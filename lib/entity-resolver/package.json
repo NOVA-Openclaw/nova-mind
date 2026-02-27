@@ -1,0 +1,23 @@
+{
+  "name": "@clawd/entity-resolver",
+  "version": "1.0.0",
+  "description": "Entity resolution and caching library for NOVA",
+  "type": "module",
+  "main": "index.ts",
+  "types": "index.ts",
+  "dependencies": {
+    "pg": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.16.0",
+    "typescript": "^5.9.3"
+  },
+  "keywords": [
+    "entity",
+    "resolution",
+    "cache",
+    "nova"
+  ],
+  "author": "NOVA",
+  "license": "MIT"
+}

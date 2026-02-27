@@ -1,0 +1,7 @@
+# NOVA bash environment setup
+# This file is sourced by bash on startup when BASH_ENV is set
+
+# Source shell aliases (gh wrapper for SE workflow)
+if [ -f ~/.local/share/nova/shell-aliases.sh ]; then
+    source ~/.local/share/nova/shell-aliases.sh
+fi

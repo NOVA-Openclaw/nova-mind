@@ -1,0 +1,166 @@
+workflow:
+  name: "code-review-deploy"
+  version: "1.0.0"
+  description: "Review code changes, run tests, and deploy to production"
+  author: "nova"
+  tags: ["deployment", "code", "automation"]
+  
+  variables:
+    branch: "main"
+    pr_number: ""
+    requester: ""
+  
+  steps:
+    # Step 1: Run automated tests
+    - step: "run-tests"
+      type: "shell"
+      command: "npm test"
+      working_dir: "/home/nova/clawd/codebase"
+      outputs:
+        - test_results: "$result.stdout"
+        - test_passed: "$result.exit_code == 0"
+      retry:
+        max_attempts: 2
+        backoff: "constant"
+        backoff_base: 10
+    
+    # Step 2: Conditional check on test results
+    - step: "check-tests"
+      type: "conditional"
+      condition: "$test_passed == false"
+      if_true:
+        - step: "notify-test-failure"
+          type: "notify"
+          target: "agent_chat"
+          message: |
+            ❌ Tests failed for PR #$pr_number
+            
+            Results: $test_results
+          mentions: ["$requester"]
+        
+        - step: "fail-workflow"
+          type: "exit"
+          status: "failure"
+      if_false:
+        - step: "log-test-success"
+          type: "log"
+          message: "All tests passed for PR #$pr_number"
+    
+    # Step 3: Security and quality checks in parallel
+    - step: "code-analysis"
+      type: "parallel"
+      branches:
+        - name: "security-scan"
+          steps:
+            - step: "run-security-scan"
+              type: "shell"
+              command: "npm audit --audit-level=high"
+              on_error: "continue"
+              outputs:
+                - security_issues: "$result.stdout"
+        
+        - name: "code-quality"
+          steps:
+            - step: "run-linter"
+              type: "shell"
+              command: "npm run lint"
+              outputs:
+                - lint_issues: "$result.stdout"
+      
+      wait_for: "all"
+    
+    # Step 4: Code review by Coder agent
+    - step: "agent-code-review"
+      type: "agent"
+      agent: "coder"
+      task: |
+        Review code changes in PR #$pr_number:
+        - Check for security issues
+        - Verify code quality
+        - Ensure all tests pass
+        - Look for potential bugs
+        
+        Test results: $test_results
+        Security scan: $security_issues
+        Lint issues: $lint_issues
+      timeout: 300
+      outputs:
+        - review_approved: "$result.approved"
+        - review_comments: "$result.comments"
+    
+    # Step 5: Human approval gate
+    - step: "human-approval"
+      type: "gate"
+      gate_type: "approval"
+      message: |
+        📋 Deployment approval needed for PR #$pr_number
+        
+        Agent review: $review_approved
+        Comments: $review_comments
+        
+        Approve deployment to production?
+      approvers: ["nova", "druid"]
+      timeout: 7200  # 2 hours
+      on_timeout: "fail"
+      on_reject: "fail"
+    
+    # Step 6: Deploy to production
+    - step: "deploy"
+      type: "shell"
+      command: "git push production $branch"
+      working_dir: "/home/nova/clawd/codebase"
+      on_error:
+        rollback:
+          - step: "rollback-deployment"
+            type: "shell"
+            command: "git push production HEAD~1 --force"
+          
+          - step: "notify-rollback"
+            type: "notify"
+            target: "agent_chat"
+            message: "🔄 Deployment failed. Rolled back to previous version."
+            mentions: ["nova", "$requester"]
+    
+    # Step 7: Post-deployment verification
+    - step: "verify-deployment"
+      type: "agent"
+      agent: "coder"
+      task: "Verify production deployment: check health endpoints, run smoke tests"
+      timeout: 180
+      retry:
+        max_attempts: 3
+        backoff: "linear"
+        backoff_base: 30
+    
+    # Step 8: Success notification
+    - step: "notify-success"
+      type: "notify"
+      target: "agent_chat"
+      message: |
+        ✅ PR #$pr_number deployed to production
+        
+        Branch: $branch
+        Deployed by: $requester
+        Verification: Passed
+      mentions: ["$requester"]
+  
+  on_success:
+    - type: "metric"
+      name: "deployment.success"
+      value: 1
+      tags:
+        branch: "$branch"
+        pr_number: "$pr_number"
+  
+  on_failure:
+    - type: "notify"
+      target: "agent_chat"
+      message: "❌ Deployment failed at step: $failed_step. Error: $error_message"
+      mentions: ["nova", "$requester"]
+    
+    - type: "metric"
+      name: "deployment.failure"
+      value: 1
+      tags:
+        branch: "$branch"
+        failed_step: "$failed_step"

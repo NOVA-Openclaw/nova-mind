@@ -1,0 +1,34 @@
+{
+  "id": "agent_config_sync",
+  "main": "./dist/index.js",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "database": {
+        "type": "string",
+        "description": "PostgreSQL database name"
+      },
+      "host": {
+        "type": "string",
+        "description": "PostgreSQL host"
+      },
+      "port": {
+        "type": "integer",
+        "description": "PostgreSQL port"
+      },
+      "user": {
+        "type": "string",
+        "description": "PostgreSQL user"
+      },
+      "password": {
+        "type": "string",
+        "description": "PostgreSQL password"
+      },
+      "outputPath": {
+        "type": "string",
+        "description": "Path to write agents.json (default: ~/.openclaw/agents.json)"
+      }
+    }
+  }
+}

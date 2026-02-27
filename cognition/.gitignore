@@ -1,0 +1,21 @@
+# Security - never commit these
+.env
+.env.*
+*.pem
+*.key
+.htpasswd
+.htaccess
+credentials.json
+secrets.json
+service-account*.json
+**/id_rsa
+**/id_ed25519
+
+# SE workflow temporary files
+tests/TEST-CASES-*.md
+tests/TEST-RESULTS-*.md
+IMPLEMENTATION-*.md
+*-review.md
+
+# NOVA local documentation config (untracked)
+.nova/

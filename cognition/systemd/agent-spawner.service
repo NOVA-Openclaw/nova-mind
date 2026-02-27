@@ -1,0 +1,35 @@
+[Unit]
+Description=NOVA Agent Spawner Daemon
+Documentation=https://github.com/NOVA-Openclaw/nova-cognition/issues/68
+After=network.target postgresql.service openclaw-gateway.service
+Wants=postgresql.service
+
+[Service]
+Type=simple
+User=nova
+Group=nova
+WorkingDirectory=/home/nova/workspace
+Environment=NOVA_DB=nova_memory
+Environment=NOVA_DB_USER=nova
+Environment=NOVA_DB_HOST=localhost
+Environment=OPENCLAW_GATEWAY=http://localhost:18789
+EnvironmentFile=-/home/nova/.config/openclaw/env
+
+ExecStart=/home/nova/workspace/scripts/agent-spawner.py
+Restart=on-failure
+RestartSec=10
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=agent-spawner
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/nova/workspace /tmp
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

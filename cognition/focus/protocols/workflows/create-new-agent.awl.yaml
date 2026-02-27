@@ -1,0 +1,132 @@
+workflow:
+  name: "create-new-agent"
+  version: "1.0.0"
+  description: "Complete workflow for creating and onboarding a new agent"
+  author: "newhart"
+  tags: ["agents", "onboarding", "infrastructure"]
+  
+  variables:
+    requirements: ""
+    agent_name: ""
+    requester: "nova"
+  
+  steps:
+    # Step 1: Design the agent
+    - step: "design-agent"
+      type: "agent"
+      agent: "newhart"
+      task: |
+        Design a new agent with requirements:
+        $requirements
+        
+        Return: agent specification, SQL file path, and seed_context
+      timeout: 600
+      outputs:
+        - agent_name: "$result.agent_name"
+        - sql_file: "$result.sql_path"
+        - seed_context: "$result.seed_context"
+      on_error:
+        - step: "notify-design-failure"
+          type: "notify"
+          target: "agent_chat"
+          message: "Agent design failed: $error_message"
+          mentions: ["$requester"]
+    
+    # Step 2: Human approval gate
+    - step: "approve-design"
+      type: "gate"
+      gate_type: "approval"
+      message: |
+        Review agent design:
+        - Name: $agent_name
+        - SQL: $sql_file
+        
+        Approve for insertion?
+      approvers: ["nova", "druid"]
+      timeout: 3600
+      on_reject: "fail"
+    
+    # Step 3: Insert into database
+    - step: "insert-agent"
+      type: "database"
+      operation: "execute_file"
+      file: "$sql_file"
+      database: "nova_memory"
+      outputs:
+        - agent_id: "$result.id"
+      retry:
+        max_attempts: 2
+        backoff: "constant"
+        backoff_base: 5
+      on_error:
+        rollback:
+          - step: "notify-rollback"
+            type: "notify"
+            target: "agent_chat"
+            message: "Agent insertion failed. Rolling back."
+    
+    # Step 4: Parallel post-insertion tasks
+    - step: "post-insertion"
+      type: "parallel"
+      branches:
+        - name: "update-dashboard"
+          steps:
+            - step: "refresh-staff-json"
+              type: "shell"
+              command: "npm run build-staff-json"
+              working_dir: "/home/nova/clawd/dashboard"
+              on_error: "warn"
+        
+        - name: "create-documentation"
+          steps:
+            - step: "document-agent"
+              type: "agent"
+              agent: "scribe"
+              task: |
+                Document the new agent $agent_name:
+                - Purpose and role
+                - Spawn instructions
+                - Integration points
+              timeout: 300
+      
+      wait_for: "all"
+    
+    # Step 5: Verification
+    - step: "verify-agent"
+      type: "database"
+      operation: "query"
+      sql: "SELECT * FROM agents WHERE name = '$agent_name'"
+      assert:
+        - condition: "$result.count > 0"
+          message: "Agent not found in database"
+    
+    # Step 6: Announce completion
+    - step: "announce-completion"
+      type: "notify"
+      target: "agent_chat"
+      message: |
+        ✅ New agent onboarded: $agent_name
+        - Database: ✓
+        - Dashboard: ✓
+        - Documentation: ✓
+        
+        Ready to spawn!
+      mentions: ["$requester"]
+  
+  on_success:
+    - type: "log"
+      message: "Agent $agent_name created successfully"
+    - type: "metric"
+      name: "agent.created"
+      value: 1
+      tags:
+        agent_name: "$agent_name"
+  
+  on_failure:
+    - type: "notify"
+      target: "agent_chat"
+      message: "❌ Agent creation failed at step: $failed_step"
+      mentions: ["nova", "newhart"]
+    - type: "log"
+      level: "error"
+      message: "Workflow failed: $error_message"

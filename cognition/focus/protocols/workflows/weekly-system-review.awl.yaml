@@ -1,0 +1,189 @@
+workflow:
+  name: "weekly-system-review"
+  version: "1.0.0"
+  description: "Weekly review of system health, agent performance, and outstanding tasks"
+  author: "nova"
+  tags: ["monitoring", "review", "maintenance"]
+  
+  variables:
+    review_period_days: 7
+    report_recipients: ["nova", "druid"]
+  
+  steps:
+    # Step 1: Gather system metrics
+    - step: "gather-metrics"
+      type: "database"
+      operation: "query"
+      sql: |
+        SELECT 
+          COUNT(*) as total_sessions,
+          SUM(token_usage) as total_tokens,
+          AVG(session_duration) as avg_duration
+        FROM sessions 
+        WHERE created_at > now() - interval '$review_period_days days'
+      outputs:
+        - metrics: "$result"
+    
+    # Step 2: Check agent activity
+    - step: "check-agent-activity"
+      type: "database"
+      operation: "query"
+      sql: |
+        SELECT 
+          sender,
+          COUNT(*) as message_count
+        FROM agent_chat
+        WHERE created_at > now() - interval '$review_period_days days'
+        GROUP BY sender
+        ORDER BY message_count DESC
+      outputs:
+        - agent_activity: "$result"
+    
+    # Step 3: Identify pending tasks
+    - step: "pending-tasks"
+      type: "database"
+      operation: "query"
+      sql: |
+        SELECT task, assigned_to, created_at
+        FROM tasks
+        WHERE status = 'pending'
+        ORDER BY created_at ASC
+      outputs:
+        - tasks: "$result"
+    
+    # Step 4: Check for system errors
+    - step: "check-errors"
+      type: "database"
+      operation: "query"
+      sql: |
+        SELECT error_type, COUNT(*) as count
+        FROM error_logs
+        WHERE created_at > now() - interval '$review_period_days days'
+        GROUP BY error_type
+        ORDER BY count DESC
+      outputs:
+        - errors: "$result"
+    
+    # Step 5: Parallel analysis by agents
+    - step: "analysis"
+      type: "parallel"
+      branches:
+        - name: "performance-analysis"
+          steps:
+            - step: "analyze-performance"
+              type: "agent"
+              agent: "scribe"
+              task: |
+                Analyze system performance from the past $review_period_days days:
+                
+                Metrics: $metrics
+                Agent activity: $agent_activity
+                
+                Provide insights on:
+                - Token usage trends
+                - Session patterns
+                - Agent utilization
+              timeout: 300
+              outputs:
+                - performance_report: "$result.report"
+        
+        - name: "task-review"
+          steps:
+            - step: "review-tasks"
+              type: "agent"
+              agent: "scribe"
+              task: |
+                Review pending tasks:
+                $tasks
+                
+                Identify:
+                - High priority items
+                - Overdue tasks
+                - Blocked tasks
+              timeout: 180
+              outputs:
+                - task_report: "$result.report"
+        
+        - name: "error-analysis"
+          steps:
+            - step: "analyze-errors"
+              type: "agent"
+              agent: "coder"
+              task: |
+                Analyze error patterns from the past $review_period_days days:
+                $errors
+                
+                Identify:
+                - Critical issues
+                - Recurring problems
+                - Suggested fixes
+              timeout: 240
+              outputs:
+                - error_report: "$result.report"
+      
+      wait_for: "all"
+    
+    # Step 6: Generate comprehensive report
+    - step: "generate-report"
+      type: "agent"
+      agent: "scribe"
+      task: |
+        Create a weekly system review report:
+        
+        ## System Metrics
+        $metrics
+        
+        ## Performance Analysis
+        $performance_report
+        
+        ## Task Status
+        $task_report
+        
+        ## Error Analysis
+        $error_report
+        
+        ## Recommendations
+        Provide 3-5 actionable recommendations for system improvement.
+      timeout: 300
+      outputs:
+        - final_report: "$result.report"
+    
+    # Step 7: Distribute report
+    - step: "send-report"
+      type: "notify"
+      target: "agent_chat"
+      message: |
+        📊 Weekly System Review ($review_period_days days)
+        
+        $final_report
+      mentions: "$report_recipients"
+    
+    # Step 8: Create action items for high-priority issues
+    - step: "create-action-items"
+      type: "conditional"
+      condition: "$tasks.length > 10"
+      if_true:
+        - step: "flag-task-backlog"
+          type: "notify"
+          target: "agent_chat"
+          message: |
+            ⚠️ Task backlog alert: $tasks.length pending tasks
+            
+            Consider prioritization review.
+          mentions: ["nova"]
+  
+  on_success:
+    - type: "log"
+      message: "Weekly review completed successfully"
+    
+    - type: "database"
+      operation: "execute"
+      sql: |
+        INSERT INTO review_history (review_type, report_data, created_at)
+        VALUES ('weekly', '$final_report', now())
+  
+  on_failure:
+    - type: "notify"
+      target: "agent_chat"
+      message: "❌ Weekly review workflow failed: $error_message"
+      mentions: ["nova"]

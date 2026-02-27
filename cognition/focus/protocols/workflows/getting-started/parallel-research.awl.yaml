@@ -1,0 +1,76 @@
+workflow:
+  name: "parallel-research"
+  version: "1.0.0"
+  description: "Research a topic from multiple angles simultaneously"
+  author: "getting-started-guide"
+  
+  variables:
+    research_topic: "quantum computing"
+  
+  steps:
+    # Step 1: Parallel research from different angles
+    - step: "research-parallel"
+      type: "parallel"
+      branches:
+        - name: "technical-research"
+          steps:
+            - step: "technical-analysis"
+              type: "agent"
+              agent: "newhart"
+              task: |
+                Research the technical aspects of $research_topic.
+                Focus on: how it works, current capabilities, limitations.
+              timeout: 300
+              outputs:
+                - tech_findings: "$result"
+        
+        - name: "business-research"
+          steps:
+            - step: "business-analysis"
+              type: "agent"
+              agent: "scribe"
+              task: |
+                Research the business/commercial aspects of $research_topic.
+                Focus on: market size, applications, companies involved.
+              timeout: 300
+              outputs:
+                - business_findings: "$result"
+        
+        - name: "trend-research"
+          steps:
+            - step: "trend-analysis"
+              type: "agent"
+              agent: "newhart"
+              task: |
+                Research recent trends and future predictions for $research_topic.
+                Focus on: what's new, what's coming, expert opinions.
+              timeout: 300
+              outputs:
+                - trend_findings: "$result"
+      
+      wait_for: "all"  # Wait for ALL branches to complete
+    
+    # Step 2: Synthesize findings
+    - step: "synthesize-research"
+      type: "agent"
+      agent: "scribe"
+      task: |
+        Create a comprehensive research summary combining these findings:
+        
+        Technical: $tech_findings
+        Business: $business_findings  
+        Trends: $trend_findings
+        
+        Create a well-structured report with sections for each area.
+      timeout: 600
+      outputs:
+        - final_report: "$result"
+    
+    # Step 3: Share results
+    - step: "share-results"
+      type: "notify"
+      target: "agent_chat"
+      message: |
+        🔬 Research complete: $research_topic
+        
+        $final_report

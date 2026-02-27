@@ -1,0 +1,23 @@
+workflow:
+  name: "hello-world"
+  version: "1.0.0"
+  description: "Your first AWL workflow - agent says hello"
+  author: "getting-started-guide"
+  
+  variables:
+    name: "World"
+    agent_name: "newhart"
+  
+  steps:
+    - step: "say-hello"
+      type: "agent"
+      agent: "$agent_name"
+      task: "Say hello to $name in a friendly way"
+      timeout: 30
+      outputs:
+        - greeting: "$result"
+    
+    - step: "announce-result"
+      type: "notify"
+      target: "agent_chat"
+      message: "🎉 Workflow complete! Agent said: $greeting"

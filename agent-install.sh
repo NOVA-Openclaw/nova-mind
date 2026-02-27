@@ -469,7 +469,7 @@ verify_schema() {
         return 1
     fi
 
-    local SCHEMA_FILE="$SCRIPT_DIR/memory/schema/schema.sql"
+    local SCHEMA_FILE="$SCRIPT_DIR/database/schema.sql"
     if [ -f "$SCHEMA_FILE" ]; then
         local TABLE_NAMES
         TABLE_NAMES=$(grep "^CREATE TABLE" "$SCHEMA_FILE" | sed -E 's/CREATE TABLE IF NOT EXISTS ([^ ]+).*/\1/' | sort)
@@ -742,10 +742,10 @@ else
 fi
 
 # --- Schema management via pgschema ---
-SCHEMA_FILE="$SCRIPT_DIR/memory/schema/schema.sql"
+SCHEMA_FILE="$SCRIPT_DIR/database/schema.sql"
 
 if [ ! -f "$SCHEMA_FILE" ]; then
-    echo -e "  ${CROSS_MARK} memory/schema/schema.sql not found at $SCHEMA_FILE"
+    echo -e "  ${CROSS_MARK} database/schema.sql not found at $SCHEMA_FILE"
     exit 1
 fi
 
@@ -775,7 +775,7 @@ else
 fi
 
 # -- Pre-migrations --
-PRE_MIGRATIONS_DIR="$SCRIPT_DIR/memory/pre-migrations"
+PRE_MIGRATIONS_DIR="$SCRIPT_DIR/database/pre-migrations"
 if [ -d "$PRE_MIGRATIONS_DIR" ]; then
     PRE_MIGRATION_FILES=()
     while IFS= read -r -d '' f; do
@@ -820,8 +820,8 @@ else
 
     # Optionally use .pgschemaignore from memory/
     PGSCHEMA_IGNORE_OPT=()
-    if [ -f "$SCRIPT_DIR/memory/.pgschemaignore" ]; then
-        PGSCHEMA_IGNORE_OPT+=("--ignore-file" "$SCRIPT_DIR/memory/.pgschemaignore")
+    if [ -f "$SCRIPT_DIR/database/.pgschemaignore" ]; then
+        PGSCHEMA_IGNORE_OPT+=("--ignore-file" "$SCRIPT_DIR/database/.pgschemaignore")
     fi
 
     PLAN_FILE=$(mktemp /tmp/pgschema-plan-XXXXXX.json)
@@ -1676,7 +1676,7 @@ if [ -d "$REL_SKILLS_SOURCE" ] 2>/dev/null; then
 fi
 echo "  [memory]"
 echo "    • Shared PG loader libraries → ~/.openclaw/lib/"
-echo "    • Schema managed via pgschema (memory/schema/schema.sql)"
+echo "    • Schema managed via pgschema (database/schema.sql)"
 if [ ${#INSTALLED_HOOKS[@]} -gt 0 ]; then
     for hook in "${INSTALLED_HOOKS[@]}"; do
         echo "    • Hook: $hook"

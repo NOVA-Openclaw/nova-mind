@@ -1,0 +1,25 @@
+{
+  "meta": {
+    "lastTouchedVersion": "2026.2.9"
+  },
+  "agents": {
+    "defaults": {}
+  },
+  "hooks": {
+    "enabled": true,
+    "internal": {
+      "enabled": true,
+      "entries": {
+        "memory-extract": {
+          "enabled": true
+        },
+        "semantic-recall": {
+          "enabled": true
+        },
+        "session-init": {
+          "enabled": true
+        }
+      }
+    }
+  }
+}

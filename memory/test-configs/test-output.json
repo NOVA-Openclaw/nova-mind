@@ -1,0 +1,31 @@
+{
+  "meta": {
+    "lastTouchedVersion": "2026.2.9"
+  },
+  "agents": {
+    "defaults": {}
+  },
+  "hooks": {
+    "enabled": true,
+    "internal": {
+      "enabled": true,
+      "entries": {
+        "boot-md": {
+          "enabled": true
+        },
+        "command-logger": {
+          "enabled": false
+        },
+        "memory-extract": {
+          "enabled": true
+        },
+        "semantic-recall": {
+          "enabled": true
+        },
+        "session-init": {
+          "enabled": true
+        }
+      }
+    }
+  }
+}

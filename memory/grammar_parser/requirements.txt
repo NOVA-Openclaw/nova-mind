@@ -1,0 +1,11 @@
+# Grammar-Based Memory Extraction Requirements
+
+# Core NLP library
+spacy>=3.7.0,<4.0.0
+
+# English language model (install separately with: python -m spacy download en_core_web_sm)
+# en_core_web_sm>=3.7.0
+
+# Optional: For enhanced entity recognition
+# en_core_web_md>=3.7.0
+# en_core_web_lg>=3.7.0

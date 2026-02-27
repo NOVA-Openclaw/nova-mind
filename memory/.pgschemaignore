@@ -1,0 +1,9 @@
+# Objects to exclude from pgschema management
+# See https://www.pgschema.com/cli/ignore
+#
+# Example:
+# [tables]
+# patterns = ["temp_*", "test_*"]
+#
+# [views]
+# patterns = ["debug_*"]

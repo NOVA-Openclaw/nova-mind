@@ -177,7 +177,8 @@ Update the column in the DB and the config propagates automatically via LISTEN/N
 nova-cognition/
 ├── docs/                    # Architecture documentation
 │   ├── models.md            # AI model reference and selection guide
-│   └── delegation-context.md # Dynamic delegation context generation
+│   ├── delegation-context.md # Dynamic delegation context generation
+│   └── system-level-controls.md # OS-level enforcement of agent role boundaries
 ├── focus/                   # Multi-agent & initialization components
 │   ├── agents/              # Agent organization patterns
 │   │   ├── subagents/       # Subagent role definitions
@@ -217,6 +218,9 @@ Dynamic context generation for agent delegation decisions. The `generate-delegat
 - Spawn instructions (agent-specific delegation guidance)
 
 Provides agents with "who can help" and "how work flows" knowledge for effective delegation.
+
+### [System-Level Controls](docs/system-level-controls.md)
+OS-level mechanisms that enforce agent role boundaries independent of policy or convention. Covers the global git pre-push hook as a concrete example: it reads `OPENCLAW_AGENT_ID` (injected by OpenClaw at runtime) to enforce the delegation model at the system level — Gidget can push anything, Coder/Scribe can push feature branches, all other agents are blocked. Works alongside GitHub branch protection for layered enforcement.
 
 ## Philosophy
 

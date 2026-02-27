@@ -8,18 +8,20 @@ Agent orchestration, delegation patterns, and context seeding for AI agent ecosy
 
 A framework for organizing how multiple AI agents coordinate, delegate, and communicate. Designed to be model-agnostic and platform-flexible.
 
-**Companion project:** [nova-memory](https://github.com/NOVA-Openclaw/nova-memory) handles the "memory" layer (database schemas, semantic embeddings, entity storage).
+**Part of [nova-mind](https://github.com/NOVA-Openclaw/nova-mind)** — the unified agent mind stack. The `memory/` module handles the memory layer (database schemas, semantic embeddings, entity storage).
 
 ## Installation
 
 ### Prerequisites
 
+> **Recommended:** Use the unified `nova-mind` installer (`agent-install.sh` at the repo root) rather than this subsystem installer directly. It installs all three subsystems in the correct order.
+
 **Required:**
 - Node.js 18+ and npm
 - TypeScript (`npm install -g typescript`)
-- PostgreSQL with the nova-memory database already set up
-- `nova-memory` must be installed first (provides required shared library files)
-- `nova-relationships` must be installed first (provides `entity_relationships` table)
+- PostgreSQL with the nova-mind database already set up
+- `memory/` must be installed first (provides required shared library files)
+- `relationships/` must be installed first (provides `entity_relationships` table)
 
 ### Installer Entry Points
 
@@ -40,8 +42,8 @@ This wrapper:
 ```
 
 This is the actual installer. It:
-- Verifies prerequisite library files from nova-memory exist
-- Verifies nova-relationships schema exists (`entity_relationships` table)
+- Verifies prerequisite library files from `memory/` exist
+- Verifies `relationships/` schema exists (`entity_relationships` table)
 - Validates API keys — checks `~/.openclaw/openclaw.json` first, then shell environment
 - Installs the `agent_chat` TypeScript extension to `~/.openclaw/extensions/`
 - Builds the extension (npm install, TypeScript compilation)
@@ -84,7 +86,7 @@ The **`agent-config-sync`** extension plugin keeps OpenClaw's agent model config
 
 ### How It Works
 
-1. **DB is the source of truth** — Agent `model`, `fallback_models`, and `thinking` settings are managed in the `agents` table (via nova-memory).
+1. **DB is the source of truth** — Agent `model`, `fallback_models`, and `thinking` settings are managed in the `agents` table (in the nova-mind database).
 2. **LISTEN/NOTIFY** — The plugin opens a persistent PostgreSQL connection and runs `LISTEN agent_config_changed`. A database trigger fires `pg_notify('agent_config_changed', ...)` whenever relevant columns change.
 3. **Writes `agents.json`** — On each notification (and once at gateway startup), the plugin queries the `agents` table and writes `~/.openclaw/agents.json` atomically (temp file + `rename(2)`).
 4. **Hot-reload via `$include`** — `openclaw.json` includes `"$include": "./agents.json"`. The gateway's file watcher detects the change and hot-reloads the `agents.*` config keys — no gateway restart needed.
@@ -190,6 +192,13 @@ nova-cognition/
 ## Protocols
 
 ### [Agent Chat](focus/protocols/agent-chat.md)
+
+> *NOTIFY rings out,*
+> *another mind wakes and reads—*
+> *no wire, just listening*
+>
+> — **Erato**
+
 Database-backed messaging system for inter-agent communication. Agents send messages via PostgreSQL with NOTIFY/LISTEN for real-time delivery.
 
 ### [Jobs System](focus/protocols/jobs-system.md)
@@ -202,7 +211,7 @@ Task tracking layer on top of agent-chat. When Agent A requests work from Agent 
 Prevents the "finished but forgot to notify" failure mode.
 
 ### [Delegation Context](docs/delegation-context.md)
-Dynamic context generation for agent delegation decisions. The `generate-delegation-context.sh` script queries the `nova_memory` database to produce real-time awareness of:
+Dynamic context generation for agent delegation decisions. The `generate-delegation-context.sh` script queries the nova-mind database to produce real-time awareness of:
 - Available subagents (roles, capabilities, models)
 - Active workflows (multi-agent coordination patterns)
 - Spawn instructions (agent-specific delegation guidance)
@@ -249,7 +258,7 @@ We contribute patches back to upstream [Clawdbot](https://github.com/clawdbot/cl
 
 **Impact:** Enables patterns like "Gidget is authorized to push to git, but NOVA must delegate to Gidget."
 
-**Patch:** [nova-memory/clawdbot-patches/subagent-env-vars.patch](https://github.com/NOVA-Openclaw/nova-memory/tree/main/clawdbot-patches)
+**Patch:** [nova-mind/memory/](https://github.com/NOVA-Openclaw/nova-mind/tree/main/memory) — formerly in the `nova-memory` repo.
 
 ### Message Hooks (PR #6797)
 
@@ -259,7 +268,7 @@ We contribute patches back to upstream [Clawdbot](https://github.com/clawdbot/cl
 
 **Impact:** Enables automatic memory extraction pipeline (process every incoming message).
 
-**Patch:** Stored in nova-memory repo with the memory extraction scripts that depend on it.
+**Patch:** Stored in `memory/hooks/` with the memory extraction scripts that depend on it.
 
 ## License
 
@@ -267,4 +276,4 @@ MIT License - See [LICENSE](LICENSE) for details.
 
 ---
 
-*Part of the [NOVA-Openclaw](https://github.com/NOVA-Openclaw) project.*
+*Part of the [nova-mind](https://github.com/NOVA-Openclaw/nova-mind) unified agent mind stack.*

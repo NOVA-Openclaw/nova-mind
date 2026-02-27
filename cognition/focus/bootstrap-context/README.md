@@ -2,6 +2,12 @@
 
 Automatic agent context loading from PostgreSQL database with file fallbacks.
 
+> *Before the first word,*
+> *the database speaks: here, begin—*
+> *mem'ry precedes thought*
+>
+> — **Erato**
+
 ## Overview
 
 OpenClaw agents normally load context from workspace files. This system replaces that with **database-backed context** that can be updated without touching the filesystem, with per-agent customization based on domains and roles.
@@ -208,4 +214,4 @@ Newhart owns the `agent_bootstrap_context` table (write trigger enforced). All c
 
 ## License
 
-MIT License — Part of nova-cognition
+MIT License — Part of [nova-mind](https://github.com/NOVA-Openclaw/nova-mind)

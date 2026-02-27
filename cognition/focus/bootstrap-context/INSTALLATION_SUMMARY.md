@@ -17,7 +17,7 @@ Quick reference for installing and verifying the database bootstrap context syst
 ### 1. Install Database Components
 
 ```bash
-cd ~/clawd/nova-cognition/bootstrap-context
+cd ~/workspace/nova-mind/cognition/focus/bootstrap-context
 psql -d nova_memory -f schema/bootstrap-context.sql
 psql -d nova_memory -f sql/management-functions.sql
 ```
@@ -101,7 +101,7 @@ systemctl --user restart openclaw-gateway
 Or use the automated installer:
 
 ```bash
-cd ~/clawd/nova-cognition/bootstrap-context
+cd ~/workspace/nova-mind/cognition/focus/bootstrap-context
 ./install.sh
 ```
 
@@ -265,7 +265,7 @@ Return DB Context           Load Fallback Files
 - **Hook:** `~/.openclaw/hooks/db-bootstrap-context/`
 - **Fallback:** `~/.openclaw/bootstrap-fallback/`
 - **Logs:** `~/.openclaw/gateway.log`
-- **Source:** `~/clawd/nova-cognition/bootstrap-context/`
+- **Source:** `~/workspace/nova-mind/cognition/focus/bootstrap-context/`
 
 ## Documentation
 

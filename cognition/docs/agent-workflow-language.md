@@ -485,13 +485,13 @@ gate step → NOVA sends approval request → waits for response → continues/f
 
 ### Workflow Definition Files
 
-**Location:** `~/clawd/nova-cognition/focus/protocols/workflows/`
+**Location:** `~/workspace/nova-mind/cognition/focus/protocols/workflows/`
 
 **Naming:** `{workflow-name}.awl.yaml`
 
 Example:
 ```
-~/clawd/nova-cognition/focus/protocols/workflows/
+~/workspace/nova-mind/cognition/focus/protocols/workflows/
   ├── create-new-agent.awl.yaml
   ├── deploy-code-change.awl.yaml
   ├── weekly-review.awl.yaml
@@ -500,7 +500,7 @@ Example:
 
 ### Workflow Execution Logs
 
-**Location:** `~/clawd/nova-cognition/logs/executions/`
+**Location:** `~/.openclaw/logs/awl-executions/`
 
 **Format:** JSONL (one JSON object per line)
 

@@ -56,7 +56,7 @@ This is the source of truth for persistent information.
 | `projects` | Active efforts with goals |
 | `tasks` | Actionable items linked to projects |
 | `events` | Timeline of what happened |
-| `lessons` | Things learned from experience |
+| `lessons` | Things learned from experience — confidence decays unless reinforced |
 | `sops` | Standard Operating Procedures |
 | `vocabulary` | Words for STT correction |
 | `preferences` | User and system preferences |

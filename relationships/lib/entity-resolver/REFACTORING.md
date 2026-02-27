@@ -7,14 +7,14 @@
 
 ## Overview
 
-Successfully extracted entity resolution logic from `~/clawd/hooks/semantic-recall/handler.ts` into a reusable shared library at `~/clawd/lib/entity-resolver/`.
+Successfully extracted entity resolution logic from `~/.openclaw/hooks/semantic-recall/handler.ts` into a reusable shared library at `~/workspace/nova-mind/relationships/lib/entity-resolver/`.
 
 ## What Was Done
 
 ### 1. Created Library Structure
 
 ```
-~/clawd/lib/entity-resolver/
+~/workspace/nova-mind/relationships/lib/entity-resolver/
 ├── index.ts          # Main exports, clean API surface
 ├── resolver.ts       # Core resolution logic with DB pooling
 ├── cache.ts          # Session-aware caching with TTL
@@ -123,7 +123,7 @@ if (!entity) {
 
 ### Library Tests
 ```bash
-cd ~/clawd/lib/entity-resolver
+cd ~/workspace/nova-mind/relationships/lib/entity-resolver
 npx tsx test.ts "(512) 692-7184"
 ```
 
@@ -137,7 +137,7 @@ npx tsx test.ts "(512) 692-7184"
 
 ### Hook Integration
 ```bash
-cd ~/clawd/hooks/semantic-recall
+cd ~/.openclaw/hooks/semantic-recall
 npx tsx verify-refactor.ts
 ```
 
@@ -152,7 +152,7 @@ npx tsx verify-refactor.ts
 
 ### Basic Resolution
 ```typescript
-import { resolveEntity } from '~/clawd/lib/entity-resolver';
+import { resolveEntity } from '~/workspace/nova-mind/relationships/lib/entity-resolver';
 
 const entity = await resolveEntity({ phone: '+1234567890' });
 if (entity) {
@@ -166,7 +166,7 @@ import {
   resolveEntity, 
   getCachedEntity, 
   setCachedEntity 
-} from '~/clawd/lib/entity-resolver';
+} from '~/workspace/nova-mind/relationships/lib/entity-resolver';
 
 const sessionId = 'session-123';
 let entity = getCachedEntity(sessionId);
@@ -184,7 +184,7 @@ if (!entity) {
 import { 
   resolveEntity, 
   getEntityProfile 
-} from '~/clawd/lib/entity-resolver';
+} from '~/workspace/nova-mind/relationships/lib/entity-resolver';
 
 const entity = await resolveEntity({ phone: '+1234567890' });
 if (entity) {
@@ -231,7 +231,7 @@ To migrate other code to use this library:
 
 1. **Install dependencies** (if needed):
    ```bash
-   cd ~/clawd/lib/entity-resolver
+   cd ~/workspace/nova-mind/relationships/lib/entity-resolver
    npm install
    ```
 
@@ -274,23 +274,23 @@ Potential improvements to the library:
 ## Files Modified
 
 **Created:**
-- `~/clawd/lib/entity-resolver/index.ts`
-- `~/clawd/lib/entity-resolver/resolver.ts`
-- `~/clawd/lib/entity-resolver/cache.ts`
-- `~/clawd/lib/entity-resolver/types.ts`
-- `~/clawd/lib/entity-resolver/package.json`
-- `~/clawd/lib/entity-resolver/README.md`
-- `~/clawd/lib/entity-resolver/test.ts`
-- `~/clawd/lib/entity-resolver/REFACTORING.md` (this file)
-- `~/clawd/hooks/semantic-recall/verify-refactor.ts`
+- `~/workspace/nova-mind/relationships/lib/entity-resolver/index.ts`
+- `~/workspace/nova-mind/relationships/lib/entity-resolver/resolver.ts`
+- `~/workspace/nova-mind/relationships/lib/entity-resolver/cache.ts`
+- `~/workspace/nova-mind/relationships/lib/entity-resolver/types.ts`
+- `~/workspace/nova-mind/relationships/lib/entity-resolver/package.json`
+- `~/workspace/nova-mind/relationships/lib/entity-resolver/README.md`
+- `~/workspace/nova-mind/relationships/lib/entity-resolver/test.ts`
+- `~/workspace/nova-mind/relationships/lib/entity-resolver/REFACTORING.md` (this file)
+- `~/.openclaw/hooks/semantic-recall/verify-refactor.ts`
 
 **Modified:**
-- `~/clawd/hooks/semantic-recall/handler.ts` (refactored to use library)
-- `~/clawd/hooks/semantic-recall/IMPLEMENTATION.md` (updated documentation)
+- `~/.openclaw/hooks/semantic-recall/handler.ts` (refactored to use library)
+- `~/.openclaw/hooks/semantic-recall/IMPLEMENTATION.md` (updated documentation)
 
 **Preserved:**
-- `~/clawd/hooks/semantic-recall/test-entity-resolution.js` (legacy test)
-- `~/clawd/hooks/semantic-recall/HOOK.md` (unchanged)
+- `~/.openclaw/hooks/semantic-recall/test-entity-resolution.js` (legacy test)
+- `~/.openclaw/hooks/semantic-recall/HOOK.md` (unchanged)
 
 ## Conclusion
 

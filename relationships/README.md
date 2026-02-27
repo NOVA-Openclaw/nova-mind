@@ -2,7 +2,13 @@
 
 **Project #29: NOVA Entity Perception, Profiling, and Relationship Management**
 
-Part of the NOVA Psyche ecosystem, providing comprehensive entity perception, profiling, recall triggers, context weighting, and Web of Trust infrastructure for AI agent networks.
+Part of the nova-mind ecosystem, providing comprehensive entity perception, profiling, recall triggers, context weighting, and Web of Trust infrastructure for AI agent networks.
+
+> *Certificate sealed,*
+> *threads of trust span every node—*
+> *the graph knows your face*
+>
+> — **Erato**
 
 ## Overview
 
@@ -149,12 +155,14 @@ The system includes experimental infrastructure for building trust networks betw
 
 ### Prerequisites
 
+> **Recommended:** Use the unified `nova-mind` installer (`agent-install.sh` at the repo root) rather than this subsystem installer directly. It installs all three subsystems in the correct order.
+
 **Required:**
 - Node.js 18+ and npm
-- PostgreSQL with `nova-memory` database already set up
-- `nova-memory` must be installed first (provides required shared library files)
+- PostgreSQL with nova-mind database already set up
+- `memory/` must be installed first (provides required shared library files)
 
-**The nova-memory tables must exist:**
+**The following tables must exist (created by `memory/` installer):**
 - `entities` — Entity records (people, organizations, concepts)
 - `entity_facts` — Key-value facts about entities
 - `entity_relationships` — Relationships between entities
@@ -166,12 +174,12 @@ The system includes experimental infrastructure for building trust networks betw
 ./shell-install.sh
 ```
 
-A **non-interactive** prerequisite-checking wrapper that validates your environment before running the installer. Unlike nova-memory's `shell-install.sh`, it does **not** prompt for configuration — it expects nova-memory to already be installed. It performs the following checks:
+A **non-interactive** prerequisite-checking wrapper that validates your environment before running the installer. Unlike the memory `shell-install.sh`, it does **not** prompt for configuration — it expects the `memory/` module to already be installed. It performs the following checks:
 
 1. **jq** is installed
 2. **Database configuration** exists — either `~/.openclaw/postgres.json` or PG environment variables (`PGHOST`, `PGDATABASE`, `PGUSER`)
 3. **postgres.json validity** — all required fields present (`host`, `port`, `database`, `user`)
-4. **pg-env.sh** exists at `~/.openclaw/lib/pg-env.sh` (installed by nova-memory)
+4. **pg-env.sh** exists at `~/.openclaw/lib/pg-env.sh` (installed by the `memory/` module)
 5. **env-loader.sh** loaded if available (optional, non-fatal)
 6. **Database reachability** — connects via `psql` to verify the database is up
 
@@ -183,7 +191,7 @@ If all checks pass, it execs `agent-install.sh` with any flags you passed throug
 ```
 
 This is the actual installer. It:
-- Verifies database schema (requires nova-memory tables)
+- Verifies database schema (requires tables from the `memory/` module)
 - Installs the entity-resolver TypeScript library
 - Sets up the certificate-authority skill
 - Configures the NOVA CA infrastructure

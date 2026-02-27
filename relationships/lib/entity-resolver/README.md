@@ -24,7 +24,7 @@ import { resolveEntity, getEntityProfile } from '../entity-resolver';
 Run the test script to verify functionality:
 
 ```bash
-cd ~/clawd/lib/entity-resolver
+cd ~/workspace/nova-mind/relationships/lib/entity-resolver
 npx tsx test.ts [phone_or_uuid]
 
 # Example:

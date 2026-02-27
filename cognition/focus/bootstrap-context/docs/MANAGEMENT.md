@@ -278,7 +278,7 @@ sudo systemctl status postgresql
 
 **Function not found (42883)** - Schema not installed:
 ```bash
-cd ~/clawd/nova-cognition/bootstrap-context
+cd ~/workspace/nova-mind/cognition/focus/bootstrap-context
 ./install.sh
 ```
 

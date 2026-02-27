@@ -35,7 +35,7 @@ psql nova_memory -c "SELECT count(*) FROM agents;"
 nova-session spawn newhart "Hello, just testing!"
 
 # 4. Check workflow directory exists
-ls ~/clawd/nova-cognition/focus/protocols/workflows/
+ls ~/workspace/nova-mind/cognition/focus/protocols/workflows/
 ```
 
 If any of these fail, see the [Troubleshooting](#troubleshooting) section.
@@ -48,7 +48,7 @@ Let's start with the simplest possible workflow - having an agent say hello.
 
 ### Step 1: Create the workflow file
 
-Create `~/clawd/nova-cognition/focus/protocols/workflows/getting-started/hello-world.awl.yaml`:
+Create `~/workspace/nova-mind/cognition/focus/protocols/workflows/getting-started/hello-world.awl.yaml`:
 
 ```yaml
 workflow:
@@ -104,7 +104,7 @@ nova-workflow run workflows/getting-started/hello-world.awl.yaml \
 
 Let's build something more realistic - a workflow that gets approval before doing work.
 
-Create `~/clawd/nova-cognition/focus/protocols/workflows/getting-started/write-with-approval.awl.yaml`:
+Create `~/workspace/nova-mind/cognition/focus/protocols/workflows/getting-started/write-with-approval.awl.yaml`:
 
 ```yaml
 workflow:
@@ -202,7 +202,7 @@ nova-workflow run workflows/getting-started/write-with-approval.awl.yaml \
 
 Real workflows often need to do multiple things at once. Here's how:
 
-Create `~/clawd/nova-cognition/focus/protocols/workflows/getting-started/parallel-research.awl.yaml`:
+Create `~/workspace/nova-mind/cognition/focus/protocols/workflows/getting-started/parallel-research.awl.yaml`:
 
 ```yaml
 workflow:
@@ -611,7 +611,7 @@ timeout: 7200  # 2 hours
 1. **Check logs:**
    ```bash
    nova-workflow logs <workflow-id>
-   tail -f ~/clawd/nova-cognition/logs/executions/$(date +%Y-%m-%d).jsonl
+   tail -f ~/.openclaw/logs/awl-executions/$(date +%Y-%m-%d).jsonl
    ```
 
 2. **Validate syntax:**
@@ -637,7 +637,7 @@ timeout: 7200  # 2 hours
 
 Now that you understand AWL basics:
 
-1. **Study the examples** in `~/clawd/nova-cognition/focus/protocols/workflows/`
+1. **Study the examples** in `~/workspace/nova-mind/cognition/focus/protocols/workflows/`
 2. **Read the full specification** in `docs/agent-workflow-language.md`
 3. **Create your own workflows** for common tasks
 4. **Set up monitoring** for production workflows

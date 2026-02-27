@@ -92,7 +92,7 @@ Spawn instructions (stored in `agents.seed_context`) provide critical guidance:
 **If available,** run the delegation context generator:
 
 ```bash
-~/clawd/nova-cognition/scripts/generate-delegation-context.sh
+~/.openclaw/scripts/generate-delegation-context.sh
 ```
 
 This generates `DELEGATION_CONTEXT.md` with:
@@ -134,7 +134,7 @@ Craft a clear, focused task description with:
 #### Example Task Description:
 
 ```
-Project: nova-cognition (~/clawd/nova-cognition)
+Project: nova-mind (~/workspace/nova-mind/cognition)
 
 Work issue #5: https://github.com/NOVA-Openclaw/nova-cognition/issues/5
 
@@ -327,7 +327,7 @@ gh issue create --repo NOVA-Openclaw/nova-cognition \
 ### 2. Spawn Coder with Issue Reference
 
 ```
-Project: nova-cognition (~/clawd/nova-cognition)
+Project: nova-mind (~/workspace/nova-mind/cognition)
 Work issue #5: https://github.com/NOVA-Openclaw/nova-cognition/issues/5
 
 [Your requirements here]

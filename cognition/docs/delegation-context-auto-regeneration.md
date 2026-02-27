@@ -1,6 +1,6 @@
 # DELEGATION_CONTEXT Auto-Regeneration System
 
-This document describes the auto-regeneration system that keeps `~/clawd/DELEGATION_CONTEXT.md` synchronized with database changes to agents, workflows, and workflow steps.
+This document describes the auto-regeneration system that keeps `~/.openclaw/workspace/DELEGATION_CONTEXT.md` synchronized with database changes to agents, workflows, and workflow steps.
 
 ## Overview
 
@@ -89,7 +89,7 @@ FOR EACH ROW EXECUTE FUNCTION notify_delegation_change();
 
 #### 3. Python Listener
 
-**Location:** `~/clawd/scripts/delegation-listener.py`  
+**Location:** `~/.openclaw/scripts/delegation-listener.py`  
 **Purpose:** Listens for `delegation_changed` notifications and triggers regeneration
 
 **Key Features:**
@@ -121,7 +121,7 @@ After=postgresql.service
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/python3 /home/nova/clawd/scripts/delegation-listener.py
+ExecStart=/usr/bin/python3 ~/.openclaw/scripts/delegation-listener.py
 Restart=always
 RestartSec=5
 Environment=PGHOST=localhost
@@ -132,8 +132,8 @@ WantedBy=default.target
 
 #### 5. Regeneration Script
 
-**Location:** `~/clawd/scripts/generate-delegation-context.sh`  
-**Output:** `~/clawd/DELEGATION_CONTEXT.md`
+**Location:** `~/.openclaw/scripts/generate-delegation-context.sh`  
+**Output:** `~/.openclaw/workspace/DELEGATION_CONTEXT.md`
 
 The listener calls this existing script to perform the actual regeneration.
 
@@ -173,7 +173,7 @@ psql -d nova_memory -c "UPDATE agents SET description = description WHERE id = 1
 journalctl --user -u delegation-listener.service -n 10
 
 # Verify DELEGATION_CONTEXT.md was updated
-ls -la ~/clawd/DELEGATION_CONTEXT.md
+ls -la ~/.openclaw/workspace/DELEGATION_CONTEXT.md
 ```
 
 #### 2. Direct Notification Test
@@ -196,7 +196,7 @@ systemctl --user is-active delegation-listener.service
 psql -d nova_memory -c "SELECT 1;"
 
 # Test regeneration script directly  
-~/clawd/scripts/generate-delegation-context.sh
+~/.openclaw/scripts/generate-delegation-context.sh
 ```
 
 #### 4. End-to-End Test
@@ -212,7 +212,7 @@ VALUES ('test-agent', 'tester', 'testing', 'Test agent for delegation', 'test-mo
 sleep 3
 
 # Check if DELEGATION_CONTEXT.md contains the new agent
-grep -i "test-agent\|tester" ~/clawd/DELEGATION_CONTEXT.md
+grep -i "test-agent\|tester" ~/.openclaw/workspace/DELEGATION_CONTEXT.md
 
 # Clean up
 psql -d nova_memory -c "DELETE FROM agents WHERE nickname = 'tester';"
@@ -230,11 +230,11 @@ psql -d nova_memory -c "DELETE FROM agents WHERE nickname = 'tester';"
 2. **No regeneration after changes:**
    - Verify triggers exist: `psql -d nova_memory -c "SELECT tgname FROM pg_trigger WHERE tgfoid = (SELECT oid FROM pg_proc WHERE proname = 'notify_delegation_change');"`
    - Check listener is receiving notifications: `journalctl --user -u delegation-listener.service -f`
-   - Test regeneration script manually: `~/clawd/scripts/generate-delegation-context.sh`
+   - Test regeneration script manually: `~/.openclaw/scripts/generate-delegation-context.sh`
 
 3. **Script execution failures:**
-   - Check script permissions: `ls -la ~/clawd/scripts/generate-delegation-context.sh`
-   - Test script output: `~/clawd/scripts/generate-delegation-context.sh && echo "Success"`
+   - Check script permissions: `ls -la ~/.openclaw/scripts/generate-delegation-context.sh`
+   - Test script output: `~/.openclaw/scripts/generate-delegation-context.sh && echo "Success"`
 
 ## Long-Term Solution (Issue #10)
 
@@ -338,7 +338,7 @@ systemctl --user is-active delegation-listener.service
 
 ```bash
 # Remove Python listener script
-rm ~/clawd/scripts/delegation-listener.py
+rm ~/.openclaw/scripts/delegation-listener.py
 
 # Remove systemd service file
 rm ~/.config/systemd/user/delegation-listener.service
@@ -370,7 +370,7 @@ SELECT tgname FROM pg_trigger WHERE tgfoid = (SELECT oid FROM pg_proc WHERE pron
 -- (Assuming file content is available)
 SELECT update_universal_context(
     'DELEGATION_CONTEXT',
-    '[content from ~/clawd/DELEGATION_CONTEXT.md]',
+    '[content from ~/.openclaw/workspace/DELEGATION_CONTEXT.md]',
     'Migrated from file-based system',
     'migration'
 );
@@ -416,7 +416,7 @@ psql -d nova_memory -c "SELECT updated_at FROM bootstrap_context_universal WHERE
 - **Trigger overhead:** Minimal - simple NOTIFY call
 - **Debouncing:** Reduces unnecessary regenerations during bulk changes
 - **Script execution:** ~1-3 seconds for typical delegation contexts
-- **File I/O:** Single file write to `~/clawd/DELEGATION_CONTEXT.md`
+- **File I/O:** Single file write to `~/.openclaw/workspace/DELEGATION_CONTEXT.md`
 
 ### Long-Term Solution
 
@@ -432,7 +432,7 @@ psql -d nova_memory -c "SELECT updated_at FROM bootstrap_context_universal WHERE
 ```bash
 # Short-term system health
 systemctl --user is-active delegation-listener.service
-stat ~/clawd/DELEGATION_CONTEXT.md
+stat ~/.openclaw/workspace/DELEGATION_CONTEXT.md
 journalctl --user -u delegation-listener.service --since "1 hour ago" | grep -c "Regeneration complete"
 
 # Long-term system health
@@ -463,6 +463,6 @@ For issues with the delegation context auto-regeneration system:
 1. **Check service status:** `systemctl --user status delegation-listener.service`
 2. **Review logs:** `journalctl --user -u delegation-listener.service`  
 3. **Test database triggers:** See testing section above
-4. **Verify file generation:** Run `~/clawd/scripts/generate-delegation-context.sh` manually
+4. **Verify file generation:** Run `~/.openclaw/scripts/generate-delegation-context.sh` manually
 
 For long-term solution planning, reference Issue #10 in nova-cognition repository.

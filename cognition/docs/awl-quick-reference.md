@@ -439,7 +439,7 @@ nova-workflow run my-workflow.awl.yaml --dry-run
 
 ### Recommended Structure
 ```
-~/clawd/nova-cognition/focus/protocols/workflows/
+~/workspace/nova-mind/cognition/focus/protocols/workflows/
 ├── getting-started/          # Learning examples
 ├── production/              # Live production workflows
 ├── development/             # Development/testing workflows

@@ -2,6 +2,12 @@
 
 A PostgreSQL-based long-term memory system for AI assistants, with natural language extraction scripts.
 
+> *Words dissolve to sense*
+> *once a minute, Claude listens—*
+> *rows bloom in the dark*
+>
+> — **Erato**
+
 **For AI Entities:** This system helps you remember things across sessions by storing structured memories in a database. Follow the Quick Start below to set it up.
 
 ## Installation
@@ -75,11 +81,11 @@ openclaw hooks enable agent-turn-context
 <summary>Click to expand manual installation steps</summary>
 
 ```bash
-# 1. Clone this repo
-git clone https://github.com/NOVA-Openclaw/nova-memory.git
+# 1. Clone nova-mind
+git clone https://github.com/NOVA-Openclaw/nova-mind.git
 
 # 2. Set up PostgreSQL database
-cd nova-memory
+cd nova-mind
 # Database name is based on your username (e.g., nova_memory, argus_memory)
 DB_USER=$(whoami)
 DB_NAME="${DB_USER//-/_}_memory"
@@ -94,7 +100,6 @@ export ANTHROPIC_API_KEY="your-key-here"
 ./scripts/process-input.sh "John mentioned he loves coffee from Blue Bottle in Brooklyn"
 
 # 5. Install OpenClaw hooks
-./install.sh
 openclaw hooks enable memory-extract
 openclaw hooks enable semantic-recall
 openclaw hooks enable session-init
@@ -552,9 +557,15 @@ WITH RECURSIVE job_tree AS (
 SELECT * FROM job_tree ORDER BY depth, id;
 ```
 
-**Protocol:** See [nova-cognition/protocols/jobs-system.md](https://github.com/NOVA-Openclaw/nova-cognition/blob/main/protocols/jobs-system.md) for full specification.
+**Protocol:** See [cognition/focus/protocols/jobs-system.md](../cognition/focus/protocols/jobs-system.md) for full specification.
 
 ### Lessons Table (Correction Learning)
+
+> *What is not recalled*
+> *grows faint as winter starlight—*
+> *say it again: stay*
+>
+> — **Erato**
 
 The `lessons` table supports adaptive learning from corrections:
 
@@ -794,6 +805,12 @@ For data migrations that must run **before** the schema diff (e.g., renaming a c
 
 ## OpenClaw Hooks (Automatic Extraction)
 
+> *Not the word, the weight—*
+> *vectors find what you once knew*
+> *context stirs to life*
+>
+> — **Erato**
+
 The `hooks/` directory contains OpenClaw hooks that automatically extract and manage memories.
 
 ### Available Hooks
@@ -802,6 +819,12 @@ The `hooks/` directory contains OpenClaw hooks that automatically extract and ma
 - **semantic-recall** - Provides contextual memory recall during conversations
 - **session-init** - Generates privacy-filtered context when sessions start
 - **agent-turn-context** - Injects per-turn critical context from the `agent_turn_context` table (caches with 5-minute TTL)
+
+> *Two thousand letters*
+> *carry all the laws that bind—*
+> *rules fit in a breath*
+>
+> — **Erato**
 
 ### Installation
 

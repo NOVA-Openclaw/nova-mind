@@ -6,12 +6,12 @@
 
 ## Summary
 
-Successfully extracted entity resolution logic from the semantic-recall hook into a reusable shared library at `~/clawd/lib/entity-resolver/`. The hook has been refactored to use the library and continues to work correctly with improved performance through session-aware caching.
+Successfully extracted entity resolution logic from the semantic-recall hook into a reusable shared library at `~/workspace/nova-mind/relationships/lib/entity-resolver/`. The hook has been refactored to use the library and continues to work correctly with improved performance through session-aware caching.
 
 ## Deliverables
 
 ### 1. Entity Resolver Library
-📁 **Location:** `~/clawd/lib/entity-resolver/`
+📁 **Location:** `~/workspace/nova-mind/relationships/lib/entity-resolver/`
 
 **Files created:**
 - ✅ `index.ts` - Main exports (44 lines)
@@ -26,7 +26,7 @@ Successfully extracted entity resolution logic from the semantic-recall hook int
 **Total:** ~1,000 lines of code + documentation
 
 ### 2. Refactored Hook
-📁 **Location:** `~/clawd/hooks/semantic-recall/`
+📁 **Location:** `~/.openclaw/hooks/semantic-recall/`
 
 **Files modified:**
 - ✅ `handler.ts` - Refactored to use library (reduced complexity)
@@ -70,7 +70,7 @@ export interface EntityIdentifiers { phone?: string; uuid?: string; certCN?: str
 
 ### ✅ Library Tests
 ```bash
-cd ~/clawd/lib/entity-resolver
+cd ~/workspace/nova-mind/relationships/lib/entity-resolver
 npx tsx test.ts "(512) 692-7184"
 ```
 **Result:** All tests passed
@@ -82,7 +82,7 @@ npx tsx test.ts "(512) 692-7184"
 
 ### ✅ Hook Integration
 ```bash
-cd ~/clawd/hooks/semantic-recall
+cd ~/.openclaw/hooks/semantic-recall
 npx tsx verify-refactor.ts
 ```
 **Result:** Integration verified
@@ -179,7 +179,7 @@ hooks/semantic-recall/verify-refactor.ts
 
 1. **Commit to git:**
    ```bash
-   cd ~/clawd
+   cd ~/workspace/nova-mind
    git add lib/entity-resolver/
    git add hooks/semantic-recall/handler.ts
    git add hooks/semantic-recall/IMPLEMENTATION.md
@@ -199,21 +199,21 @@ hooks/semantic-recall/verify-refactor.ts
 
 ## Documentation
 
-- **API Docs:** `~/clawd/lib/entity-resolver/README.md`
-- **Refactoring Guide:** `~/clawd/lib/entity-resolver/REFACTORING.md`
-- **Hook Implementation:** `~/clawd/hooks/semantic-recall/IMPLEMENTATION.md`
+- **API Docs:** `~/workspace/nova-mind/relationships/lib/entity-resolver/README.md`
+- **Refactoring Guide:** `~/workspace/nova-mind/relationships/lib/entity-resolver/REFACTORING.md`
+- **Hook Implementation:** `~/.openclaw/hooks/semantic-recall/IMPLEMENTATION.md`
 
 ## Verification Commands
 
 ```bash
 # Test library
-cd ~/clawd/lib/entity-resolver && npx tsx test.ts "(512) 692-7184"
+cd ~/workspace/nova-mind/relationships/lib/entity-resolver && npx tsx test.ts "(512) 692-7184"
 
 # Test hook integration
-cd ~/clawd/hooks/semantic-recall && npx tsx verify-refactor.ts
+cd ~/.openclaw/hooks/semantic-recall && npx tsx verify-refactor.ts
 
 # Check import paths
-cd ~/clawd && grep -r "entity-resolver" hooks/semantic-recall/handler.ts
+cd ~/workspace/nova-mind && grep -r "entity-resolver" hooks/semantic-recall/handler.ts
 ```
 
 ---

@@ -116,7 +116,7 @@ Added granular state tracking with four distinct states:
 
 ### For Nova (Local Testing)
 1. Stop the agent-chat-channel plugin if running
-2. Run migration: `psql -d nova_memory -f ~/.clawdbot/extensions/agent_chat/migration.sql`
+2. Run migration: `psql -d ${USER}_memory -f ~/.clawdbot/extensions/agent_chat/migration.sql`
 3. Restart the plugin
 4. Send a test message and verify state progression
 5. Test monitoring queries
@@ -124,9 +124,9 @@ Added granular state tracking with four distinct states:
 ### For Newhart
 1. Copy files from `/home/nova/clawd/clawdbot-plugins/agent-chat-channel/` to `/home/newhart/clawd/clawdbot-plugins/agent-chat-channel/`
 2. Backup database: `pg_dump -d nova_memory > backup.sql`
-3. Run migration: `psql -d nova_memory -f ~/clawd/clawdbot-plugins/agent-chat-channel/migration.sql`
+3. Run migration: `psql -d ${USER}_memory -f ~/workspace/nova-mind/cognition/focus/agent_chat/migration.sql`
 4. Restart the agent-chat-channel plugin
-5. Test with: `psql -d nova_memory -f ~/clawd/clawdbot-plugins/agent-chat-channel/test-state-tracking.sql`
+5. Test with: `psql -d ${USER}_memory -f ~/workspace/nova-mind/cognition/focus/agent_chat/test-state-tracking.sql`
 
 ## Testing the Changes
 

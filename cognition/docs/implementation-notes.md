@@ -102,7 +102,7 @@ interface GateState {
 
 **Storage:**
 - **Option 1:** PostgreSQL table `workflow_executions`
-- **Option 2:** JSON files in `~/clawd/nova-cognition/logs/executions/`
+- **Option 2:** JSON files in `~/.openclaw/logs/awl-executions/`
 - **Recommendation:** Start with PostgreSQL for durability
 
 ### 3. Executor Engine

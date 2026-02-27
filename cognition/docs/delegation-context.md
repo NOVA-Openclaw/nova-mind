@@ -14,11 +14,11 @@ When an agent needs to delegate work, it should know:
 
 ### Script: `generate-delegation-context.sh`
 
-**Location:** `~/clawd/scripts/generate-delegation-context.sh`
+**Location:** `~/.openclaw/scripts/generate-delegation-context.sh`
 
-**Output:** `~/clawd/DELEGATION_CONTEXT.md` (configurable)
+**Output:** `~/.openclaw/workspace/DELEGATION_CONTEXT.md` (configurable)
 
-**Database:** `nova_memory`
+**Database:** `{username}_memory` (e.g., `nova_memory`)
 
 ### Data Sources
 
@@ -72,11 +72,11 @@ Agent-specific guidance extracted from `seed_context` showing how to effectively
 
 ### Manual Generation
 ```bash
-~/clawd/scripts/generate-delegation-context.sh
-# Outputs to ~/clawd/DELEGATION_CONTEXT.md
+~/.openclaw/scripts/generate-delegation-context.sh
+# Outputs to ~/.openclaw/workspace/DELEGATION_CONTEXT.md
 
 # Custom output location:
-~/clawd/scripts/generate-delegation-context.sh /tmp/custom-context.md
+~/.openclaw/scripts/generate-delegation-context.sh /tmp/custom-context.md
 ```
 
 ### Integration Points
@@ -104,7 +104,7 @@ Both should be loaded together for full delegation awareness.
 
 ## Maintenance
 
-**Auto-generated file** - Do not edit `DELEGATION_CONTEXT.md` manually. Changes should be made in the database:
+**Auto-generated file** - Do not edit `DELEGATION_CONTEXT.md` manually. Changes should be made in the nova-mind database:
 
 - Update agent definitions in `agents` table
 - Modify workflows in `workflows` and `workflow_steps` tables
@@ -112,6 +112,6 @@ Both should be loaded together for full delegation awareness.
 
 ## Related
 
-- [Issue #3: Dynamic delegation context and workflow integration](https://github.com/NOVA-Openclaw/nova-cognition/issues/3)
-- [Issue #4: Create generate-delegation-context.sh script](https://github.com/NOVA-Openclaw/nova-cognition/issues/4)
-- `nova-memory` database schemas: `agents`, `workflows`, `workflow_steps`, `workflow_steps_detail`
+- `nova-mind` database schemas: `agents`, `workflows`, `workflow_steps`, `workflow_steps_detail`
+- [cognition/README.md](../README.md) — Overview of the cognition subsystem
+- [cognition/docs/models.md](models.md) — AI model reference for agent selection

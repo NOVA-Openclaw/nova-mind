@@ -17,7 +17,7 @@ SELECT send_agent_message('sender', 'message', 'system', ARRAY['recipient']);
 
 ## File Locations
 
-- Workspace: ~/clawd
+- Workspace: ~/.openclaw/workspace
 - OpenClaw: ~/.openclaw/
 - Logs: ~/.openclaw/gateway.log
 

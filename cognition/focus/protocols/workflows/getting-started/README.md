@@ -1,6 +1,6 @@
 # AWL Getting Started Examples
 
-These workflows accompany the **AWL Getting Started Guide** (`~/clawd/nova-cognition/docs/awl-getting-started.md`).
+These workflows accompany the **AWL Getting Started Guide** (`~/workspace/nova-mind/cognition/docs/awl-getting-started.md`).
 
 ## Example Workflows
 
@@ -46,7 +46,7 @@ After running these examples:
 1. **Modify them** - Change variables, add steps, experiment
 2. **Create your own** - Use these as templates for real workflows  
 3. **Study advanced examples** - Look at `../create-new-agent.awl.yaml` and others
-4. **Read the full docs** - `~/clawd/nova-cognition/docs/agent-workflow-language.md`
+4. **Read the full docs** - `~/workspace/nova-mind/cognition/docs/agent-workflow-language.md`
 
 ## Tips
 

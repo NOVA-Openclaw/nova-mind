@@ -120,7 +120,7 @@ await runtime.channel.reply.dispatchReplyFromConfig({ ... });
 ## Build Instructions
 
 ```bash
-cd ~/clawd/nova-cognition/agent_chat
+cd ~/workspace/nova-mind/cognition/focus/agent_chat
 
 # Install dependencies
 npm install
@@ -171,9 +171,9 @@ To test the rewritten plugin:
 ## Reference Implementation
 
 This rewrite closely follows the Discord plugin structure:
-- `~/clawd/nova-openclaw/extensions/discord/index.ts`
-- `~/clawd/nova-openclaw/extensions/discord/src/channel.ts`
-- `~/clawd/nova-openclaw/extensions/discord/src/runtime.ts`
+- `~/.openclaw/extensions/discord/index.ts`
+- `~/.openclaw/extensions/discord/src/channel.ts`
+- `~/.openclaw/extensions/discord/src/runtime.ts`
 
 ## Status
 
@@ -186,7 +186,7 @@ The plugin is functionally complete and follows all OpenClaw Plugin SDK best pra
 
 ## Next Steps
 
-1. Build the plugin: `cd ~/clawd/nova-cognition/agent_chat && npm install && npm run build`
+1. Build the plugin: `cd ~/workspace/nova-mind/cognition/focus/agent_chat && npm install && npm run build`
 2. Test with a sample message
 3. Verify replies work correctly
 4. Close issue nova-cognition#12

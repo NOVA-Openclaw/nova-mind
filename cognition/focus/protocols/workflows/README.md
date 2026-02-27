@@ -207,4 +207,4 @@ Check `wait_for` setting - use "any" or "first" if not all branches critical.
 
 ---
 
-For full documentation, see: `~/clawd/nova-cognition/docs/agent-workflow-language.md`
+For full documentation, see: `~/workspace/nova-mind/cognition/docs/agent-workflow-language.md`

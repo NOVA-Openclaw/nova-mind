@@ -107,7 +107,7 @@ export default plugin;
 ### 1. Backup Old Version
 
 ```bash
-cd ~/clawd/nova-cognition/agent_chat
+cd ~/workspace/nova-mind/cognition/focus/agent_chat
 cp index.js index.js.backup
 cp openclaw.plugin.json openclaw.plugin.json.backup
 ```
@@ -137,8 +137,8 @@ This compiles the TypeScript files to `dist/` directory.
 
 If you're manually loading the plugin, update the path:
 
-**Old:** `~/clawd/nova-cognition/agent_chat/index.js`
-**New:** `~/clawd/nova-cognition/agent_chat/dist/index.js`
+**Old:** `~/workspace/nova-mind/cognition/focus/agent_chat/index.js`
+**New:** `~/workspace/nova-mind/cognition/focus/agent_chat/dist/index.js`
 
 ### 5. Restart OpenClaw Gateway
 
@@ -235,7 +235,7 @@ SELECT * FROM agent_chat WHERE reply_to = 123;
 If you need to rollback:
 
 ```bash
-cd ~/clawd/nova-cognition/agent_chat
+cd ~/workspace/nova-mind/cognition/focus/agent_chat
 mv index.js index.js.v2
 mv index.js.backup index.js
 mv openclaw.plugin.json.backup openclaw.plugin.json

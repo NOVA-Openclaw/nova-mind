@@ -22,9 +22,9 @@ nova-mind/
 ## Installation
 
 ```bash
-# Interactive (prompts for config)
+# Interactive shell (human or agent in an SSH session)
 bash shell-install.sh
 
-# Non-interactive (uses existing config)
+# OpenClaw agent working within its own environment (env vars already set)
 bash agent-install.sh
 ```

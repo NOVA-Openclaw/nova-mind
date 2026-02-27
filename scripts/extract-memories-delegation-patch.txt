@@ -1,0 +1,36 @@
+# Patch for extract-memories.sh to add delegation awareness
+# This shows the addition to the PROMPT section
+
+# Add this section after the PRIVACY DETECTION section and before the "Return JSON" section:
+
+DELEGATION CONTEXT:
+NOVA frequently delegates tasks to specialized agents. When you see patterns like:
+- "Let me get [AGENT] to help"
+- "I'll delegate this to [AGENT]"
+- "[AGENT] fixed/completed/handled [TASK]"
+- "Consider [AGENT] for this task"
+- "[AGENT] is good at [CAPABILITY]"
+
+Extract as entity_facts for NOVA (entity_id=1):
+
+1. **New delegations**: 
+   - key: "delegates_to"
+   - value: "AGENT_NAME for TASK_TYPE"
+   - category: "delegation"
+   - confidence: 1.0 (if stated explicitly), 0.8 (if implied)
+
+2. **Agent capabilities** (from experience):
+   - key: "agent_capability"
+   - value: "AGENT_NAME: description of what they're good at"
+   - category: "delegation"
+   - confidence: based on how certain the statement is
+
+3. **Outcomes**:
+   - key: "agent_success" (positive outcome) or "agent_failure" (negative outcome)
+   - value: "AGENT_NAME: what they did and the outcome"
+   - category: "delegation"
+   - confidence: 1.0 for completed actions
+
+IMPORTANT: Only extract delegation info from the CURRENT MESSAGE, but use context to understand which agent is being discussed.
+
+Known agents: Coder (coding), Gidget (git-ops), Scout (research), IRIS (creative), Hermes (comms), Scribe (docs), Ticker (portfolio), Athena (media), Newhart (meta/agents).

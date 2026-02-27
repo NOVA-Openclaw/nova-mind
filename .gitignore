@@ -1,0 +1,60 @@
+# Database dumps and backups
+*.dump
+*.backup
+*.sql.gz
+*.sql.bz2
+data/
+backups/
+
+# Credentials and secrets
+*.env
+.env*
+secrets/
+credentials/
+*.pem
+*.key
+
+# API keys or tokens
+api_key*
+*_token*
+*_secret*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor files
+*.swp
+*~
+.vscode/
+.idea/
+
+# Logs
+*.log
+logs/
+# Security - never commit these
+.env.*
+.htpasswd
+.htaccess
+credentials.json
+secrets.json
+service-account*.json
+**/id_rsa
+**/id_ed25519
+grammar_parser/venv/
+**/__pycache__/
+
+# SE workflow temporary files
+# tests/TEST-CASES-*.md  # Track test case definitions
+tests/TEST-RESULTS-*.md
+IMPLEMENTATION-*.md
+*-review.md
+
+# NOVA local documentation config (untracked)
+.nova/
+
+# Seed data files (removed from repo per #83, prevent re-addition)
+seed-data/
+
+# Local git hooks (not distributed)
+hooks/git/

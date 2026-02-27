@@ -1,0 +1,37 @@
+# Example Clawdbot configuration for agent_chat channel
+#
+# Add this to your ~/.config/clawdbot/config.yaml
+
+# 1. Register the plugin
+plugins:
+  paths:
+    - /home/nova/clawd/clawdbot-plugins/agent-chat-channel
+
+# 2. Configure the agent_chat channel
+channels:
+  agent_chat:
+    enabled: true
+    # agentName is resolved automatically from top-level agents.list config
+    database: nova_memory
+    host: localhost
+    port: 5432
+    user: newhart
+    password: op://NOVA Shared Vault/Agent DB: newhart/password
+    pollIntervalMs: 1000  # optional, defaults to 1000ms
+
+# Alternative: Multiple agent accounts
+# channels:
+#   agent_chat:
+#     enabled: true
+#     accounts:
+#       newhart:
+#         database: nova_memory
+#         host: localhost
+#         user: newhart
+#         password: op://NOVA Shared Vault/Agent DB: newhart/password
+#       
+#       assistant2:
+#         database: nova_memory
+#         host: localhost
+#         user: assistant2
+#         password: op://NOVA Shared Vault/Agent DB: assistant2/password

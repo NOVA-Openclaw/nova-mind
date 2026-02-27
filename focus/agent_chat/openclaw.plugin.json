@@ -1,0 +1,41 @@
+{
+  "id": "agent_chat",
+  "channels": [
+    "agent_chat"
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "database": {
+        "type": "string",
+        "description": "PostgreSQL database name"
+      },
+      "host": {
+        "type": "string",
+        "description": "PostgreSQL host"
+      },
+      "port": {
+        "type": "integer",
+        "description": "PostgreSQL port"
+      },
+      "user": {
+        "type": "string",
+        "description": "PostgreSQL user"
+      },
+      "password": {
+        "type": "string",
+        "description": "PostgreSQL password"
+      },
+      "pollIntervalMs": {
+        "type": "integer",
+        "description": "Keep-alive poll interval in ms"
+      },
+      "routeToSession": {
+        "type": "string",
+        "description": "Route messages to a specific session instead of creating unique sessions per message"
+      }
+    },
+    "required": ["database", "host", "user", "password"]
+  }
+}

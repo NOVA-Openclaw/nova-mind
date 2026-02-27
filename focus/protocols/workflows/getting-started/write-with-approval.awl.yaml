@@ -1,0 +1,71 @@
+workflow:
+  name: "write-with-approval"
+  version: "1.0.0"
+  description: "Write content with human approval gate"
+  author: "getting-started-guide"
+  
+  variables:
+    topic: "AI and the future"
+    approver: "nova"
+  
+  steps:
+    # Step 1: Create initial draft
+    - step: "create-draft"
+      type: "agent"
+      agent: "scribe"
+      task: |
+        Write a brief 2-paragraph introduction about: $topic
+        
+        Make it engaging and informative.
+      timeout: 300
+      outputs:
+        - draft_content: "$result"
+    
+    # Step 2: Human approval gate
+    - step: "review-approval"
+      type: "gate"
+      gate_type: "approval"
+      message: |
+        📝 Draft ready for review:
+        
+        Topic: $topic
+        Content: $draft_content
+        
+        Approve for publication?
+      approvers: ["$approver"]
+      timeout: 1800  # 30 minutes
+      on_reject: "fail"
+    
+    # Step 3: Finalize (only if approved)
+    - step: "finalize-content"
+      type: "agent"
+      agent: "scribe"
+      task: |
+        Polish this approved content and format it nicely:
+        
+        $draft_content
+      timeout: 180
+      outputs:
+        - final_content: "$result"
+    
+    # Step 4: Success notification
+    - step: "notify-completion"
+      type: "notify"
+      target: "agent_chat"
+      message: |
+        ✅ Content creation workflow complete!
+        
+        Topic: $topic
+        Final content: $final_content
+      mentions: ["$approver"]
+  
+  # Handle workflow-level events
+  on_success:
+    - type: "log"
+      message: "Content creation successful for topic: $topic"
+  
+  on_failure:
+    - type: "notify"
+      target: "agent_chat"
+      message: "❌ Content creation failed: $error_message"
+      mentions: ["$approver"]

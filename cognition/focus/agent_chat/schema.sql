@@ -87,7 +87,6 @@ DECLARE
     v_id        INTEGER;
     v_sender    TEXT;
     v_recipients TEXT[];
-    v_recipient TEXT;
 BEGIN
     -- Validate inputs
     IF p_message IS NULL OR trim(p_message) = '' THEN
@@ -102,17 +101,6 @@ BEGIN
     v_sender := LOWER(p_sender);
     v_recipients := ARRAY(SELECT LOWER(unnest(p_recipients)));
 
-    -- Validate sender exists in agents table
-    IF NOT EXISTS (SELECT 1 FROM agents WHERE LOWER(name) = v_sender) THEN
-        RAISE EXCEPTION 'send_agent_message: sender "%" not found in agents table', v_sender;
-    END IF;
-
-    -- Validate each recipient (allow '*' for broadcast)
-    FOREACH v_recipient IN ARRAY v_recipients LOOP
-        IF v_recipient <> '*' AND NOT EXISTS (SELECT 1 FROM agents WHERE LOWER(name) = v_recipient) THEN
-            RAISE EXCEPTION 'send_agent_message: recipient "%" not found in agents table', v_recipient;
-        END IF;
-    END LOOP;
 
     -- Bypass gate and insert
     SET LOCAL agent_chat.bypass_gate = 'on';

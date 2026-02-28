@@ -55,12 +55,13 @@ function createPgClient(config: {
  */
 async function fetchUnprocessedMessages(client: pg.Client, agentName: string) {
   const query = `
-    SELECT ac.id, ac.channel, ac.sender, ac.message, ac.mentions, ac.reply_to, ac.created_at
+    SELECT ac.id, ac.sender, ac.message, ac.recipients, ac.reply_to, ac."timestamp"
     FROM agent_chat ac
     LEFT JOIN agent_chat_processed acp ON ac.id = acp.chat_id AND LOWER(acp.agent) = LOWER($1)
-    WHERE LOWER($1) = ANY(SELECT LOWER(unnest(ac.mentions)))
+    WHERE (LOWER($1) = ANY(SELECT LOWER(unnest(ac.recipients)))
+        OR '*' = ANY(ac.recipients))
       AND acp.chat_id IS NULL
-    ORDER BY ac.created_at ASC
+    ORDER BY ac."timestamp" ASC
   `;
 
   const result = await client.query(query, [agentName]);
@@ -126,31 +127,39 @@ async function markMessageFailed(
 }
 
 /**
- * Insert outbound message into agent_chat
+ * Insert outbound message into agent_chat via send_agent_message()
  */
 async function insertOutboundMessage(
   client: pg.Client,
   {
-    channel,
     sender,
     message,
+    recipients,
     replyTo,
   }: {
-    channel: string;
     sender: string;
     message: string;
+    recipients: string[];
     replyTo: number | null;
   },
 ) {
-  const query = `
-    INSERT INTO agent_chat (channel, sender, message, mentions, reply_to, created_at)
-    VALUES ($1, $2, $3, $4, $5, NOW())
-    RETURNING id
-  `;
+  // All inserts must go through send_agent_message() — direct INSERT is blocked.
+  // reply_to is set separately after insert since send_agent_message doesn't accept it.
+  const result = await client.query(
+    `SELECT send_agent_message($1, $2, $3) AS id`,
+    [sender, message, recipients],
+  );
 
-  const result = await client.query(query, [channel, sender, message, [], replyTo || null]);
+  const newId: number = result.rows[0].id;
 
-  return result.rows[0];
+  if (replyTo !== null) {
+    await client.query(
+      `UPDATE agent_chat SET reply_to = $1 WHERE id = $2`,
+      [replyTo, newId],
+    );
+  }
+
+  return { id: newId };
 }
 
 /**
@@ -172,12 +181,11 @@ async function processAgentChatMessage({
 }: {
   message: {
     id: number;
-    channel: string;
     sender: string;
     message: string;
-    mentions: string[];
+    recipients: string[];
     reply_to: number | null;
-    created_at: Date;
+    timestamp: Date;
   };
   client: pg.Client;
   agentName: string;
@@ -206,11 +214,11 @@ async function processAgentChatMessage({
 
     // Format the inbound message envelope
     const envelopeOptions = runtime.channel.reply.resolveEnvelopeFormatOptions(cfg);
-    const fromLabel = `${message.sender} (${message.channel})`;
+    const fromLabel = `${message.sender}`;
     const body = runtime.channel.reply.formatInboundEnvelope({
       channel: "AgentChat",
       from: fromLabel,
-      timestamp: message.created_at ? new Date(message.created_at).getTime() : undefined,
+      timestamp: message.timestamp ? new Date(message.timestamp).getTime() : undefined,
       body: message.message,
       chatType: "direct",
       sender: { name: message.sender, id: message.sender },
@@ -218,7 +226,7 @@ async function processAgentChatMessage({
     });
 
     // Build the inbound context
-    const agentChatTo = `agent_chat:${message.channel}`;
+    const agentChatTo = `agent_chat:${agentName}`;
     const ctxPayload = runtime.channel.reply.finalizeInboundContext({
       Body: body,
       RawBody: message.message,
@@ -233,7 +241,7 @@ async function processAgentChatMessage({
       Provider: "agent_chat",
       Surface: "agent_chat",
       MessageSid: String(message.id),
-      Timestamp: message.created_at ? new Date(message.created_at).getTime() : undefined,
+      Timestamp: message.timestamp ? new Date(message.timestamp).getTime() : undefined,
       OriginatingChannel: "agent_chat",
       OriginatingTo: agentChatTo,
     });
@@ -244,9 +252,9 @@ async function processAgentChatMessage({
         deliver: async (payload, info) => {
           try {
             await insertOutboundMessage(client, {
-              channel: message.channel,
               sender: agentName,
               message: payload.text || "",
+              recipients: [message.sender],
               replyTo: message.id,
             });
 
@@ -569,9 +577,6 @@ export const agentChatPlugin: ChannelPlugin<ResolvedAgentChatAccount> = {
       try {
         await client.connect();
 
-        // Extract channel from 'to' parameter (format: "agent_chat:channel" or just "channel")
-        const channel = to.includes(":") ? to.split(":").pop() || "default" : to;
-
         const agentName = resolveAgentName(cfg);
         if (!agentName) {
           throw new Error(
@@ -579,11 +584,14 @@ export const agentChatPlugin: ChannelPlugin<ResolvedAgentChatAccount> = {
           );
         }
 
+        // 'to' is the recipient agent name (format: "agent_chat:AgentName", "agent:AgentName", or bare "AgentName")
+        const recipientName = normalizeAgentChatMessagingTarget(to) || to;
+
         const result = await insertOutboundMessage(client, {
-          channel,
           sender: agentName,
           message: text,
-          replyTo: null, // Could be enhanced to track reply_to from context
+          recipients: [recipientName],
+          replyTo: null,
         });
 
         return {

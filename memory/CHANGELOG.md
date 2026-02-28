@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### Added (renames.json mechanism — #107)
+
+- **`memory/database/renames.json`** ([#107](https://github.com/nova-openclaw/nova-memory/issues/107)) — New declarative rename manifest. Declares column and table renames that must be applied before `pgschema plan/apply` can converge. Format:
+  ```json
+  {
+    "renames": [
+      { "table": "agent_chat", "column": { "from": "mentions", "to": "recipients" }, "pr": "#106" },
+      { "table": "agent_chat", "column": { "from": "created_at", "to": "timestamp" }, "pr": "#106" },
+      { "table": "agent_chat", "drop": "channel", "pr": "#106", "reason": "..." }
+    ]
+  }
+  ```
+- **`agent-install.sh` Step 1.5** ([#107](https://github.com/nova-openclaw/nova-memory/issues/107)) — New installer step reads `renames.json` and applies renames idempotently before `pgschema plan`. For each column rename, checks whether the `FROM` column still exists via `information_schema.columns`; skips if already renamed. Drops listed in `renames.json` are registered as intentional and excluded from the hazard-count filter in the pgschema plan check, preventing false "destructive change" blocking.
+
 ### Fixed
 - **`shell-install.sh`: source `pg-env.sh` early so `PGPASSWORD` is set during reachability check** ([#134](https://github.com/nova-openclaw/nova-memory/issues/134)) — `lib/pg-env.sh` is now sourced at the top of the script before any config validation or DB checks:
   - Removed redundant manual `jq` parsing of `postgres.json` fields — `load_pg_env()` handles all env loading

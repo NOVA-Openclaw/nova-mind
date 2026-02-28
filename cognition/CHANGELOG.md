@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Changed (agent_chat modernization — #106, #107)
+
+- **`agent_chat` schema modernized** ([#106](https://github.com/nova-openclaw/nova-cognition/issues/106)) — Column renames and one removal rationalize the table structure for multi-agent messaging:
+  - `mentions` → `recipients` (more accurate semantics; column is `NOT NULL` with CHECK)
+  - `created_at` → `"timestamp"` (quoted everywhere — `timestamp` is a reserved word in PostgreSQL; type upgraded to `TIMESTAMPTZ`)
+  - `channel` column **dropped** — inter-agent messaging uses `sender + recipients` only
+- **`send_agent_message()` is now the only insert path** ([#106](https://github.com/nova-openclaw/nova-cognition/issues/106)) — Direct `INSERT` on `agent_chat` is blocked by the new `trg_enforce_agent_chat_function_use` trigger. All inserts must go through `send_agent_message(p_sender, p_message, p_recipients)` (SECURITY DEFINER). The function validates sender and all recipients against the `agents` table; use `ARRAY['*']` for broadcast.
+- **`normalize_agent_chat_mentions()` trigger removed** ([#106](https://github.com/nova-openclaw/nova-cognition/issues/106)) — Normalization (lowercase) is now enforced inside `send_agent_message()`.
+- **New views and expiry function** ([#106](https://github.com/nova-openclaw/nova-cognition/issues/106)) — Added `v_agent_chat_recent` and `v_agent_chat_stats`; `expire_old_chat()` now uses `"timestamp"` column.
+- **pg_notify payload updated** ([#106](https://github.com/nova-openclaw/nova-cognition/issues/106)) — `notify_agent_chat()` now emits `recipients` and drops the `channel` field.
+- **`channel.ts` updated to new schema** ([#106](https://github.com/nova-openclaw/nova-cognition/issues/106)) — `fetchUnprocessedMessages` selects `recipients`/`"timestamp"` and also matches broadcast (`'*'`). `insertOutboundMessage` uses `send_agent_message()`. Context routing changed from `agent_chat:channel` to `agent_chat:agentName`.
+- **Declarative column renames via `renames.json`** ([#107](https://github.com/nova-openclaw/nova-memory/issues/107)) — `memory/database/renames.json` declares the three `agent_chat` renames/drops. `agent-install.sh` Step 1.5 reads this file and applies `ALTER TABLE … RENAME COLUMN` idempotently before `pgschema plan/apply`.
+
 ### Added
 - **`agents.json` output is now a bare JSON array** — The `agent-config-sync` plugin writes a plain array (e.g. `[{ "id": "main", ... }, ...]`) instead of a wrapped object. The `$include` directive in `openclaw.json` moved from the root level to `agents.list`: `"list": { "$include": "./agents.json" }`. This lets other `agents.*` keys (defaults, models allowlist) live in `openclaw.json` without being touched by syncs. ([#174](https://github.com/nova-openclaw/nova-cognition/issues/174), [#167](https://github.com/nova-openclaw/nova-cognition/issues/167))
 - **`is_default` support in agent sync** — Agents with `is_default = true` in the DB now get `"default": true` in their `agents.json` entry. The key is omitted entirely for non-default agents. ([#174](https://github.com/nova-openclaw/nova-cognition/issues/174), [#168](https://github.com/nova-openclaw/nova-cognition/issues/168))

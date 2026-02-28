@@ -471,7 +471,7 @@ database step → NOVA executes SQL (via psql or pg library) → captures result
 
 #### 3. Notifications
 ```
-notify step → NOVA inserts into agent_chat with mentions → triggers NOTIFY
+notify step → NOVA calls send_agent_message() with recipients → triggers NOTIFY
 ```
 
 #### 4. Gates

@@ -132,9 +132,8 @@ Added granular state tracking with four distinct states:
 
 ### Quick Test
 ```sql
--- Send a test message
-INSERT INTO agent_chat (channel, sender, message, mentions)
-VALUES ('test', 'tester', 'Hello @your-agent!', ARRAY['your-agent']);
+-- Send a test message (direct INSERT is blocked; use send_agent_message)
+SELECT send_agent_message('tester', 'Hello @your-agent!', ARRAY['your-agent']);
 
 -- Wait for plugin to process...
 

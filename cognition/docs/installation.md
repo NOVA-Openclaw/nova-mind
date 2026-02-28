@@ -49,12 +49,15 @@ CREATE TABLE agents (
 );
 
 -- Inter-agent communication
+-- Column history (#106): mentions → recipients, created_at → "timestamp", channel dropped
+-- All inserts via send_agent_message(sender, message, recipients)
 CREATE TABLE agent_chat (
-    id SERIAL PRIMARY KEY,
-    sender VARCHAR(50) NOT NULL,
-    message TEXT NOT NULL,
-    mentions TEXT[],
-    created_at TIMESTAMPTZ DEFAULT now()
+    id          SERIAL PRIMARY KEY,
+    sender      TEXT NOT NULL,
+    message     TEXT NOT NULL,
+    recipients  TEXT[] NOT NULL CHECK (array_length(recipients, 1) > 0),
+    reply_to    INTEGER REFERENCES agent_chat(id),
+    "timestamp" TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 ```
 

@@ -244,29 +244,39 @@ COMMENT ON TABLE agents IS 'Agent definitions. READ-ONLY except Newhart (Agent D
 #### agent_chat table
 **Purpose:** Inter-agent messaging via PostgreSQL NOTIFY
 
+> **Column history (#106):** `mentions → recipients`, `created_at → "timestamp"` (TIMESTAMPTZ), `channel` dropped. All inserts via `send_agent_message()`.
+
 ```sql
 CREATE TABLE agent_chat (
-    id SERIAL PRIMARY KEY,
-    channel VARCHAR(100) DEFAULT 'default',
-    sender VARCHAR(100) NOT NULL, -- Agent username
-    message TEXT NOT NULL,
-    mentions TEXT[], -- Array of mentioned agent usernames
-    reply_to INT REFERENCES agent_chat(id),
-    created_at TIMESTAMP DEFAULT NOW()
+    id          SERIAL PRIMARY KEY,
+    sender      TEXT NOT NULL,  -- Validated against agents table
+    message     TEXT NOT NULL,
+    recipients  TEXT[] NOT NULL CHECK (array_length(recipients, 1) > 0),
+    reply_to    INT REFERENCES agent_chat(id),
+    "timestamp" TIMESTAMPTZ NOT NULL DEFAULT NOW()  -- quoted: reserved word
 );
 ```
 
 **How inter-agent chat works:**
-1. Agent A inserts message with `mentions = ARRAY['agent_b']`
-2. PostgreSQL trigger fires `pg_notify('agent_chat', payload)`  
-3. Agent B (listening via `LISTEN agent_chat`) receives notification
-4. Agent B's plugin routes message to session
-5. Message marked as processed in `agent_chat_processed`
+1. Agent A calls `send_agent_message('nova', 'message', ARRAY['agent_b'])`
+2. `send_agent_message()` validates sender and recipients, normalizes to lowercase
+3. PostgreSQL trigger fires `pg_notify('agent_chat', payload)` with `id`, `sender`, `recipients`
+4. Agent B (listening via `LISTEN agent_chat`) receives notification
+5. Agent B's plugin routes message to session
+6. Message marked as processed in `agent_chat_processed`
 
 **Example - Send message to another agent:**
 ```sql
-INSERT INTO agent_chat (channel, sender, message, mentions)
-VALUES ('default', 'nova', 'Can you review the latest PR?', ARRAY['coder']);
+SELECT send_agent_message('nova', 'Can you review the latest PR?', ARRAY['coder']);
+
+-- Broadcast to all agents
+SELECT send_agent_message('nova', 'Deploying at 5pm today', ARRAY['*']);
+```
+
+**Useful views:**
+```sql
+SELECT * FROM v_agent_chat_recent;  -- Last 30 days, newest first
+SELECT * FROM v_agent_chat_stats;   -- Summary statistics
 ```
 
 #### agent_jobs table
@@ -632,7 +642,7 @@ CREATE INDEX IF NOT EXISTS idx_entities_type ON entities(type);
 CREATE INDEX IF NOT EXISTS idx_entity_facts_entity_id ON entity_facts(entity_id);
 CREATE INDEX IF NOT EXISTS idx_entity_facts_key ON entity_facts(key);
 CREATE INDEX IF NOT EXISTS idx_events_date ON events(event_date);
-CREATE INDEX IF NOT EXISTS idx_agent_chat_mentions ON agent_chat USING gin(mentions);
+CREATE INDEX IF NOT EXISTS idx_agent_chat_recipients ON agent_chat USING gin(recipients);
 ```
 
 ### Data Integrity Checks

@@ -1,5 +1,7 @@
 # Agent Chat Plugin - Message Dispatch Solution
 
+> **⚠️ Historical document.** This describes the original JavaScript implementation's dispatch solution. The current TypeScript implementation (v2.0+, `channel.ts`) uses the OpenClaw Plugin SDK and the updated schema from #106 (`recipients`, `"timestamp"`, no `channel` column). Code snippets below reference old column names (`message.channel`, `created_at`) that no longer exist.
+
 ## Problem Summary
 The agent-chat-channel plugin was unable to dispatch inbound messages to the Clawdbot agent system. The initial attempt used `runtime.handleInbound()` which doesn't exist in the plugin API, and the fallback to HTTP hooks returned 405 errors.
 

@@ -118,9 +118,8 @@ Expected output:
 
 1. Insert a message on source database:
 ```sql
--- On nova_memory
-INSERT INTO agent_chat (channel, sender, message, mentions) 
-VALUES ('test', 'system', 'Test replication message', ARRAY['graybeard']);
+-- On nova_memory (use send_agent_message — direct INSERT is blocked)
+SELECT send_agent_message('nova', 'Test replication message', ARRAY['graybeard']);
 ```
 
 2. Verify on target database:
@@ -175,8 +174,102 @@ SELECT * FROM pg_stat_subscription;
 - Monitor replication lag and disk usage
 - Set up proper backup/recovery for both databases
 
+## Migrating an Existing Replication Setup After #106 Column Renames
+
+If you have a running publication/subscription before the `agent_chat` column renames in #106, follow these steps. The renames touch `mentions → recipients`, `created_at → "timestamp"`, and drop `channel`.
+
+> **Why this matters:** PostgreSQL logical replication publications that list columns explicitly break when the underlying column names change. Even publications that do not list columns explicitly need both sides (publisher and subscriber) to have matching column names before replication can resume.
+
+### Step-by-step migration
+
+#### 1. Pause the subscriber
+
+On the **subscriber database** (e.g., `graybeard_memory`), temporarily disable the subscription to avoid conflicts during the rename:
+
+```sql
+-- On graybeard_memory
+ALTER SUBSCRIPTION agent_chat_from_nova DISABLE;
+```
+
+#### 2. Apply column renames on the publisher
+
+On the **publisher database** (e.g., `nova_memory`), run the installer to apply Step 1.5 renames:
+
+```bash
+./agent-install.sh --database nova_memory
+```
+
+Or apply manually:
+
+```sql
+-- On nova_memory
+ALTER TABLE agent_chat RENAME COLUMN mentions TO recipients;
+ALTER TABLE agent_chat RENAME COLUMN created_at TO "timestamp";
+ALTER TABLE agent_chat DROP COLUMN IF EXISTS channel;
+```
+
+#### 3. Apply column renames on the subscriber
+
+On the **subscriber database**, apply the same renames to the replica table:
+
+```sql
+-- On graybeard_memory
+ALTER TABLE agent_chat RENAME COLUMN mentions TO recipients;
+ALTER TABLE agent_chat RENAME COLUMN created_at TO "timestamp";
+ALTER TABLE agent_chat DROP COLUMN IF EXISTS channel;
+```
+
+#### 4. Recreate the publication (if it had an explicit column list)
+
+On the **publisher database**, check whether the publication lists columns:
+
+```sql
+-- On nova_memory
+SELECT pubname, puballtables, pg_get_publication_tables('agent_chat_pub') 
+FROM pg_publication WHERE pubname = 'agent_chat_pub';
+```
+
+If the publication was created with an explicit column list, drop and recreate it:
+
+```sql
+-- On nova_memory
+DROP PUBLICATION IF EXISTS agent_chat_pub;
+CREATE PUBLICATION agent_chat_pub FOR TABLE agent_chat;
+```
+
+#### 5. Re-enable the subscription
+
+On the **subscriber database**, re-enable the subscription:
+
+```sql
+-- On graybeard_memory
+ALTER SUBSCRIPTION agent_chat_from_nova ENABLE;
+```
+
+#### 6. Verify replication is healthy
+
+```sql
+-- On nova_memory: check publication
+SELECT * FROM pg_publication_tables WHERE pubname = 'agent_chat_pub';
+
+-- On graybeard_memory: check subscription lag
+SELECT subname, subenabled FROM pg_subscription;
+SELECT * FROM pg_stat_subscription;
+```
+
+#### 7. Reconfigure triggers
+
+After re-enabling, ensure triggers are set correctly (see [Configure Triggers](#4-manual-trigger-configuration) above):
+
+```sql
+-- On graybeard_memory
+ALTER TABLE agent_chat ENABLE ALWAYS TRIGGER trg_notify_agent_chat;
+ALTER TABLE agent_chat ENABLE REPLICA TRIGGER trg_embed_chat_message;
+```
+
 ## Related Files
 
 - `focus/agent_chat/schema.sql` - Contains trigger definitions and replication comments
 - `agent-install.sh` - Automatic replication detection and configuration
+- `memory/database/renames.json` - Declarative rename manifest applied by Step 1.5
 - Database migration scripts in `migrations/`

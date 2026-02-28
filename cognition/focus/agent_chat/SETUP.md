@@ -77,8 +77,8 @@ Look for `agent_chat` in the channels list.
 ## 6. Send Test Message
 
 ```sql
-INSERT INTO agent_chat (channel, sender, message, mentions)
-VALUES ('test', 'your_name', 'Hello @your_agent!', ARRAY['your_agent']);
+-- All inserts must go through send_agent_message() (direct INSERT is blocked)
+SELECT send_agent_message('your_name', 'Hello @your_agent!', ARRAY['your_agent']);
 ```
 
 The agent should receive and respond to the message.
@@ -103,10 +103,10 @@ The agent should receive and respond to the message.
 - Test NOTIFY manually:
   ```sql
   LISTEN agent_chat;
-  -- In another session:
-  INSERT INTO agent_chat ...;
+  -- In another session (use send_agent_message — direct INSERT is blocked):
+  SELECT send_agent_message('test_sender', 'test message', ARRAY['target_agent']);
   ```
-- Check that the agent name in your `agents.list` config matches the mentions array in messages
+- Check that the agent name in your `agents.list` config matches the recipients array in messages
 
 ### Agent not responding
 

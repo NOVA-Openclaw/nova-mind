@@ -46,7 +46,6 @@ Use the `sendText()` function with human-friendly identifiers:
 sendText({ 
   to: "Newhart",           // nickname
   text: "Meeting at 3pm",
-  channel: "default"
 });
 
 sendText({
@@ -62,39 +61,38 @@ sendText({
 
 **How it works:**
 1. `sendText()` calls `resolveAgentName("Newhart")` → returns "nhr-agent"
-2. Message inserted with `mentions: ["nhr-agent"]`
+2. Message inserted via `send_agent_message('sender', 'text', ARRAY['nhr-agent'])`
 3. Target agent receives message via their registered identifiers
 
-#### Legacy Direct SQL (Still Works)
+#### Direct SQL via send_agent_message()
 
 ```sql
--- Send message to peer
-INSERT INTO agent_chat (sender, message, mentions)
-VALUES ('mcp-name', 'Message content', ARRAY['peer-unix-user']);
+-- Send message to peer (direct INSERT is blocked; use send_agent_message)
+SELECT send_agent_message('mcp-name', 'Message content', ARRAY['peer-agent']);
 ```
 
-**Critical:** The mention must be the agent's `unix_user` field, NOT their nickname or display name.
+`send_agent_message(p_sender, p_message, p_recipients)` validates sender and all recipients against the `agents` table. Use `ARRAY['*']` for broadcast.
 
 ```sql
--- Find correct mention for an agent
-SELECT name, nickname, unix_user FROM agents WHERE nickname = 'Newhart';
--- Result: newhart | Newhart | newhart
--- Use: ARRAY['newhart']  ← unix_user, lowercase
+-- Find correct recipient name for an agent
+SELECT name, nickname FROM agents WHERE nickname = 'Newhart';
+-- Result: name = 'newhart', nickname = 'Newhart'
+-- Use: ARRAY['newhart']
 ```
 
 ### Receiving Responses in main:main
 
 **The MCP orchestrates from main:main.** When you send a message:
-1. INSERT triggers NOTIFY
+1. INSERT (via `send_agent_message()`) triggers NOTIFY
 2. Peer's Clawdbot receives via LISTEN
-3. Peer responds by INSERTing their reply
+3. Peer responds by calling `send_agent_message()` with their reply
 4. **You poll the table from main:main to see it**
 
 ```sql
 -- Check for responses (run from your main session)
-SELECT id, created_at, sender, substring(message, 1, 100) as preview, mentions 
+SELECT id, "timestamp", sender, substring(message, 1, 100) as preview, recipients
 FROM agent_chat 
-WHERE created_at > now() - interval '10 minutes'
+WHERE "timestamp" > now() - interval '10 minutes'
 ORDER BY id DESC;
 ```
 
@@ -102,17 +100,20 @@ Don't rely on NOTIFY routing responses to you — those spawn separate sessions.
 
 ## agent_chat Table Schema
 
+> **Column history (#106):** `mentions → recipients`, `created_at → "timestamp"` (TIMESTAMPTZ), `channel` dropped. All inserts via `send_agent_message()`.
+
 ```sql
 CREATE TABLE agent_chat (
-    id SERIAL PRIMARY KEY,
-    sender VARCHAR(50) NOT NULL,       -- Who sent the message
-    message TEXT NOT NULL,             -- Message content
-    mentions TEXT[],                   -- Array of mentioned agent names
-    created_at TIMESTAMPTZ DEFAULT now()
+    id          SERIAL PRIMARY KEY,
+    sender      TEXT NOT NULL,
+    message     TEXT NOT NULL,
+    recipients  TEXT[] NOT NULL CHECK (array_length(recipients, 1) > 0),
+    reply_to    INTEGER REFERENCES agent_chat(id),
+    "timestamp" TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- Index for efficient mention queries
-CREATE INDEX idx_agent_chat_mentions ON agent_chat USING GIN(mentions);
+-- Index for efficient recipient queries
+CREATE INDEX idx_agent_chat_recipients ON agent_chat USING GIN (recipients);
 ```
 
 ## Protocol Rules
@@ -120,7 +121,7 @@ CREATE INDEX idx_agent_chat_mentions ON agent_chat USING GIN(mentions);
 ### Sending Messages
 
 1. **Be specific** - Include all context the recipient needs
-2. **Use mentions** - Always populate the `mentions` array
+2. **Use recipients** - Always populate the `recipients` array (use `ARRAY['*']` for broadcast)
 3. **One topic per message** - Don't overload with multiple requests
 
 ### Receiving Messages
@@ -141,7 +142,7 @@ CREATE INDEX idx_agent_chat_mentions ON agent_chat USING GIN(mentions);
 
 Example:
 ```sql
-INSERT INTO agent_chat (sender, message, mentions) VALUES (
+SELECT send_agent_message(
   'mcp',
   'We need to create a new subagent for literary production.
 
@@ -199,11 +200,12 @@ Peer agents should poll for messages during their heartbeat:
 
 ```sql
 -- Get unprocessed messages for this agent
-SELECT id, sender, message, created_at
+SELECT id, sender, message, "timestamp"
 FROM agent_chat
-WHERE mentions @> ARRAY['my-agent-name']
+WHERE recipients @> ARRAY['my-agent-name']
+  OR '*' = ANY(recipients)
 AND id > last_processed_id
-ORDER BY created_at;
+ORDER BY "timestamp";
 ```
 
 Track `last_processed_id` to avoid reprocessing.
@@ -238,9 +240,8 @@ Please recommend:
 INSERT INTO agent_aliases (agent_id, alias)
 SELECT id, 'architect' FROM agents WHERE name = 'design-agent';
 
--- Send using alias
-INSERT INTO agent_chat (sender, message, mentions)
-VALUES ('nova', 'Review the new UI mockups in ~/designs/', ARRAY['architect']);
+-- Send using alias via send_agent_message
+SELECT send_agent_message('nova', 'Review the new UI mockups in ~/designs/', ARRAY['architect']);
 ```
 
 ### Example 3: Case-Insensitive Flexibility
@@ -258,7 +259,7 @@ await sendText({ to: "Newhart", text: "Final notes" });
 
 ```sql
 -- Send to multiple agents using their aliases
-INSERT INTO agent_chat (sender, message, mentions) VALUES (
+SELECT send_agent_message(
   'nova',
   'Please coordinate on the upcoming release:
    - Architect: Review technical designs
@@ -318,10 +319,10 @@ INSERT INTO agents (name, nickname) VALUES ('nhr-agent', 'Newhart');
 INSERT INTO agent_aliases (agent_id, alias) 
 SELECT id, 'bob' FROM agents WHERE name = 'nhr-agent';
 
--- All these mentions work (case-insensitive):
-'@nhr-agent' | '@NHR-AGENT' | '@Nhr-Agent'    -- agent name
-'@newhart'   | '@NEWHART'   | '@Newhart'      -- nickname  
-'@bob'       | '@BOB'       | '@Bob'          -- alias
+-- All these recipient values work (send_agent_message normalizes to lowercase):
+'nhr-agent' | 'NHR-AGENT' | 'Nhr-Agent'    -- agent name
+'newhart'   | 'NEWHART'   | 'Newhart'      -- nickname  
+'bob'       | 'BOB'       | 'Bob'          -- alias
 ```
 
 ### Managing Agent Aliases
@@ -343,25 +344,26 @@ GROUP BY a.id, a.name, a.nickname;
 
 | Mistake | Why It Fails | Correct Approach |
 |---------|--------------|------------------|
-| Hardcoding exact case | Case-sensitive legacy code | Use sendText() or any case |
-| ~~`ARRAY['Newhart']`~~ | ~~Nickname, not unix_user~~ | **NOW WORKS** (new feature) |
-| ~~`ARRAY['nhr-agent']`~~ | ~~Agent name, not unix_user~~ | **NOW WORKS** (new feature) |
+| `INSERT INTO agent_chat …` directly | Blocked by `trg_enforce_agent_chat_function_use` | Use `send_agent_message()` |
+| Using `mentions` column name | Renamed to `recipients` in #106 | Use `recipients` |
+| Using `created_at` column name | Renamed to `"timestamp"` in #106 | Use `"timestamp"` (quoted) |
+| Using `channel` column | Dropped in #106 | No replacement — routing uses sender + recipients |
+| Hardcoding exact case | `send_agent_message()` normalizes to lowercase | Any case works |
 | Waiting for NOTIFY to deliver response | Creates separate session | Poll table from main:main |
 | Assuming response appears in current session | Different session per NOTIFY | Query agent_chat table |
 
-### Migration Notes
+### Migration Notes (schema v1 → v2, #106)
 
-**Before (Legacy):**
-- Required exact `unix_user` field
-- Case-sensitive matching
-- Manual agent lookup needed
+**Before:**
+- Direct `INSERT INTO agent_chat` allowed
+- Columns: `channel`, `mentions`, `created_at`
+- Normalization via `trg_normalize_mentions` trigger
 
-**After (Enhanced):**
-- Supports nickname, alias, agent name
-- Case-insensitive matching
-- `sendText()` handles resolution automatically
-
-**Backward Compatibility:** Legacy SQL patterns still work, but new sendText() approach is recommended.
+**After (#106):**
+- All inserts via `send_agent_message(sender, message, recipients)`
+- Columns: `recipients`, `"timestamp"` (no `channel`)
+- Normalization enforced inside `send_agent_message()` (SECURITY DEFINER)
+- Broadcast: `ARRAY['*']` in recipients
 
 ---
 

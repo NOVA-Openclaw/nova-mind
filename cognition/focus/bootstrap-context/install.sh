@@ -32,12 +32,6 @@ fi
 echo "✅ Database connection OK"
 echo ""
 
-# Install database schema
-echo "Installing database schema..."
-psql -d "$DB_NAME" -f "$SCRIPT_DIR/schema/bootstrap-context.sql"
-echo "✅ Schema installed"
-echo ""
-
 # Install management functions
 echo "Installing management functions..."
 psql -d "$DB_NAME" -f "$SCRIPT_DIR/sql/management-functions.sql"
@@ -71,14 +65,6 @@ echo ""
 
 # Verify installation
 echo "Verifying installation..."
-TABLES=$(psql -d "$DB_NAME" -t -c "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name LIKE 'bootstrap_context%'")
-if [ "$TABLES" -ge 4 ]; then
-    echo "✅ Database tables: $TABLES/4 found"
-else
-    echo "❌ Error: Expected 4 tables, found $TABLES"
-    exit 1
-fi
-
 FUNCTIONS=$(psql -d "$DB_NAME" -t -c "SELECT COUNT(*) FROM pg_proc WHERE proname LIKE '%bootstrap%'")
 echo "✅ Database functions: $FUNCTIONS found"
 

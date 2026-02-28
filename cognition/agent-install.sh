@@ -592,24 +592,6 @@ if [ $VERIFY_ONLY -eq 0 ]; then
         exit 1
     fi
     
-    # Apply agent_chat schema (idempotent - uses CREATE IF NOT EXISTS)
-    SCHEMA_FILE="$SCRIPT_DIR/focus/agent_chat/schema.sql"
-    if [ ! -f "$SCHEMA_FILE" ]; then
-        echo -e "  ${WARNING} focus/agent_chat/schema.sql not found (will be created by extension)"
-    else
-        echo "  Applying agent_chat schema..."
-        SCHEMA_ERR="${TMPDIR:-/tmp}/schema-apply-$$.err"
-        if psql -U "$DB_USER" -d "$DB_NAME" -f "$SCHEMA_FILE" > /dev/null 2>"$SCHEMA_ERR"; then
-            echo -e "  ${CHECK_MARK} Schema applied"
-            rm -f "$SCHEMA_ERR"
-        else
-            echo -e "  ${CROSS_MARK} Schema apply failed (exit code $?)"
-            cat "$SCHEMA_ERR" >&2
-            rm -f "$SCHEMA_ERR"
-            exit 1
-        fi
-    fi
-    
     # Configure triggers for logical replication if subscriptions exist
     echo "  Checking for logical replication subscriptions..."
     SUBSCRIPTION_COUNT=$(psql -U "$DB_USER" -d "$DB_NAME" -tAc "SELECT COUNT(*) FROM pg_subscription WHERE subname LIKE '%agent_chat%'" 2>/dev/null || echo "0")

@@ -177,8 +177,8 @@ No changes required. The plugin still uses:
 
 1. Insert a test message:
 ```sql
-INSERT INTO agent_chat (channel, sender, message, mentions)
-VALUES ('test', 'tester', '@MyAgent hello!', ARRAY['MyAgent']);
+-- All inserts must go through send_agent_message() (direct INSERT is blocked since #106)
+SELECT send_agent_message('tester', '@MyAgent hello!', ARRAY['myagent']);
 ```
 
 2. Check OpenClaw logs for:

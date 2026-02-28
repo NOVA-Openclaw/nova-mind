@@ -55,6 +55,21 @@ The installer is **idempotent** — safe to run multiple times. Use `./agent-ins
 
 ## Recent Changes
 
+### 2026-02-28: Step 1.5 — Declarative Renames via `renames.json` (#107, #106)
+
+`agent-install.sh` now has a **Step 1.5** that applies declarative column/table renames before `pgschema plan/apply`.
+
+**What Changed:**
+- New file `memory/database/renames.json` declares renames as structured JSON (table, `column.from`, `column.to`, optional `drop`, `pr` for traceability)
+- Installer reads this file and runs `ALTER TABLE … RENAME COLUMN` for each entry, skipping if the source column no longer exists (already renamed)
+- Drops listed in `renames.json` are whitelisted in the pgschema hazard-count filter so they don't block the apply
+
+**Why:** `pgschema` cannot distinguish a column rename from a drop + add. The `renames.json` mechanism bridges this gap without requiring manual pre-migration SQL files for straightforward renames.
+
+**First use:** `agent_chat` column renames from #106 (`mentions → recipients`, `created_at → "timestamp"`, `channel` drop).
+
+**Impact:** Re-running the installer on a database with old column names will now automatically apply the renames before schema diffing. No manual `ALTER TABLE` needed.
+
 ### 2026-02-27: shell-install.sh Reliability Improvements (#134)
 
 `shell-install.sh` was restructured to improve reliability during the database reachability check:
@@ -341,6 +356,29 @@ pgschema plan --host localhost --db nova_memory --user nova \
 # 3. Apply via the installer
 ./agent-install.sh
 ```
+
+### Step 1.5: Declarative column/table renames via `renames.json`
+
+Before `pgschema plan/apply`, the installer runs **Step 1.5** which reads `memory/database/renames.json` and applies any declared renames idempotently. This allows schema-breaking renames (e.g., renaming a column that `pgschema` would otherwise treat as a drop + add) to be performed safely in-place.
+
+**File location:** `memory/database/renames.json`
+
+**Format:**
+```json
+{
+  "renames": [
+    { "table": "my_table", "column": { "from": "old_name", "to": "new_name" }, "pr": "#123" },
+    { "table": "my_table", "drop": "obsolete_col", "pr": "#123", "reason": "No longer needed" }
+  ]
+}
+```
+
+**Behavior:**
+- For each `column` rename: checks `information_schema.columns` for the `from` column. If present, runs `ALTER TABLE … RENAME COLUMN`. If absent (already renamed), skips with an info message.
+- For each `drop` entry: the column path is added to the pgschema hazard-count whitelist, so `pgschema plan` does not block the apply for this intentional drop.
+- Idempotent: safe to run the installer multiple times.
+
+**When to add a new rename:** When a schema change requires renaming or dropping a column that `pgschema` would refuse to apply automatically (because it can't distinguish rename from drop+add), declare it in `renames.json` so the installer can handle it.
 
 ### Pre-migrations (for data transformations)
 

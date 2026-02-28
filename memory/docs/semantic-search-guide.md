@@ -168,8 +168,8 @@ SELECT
         WHEN me.source_type = 'agent_chat' THEN
             json_build_object(
                 'sender', ac.sender,
-                'channel', ac.channel,
-                'timestamp', ac.created_at
+                'recipients', ac.recipients,
+                'timestamp', ac."timestamp"
             )
     END as context
 FROM memory_embeddings me

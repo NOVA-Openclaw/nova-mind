@@ -1,18 +1,15 @@
 -- Agent Chat Database Schema
--- 
+--
 -- This file sets up the tables and triggers needed for the agent_chat channel plugin.
 -- Run this in your PostgreSQL database (e.g., nova_memory).
-
--- Main chat messages table
-CREATE TABLE IF NOT EXISTS agent_chat (
-    id SERIAL PRIMARY KEY,
-    channel TEXT NOT NULL DEFAULT 'default',
-    sender TEXT NOT NULL,
-    message TEXT NOT NULL,
-    mentions TEXT[] DEFAULT '{}',
-    reply_to INTEGER REFERENCES agent_chat(id),
-    created_at TIMESTAMP DEFAULT NOW()
-);
+--
+-- COLUMN HISTORY (see #106):
+--   mentions   → recipients  (renamed)
+--   created_at → "timestamp" (renamed; quoted everywhere — reserved word in PostgreSQL)
+--   channel               (dropped; inter-agent messaging uses sender+recipients only)
+--
+-- Pre-migration renames are handled by the installer (Step 1.5, renames.json).
+-- This schema reflects the post-rename desired state.
 
 -- Message processing status enum
 DO $$ BEGIN
@@ -21,43 +18,131 @@ EXCEPTION
     WHEN duplicate_object THEN null;
 END $$;
 
--- Track message state through processing pipeline
--- Enhanced to track: received → routed → responded
+-- Main chat messages table
+CREATE TABLE IF NOT EXISTS agent_chat (
+    id          SERIAL PRIMARY KEY,
+    sender      TEXT NOT NULL,
+    message     TEXT NOT NULL,
+    recipients  TEXT[] NOT NULL CHECK (array_length(recipients, 1) > 0),
+    reply_to    INTEGER REFERENCES agent_chat(id),
+    "timestamp" TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Track message state through processing pipeline: received → routed → responded
 CREATE TABLE IF NOT EXISTS agent_chat_processed (
-    chat_id INTEGER REFERENCES agent_chat(id) ON DELETE CASCADE,
-    agent TEXT NOT NULL,
-    status agent_chat_status NOT NULL DEFAULT 'received',
-    received_at TIMESTAMP DEFAULT NOW(),
-    routed_at TIMESTAMP,
-    responded_at TIMESTAMP,
+    chat_id      INTEGER REFERENCES agent_chat(id) ON DELETE CASCADE,
+    agent        TEXT NOT NULL,
+    status       agent_chat_status NOT NULL DEFAULT 'received',
+    received_at  TIMESTAMPTZ DEFAULT NOW(),
+    routed_at    TIMESTAMPTZ,
+    responded_at TIMESTAMPTZ,
     error_message TEXT,
     PRIMARY KEY (chat_id, agent)
 );
 
--- Create indexes for better query performance
-CREATE INDEX IF NOT EXISTS idx_agent_chat_mentions ON agent_chat USING GIN(mentions);
-CREATE INDEX IF NOT EXISTS idx_agent_chat_created_at ON agent_chat(created_at);
-CREATE INDEX IF NOT EXISTS idx_agent_chat_channel ON agent_chat(channel);
-CREATE INDEX IF NOT EXISTS idx_agent_chat_processed_agent ON agent_chat_processed(agent);
-CREATE INDEX IF NOT EXISTS idx_agent_chat_processed_status ON agent_chat_processed(status);
+-- Indexes
+CREATE INDEX IF NOT EXISTS idx_agent_chat_recipients  ON agent_chat USING GIN (recipients);
+CREATE INDEX IF NOT EXISTS idx_agent_chat_timestamp   ON agent_chat ("timestamp");
+CREATE INDEX IF NOT EXISTS idx_agent_chat_sender      ON agent_chat (sender, "timestamp" DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_chat_processed_agent  ON agent_chat_processed (agent);
+CREATE INDEX IF NOT EXISTS idx_agent_chat_processed_status ON agent_chat_processed (status);
 
--- Function to send NOTIFY when new message arrives
+-- ====================
+-- FUNCTION-GATED INSERTS
+-- ====================
+
+-- All inserts must go through send_agent_message() (SECURITY DEFINER).
+-- Direct INSERT on agent_chat is blocked by enforce_agent_chat_function_use().
+
+-- Gate trigger function: blocks direct inserts that bypass send_agent_message()
+CREATE OR REPLACE FUNCTION enforce_agent_chat_function_use()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF current_setting('agent_chat.bypass_gate', true) IS DISTINCT FROM 'on' THEN
+        RAISE EXCEPTION 'Direct INSERT on agent_chat is not allowed. Use send_agent_message() instead.';
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_enforce_agent_chat_function_use ON agent_chat;
+CREATE TRIGGER trg_enforce_agent_chat_function_use
+BEFORE INSERT ON agent_chat
+FOR EACH ROW
+EXECUTE FUNCTION enforce_agent_chat_function_use();
+
+-- send_agent_message: validated, normalized insert API (SECURITY DEFINER)
+-- Validates sender and all recipients exist in agents table (or '*' for broadcast).
+-- Rejects empty message and empty/NULL recipients.
+CREATE OR REPLACE FUNCTION send_agent_message(
+    p_sender     TEXT,
+    p_message    TEXT,
+    p_recipients TEXT[]
+)
+RETURNS integer
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+DECLARE
+    v_id        INTEGER;
+    v_sender    TEXT;
+    v_recipients TEXT[];
+    v_recipient TEXT;
+BEGIN
+    -- Validate inputs
+    IF p_message IS NULL OR trim(p_message) = '' THEN
+        RAISE EXCEPTION 'send_agent_message: message cannot be empty';
+    END IF;
+
+    IF p_recipients IS NULL OR array_length(p_recipients, 1) IS NULL THEN
+        RAISE EXCEPTION 'send_agent_message: recipients cannot be NULL or empty — use ARRAY[''*''] for broadcast';
+    END IF;
+
+    -- Normalize to lowercase
+    v_sender := LOWER(p_sender);
+    v_recipients := ARRAY(SELECT LOWER(unnest(p_recipients)));
+
+    -- Validate sender exists in agents table
+    IF NOT EXISTS (SELECT 1 FROM agents WHERE LOWER(name) = v_sender) THEN
+        RAISE EXCEPTION 'send_agent_message: sender "%" not found in agents table', v_sender;
+    END IF;
+
+    -- Validate each recipient (allow '*' for broadcast)
+    FOREACH v_recipient IN ARRAY v_recipients LOOP
+        IF v_recipient <> '*' AND NOT EXISTS (SELECT 1 FROM agents WHERE LOWER(name) = v_recipient) THEN
+            RAISE EXCEPTION 'send_agent_message: recipient "%" not found in agents table', v_recipient;
+        END IF;
+    END LOOP;
+
+    -- Bypass gate and insert
+    SET LOCAL agent_chat.bypass_gate = 'on';
+    INSERT INTO agent_chat (sender, message, recipients)
+    VALUES (v_sender, p_message, v_recipients)
+    RETURNING id INTO v_id;
+
+    RETURN v_id;
+END;
+$$;
+
+-- ====================
+-- NOTIFICATION TRIGGER
+-- ====================
+
+-- Sends pg_notify when a new message arrives
 CREATE OR REPLACE FUNCTION notify_agent_chat()
 RETURNS TRIGGER AS $$
 BEGIN
     PERFORM pg_notify('agent_chat', json_build_object(
-        'id', NEW.id,
-        'channel', NEW.channel,
-        'sender', NEW.sender,
-        'mentions', NEW.mentions
+        'id',         NEW.id,
+        'sender',     NEW.sender,
+        'recipients', NEW.recipients
     )::text);
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 
--- Trigger to call notify function on INSERT
 -- Note: For logical replication setups, use ENABLE ALWAYS TRIGGER to ensure
--- notifications fire on replicated rows
+-- notifications fire on replicated rows (see installer replication check below).
 DROP TRIGGER IF EXISTS agent_chat_notify ON agent_chat;
 DROP TRIGGER IF EXISTS trg_notify_agent_chat ON agent_chat;
 CREATE TRIGGER trg_notify_agent_chat
@@ -71,51 +156,49 @@ EXECUTE FUNCTION notify_agent_chat();
 
 -- Table to store message embeddings (if using nova-memory semantic system)
 CREATE TABLE IF NOT EXISTS memory_embeddings (
-    id SERIAL PRIMARY KEY,
+    id           SERIAL PRIMARY KEY,
     content_hash VARCHAR(64) UNIQUE NOT NULL,
-    embedding VECTOR(1536), -- OpenAI ada-002 dimensions
-    content TEXT NOT NULL,
-    metadata JSONB DEFAULT '{}',
-    created_at TIMESTAMP DEFAULT NOW()
+    embedding    VECTOR(1536), -- OpenAI ada-002 dimensions
+    content      TEXT NOT NULL,
+    metadata     JSONB DEFAULT '{}',
+    created_at   TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- Index for similarity search
-CREATE INDEX IF NOT EXISTS idx_memory_embeddings_vector 
+CREATE INDEX IF NOT EXISTS idx_memory_embeddings_vector
 ON memory_embeddings USING ivfflat (embedding vector_cosine_ops);
 
 -- Function to create embeddings for new messages
--- Note: This requires OpenAI API access and vector extension
+-- Note: This requires OpenAI API access and the vector extension.
+-- Produces a placeholder record; external embedding service fills in the vector.
 CREATE OR REPLACE FUNCTION embed_chat_message()
 RETURNS TRIGGER AS $$
 DECLARE
-    content_text TEXT;
+    content_text     TEXT;
     content_hash_val VARCHAR(64);
 BEGIN
-    -- Prepare content for embedding
-    content_text := NEW.sender || ': ' || NEW.message;
+    content_text     := NEW.sender || ': ' || NEW.message;
     content_hash_val := encode(sha256(content_text::bytea), 'hex');
-    
-    -- Insert embedding record (embedding vector will be populated by external process)
-    -- This just creates a placeholder that external embedding service can process
+
     INSERT INTO memory_embeddings (content_hash, content, metadata, embedding)
     VALUES (
         content_hash_val,
         content_text,
         json_build_object(
-            'chat_id', NEW.id,
-            'sender', NEW.sender,
-            'channel', NEW.channel,
-            'created_at', NEW.created_at
+            'chat_id',    NEW.id,
+            'sender',     NEW.sender,
+            'recipients', NEW.recipients,
+            'timestamp',  NEW."timestamp"
         ),
-        NULL  -- Will be updated by embedding service
+        NULL  -- Populated by external embedding service
     )
-    ON CONFLICT (content_hash) DO NOTHING; -- Skip if already exists
-    
+    ON CONFLICT (content_hash) DO NOTHING;
+
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 
--- Embedding trigger - should NOT fire on replicated data to avoid duplicates
+-- Embedding trigger — should NOT fire on replicated data to avoid duplicates.
 DROP TRIGGER IF EXISTS trg_embed_chat_message ON agent_chat;
 CREATE TRIGGER trg_embed_chat_message
 AFTER INSERT ON agent_chat
@@ -123,91 +206,73 @@ FOR EACH ROW
 EXECUTE FUNCTION embed_chat_message();
 
 -- ====================
--- LOGICAL REPLICATION CONFIGURATION
+-- CLEANUP FUNCTIONS
 -- ====================
 
--- IMPORTANT: For agents using logical replication subscriptions from another database
--- (e.g., graybeard_memory subscribing to nova_memory.agent_chat), you need to configure
--- triggers properly to handle replicated data:
---
--- 1. NOTIFICATION TRIGGER: Must fire ALWAYS (including on replicated rows)
---    Otherwise agents won't receive notifications for replicated messages
---
--- 2. EMBEDDING TRIGGER: Should NOT fire on replicated rows (only REPLICA mode)
---    Otherwise you get duplicate key violations because source DB already created embeddings
---
--- Run these commands AFTER creating your logical replication subscription:
---
--- -- Enable notifications for ALL rows (including replicated)
--- ALTER TABLE agent_chat ENABLE ALWAYS TRIGGER trg_notify_agent_chat;
---
--- -- Disable embedding trigger for replicated rows (only run on origin)
--- ALTER TABLE agent_chat ENABLE REPLICA TRIGGER trg_embed_chat_message;
---
--- To check current trigger configuration:
--- SELECT schemaname, tablename, trigger_name, status 
--- FROM pg_catalog.pg_trigger t
--- JOIN pg_catalog.pg_class c ON t.tgrelid = c.oid
--- JOIN pg_catalog.pg_namespace n ON c.relnamespace = n.oid
--- WHERE c.relname = 'agent_chat' AND NOT t.tgisinternal;
+-- Drop legacy normalization trigger and function (normalization now in send_agent_message)
+DROP TRIGGER IF EXISTS trg_normalize_mentions ON agent_chat;
+DROP FUNCTION IF EXISTS normalize_agent_chat_recipients() CASCADE;
+DROP FUNCTION IF EXISTS normalize_agent_chat_mentions() CASCADE;
+
+-- expire_old_chat: delete messages older than 30 days
+CREATE OR REPLACE FUNCTION expire_old_chat()
+RETURNS integer
+LANGUAGE plpgsql
+VOLATILE
+AS $$
+DECLARE
+    v_count INTEGER;
+BEGIN
+    DELETE FROM agent_chat
+    WHERE "timestamp" < now() - interval '30 days';
+
+    GET DIAGNOSTICS v_count = ROW_COUNT;
+    RETURN v_count;
+END;
+$$;
 
 -- ====================
--- MIGRATION HELPER
--- ====================
--- If you have existing data in agent_chat_processed without the new columns,
--- run this to add them:
---
--- ALTER TABLE agent_chat_processed 
---   ADD COLUMN IF NOT EXISTS status agent_chat_status DEFAULT 'responded',
---   ADD COLUMN IF NOT EXISTS received_at TIMESTAMP DEFAULT NOW(),
---   ADD COLUMN IF NOT EXISTS routed_at TIMESTAMP,
---   ADD COLUMN IF NOT EXISTS responded_at TIMESTAMP,
---   ADD COLUMN IF NOT EXISTS error_message TEXT;
---
--- UPDATE agent_chat_processed 
--- SET routed_at = processed_at, 
---     responded_at = processed_at,
---     received_at = processed_at
--- WHERE routed_at IS NULL;
---
--- Then drop the old processed_at column:
--- ALTER TABLE agent_chat_processed DROP COLUMN IF EXISTS processed_at;
-
--- ====================
--- MONITORING QUERIES
+-- VIEWS
 -- ====================
 
--- Find messages that were routed but never responded to (stuck/ignored)
--- COMMENT ON TABLE agent_chat_processed IS 'Use this query to find stuck messages:
--- SELECT 
---   ac.id,
---   ac.channel,
---   ac.sender,
---   ac.message,
---   acp.agent,
---   acp.status,
---   acp.received_at,
---   acp.routed_at,
---   NOW() - acp.routed_at AS time_since_routed
--- FROM agent_chat ac
--- JOIN agent_chat_processed acp ON ac.id = acp.chat_id
--- WHERE acp.status = ''routed''
---   AND acp.routed_at < NOW() - INTERVAL ''5 minutes''
--- ORDER BY acp.routed_at DESC;
--- ';
+-- Recent messages (last 30 days)
+CREATE OR REPLACE VIEW v_agent_chat_recent AS
+SELECT
+    id,
+    sender,
+    message,
+    recipients,
+    reply_to,
+    "timestamp"
+FROM agent_chat
+WHERE "timestamp" > (now() - INTERVAL '30 days')
+ORDER BY "timestamp" DESC;
 
--- Find response time statistics per agent
--- SELECT 
---   agent,
---   COUNT(*) as total_responses,
---   AVG(EXTRACT(EPOCH FROM (responded_at - received_at))) as avg_response_seconds,
---   MIN(EXTRACT(EPOCH FROM (responded_at - received_at))) as min_response_seconds,
---   MAX(EXTRACT(EPOCH FROM (responded_at - received_at))) as max_response_seconds
--- FROM agent_chat_processed
--- WHERE status = 'responded'
---   AND responded_at IS NOT NULL
--- GROUP BY agent;
+-- Summary statistics
+CREATE OR REPLACE VIEW v_agent_chat_stats AS
+SELECT
+    count(*)                                                         AS total_messages,
+    count(*) FILTER (WHERE "timestamp" > (now() - INTERVAL '24 hours')) AS messages_24h,
+    count(*) FILTER (WHERE "timestamp" > (now() - INTERVAL '7 days'))   AS messages_7d,
+    count(DISTINCT sender)                                           AS unique_senders,
+    pg_size_pretty(pg_total_relation_size('agent_chat'::regclass))   AS table_size,
+    min("timestamp")                                                 AS oldest_message,
+    max("timestamp")                                                 AS newest_message
+FROM agent_chat;
 
--- Example: Insert a test message
--- INSERT INTO agent_chat (channel, sender, message, mentions)
--- VALUES ('general', 'test_user', 'Hello @newhart!', ARRAY['newhart']);
+-- ====================
+-- LOGICAL REPLICATION NOTES
+-- ====================
+--
+-- Column renames should be transparent to agent_chat_pub since PostgreSQL
+-- publications track table OIDs, not column names. However, if the publication
+-- was created with an explicit column list (e.g., FOR TABLE agent_chat (id,
+-- channel, sender, message, mentions, reply_to, created_at)), it must be
+-- recreated after the renames to reflect the new column names.
+--
+-- The subscriber (graybeard_memory) will also need the same column renames
+-- applied — coordinate with Graybeard post-merge.
+--
+-- After setting up logical replication subscriptions:
+--   ALTER TABLE agent_chat ENABLE ALWAYS TRIGGER trg_notify_agent_chat;
+--   ALTER TABLE agent_chat ENABLE REPLICA TRIGGER trg_embed_chat_message;

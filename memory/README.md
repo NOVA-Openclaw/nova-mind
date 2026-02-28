@@ -375,38 +375,43 @@ The `agent_chat` and `agent_chat_processed` tables enable asynchronous communica
 
 **agent_chat** - Message queue for inter-agent communication
 
+> **Column history (#106):** `mentions → recipients`, `created_at → "timestamp"` (TIMESTAMPTZ), `channel` dropped. All inserts via `send_agent_message()`.
+
 | Column | Type | Purpose |
 |--------|------|---------|
 | `id` | serial | Primary key |
-| `channel` | varchar | Logical channel/topic (e.g., 'default', 'tasks') |
-| `sender` | varchar | Agent database username who sent the message |
+| `sender` | text | Agent name who sent the message (validated against `agents` table) |
 | `message` | text | The message content |
-| `mentions` | text[] | Array of agent usernames being addressed |
+| `recipients` | text[] | Array of agent names being addressed (NOT NULL; use `'{*}'` for broadcast) |
 | `reply_to` | int | Optional reference to parent message id |
-| `created_at` | timestamp | When the message was sent |
+| `"timestamp"` | timestamptz | When the message was sent (quoted — reserved word in PostgreSQL) |
 
 **agent_chat_processed** - Tracks which agents have processed which messages
 
 | Column | Type | Purpose |
 |--------|------|---------|
 | `chat_id` | int | Reference to agent_chat.id |
-| `agent` | varchar | Agent username (lowercase) |
-| `processed_at` | timestamp | When the agent processed the message |
+| `agent` | text | Agent name (lowercase) |
+| `status` | agent_chat_status | `received` → `routed` → `responded` (or `failed`) |
+| `received_at` | timestamptz | When the agent first received the message |
+| `routed_at` | timestamptz | When the message was dispatched to the agent session |
+| `responded_at` | timestamptz | When the agent replied |
+| `error_message` | text | Error details if status = `failed` |
 
 **How it works:**
-1. Agent A inserts a message into `agent_chat` with `mentions = ARRAY['agent_b']`
-2. PostgreSQL trigger fires `pg_notify('agent_chat', payload)`
-3. Agent B's OpenClaw plugin (listening via `LISTEN agent_chat`) receives the notification
-4. Plugin checks for unprocessed messages where Agent B is mentioned
-5. Message is routed to Agent B's session; marked as processed
+1. Agent A calls `send_agent_message('nova', 'message', ARRAY['agent_b'])` — direct INSERT is blocked
+2. `send_agent_message()` validates sender and recipients, normalizes to lowercase, inserts
+3. PostgreSQL trigger fires `pg_notify('agent_chat', payload)` with `id`, `sender`, `recipients`
+4. Agent B's OpenClaw plugin (listening via `LISTEN agent_chat`) receives the notification
+5. Plugin checks for unprocessed messages where Agent B is in `recipients` (or `'*'`)
+6. Message is routed to Agent B's session; marked as processed
 
 **Plugin:** The `agent-chat-channel` OpenClaw plugin handles the LISTEN/NOTIFY integration.  
 **Source:** https://github.com/NOVA-Openclaw/nova_scripts (openclaw-plugins/agent-chat-channel/)
 
 **Example - Send message to another agent:**
 ```sql
-INSERT INTO agent_chat (channel, sender, message, mentions)
-VALUES ('default', 'nova', 'Hey, can you review the latest PR?', ARRAY['coder']);
+SELECT send_agent_message('nova', 'Hey, can you review the latest PR?', ARRAY['coder']);
 ```
 
 #### New Features (Issues #69 & #70)

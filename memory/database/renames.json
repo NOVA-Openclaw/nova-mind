@@ -1,0 +1,20 @@
+{
+  "renames": [
+    {
+      "table": "agent_chat",
+      "column": { "from": "mentions", "to": "recipients" },
+      "pr": "#106"
+    },
+    {
+      "table": "agent_chat",
+      "column": { "from": "created_at", "to": "timestamp" },
+      "pr": "#106"
+    },
+    {
+      "table": "agent_chat",
+      "drop": "channel",
+      "pr": "#106",
+      "reason": "Inter-agent messaging uses sender+recipients, channel column is unnecessary"
+    }
+  ]
+}

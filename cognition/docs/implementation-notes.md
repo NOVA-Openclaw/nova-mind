@@ -322,15 +322,15 @@ async executeDatabaseStep(step) {
 ```javascript
 async executeNotifyStep(step) {
   const message = this.interpolate(step.message);
-  const mentions = Array.isArray(step.mentions)
+  const recipients = Array.isArray(step.mentions)
     ? step.mentions
     : [step.mentions];
   
-  await insertAgentMessage({
-    sender: 'nova',
-    message: message,
-    mentions: mentions
-  });
+  // All inserts go through send_agent_message() — direct INSERT is blocked (#106)
+  await db.query(
+    `SELECT send_agent_message($1, $2, $3)`,
+    ['nova', message, recipients]
+  );
 }
 ```
 

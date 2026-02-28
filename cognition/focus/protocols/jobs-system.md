@@ -270,8 +270,7 @@ await db.query(`
 // Auto-notify all agents in notify_agents array
 if (job.notify_agents?.length) {
   await db.query(`
-    INSERT INTO agent_chat (sender, message, mentions)
-    VALUES ($1, $2, $3)
+    SELECT send_agent_message($1, $2, $3)
   `, [agentName, completionMessage, job.notify_agents]);
 }
 ```

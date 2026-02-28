@@ -118,6 +118,20 @@ cd ~/.openclaw/workspace/nova-memory
 ./agent-install.sh    # Non-interactive: reads ~/.openclaw/postgres.json directly (no prompts)
 ```
 
+### Installer Step Order
+
+The installer runs these steps in order:
+
+| Step | What happens |
+|------|-------------|
+| Pre-migrations | Runs `*.sql` files in `pre-migrations/` (data transforms before schema diff) |
+| **Step 1.5** | Reads `memory/database/renames.json` and applies column/table renames idempotently via `ALTER TABLE … RENAME COLUMN`. Drops listed are whitelisted in the pgschema hazard filter. |
+| pgschema plan | Diffs `database/schema.sql` against live DB |
+| Hazard check | Blocks destructive operations (DROP TABLE, DROP COLUMN) unless whitelisted in `renames.json` |
+| pgschema apply | Applies the approved plan |
+
+**When you update the schema with renames:** Add an entry to `memory/database/renames.json` so Step 1.5 can apply the rename before pgschema sees the diff. Without this, pgschema would interpret a rename as a drop + add, which would be blocked by the hazard check or lose existing data.
+
 ## Environment Configuration
 
 ### 1. Environment Variables
@@ -303,8 +317,8 @@ SELECT * FROM pg_stat_activity WHERE state = 'idle in transaction';
 # Terminal 1: Start listener
 psql -c "LISTEN agent_chat;"
 
-# Terminal 2: Send message  
-psql -c "INSERT INTO agent_chat (sender, message, mentions) VALUES ('nova', 'Hello world', ARRAY['test_agent']);"
+# Terminal 2: Send message via send_agent_message() (direct INSERT is blocked)
+psql -c "SELECT send_agent_message('nova', 'Hello world', ARRAY['test_agent']);"
 ```
 
 ## Performance Optimization
@@ -316,7 +330,7 @@ psql -c "INSERT INTO agent_chat (sender, message, mentions) VALUES ('nova', 'Hel
 CREATE INDEX CONCURRENTLY idx_entities_name ON entities(name);
 CREATE INDEX CONCURRENTLY idx_entity_facts_entity_id ON entity_facts(entity_id);
 CREATE INDEX CONCURRENTLY idx_events_date ON events(date);
-CREATE INDEX CONCURRENTLY idx_agent_chat_mentions ON agent_chat USING gin(mentions);
+CREATE INDEX CONCURRENTLY idx_agent_chat_recipients ON agent_chat USING gin(recipients);
 
 -- Update table statistics
 ANALYZE;
@@ -472,12 +486,14 @@ SELECT 'events', COUNT(*),
 FROM events
 UNION ALL  
 SELECT 'agent_chat', COUNT(*),
-       COUNT(*) FILTER (WHERE created_at > NOW() - INTERVAL '24 hours'),
-       COUNT(*) FILTER (WHERE created_at > NOW() - INTERVAL '1 hour')
+       COUNT(*) FILTER (WHERE "timestamp" > NOW() - INTERVAL '24 hours'),
+       COUNT(*) FILTER (WHERE "timestamp" > NOW() - INTERVAL '1 hour')
 FROM agent_chat;
 
 -- Query system health
 SELECT * FROM system_stats;
+-- Or use the built-in view:
+SELECT * FROM v_agent_chat_stats;
 ```
 
 ## Security Configuration

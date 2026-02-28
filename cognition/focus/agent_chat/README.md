@@ -78,43 +78,42 @@ channels:
 
 The plugin expects these tables:
 
+> **Column history (#106):** `mentions → recipients`, `created_at → "timestamp"` (TIMESTAMPTZ, quoted — reserved word), `channel` dropped.
+> All inserts must go through `send_agent_message()` — direct `INSERT` is blocked by trigger.
+
 ### agent_chat
 
 ```sql
 CREATE TABLE agent_chat (
-  id SERIAL PRIMARY KEY,
-  channel TEXT NOT NULL,
-  sender TEXT NOT NULL,
-  message TEXT NOT NULL,
-  mentions TEXT[] DEFAULT '{}',
-  reply_to INTEGER REFERENCES agent_chat(id),
-  created_at TIMESTAMP DEFAULT NOW()
+  id          SERIAL PRIMARY KEY,
+  sender      TEXT NOT NULL,
+  message     TEXT NOT NULL,
+  recipients  TEXT[] NOT NULL CHECK (array_length(recipients, 1) > 0),
+  reply_to    INTEGER REFERENCES agent_chat(id),
+  "timestamp" TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+```
 
--- Trigger for NOTIFY
-CREATE OR REPLACE FUNCTION notify_agent_chat()
-RETURNS TRIGGER AS $$
-BEGIN
-  PERFORM pg_notify('agent_chat', NEW.id::text);
-  RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
+All inserts go through `send_agent_message()` (SECURITY DEFINER):
 
-CREATE TRIGGER agent_chat_notify
-AFTER INSERT ON agent_chat
-FOR EACH ROW EXECUTE FUNCTION notify_agent_chat();
+```sql
+-- Validated insert: validates sender and all recipients against agents table
+SELECT send_agent_message('nova', 'Hello!', ARRAY['myagent']);
+
+-- Broadcast to all agents
+SELECT send_agent_message('nova', 'Broadcast message', ARRAY['*']);
 ```
 
 ### agent_chat_processed
 
 ```sql
 CREATE TABLE agent_chat_processed (
-  chat_id INTEGER REFERENCES agent_chat(id),
-  agent TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'received',
-  received_at TIMESTAMP,
-  routed_at TIMESTAMP,
-  responded_at TIMESTAMP,
+  chat_id      INTEGER REFERENCES agent_chat(id),
+  agent        TEXT NOT NULL,
+  status       agent_chat_status NOT NULL DEFAULT 'received',
+  received_at  TIMESTAMPTZ DEFAULT NOW(),
+  routed_at    TIMESTAMPTZ,
+  responded_at TIMESTAMPTZ,
   error_message TEXT,
   PRIMARY KEY (chat_id, agent)
 );
@@ -124,11 +123,10 @@ CREATE TABLE agent_chat_processed (
 
 ### Sending Messages
 
-Insert a message mentioning the agent:
+Send a message to an agent via `send_agent_message()`:
 
 ```sql
-INSERT INTO agent_chat (channel, sender, message, mentions)
-VALUES ('general', 'user123', '@MyAgent hello!', ARRAY['MyAgent']);
+SELECT send_agent_message('sender_agent', '@MyAgent hello!', ARRAY['myagent']);
 ```
 
 The agent will receive the message and can reply.

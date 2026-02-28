@@ -797,6 +797,73 @@ if [ -d "$PRE_MIGRATIONS_DIR" ]; then
     fi
 fi
 
+# -- Step 1.5: Apply declarative renames from renames.json before pgschema --
+RENAMES_FILE="$SCRIPT_DIR/memory/database/renames.json"
+if [ -f "$RENAMES_FILE" ]; then
+    echo "  Processing renames.json (Step 1.5)..."
+    RENAME_COUNT=$(jq '[.renames[] | select(.column.from? != null)] | length' "$RENAMES_FILE" 2>/dev/null || echo "0")
+    APPLIED=0
+    SKIPPED=0
+
+    # Process column renames
+    while IFS= read -r entry; do
+        table=$(echo "$entry" | jq -r '.table')
+        col_from=$(echo "$entry" | jq -r '.column.from')
+        col_to=$(echo "$entry" | jq -r '.column.to')
+        pr=$(echo "$entry" | jq -r '.pr // "unknown"')
+
+        # Check if the FROM column still exists
+        EXISTS=$(psql -U "$DB_USER" -d "$DB_NAME" -tAc \
+            "SELECT COUNT(*) FROM information_schema.columns
+             WHERE table_schema = 'public' AND table_name = '$table' AND column_name = '$col_from'" \
+            2>/dev/null | tr -d '[:space:]')
+
+        if [ "${EXISTS:-0}" -eq 1 ]; then
+            if psql -U "$DB_USER" -d "$DB_NAME" -c \
+                "ALTER TABLE \"$table\" RENAME COLUMN \"$col_from\" TO \"$col_to\";" >/dev/null 2>&1; then
+                echo -e "  ${CHECK_MARK} Renamed $table.$col_from → $col_to ($pr)"
+                APPLIED=$((APPLIED + 1))
+            else
+                echo -e "  ${CROSS_MARK} Failed to rename $table.$col_from → $col_to"
+                SCHEMA_DIFF_SKIPPED=1
+            fi
+        else
+            echo -e "  ${INFO} $table.$col_from already renamed (skipping)"
+            SKIPPED=$((SKIPPED + 1))
+        fi
+    done < <(jq -c '.renames[] | select(.column.from? != null)' "$RENAMES_FILE" 2>/dev/null)
+
+    # Process table renames
+    while IFS= read -r entry; do
+        tbl_from=$(echo "$entry" | jq -r '.table.from')
+        tbl_to=$(echo "$entry" | jq -r '.table.to')
+        pr=$(echo "$entry" | jq -r '.pr // "unknown"')
+
+        EXISTS=$(psql -U "$DB_USER" -d "$DB_NAME" -tAc \
+            "SELECT COUNT(*) FROM information_schema.tables
+             WHERE table_schema = 'public' AND table_name = '$tbl_from'" \
+            2>/dev/null | tr -d '[:space:]')
+
+        if [ "${EXISTS:-0}" -eq 1 ]; then
+            if psql -U "$DB_USER" -d "$DB_NAME" -c \
+                "ALTER TABLE \"$tbl_from\" RENAME TO \"$tbl_to\";" >/dev/null 2>&1; then
+                echo -e "  ${CHECK_MARK} Renamed table $tbl_from → $tbl_to ($pr)"
+                APPLIED=$((APPLIED + 1))
+            else
+                echo -e "  ${CROSS_MARK} Failed to rename table $tbl_from → $tbl_to"
+                SCHEMA_DIFF_SKIPPED=1
+            fi
+        else
+            echo -e "  ${INFO} Table $tbl_from already renamed (skipping)"
+            SKIPPED=$((SKIPPED + 1))
+        fi
+    done < <(jq -c '.renames[] | select(.table | type == "object")' "$RENAMES_FILE" 2>/dev/null)
+
+    echo -e "  ${INFO} Renames: $APPLIED applied, $SKIPPED skipped"
+else
+    echo -e "  ${INFO} No renames.json found — skipping Step 1.5"
+fi
+
 if [ "$SCHEMA_DIFF_SKIPPED" -eq 1 ]; then
     echo -e "  ${WARNING} Skipping pgschema plan/apply (extension install failed above)"
 else
@@ -841,13 +908,46 @@ else
         echo -e "  ${WARNING} pgschema plan failed (exit $PLAN_EXIT) — schema apply skipped"
         SCHEMA_DIFF_SKIPPED=1
     else
-        HAZARD_COUNT=$(jq '[(.groups // [])[] | .steps[] | select(.type != "privilege") | select(.operation == "drop") | select(.type | test("^table"))] | length' "$PLAN_FILE" 2>/dev/null || echo "0")
+        # Build list of intentional drop column paths from renames.json (table.column format)
+        INTENTIONAL_DROPS=()
+        if [ -f "$RENAMES_FILE" ]; then
+            while IFS= read -r drop_path; do
+                INTENTIONAL_DROPS+=("$drop_path")
+            done < <(jq -r '.renames[] | select(.drop? != null) | .table + "." + .drop' "$RENAMES_FILE" 2>/dev/null)
+        fi
+
+        # Build jq filter to exclude intentional drops from hazard count
+        INTENTIONAL_JQ_FILTER='false'
+        for drop_path in "${INTENTIONAL_DROPS[@]}"; do
+            INTENTIONAL_JQ_FILTER="${INTENTIONAL_JQ_FILTER} or (.path == \"${drop_path}\")"
+        done
+
+        HAZARD_COUNT=$(jq --argjson filter_expr 'null' \
+            "[(.groups // [])[] | .steps[] | select(.type != \"privilege\") | select(.operation == \"drop\") | select(.type | test(\"^table\"))] | length" \
+            "$PLAN_FILE" 2>/dev/null || echo "0")
+
+        # Re-count excluding intentional drops
+        if [ ${#INTENTIONAL_DROPS[@]} -gt 0 ]; then
+            # Build a JSON array of intentional drop paths for jq filtering
+            INTENTIONAL_JSON=$(printf '%s\n' "${INTENTIONAL_DROPS[@]}" | jq -R . | jq -s .)
+            HAZARD_COUNT=$(jq --argjson whitelist "$INTENTIONAL_JSON" \
+                '[(.groups // [])[] | .steps[] | select(.type != "privilege") | select(.operation == "drop") | select(.type | test("^table")) | select(.path as $p | $whitelist | index($p) == null)] | length' \
+                "$PLAN_FILE" 2>/dev/null || echo "0")
+        fi
+
         TOTAL_STEPS=$(jq '[(.groups // [])[] | .steps[] | select(.type != "privilege")] | length' "$PLAN_FILE" 2>/dev/null || echo "0")
 
         if [ "$HAZARD_COUNT" -gt 0 ] 2>/dev/null; then
             echo -e "  ${WARNING} Destructive changes detected — schema apply SKIPPED"
             echo "      $HAZARD_COUNT destructive operation(s) (DROP on table/column):"
-            jq -r '(.groups // [])[] | .steps[] | select(.type != "privilege") | select(.operation == "drop") | select(.type | test("^table")) | "      • " + .path' "$PLAN_FILE" 2>/dev/null || true
+            if [ ${#INTENTIONAL_DROPS[@]} -gt 0 ]; then
+                INTENTIONAL_JSON=$(printf '%s\n' "${INTENTIONAL_DROPS[@]}" | jq -R . | jq -s .)
+                jq -r --argjson whitelist "$INTENTIONAL_JSON" \
+                    '(.groups // [])[] | .steps[] | select(.type != "privilege") | select(.operation == "drop") | select(.type | test("^table")) | select(.path as $p | $whitelist | index($p) == null) | "      • " + .path' \
+                    "$PLAN_FILE" 2>/dev/null || true
+            else
+                jq -r '(.groups // [])[] | .steps[] | select(.type != "privilege") | select(.operation == "drop") | select(.type | test("^table")) | "      • " + .path' "$PLAN_FILE" 2>/dev/null || true
+            fi
             echo "      To apply manually: $PGSCHEMA_BIN apply ${PGSCHEMA_CONN_ARGS[*]} --schema public --plan $PLAN_FILE --auto-approve"
             SCHEMA_DIFF_SKIPPED=1
         elif [ "$TOTAL_STEPS" -eq 0 ] 2>/dev/null; then

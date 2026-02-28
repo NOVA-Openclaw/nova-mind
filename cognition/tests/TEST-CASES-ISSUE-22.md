@@ -64,7 +64,7 @@ cleanup_test_db() {
 - [ ] Database `${DB_NAME}` exists in `psql -l` output
 - [ ] Database is connectable: `psql -U "$DB_USER" -d "$DB_NAME" -c '\q'` succeeds
 - [ ] Tables `agent_chat` and `agent_chat_processed` exist in public schema
-- [ ] Indexes exist: `idx_agent_chat_mentions`, `idx_agent_chat_created_at`, `idx_agent_chat_channel`, `idx_agent_chat_processed_agent`, `idx_agent_chat_processed_status`
+- [ ] Indexes exist: `idx_agent_chat_recipients`, `idx_agent_chat_timestamp`, `idx_agent_chat_sender`, `idx_agent_chat_processed_agent`, `idx_agent_chat_processed_status` (Note: #106 renamed `idx_agent_chat_mentions→recipients`, `idx_agent_chat_created_at→timestamp`, removed `idx_agent_chat_channel`)
 - [ ] Custom type `agent_chat_status` exists with values: `received`, `routed`, `responded`, `failed`
 - [ ] Function `notify_agent_chat()` exists
 - [ ] Trigger `agent_chat_notify` exists on `agent_chat` table
@@ -97,10 +97,10 @@ SELECT tgname FROM pg_trigger WHERE tgname = 'agent_chat_notify';
 - Database contains existing data (optional: insert test row)
 
 ### Steps
-1. Insert a test row to confirm data preservation:
+1. Insert a test row to confirm data preservation (direct INSERT is blocked since #106; use `send_agent_message()`):
    ```bash
    psql -U "$DB_USER" -d "$DB_NAME" -c \
-     "INSERT INTO agent_chat (channel, sender, message) VALUES ('test', 'tester', 'preserve me');"
+     "SELECT send_agent_message('tester', 'preserve me', ARRAY['tester']);"
    ```
 2. Note the row count:
    ```bash
@@ -149,16 +149,15 @@ SELECT tgname FROM pg_trigger WHERE tgname = 'agent_chat_notify';
 ### Expected Results
 
 #### Tables
-- [ ] `agent_chat` table exists with columns:
-  | Column     | Type          | Nullable | Default             |
-  |------------|---------------|----------|---------------------|
-  | id         | SERIAL (int4) | NOT NULL | nextval(sequence)   |
-  | channel    | TEXT          | NOT NULL | 'default'           |
-  | sender     | TEXT          | NOT NULL | —                   |
-  | message    | TEXT          | NOT NULL | —                   |
-  | mentions   | TEXT[]        | YES      | '{}'                |
-  | reply_to   | INTEGER       | YES      | NULL                |
-  | created_at | TIMESTAMP     | YES      | NOW()               |
+- [ ] `agent_chat` table exists with columns (as of #106):
+  | Column      | Type          | Nullable | Default             |
+  |-------------|---------------|----------|---------------------|
+  | id          | SERIAL (int4) | NOT NULL | nextval(sequence)   |
+  | sender      | TEXT          | NOT NULL | —                   |
+  | message     | TEXT          | NOT NULL | —                   |
+  | recipients  | TEXT[]        | NOT NULL | — (CHECK: length>0) |
+  | reply_to    | INTEGER       | YES      | NULL                |
+  | "timestamp" | TIMESTAMPTZ   | NOT NULL | NOW()               |
 
 - [ ] `agent_chat_processed` table exists with columns:
   | Column       | Type               | Nullable | Default     |
@@ -177,27 +176,34 @@ SELECT tgname FROM pg_trigger WHERE tgname = 'agent_chat_notify';
 - [ ] `agent_chat_processed` has composite PRIMARY KEY `(chat_id, agent)`
 - [ ] `agent_chat_processed.chat_id` has FOREIGN KEY → `agent_chat(id)` with ON DELETE CASCADE
 
-#### Indexes (5 total)
-- [ ] `idx_agent_chat_mentions` — GIN index on `agent_chat(mentions)`
-- [ ] `idx_agent_chat_created_at` — B-tree on `agent_chat(created_at)`
-- [ ] `idx_agent_chat_channel` — B-tree on `agent_chat(channel)`
+#### Indexes (as of #106)
+- [ ] `idx_agent_chat_recipients` — GIN index on `agent_chat(recipients)` (was `idx_agent_chat_mentions`)
+- [ ] `idx_agent_chat_timestamp` — B-tree on `agent_chat("timestamp")` (was `idx_agent_chat_created_at`)
+- [ ] `idx_agent_chat_sender` — B-tree on `agent_chat(sender, "timestamp" DESC)`
 - [ ] `idx_agent_chat_processed_agent` — B-tree on `agent_chat_processed(agent)`
 - [ ] `idx_agent_chat_processed_status` — B-tree on `agent_chat_processed(status)`
 
 #### Custom Type
 - [ ] `agent_chat_status` ENUM with values: `received`, `routed`, `responded`, `failed`
 
-#### Function & Trigger
+#### Functions & Triggers
 - [ ] Function `notify_agent_chat()` exists, returns TRIGGER, language plpgsql
-- [ ] Trigger `agent_chat_notify` fires AFTER INSERT on `agent_chat`, FOR EACH ROW
+- [ ] Function `send_agent_message(text, text, text[])` exists, SECURITY DEFINER, validates sender/recipients
+- [ ] Function `enforce_agent_chat_function_use()` exists, returns TRIGGER
+- [ ] Trigger `trg_notify_agent_chat` fires AFTER INSERT on `agent_chat`, FOR EACH ROW
+- [ ] Trigger `trg_enforce_agent_chat_function_use` fires BEFORE INSERT on `agent_chat`, blocks direct inserts
 
 #### Functional Test
-- [ ] Insert triggers notification:
+- [ ] Insert via `send_agent_message()` triggers notification:
   ```sql
   LISTEN agent_chat;
-  INSERT INTO agent_chat (channel, sender, message, mentions)
-  VALUES ('general', 'test', 'Hello @agent', ARRAY['agent']);
-  -- Should receive NOTIFY with JSON payload containing id, channel, sender, mentions
+  SELECT send_agent_message('test', 'Hello @agent', ARRAY['agent']);
+  -- Should receive NOTIFY with JSON payload containing id, sender, recipients
+  ```
+- [ ] Direct INSERT is blocked:
+  ```sql
+  INSERT INTO agent_chat (sender, message, recipients) VALUES ('test', 'hello', ARRAY['agent']);
+  -- Expected: ERROR: Direct INSERT on agent_chat is not allowed. Use send_agent_message() instead.
   ```
 
 ### Cleanup
@@ -448,13 +454,12 @@ The installer uses `${USER//-/_}` which is bash-specific (double-slash = global 
 **Preconditions:** Database has agent_chat tables with existing rows
 
 **Steps:**
-1. Set up database with existing data:
+1. Set up database with existing data (use `send_agent_message()` — direct INSERT is blocked since #106):
    ```bash
    psql -U "$DB_USER" -d "$DB_NAME" -c "
-     INSERT INTO agent_chat (channel, sender, message) VALUES
-       ('general', 'alice', 'Hello'),
-       ('general', 'bob', 'Hi there'),
-       ('private', 'charlie', 'Secret message');
+     SELECT send_agent_message('alice', 'Hello', ARRAY['*']);
+     SELECT send_agent_message('bob', 'Hi there', ARRAY['*']);
+     SELECT send_agent_message('charlie', 'Secret message', ARRAY['nova']);
    "
    psql -U "$DB_USER" -d "$DB_NAME" -c "
      INSERT INTO agent_chat_processed (chat_id, agent, status) VALUES

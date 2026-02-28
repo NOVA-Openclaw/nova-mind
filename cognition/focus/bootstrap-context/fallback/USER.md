@@ -7,7 +7,7 @@ User information unavailable. Operating with minimal context.
 ## Recovery
 
 ```sql
-SELECT * FROM bootstrap_context_universal WHERE file_key = 'USER';
+SELECT content FROM agent_bootstrap_context WHERE context_type = 'UNIVERSAL' AND file_key = 'USER';
 ```
 
 Request user preferences from primary agent (NOVA).

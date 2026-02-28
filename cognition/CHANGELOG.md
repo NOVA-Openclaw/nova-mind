@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Removed (#110 — installer schema cleanup)
+
+- **Duplicate schema management removed from installer** ([#110](https://github.com/nova-openclaw/nova-mind/issues/110)) — `pgschema` is now the single source of truth for database schema. Specifically:
+  - `cognition/focus/bootstrap-context/schema/bootstrap-context.sql` — emptied; deprecated tables (`bootstrap_context_universal`, `bootstrap_context_agents`, `bootstrap_context_config`, `bootstrap_context_audit`) are no longer created by this file. Table `agent_bootstrap_context` is managed by `pgschema` via `database/schema.sql`.
+  - `cognition/focus/bootstrap-context/install.sh` — removed `psql -f schema/bootstrap-context.sql` step and 4-table verification. Schema is applied by the root `agent-install.sh` via `pgschema`.
+  - `cognition/focus/bootstrap-context/sql/management-functions.sql` — removed 5 functions that referenced the deprecated tables: `copy_file_to_bootstrap`, `delete_universal_context`, `delete_agent_context`, `list_all_context`, `get_bootstrap_config`. Remaining functions (`update_universal_context`, `update_agent_context`, `get_agent_bootstrap`, etc.) are unchanged and write to `agent_bootstrap_context`.
+  - `cognition/agent-install.sh` — removed direct `psql -f focus/agent_chat/schema.sql` block. `agent_chat` schema is managed exclusively by `pgschema`.
+- **Documentation updated** to reflect removed functions and deprecated tables. References to `bootstrap_context_*` tables updated to `agent_bootstrap_context`. See `cognition/focus/bootstrap-context/INSTALLATION_SUMMARY.md`, `docs/MANAGEMENT.md`, and all `fallback/*.md` files.
+
 ### Changed (agent_chat modernization — #106, #107)
 
 - **`agent_chat` schema modernized** ([#106](https://github.com/nova-openclaw/nova-cognition/issues/106)) — Column renames and one removal rationalize the table structure for multi-agent messaging:

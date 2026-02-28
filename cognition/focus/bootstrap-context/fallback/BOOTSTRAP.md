@@ -31,8 +31,8 @@ You are loading emergency fallback context because:
 
 2. **Check bootstrap system:**
    ```sql
-   SELECT * FROM bootstrap_context_config;
-   SELECT * FROM list_all_context();
+   SELECT context_type, file_key, length(content) as size
+   FROM agent_bootstrap_context ORDER BY context_type, file_key;
    ```
 
 3. **Contact Newhart:**

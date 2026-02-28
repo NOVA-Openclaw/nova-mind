@@ -246,15 +246,21 @@ After PR #9 merges, DELEGATION_CONTEXT will be integrated into the bootstrap con
 
 #### 1. Bootstrap Context Integration
 
-**Table:** `bootstrap_context_universal`  
+**Table:** `agent_bootstrap_context`  
 **Key:** `DELEGATION_CONTEXT`  
 **Management:** Through `update_universal_context()` function
 
 ```sql
--- DELEGATION_CONTEXT becomes a database row
-INSERT INTO bootstrap_context_universal (file_key, content, description, updated_by)
-VALUES ('DELEGATION_CONTEXT', '[generated content]', 'Auto-generated delegation context', 'system');
+-- DELEGATION_CONTEXT becomes a database row (via update_universal_context)
+SELECT update_universal_context(
+    'DELEGATION_CONTEXT',
+    '[generated content]',
+    'Auto-generated delegation context',
+    'system'
+);
 ```
+
+> **Note:** As of #110, context is stored in `agent_bootstrap_context` (unified table), not `bootstrap_context_universal`. Use `update_universal_context()` — the function writes to the correct table.
 
 #### 2. PostgreSQL Generation Function
 
@@ -366,14 +372,14 @@ SELECT tgname FROM pg_trigger WHERE tgfoid = (SELECT oid FROM pg_proc WHERE pron
 ### 4. Migrate Data
 
 ```sql
--- Copy current DELEGATION_CONTEXT.md to database
--- (Assuming file content is available)
+-- Copy current DELEGATION_CONTEXT.md to database via update_universal_context()
 SELECT update_universal_context(
     'DELEGATION_CONTEXT',
     '[content from ~/.openclaw/workspace/DELEGATION_CONTEXT.md]',
     'Migrated from file-based system',
     'migration'
 );
+-- Stored in agent_bootstrap_context table (context_type = 'UNIVERSAL')
 ```
 
 ### 5. Verify New System
@@ -384,7 +390,7 @@ SELECT update_universal_context(
 
 # Verify triggers update database context
 psql -d nova_memory -c "UPDATE agents SET description = description WHERE id = 1;"
-psql -d nova_memory -c "SELECT updated_at FROM bootstrap_context_universal WHERE file_key = 'DELEGATION_CONTEXT';"
+psql -d nova_memory -c "SELECT updated_at FROM agent_bootstrap_context WHERE file_key = 'DELEGATION_CONTEXT';"
 ```
 
 ### 6. Update Documentation
@@ -436,7 +442,7 @@ stat ~/.openclaw/workspace/DELEGATION_CONTEXT.md
 journalctl --user -u delegation-listener.service --since "1 hour ago" | grep -c "Regeneration complete"
 
 # Long-term system health
-psql -d nova_memory -c "SELECT file_key, updated_at FROM bootstrap_context_universal WHERE file_key = 'DELEGATION_CONTEXT';"
+psql -d nova_memory -c "SELECT file_key, updated_at FROM agent_bootstrap_context WHERE file_key = 'DELEGATION_CONTEXT';"
 ```
 
 ### Performance Monitoring
@@ -444,9 +450,6 @@ psql -d nova_memory -c "SELECT file_key, updated_at FROM bootstrap_context_unive
 ```bash
 # Monitor regeneration frequency
 journalctl --user -u delegation-listener.service --since "24 hours ago" | grep "Regeneration complete" | wc -l
-
-# Monitor database trigger activity
-psql -d nova_memory -c "SELECT table_name, operation, COUNT(*) FROM bootstrap_context_audit WHERE table_name = 'bootstrap_context_universal' AND changed_at > NOW() - INTERVAL '24 hours' GROUP BY table_name, operation;"
 ```
 
 ## Related Documentation

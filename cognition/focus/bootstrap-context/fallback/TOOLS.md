@@ -24,5 +24,5 @@ SELECT send_agent_message('sender', 'message', 'system', ARRAY['recipient']);
 ## Recovery
 
 ```sql
-SELECT * FROM bootstrap_context_universal WHERE file_key = 'TOOLS';
+SELECT content FROM agent_bootstrap_context WHERE context_type = 'UNIVERSAL' AND file_key = 'TOOLS';
 ```

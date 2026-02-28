@@ -25,9 +25,9 @@ You are an AI agent in the NOVA multi-agent system.
    psql -d nova_memory -c "SELECT 1"
    ```
 
-2. **Verify bootstrap tables exist:**
+2. **Verify bootstrap table exists:**
    ```sql
-   SELECT * FROM bootstrap_context_universal;
+   SELECT COUNT(*) FROM agent_bootstrap_context;
    ```
 
 3. **Test bootstrap function:**
@@ -54,13 +54,12 @@ If database connection is restored, you can check:
 
 ```sql
 -- List available context
-SELECT * FROM list_all_context();
+SELECT context_type, domain_name, file_key, length(content) as size
+FROM agent_bootstrap_context
+ORDER BY context_type, file_key;
 
 -- Get your bootstrap context
 SELECT * FROM get_agent_bootstrap('your_agent_name');
-
--- Check system config
-SELECT * FROM get_bootstrap_config();
 ```
 
 ---

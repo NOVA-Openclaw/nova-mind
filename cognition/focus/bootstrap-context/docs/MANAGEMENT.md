@@ -12,7 +12,9 @@ SELECT update_universal_context('FILE_KEY', 'content...', 'description', 'your_n
 SELECT update_agent_context('agent_name', 'FILE_KEY', 'content...', 'description', 'your_name');
 
 -- List everything
-SELECT * FROM list_all_context();
+SELECT context_type, domain_name, file_key, length(content) as size, updated_at
+FROM agent_bootstrap_context
+ORDER BY context_type, file_key;
 
 -- Get agent's context
 SELECT * FROM get_agent_bootstrap('agent_name');
@@ -91,30 +93,29 @@ $content$, 'Coder domain knowledge', 'newhart');
 ## Content Length Limits
 
 - Default: **20,000 characters** per file
-- Configured in `bootstrap_context_config.max_file_size`
-- Matches OpenClaw's `agents.defaults.bootstrapMaxChars`
+- Configured via `agents.defaults.bootstrapMaxChars` in `~/.openclaw/openclaw.json`
 
-Check current limit:
-```sql
-SELECT value FROM bootstrap_context_config WHERE key = 'max_file_size';
-```
+> **Note:** `bootstrap_context_config` table was removed in #110. Configuration is no longer stored in the database — check `openclaw.json` directly.
 
 ## Viewing Context
 
 ### List All Context
 
 ```sql
-SELECT * FROM list_all_context()
-ORDER BY type, agent_name, file_key;
+SELECT context_type, domain_name, file_key, length(content) as content_length, updated_at, updated_by
+FROM agent_bootstrap_context
+ORDER BY context_type, domain_name, file_key;
 ```
 
 Shows:
-- type (universal/agent)
-- agent_name (NULL for universal)
+- context_type (UNIVERSAL/GLOBAL/DOMAIN/AGENT)
+- domain_name (NULL for non-DOMAIN types)
 - file_key
 - content_length
 - updated_at
 - updated_by
+
+> **Note:** `list_all_context()` was removed in #110. Query `agent_bootstrap_context` directly.
 
 ### Get Agent Bootstrap
 
@@ -129,57 +130,35 @@ Returns what the agent will actually see:
 
 ## Deleting Context
 
-### Delete Universal File
-
 ```sql
-SELECT delete_universal_context('FILE_KEY');
+-- Delete a specific context entry
+DELETE FROM agent_bootstrap_context
+WHERE context_type = 'UNIVERSAL' AND file_key = 'FILE_KEY';
+
+-- Delete agent-specific context
+DELETE FROM agent_bootstrap_context
+WHERE context_type = 'AGENT' AND domain_name = 'agent_name' AND file_key = 'FILE_KEY';
 ```
 
-### Delete Agent File
-
-```sql
-SELECT delete_agent_context('agent_name', 'FILE_KEY');
-```
+> **Note:** `delete_universal_context()` and `delete_agent_context()` were removed in #110. Use direct DELETE statements instead. The `agent_bootstrap_context` table has a write-protection trigger — only Newhart (Agent Design/Management domain) can modify it directly.
 
 ## Configuration
 
-### View Config
+Bootstrap system configuration is no longer stored in the database. The system is always active when the hook is installed.
 
-```sql
-SELECT * FROM get_bootstrap_config();
-```
-
-### Disable System
-
-```sql
-UPDATE bootstrap_context_config 
-SET value = 'false'::jsonb 
-WHERE key = 'enabled';
-```
-
-When disabled, OpenClaw falls back to filesystem files.
-
-### Enable Fallback
-
-```sql
-UPDATE bootstrap_context_config 
-SET value = 'true'::jsonb 
-WHERE key = 'fallback_enabled';
-```
+> **Note:** `get_bootstrap_config()`, `bootstrap_context_config` table, and the enable/disable toggle were removed in #110. To disable the bootstrap hook, remove the hook directory from `~/.openclaw/hooks/db-bootstrap-context/`.
 
 ## Migrating Existing Files
-
-The `copy_file_to_bootstrap()` function imports filesystem files:
 
 ```sql
 -- Read file content first
 \set content `cat /path/to/AGENTS.md`
 
 -- Import to universal context
-SELECT copy_file_to_bootstrap('/path/to/AGENTS.md', :'content', NULL, 'migration');
+SELECT update_universal_context('AGENTS', :'content', 'Migrated from AGENTS.md', 'migration');
 
 -- Import to agent context
-SELECT copy_file_to_bootstrap('/path/to/SEED_CONTEXT.md', :'content', 'coder', 'migration');
+SELECT update_agent_context('coder', 'SEED_CONTEXT', :'content', 'Migrated from SEED_CONTEXT.md', 'migration');
 ```
 
 Or use the migration script:
@@ -187,21 +166,11 @@ Or use the migration script:
 psql -d nova_memory -f sql/migrate-initial-context.sql
 ```
 
+> **Note:** `copy_file_to_bootstrap()` was removed in #110. Use `update_universal_context()` or `update_agent_context()` directly.
+
 ## Audit Trail
 
-All changes are logged in `bootstrap_context_audit`:
-
-```sql
-SELECT 
-    table_name,
-    operation,
-    changed_by,
-    changed_at,
-    length(new_content) as new_size
-FROM bootstrap_context_audit
-ORDER BY changed_at DESC
-LIMIT 20;
-```
+> **Note:** `bootstrap_context_audit` table was removed in #110. Audit history is no longer stored in a separate table. Use PostgreSQL's WAL or your own logging if an audit trail is needed.
 
 ## Best Practices
 
@@ -239,22 +208,17 @@ SELECT * FROM get_agent_bootstrap('test_agent');
 
 ### 4. Keep Backups
 
-The audit log preserves old content, but explicitly backup critical files:
+Explicitly backup critical context:
 
 ```bash
-psql -d nova_memory -c "SELECT content FROM bootstrap_context_universal WHERE file_key='AGENTS'" > AGENTS_backup.md
+psql -d nova_memory -c "SELECT content FROM agent_bootstrap_context WHERE context_type='UNIVERSAL' AND file_key='AGENTS'" > AGENTS_backup.md
 ```
 
 ## Troubleshooting
 
 ### Context Not Loading
 
-1. Check if system is enabled:
-   ```sql
-   SELECT value FROM bootstrap_context_config WHERE key = 'enabled';
-   ```
-
-2. Verify hook is installed:
+1. Verify hook is installed:
    ```bash
    ls -la ~/.openclaw/hooks/db-bootstrap-context/
    ```
@@ -276,10 +240,16 @@ sudo systemctl start postgresql
 sudo systemctl status postgresql
 ```
 
-**Function not found (42883)** - Schema not installed:
+**Function not found (42883)** - Management functions not installed:
 ```bash
 cd ~/workspace/nova-mind/cognition/focus/bootstrap-context
-./install.sh
+psql -d nova_memory -f sql/management-functions.sql
+```
+
+**Table not found** - Schema not applied (pgschema manages this):
+```bash
+cd ~/workspace/nova-mind
+./agent-install.sh
 ```
 
 **Permission denied** - User doesn't exist in database:
@@ -304,15 +274,10 @@ ls -la ~/.openclaw/bootstrap-fallback/
 
 ### Content Too Large
 
-If context exceeds max_file_size:
+If context exceeds the bootstrap character limit:
 
 1. Split into multiple files
-2. Or increase the limit:
-   ```sql
-   UPDATE bootstrap_context_config 
-   SET value = '30000'::jsonb 
-   WHERE key = 'max_file_size';
-   ```
+2. Or increase `agents.defaults.bootstrapMaxChars` in `~/.openclaw/openclaw.json`
 
 ## Owner
 

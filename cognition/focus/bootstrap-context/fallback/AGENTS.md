@@ -24,5 +24,5 @@ SELECT send_agent_message('your_name',
 
 Check database:
 ```sql
-SELECT * FROM bootstrap_context_universal WHERE file_key = 'AGENTS';
+SELECT content FROM agent_bootstrap_context WHERE context_type = 'UNIVERSAL' AND file_key = 'AGENTS';
 ```

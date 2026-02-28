@@ -1212,26 +1212,11 @@ else
     echo -e "  ${CHECK_MARK} Database '$DB_NAME' created"
 fi
 
-# --- agent_chat schema ---
+# --- agent_chat runtime configuration ---
+# Schema is managed by pgschema via database/schema.sql
+# This section only configures triggers for logical replication
 echo ""
 echo "Agent chat schema..."
-
-COG_SCHEMA_FILE="$SCRIPT_DIR/cognition/focus/agent_chat/schema.sql"
-if [ ! -f "$COG_SCHEMA_FILE" ]; then
-    echo -e "  ${WARNING} cognition/focus/agent_chat/schema.sql not found (will be created by extension)"
-else
-    echo "  Applying agent_chat schema..."
-    SCHEMA_ERR="${TMPDIR:-/tmp}/schema-apply-$$.err"
-    if psql -U "$DB_USER" -d "$DB_NAME" -f "$COG_SCHEMA_FILE" >/dev/null 2>"$SCHEMA_ERR"; then
-        echo -e "  ${CHECK_MARK} Schema applied"
-        rm -f "$SCHEMA_ERR"
-    else
-        echo -e "  ${CROSS_MARK} Schema apply failed"
-        cat "$SCHEMA_ERR" >&2
-        rm -f "$SCHEMA_ERR"
-        exit 1
-    fi
-fi
 
 # Configure triggers for logical replication if subscriptions exist
 echo "  Checking for logical replication subscriptions..."

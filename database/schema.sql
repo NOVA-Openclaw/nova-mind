@@ -66,42 +66,36 @@ CREATE INDEX IF NOT EXISTS idx_abc_agent_name ON agent_bootstrap_context (agent_
 
 CREATE TABLE IF NOT EXISTS agent_chat (
     id SERIAL,
-    channel varchar(50) DEFAULT 'system',
     sender varchar(50) NOT NULL,
     message text NOT NULL,
-    mentions text[],
+    recipients text[] NOT NULL,
     reply_to integer,
-    created_at timestamptz DEFAULT now(),
+    timestamp timestamptz DEFAULT now() NOT NULL,
     CONSTRAINT agent_chat_pkey PRIMARY KEY (id),
-    CONSTRAINT agent_chat_reply_to_fkey FOREIGN KEY (reply_to) REFERENCES agent_chat (id)
+    CONSTRAINT agent_chat_reply_to_fkey FOREIGN KEY (reply_to) REFERENCES agent_chat (id),
+    CONSTRAINT agent_chat_recipients_check CHECK (array_length(recipients, 1) > 0)
 );
 
 
 COMMENT ON TABLE agent_chat IS 'Agent messaging. INSERT allowed for all, UPDATE/DELETE only Newhart.';
 
 --
--- Name: idx_agent_chat_channel; Type: INDEX; Schema: -; Owner: -
+-- Name: idx_agent_chat_recipients; Type: INDEX; Schema: -; Owner: -
 --
 
-CREATE INDEX IF NOT EXISTS idx_agent_chat_channel ON agent_chat (channel, created_at DESC);
-
---
--- Name: idx_agent_chat_created_at; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_agent_chat_created_at ON agent_chat (created_at);
-
---
--- Name: idx_agent_chat_mentions; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_agent_chat_mentions ON agent_chat USING gin (mentions);
+CREATE INDEX IF NOT EXISTS idx_agent_chat_recipients ON agent_chat USING gin (recipients);
 
 --
 -- Name: idx_agent_chat_sender; Type: INDEX; Schema: -; Owner: -
 --
 
-CREATE INDEX IF NOT EXISTS idx_agent_chat_sender ON agent_chat (sender, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_chat_sender ON agent_chat (sender, "timestamp" DESC);
+
+--
+-- Name: idx_agent_chat_timestamp; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_agent_chat_timestamp ON agent_chat ("timestamp");
 
 --
 -- Name: agent_chat_processed; Type: TABLE; Schema: -; Owner: -
@@ -310,7 +304,7 @@ CREATE TABLE IF NOT EXISTS agents (
 );
 
 
-COMMENT ON TABLE agents IS 'Agent definitions. READ-ONLY except Newhart (Agent Design/Management domain).';
+COMMENT ON TABLE agents IS 'Agent registry';
 
 
 COMMENT ON COLUMN agents.access_details IS 'JSON: session_key, cli_command, endpoint URL, etc.';
@@ -3177,12 +3171,8 @@ DECLARE
     content_text TEXT;
     content_hash_val VARCHAR(64);
 BEGIN
-    -- Prepare content for embedding
     content_text := NEW.sender || ': ' || NEW.message;
     content_hash_val := encode(sha256(content_text::bytea), 'hex');
-
-    -- Insert embedding record (embedding vector will be populated by external process)
-    -- This just creates a placeholder that external embedding service can process
     INSERT INTO memory_embeddings (content_hash, content, metadata, embedding)
     VALUES (
         content_hash_val,
@@ -3190,13 +3180,12 @@ BEGIN
         json_build_object(
             'chat_id', NEW.id,
             'sender', NEW.sender,
-            'channel', NEW.channel,
-            'created_at', NEW.created_at
+            'recipients', NEW.recipients,
+            'timestamp', NEW."timestamp"
         ),
-        NULL  -- Will be updated by embedding service
+        NULL
     )
-    ON CONFLICT (content_hash) DO NOTHING; -- Skip if already exists
-
+    ON CONFLICT (content_hash) DO NOTHING;
     RETURN NEW;
 END;
 $$;
@@ -3219,6 +3208,25 @@ BEGIN
 
     GET DIAGNOSTICS v_count = ROW_COUNT;
     RETURN v_count;
+END;
+$$;
+
+--
+-- Name: expire_old_chat(integer); Type: FUNCTION; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE FUNCTION expire_old_chat(
+    retention_days integer DEFAULT 90
+)
+RETURNS integer
+LANGUAGE plpgsql
+VOLATILE
+AS $$
+DECLARE deleted_count integer;
+BEGIN
+    DELETE FROM agent_chat WHERE "timestamp" < now() - (retention_days || ' days')::interval;
+    GET DIAGNOSTICS deleted_count = ROW_COUNT;
+    RETURN deleted_count;
 END;
 $$;
 
@@ -3911,24 +3919,6 @@ END;
 $$;
 
 --
--- Name: normalize_agent_chat_mentions(); Type: FUNCTION; Schema: -; Owner: -
---
-
-CREATE OR REPLACE FUNCTION normalize_agent_chat_mentions()
-RETURNS trigger
-LANGUAGE plpgsql
-VOLATILE
-AS $$
-BEGIN
-    IF NEW.mentions IS NOT NULL THEN
-        NEW.mentions := ARRAY(SELECT LOWER(unnest(NEW.mentions)));
-    END IF;
-    NEW.sender := LOWER(NEW.sender);
-    RETURN NEW;
-END;
-$$;
-
---
 -- Name: notify_agent_chat(); Type: FUNCTION; Schema: -; Owner: -
 --
 
@@ -3940,9 +3930,11 @@ AS $$
 BEGIN
     PERFORM pg_notify('agent_chat', json_build_object(
         'id', NEW.id,
-        'channel', NEW.channel,
         'sender', NEW.sender,
-        'mentions', NEW.mentions
+        'message', NEW.message,
+        'recipients', NEW.recipients,
+        'reply_to', NEW.reply_to,
+        'timestamp', NEW."timestamp"
     )::text);
     RETURN NEW;
 END;
@@ -4443,6 +4435,23 @@ END;
 $$;
 
 --
+-- Name: enforce_agent_chat_function_use(); Type: FUNCTION; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE FUNCTION enforce_agent_chat_function_use()
+RETURNS trigger
+LANGUAGE plpgsql
+VOLATILE
+AS $$
+BEGIN
+    IF current_setting('agent_chat.bypass_gate', true) = 'on' THEN
+        RETURN NEW;
+    END IF;
+    RAISE EXCEPTION 'Direct INSERT on agent_chat is not allowed. Use send_agent_message(sender, message, recipients) instead.';
+END;
+$$;
+
+--
 -- Name: send_agent_message(varchar, text, varchar, text[]); Type: FUNCTION; Schema: -; Owner: -
 --
 
@@ -4870,6 +4879,15 @@ CREATE OR REPLACE TRIGGER trg_embed_chat_message
     EXECUTE FUNCTION embed_chat_message();
 
 --
+-- Name: trg_enforce_function_use; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER trg_enforce_function_use
+    BEFORE INSERT ON agent_chat
+    FOR EACH ROW
+    EXECUTE FUNCTION enforce_agent_chat_function_use();
+
+--
 -- Name: trg_library_works_search; Type: TRIGGER; Schema: -; Owner: -
 --
 
@@ -4877,15 +4895,6 @@ CREATE OR REPLACE TRIGGER trg_library_works_search
     BEFORE INSERT OR UPDATE ON library_works
     FOR EACH ROW
     EXECUTE FUNCTION library_works_search_trigger();
-
---
--- Name: trg_normalize_mentions; Type: TRIGGER; Schema: -; Owner: -
---
-
-CREATE OR REPLACE TRIGGER trg_normalize_mentions
-    BEFORE INSERT ON agent_chat
-    FOR EACH ROW
-    EXECUTE FUNCTION normalize_agent_chat_mentions();
 
 --
 -- Name: trg_notify_agent_chat; Type: TRIGGER; Schema: -; Owner: -
@@ -4972,15 +4981,14 @@ CREATE OR REPLACE VIEW delegation_knowledge AS
 
 CREATE OR REPLACE VIEW v_agent_chat_recent AS
  SELECT id,
-    channel,
     sender,
     message,
-    mentions,
+    recipients,
     reply_to,
-    created_at
+    "timestamp"
    FROM agent_chat
-  WHERE created_at > (now() - '30 days'::interval)
-  ORDER BY created_at DESC;
+  WHERE "timestamp" > (now() - '30 days'::interval)
+  ORDER BY "timestamp" DESC;
 
 --
 -- Name: v_agent_chat_stats; Type: VIEW; Schema: -; Owner: -
@@ -4988,13 +4996,12 @@ CREATE OR REPLACE VIEW v_agent_chat_recent AS
 
 CREATE OR REPLACE VIEW v_agent_chat_stats AS
  SELECT count(*) AS total_messages,
-    count(*) FILTER (WHERE created_at > (now() - '24:00:00'::interval)) AS messages_24h,
-    count(*) FILTER (WHERE created_at > (now() - '7 days'::interval)) AS messages_7d,
+    count(*) FILTER (WHERE "timestamp" > (now() - '24:00:00'::interval)) AS messages_24h,
+    count(*) FILTER (WHERE "timestamp" > (now() - '7 days'::interval)) AS messages_7d,
     count(DISTINCT sender) AS unique_senders,
-    count(DISTINCT channel) AS active_channels,
     pg_size_pretty(pg_total_relation_size('agent_chat'::regclass)) AS table_size,
-    min(created_at) AS oldest_message,
-    max(created_at) AS newest_message
+    min("timestamp") AS oldest_message,
+    max("timestamp") AS newest_message
    FROM agent_chat;
 
 --

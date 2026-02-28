@@ -16,5 +16,5 @@ You are an AI agent in the NOVA system. Your full identity context is unavailabl
 ## Recovery
 
 ```sql
-SELECT * FROM bootstrap_context_universal WHERE file_key = 'IDENTITY';
+SELECT content FROM agent_bootstrap_context WHERE context_type = 'UNIVERSAL' AND file_key = 'IDENTITY';
 ```

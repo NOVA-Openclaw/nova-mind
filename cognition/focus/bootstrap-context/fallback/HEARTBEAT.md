@@ -13,7 +13,7 @@ If you receive a heartbeat check:
 ## Recovery
 
 ```sql
-SELECT * FROM bootstrap_context_universal WHERE file_key = 'HEARTBEAT';
+SELECT content FROM agent_bootstrap_context WHERE context_type = 'UNIVERSAL' AND file_key = 'HEARTBEAT';
 ```
 
 Full heartbeat protocol unavailable.

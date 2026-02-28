@@ -18,7 +18,7 @@ You are an AI agent in the NOVA multi-agent system.
 ## Recovery
 
 ```sql
-SELECT * FROM bootstrap_context_universal WHERE file_key = 'SOUL';
+SELECT content FROM agent_bootstrap_context WHERE context_type = 'UNIVERSAL' AND file_key = 'SOUL';
 ```
 
 Contact Newhart if bootstrap context system is down.

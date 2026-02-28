@@ -18,13 +18,13 @@ Quick reference for installing and verifying the database bootstrap context syst
 
 ```bash
 cd ~/workspace/nova-mind/cognition/focus/bootstrap-context
-psql -d nova_memory -f schema/bootstrap-context.sql
 psql -d nova_memory -f sql/management-functions.sql
 ```
 
 **Creates:**
-- 4 tables: `bootstrap_context_universal`, `bootstrap_context_agents`, `bootstrap_context_config`, `bootstrap_context_audit`
-- 8 functions: `update_universal_context`, `update_agent_context`, `get_agent_bootstrap`, etc.
+- Functions: `update_universal_context`, `update_agent_context`, `get_agent_bootstrap`, etc.
+
+> **Note:** Database tables (`agent_bootstrap_context`) are managed by pgschema via `database/schema.sql`. The old `bootstrap_context.sql` schema file is intentionally empty — tables are no longer created by this installer. See [#110](https://github.com/nova-openclaw/nova-mind/issues/110).
 
 ### 2. Install OpenClaw Hook
 
@@ -51,8 +51,8 @@ cp fallback/*.md ~/.openclaw/bootstrap-fallback/
 ### 4. Verify Installation
 
 ```bash
-# Check database tables
-psql -d nova_memory -c "\dt bootstrap_context*"
+# Check database table (managed by pgschema)
+psql -d nova_memory -c "\dt agent_bootstrap_context"
 
 # Check functions
 psql -d nova_memory -c "\df *bootstrap*"
@@ -78,9 +78,14 @@ Or manually:
 -- Read file content
 \set content `cat /path/to/AGENTS.md`
 
--- Import to database
-SELECT copy_file_to_bootstrap('/path/to/AGENTS.md', :'content', NULL, 'migration');
+-- Import to universal context
+SELECT update_universal_context('AGENTS', :'content', 'Migrated from AGENTS.md', 'migration');
+
+-- Import to agent context
+SELECT update_agent_context('coder', 'SEED_CONTEXT', :'content', 'Migrated from SEED_CONTEXT.md', 'migration');
 ```
+
+> **Note:** `copy_file_to_bootstrap()` was removed in #110. Use `update_universal_context()` or `update_agent_context()` directly.
 
 ### 6. Restart Gateway
 
@@ -112,15 +117,16 @@ This runs all steps automatically with verification.
 ### Test Database Functions
 
 ```sql
--- Check configuration
-SELECT * FROM get_bootstrap_config();
-
 -- List all context
-SELECT * FROM list_all_context();
+SELECT context_type, domain_name, file_key, length(content) as size, updated_at
+FROM agent_bootstrap_context
+ORDER BY context_type, file_key;
 
 -- Test agent bootstrap (empty initially)
 SELECT * FROM get_agent_bootstrap('test');
 ```
+
+> **Note:** `get_bootstrap_config()` and `list_all_context()` were removed in #110. Query `agent_bootstrap_context` directly for listing, and check `openclaw.json` for configuration.
 
 ### Test Hook Loading
 
@@ -176,18 +182,16 @@ $content$, 'Coder domain knowledge', 'your_name');
 ### Monitor Usage
 
 ```sql
--- Audit trail
-SELECT * FROM bootstrap_context_audit 
-ORDER BY changed_at DESC LIMIT 10;
-
 -- Content stats
 SELECT 
-    type,
+    context_type,
     COUNT(*) as file_count,
-    SUM(content_length) as total_chars
-FROM list_all_context()
-GROUP BY type;
+    SUM(length(content)) as total_chars
+FROM agent_bootstrap_context
+GROUP BY context_type;
 ```
+
+> **Note:** `bootstrap_context_audit` table was removed in #110 (deprecated). Audit history is no longer stored in a separate table.
 
 ## Troubleshooting
 
@@ -214,21 +218,14 @@ GROUP BY type;
 **Symptom:** Agent has no context
 
 **Check:**
-1. System enabled: `SELECT value FROM bootstrap_context_config WHERE key = 'enabled'`
-2. Content added: `SELECT * FROM list_all_context()`
-3. Fallback files exist: `ls ~/.openclaw/bootstrap-fallback/`
+1. Content added: `SELECT COUNT(*) FROM agent_bootstrap_context`
+2. Fallback files exist: `ls ~/.openclaw/bootstrap-fallback/`
 
 ### Content Too Large
 
 **Symptom:** Error about file size
 
-**Solution:**
-```sql
--- Increase limit (default 20000)
-UPDATE bootstrap_context_config 
-SET value = '30000'::jsonb 
-WHERE key = 'max_file_size';
-```
+**Solution:** Check `agents.defaults.bootstrapMaxChars` in `~/.openclaw/openclaw.json` and increase the value if needed.
 
 ## Architecture Summary
 
@@ -261,7 +258,7 @@ Return DB Context           Load Fallback Files
 
 ## File Locations
 
-- **Database:** `nova_memory` (tables: `bootstrap_context_*`)
+- **Database:** `nova_memory` (table: `agent_bootstrap_context`, managed by pgschema)
 - **Hook:** `~/.openclaw/hooks/db-bootstrap-context/`
 - **Fallback:** `~/.openclaw/bootstrap-fallback/`
 - **Logs:** `~/.openclaw/gateway.log`

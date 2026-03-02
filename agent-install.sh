@@ -1669,13 +1669,12 @@ OPENCLAW_CONFIG="$OPENCLAW_DIR/openclaw.json"
 if [ -f "$OPENCLAW_CONFIG" ] && command -v jq &>/dev/null; then
     jq --arg database "$DB_NAME" \
        --arg user "$DB_USER" \
-        '.channels.agent_chat = {
+        '.channels.agent_chat = (.channels.agent_chat // {}) * {
             "enabled": true,
             "database": $database,
             "host": "localhost",
             "port": 5432,
-            "user": $user,
-            "password": ""
+            "user": $user
         }' \
         "$OPENCLAW_CONFIG" >"$OPENCLAW_CONFIG.tmp" && \
         mv "$OPENCLAW_CONFIG.tmp" "$OPENCLAW_CONFIG" && \
@@ -1686,13 +1685,12 @@ if [ -f "$OPENCLAW_CONFIG" ] && command -v jq &>/dev/null; then
        --arg user "$DB_USER" \
         '.plugins.entries.agent_chat = (.plugins.entries.agent_chat // {}) * {
             "enabled": true,
-            "config": {
+            "config": ((.plugins.entries.agent_chat.config // {}) * {
                 "database": $database,
                 "host": "localhost",
                 "port": 5432,
-                "user": $user,
-                "password": ""
-            }
+                "user": $user
+            })
         }' \
         "$OPENCLAW_CONFIG" >"$OPENCLAW_CONFIG.tmp" && \
         mv "$OPENCLAW_CONFIG.tmp" "$OPENCLAW_CONFIG" && \

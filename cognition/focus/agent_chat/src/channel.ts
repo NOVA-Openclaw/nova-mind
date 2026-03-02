@@ -1,3 +1,6 @@
+import fs from "fs";
+import path from "path";
+import os from "os";
 import pg from "pg";
 import type {
   ChannelPlugin,
@@ -31,22 +34,44 @@ const meta: Omit<ChannelMeta, "id"> = {
   order: 999,
 };
 
-/**
- * Create PostgreSQL client from config
- */
-function createPgClient(config: {
+interface PgConnectionConfig {
   host: string;
   port: number;
   database: string;
   user: string;
   password: string;
-}) {
+}
+
+/**
+ * Read DB credentials from ~/.openclaw/postgres.json.
+ * Returns only the fields that are present and non-null.
+ */
+function readPostgresJson(): Partial<PgConnectionConfig> {
+  try {
+    const cfgPath = path.join(os.homedir(), ".openclaw", "postgres.json");
+    const raw = fs.readFileSync(cfgPath, "utf-8");
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as Partial<PgConnectionConfig>;
+    }
+  } catch {
+    // File missing or malformed — fall through to defaults
+  }
+  return {};
+}
+
+/**
+ * Create PostgreSQL client.
+ * Reads credentials from ~/.openclaw/postgres.json.
+ */
+function createPgClient(): pg.Client {
+  const pgJson = readPostgresJson();
   return new Client({
-    host: config.host,
-    port: config.port,
-    database: config.database,
-    user: config.user,
-    password: config.password,
+    host: pgJson.host ?? "localhost",
+    port: pgJson.port ?? 5432,
+    database: pgJson.database ?? `${os.userInfo().username}_memory`,
+    user: pgJson.user ?? os.userInfo().username,
+    password: pgJson.password ?? undefined,
   });
 }
 
@@ -146,7 +171,7 @@ async function insertOutboundMessage(
   // All inserts must go through send_agent_message() — direct INSERT is blocked.
   // reply_to is set separately after insert since send_agent_message doesn't accept it.
   const result = await client.query(
-    `SELECT send_agent_message($1, $2, $3) AS id`,
+    `SELECT send_agent_message($1::text, $2::text, $3::text[]) AS id`,
     [sender, message, recipients],
   );
 
@@ -320,11 +345,16 @@ async function startAgentChatMonitor(
     return;
   }
 
+  const pgJson = readPostgresJson();
+  const dbHost = pgJson.host ?? "localhost";
+  const dbPort = pgJson.port ?? 5432;
+  const dbName = pgJson.database ?? `${os.userInfo().username}_memory`;
+
   log?.info?.(
-    `Starting monitor for agent: ${agentName} @ ${ctx.account.config.host}:${ctx.account.config.port}/${ctx.account.config.database}`,
+    `Starting monitor for agent: ${agentName} @ ${dbHost}:${dbPort}/${dbName}`,
   );
 
-  const client = createPgClient(ctx.account.config);
+  const client = createPgClient();
 
   try {
     await client.connect();
@@ -502,11 +532,6 @@ export const agentChatPlugin: ChannelPlugin<ResolvedAgentChatAccount> = {
           name: accountId || "default",
           enabled: false,
           config: {
-            database: "",
-            host: "",
-            port: 5432,
-            user: "",
-            password: "",
             pollIntervalMs: 1000,
           },
         } as ResolvedAgentChatAccount;
@@ -523,11 +548,6 @@ export const agentChatPlugin: ChannelPlugin<ResolvedAgentChatAccount> = {
         name: config.name || normalizedAccountId,
         enabled: config.enabled !== false,
         config: {
-          database: config.database || "",
-          host: config.host || "",
-          port: config.port || 5432,
-          user: config.user || "",
-          password: config.password || "",
           pollIntervalMs: config.pollIntervalMs || 1000,
         },
       } as ResolvedAgentChatAccount;
@@ -536,29 +556,20 @@ export const agentChatPlugin: ChannelPlugin<ResolvedAgentChatAccount> = {
     defaultAccountId: () => "default",
 
     isConfigured: (account, cfg) =>
-      Boolean(
-        resolveAgentName(cfg) &&
-          account.config.database &&
-          account.config.host &&
-          account.config.user &&
-          account.config.password,
-      ),
+      Boolean(resolveAgentName(cfg)),
 
-    describeAccount: (account, cfg) => ({
-      accountId: account.accountId,
-      name: account.name,
-      enabled: account.enabled,
-      configured: Boolean(
-        resolveAgentName(cfg) &&
-          account.config.database &&
-          account.config.host &&
-          account.config.user &&
-          account.config.password,
-      ),
-      agentName: resolveAgentName(cfg),
-      database: account.config.database,
-      host: account.config.host,
-    }),
+    describeAccount: (account, cfg) => {
+      const pgJson = readPostgresJson();
+      return {
+        accountId: account.accountId,
+        name: account.name,
+        enabled: account.enabled,
+        configured: Boolean(resolveAgentName(cfg)),
+        agentName: resolveAgentName(cfg),
+        database: pgJson.database ?? null,
+        host: pgJson.host ?? "localhost",
+      };
+    },
   },
 
   outbound: {
@@ -572,7 +583,7 @@ export const agentChatPlugin: ChannelPlugin<ResolvedAgentChatAccount> = {
         throw new Error(`agent_chat account ${accountId} not configured`);
       }
 
-      const client = createPgClient(account.config);
+      const client = createPgClient();
 
       try {
         await client.connect();
@@ -628,26 +639,23 @@ export const agentChatPlugin: ChannelPlugin<ResolvedAgentChatAccount> = {
       database: (snapshot.probe as { database?: string })?.database ?? null,
     }),
 
-    buildAccountSnapshot: ({ account, runtime, cfg }) => ({
-      accountId: account.accountId,
-      name: account.name,
-      enabled: account.enabled,
-      configured: Boolean(
-        resolveAgentName(cfg) &&
-          account.config.database &&
-          account.config.host &&
-          account.config.user &&
-          account.config.password,
-      ),
-      running: runtime?.running ?? false,
-      lastStartAt: runtime?.lastStartAt ?? null,
-      lastStopAt: runtime?.lastStopAt ?? null,
-      lastError: runtime?.lastError ?? null,
-      // Store custom info in probe
-      probe: {
-        agentName: resolveAgentName(cfg),
-        database: account.config.database,
-      },
-    }),
+    buildAccountSnapshot: ({ account, runtime, cfg }) => {
+      const pgJson = readPostgresJson();
+      return {
+        accountId: account.accountId,
+        name: account.name,
+        enabled: account.enabled,
+        configured: Boolean(resolveAgentName(cfg)),
+        running: runtime?.running ?? false,
+        lastStartAt: runtime?.lastStartAt ?? null,
+        lastStopAt: runtime?.lastStopAt ?? null,
+        lastError: runtime?.lastError ?? null,
+        // Store custom info in probe
+        probe: {
+          agentName: resolveAgentName(cfg),
+          database: pgJson.database ?? null,
+        },
+      };
+    },
   },
 };

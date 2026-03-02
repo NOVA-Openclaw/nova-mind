@@ -1667,30 +1667,16 @@ echo "Configuring agent_chat channel..."
 
 OPENCLAW_CONFIG="$OPENCLAW_DIR/openclaw.json"
 if [ -f "$OPENCLAW_CONFIG" ] && command -v jq &>/dev/null; then
-    jq --arg database "$DB_NAME" \
-       --arg user "$DB_USER" \
-        '.channels.agent_chat = (.channels.agent_chat // {}) * {
-            "enabled": true,
-            "database": $database,
-            "host": "localhost",
-            "port": 5432,
-            "user": $user
+    jq '.channels.agent_chat = (.channels.agent_chat // {}) * {
+            "enabled": true
         }' \
         "$OPENCLAW_CONFIG" >"$OPENCLAW_CONFIG.tmp" && \
         mv "$OPENCLAW_CONFIG.tmp" "$OPENCLAW_CONFIG" && \
         echo -e "  ${CHECK_MARK} Configured channels.agent_chat" || \
         echo -e "  ${WARNING} Could not configure agent_chat channel"
 
-    jq --arg database "$DB_NAME" \
-       --arg user "$DB_USER" \
-        '.plugins.entries.agent_chat = (.plugins.entries.agent_chat // {}) * {
-            "enabled": true,
-            "config": ((.plugins.entries.agent_chat.config // {}) * {
-                "database": $database,
-                "host": "localhost",
-                "port": 5432,
-                "user": $user
-            })
+    jq '.plugins.entries.agent_chat = (.plugins.entries.agent_chat // {}) * {
+            "enabled": true
         }' \
         "$OPENCLAW_CONFIG" >"$OPENCLAW_CONFIG.tmp" && \
         mv "$OPENCLAW_CONFIG.tmp" "$OPENCLAW_CONFIG" && \
@@ -1792,7 +1778,7 @@ fi
 # Run local post-install overrides if present
 # ============================================
 POST_INSTALL="$HOME/.openclaw/post-install.sh"
-if [ -x "$POST_INSTALL" ]; then
+if [ -f "$POST_INSTALL" ]; then
   echo ""
   echo "Running post-install hook: $POST_INSTALL"
   bash "$POST_INSTALL"

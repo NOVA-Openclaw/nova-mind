@@ -1285,18 +1285,14 @@ if [ -d "$EXTENSION_SOURCE" ]; then
     echo "  Building agent_chat TypeScript..."
     cd "$EXTENSION_TARGET"
 
-    if [ -d "dist" ] && [ -f "dist/index.js" ] && [ "$FORCE_INSTALL" -eq 0 ]; then
-        echo -e "  ${CHECK_MARK} Already built (use --force to rebuild)"
+    NPM_BUILD_LOG="${TMPDIR:-/tmp}/npm-build-agent-chat-$$.log"
+    if npm run build >"$NPM_BUILD_LOG" 2>&1; then
+        echo -e "  ${CHECK_MARK} Build completed"
+        rm -f "$NPM_BUILD_LOG"
     else
-        NPM_BUILD_LOG="${TMPDIR:-/tmp}/npm-build-agent-chat-$$.log"
-        if npm run build >"$NPM_BUILD_LOG" 2>&1; then
-            echo -e "  ${CHECK_MARK} Build completed"
-            rm -f "$NPM_BUILD_LOG"
-        else
-            echo -e "  ${CROSS_MARK} Build failed"
-            tail -20 "$NPM_BUILD_LOG"
-            exit 1
-        fi
+        echo -e "  ${CROSS_MARK} Build failed"
+        tail -20 "$NPM_BUILD_LOG"
+        exit 1
     fi
 
     [ -f "dist/index.js" ] && echo -e "  ${CHECK_MARK} Build output verified: dist/index.js" || \

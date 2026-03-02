@@ -5,8 +5,14 @@ import type {
   ChannelGatewayContext,
   ChannelMeta,
 } from "openclaw/plugin-sdk";
+import { loadPgEnv } from "../lib/pg-env.js";
 import { getAgentChatRuntime } from "./runtime.js";
 import { AgentChatConfigSchema, type ResolvedAgentChatAccount } from "./config.js";
+
+// Load PG* env vars from ~/.openclaw/postgres.json at extension startup.
+// The pg library reads these env vars natively when new Client() is called
+// with no arguments (PGHOST, PGUSER, PGPASSWORD, PGDATABASE, PGPORT).
+loadPgEnv();
 
 const { Client } = pg;
 
@@ -32,22 +38,12 @@ const meta: Omit<ChannelMeta, "id"> = {
 };
 
 /**
- * Create PostgreSQL client from config
+ * Create PostgreSQL client.
+ * Credentials are read from PG* env vars set by loadPgEnv() at startup.
+ * The pg library natively reads PGHOST, PGUSER, PGPASSWORD, PGDATABASE, PGPORT.
  */
-function createPgClient(config: {
-  host: string;
-  port: number;
-  database: string;
-  user: string;
-  password: string;
-}) {
-  return new Client({
-    host: config.host,
-    port: config.port,
-    database: config.database,
-    user: config.user,
-    password: config.password,
-  });
+function createPgClient(): pg.Client {
+  return new Client();
 }
 
 /**
@@ -146,7 +142,7 @@ async function insertOutboundMessage(
   // All inserts must go through send_agent_message() — direct INSERT is blocked.
   // reply_to is set separately after insert since send_agent_message doesn't accept it.
   const result = await client.query(
-    `SELECT send_agent_message($1, $2, $3) AS id`,
+    `SELECT send_agent_message($1::text, $2::text, $3::text[]) AS id`,
     [sender, message, recipients],
   );
 
@@ -320,11 +316,9 @@ async function startAgentChatMonitor(
     return;
   }
 
-  log?.info?.(
-    `Starting monitor for agent: ${agentName} @ ${ctx.account.config.host}:${ctx.account.config.port}/${ctx.account.config.database}`,
-  );
+  log?.info?.(`Starting monitor for agent: ${agentName}`);
 
-  const client = createPgClient(ctx.account.config);
+  const client = createPgClient();
 
   try {
     await client.connect();
@@ -502,11 +496,6 @@ export const agentChatPlugin: ChannelPlugin<ResolvedAgentChatAccount> = {
           name: accountId || "default",
           enabled: false,
           config: {
-            database: "",
-            host: "",
-            port: 5432,
-            user: "",
-            password: "",
             pollIntervalMs: 1000,
           },
         } as ResolvedAgentChatAccount;
@@ -523,11 +512,6 @@ export const agentChatPlugin: ChannelPlugin<ResolvedAgentChatAccount> = {
         name: config.name || normalizedAccountId,
         enabled: config.enabled !== false,
         config: {
-          database: config.database || "",
-          host: config.host || "",
-          port: config.port || 5432,
-          user: config.user || "",
-          password: config.password || "",
           pollIntervalMs: config.pollIntervalMs || 1000,
         },
       } as ResolvedAgentChatAccount;
@@ -536,29 +520,19 @@ export const agentChatPlugin: ChannelPlugin<ResolvedAgentChatAccount> = {
     defaultAccountId: () => "default",
 
     isConfigured: (account, cfg) =>
-      Boolean(
-        resolveAgentName(cfg) &&
-          account.config.database &&
-          account.config.host &&
-          account.config.user &&
-          account.config.password,
-      ),
+      Boolean(resolveAgentName(cfg)),
 
-    describeAccount: (account, cfg) => ({
-      accountId: account.accountId,
-      name: account.name,
-      enabled: account.enabled,
-      configured: Boolean(
-        resolveAgentName(cfg) &&
-          account.config.database &&
-          account.config.host &&
-          account.config.user &&
-          account.config.password,
-      ),
-      agentName: resolveAgentName(cfg),
-      database: account.config.database,
-      host: account.config.host,
-    }),
+    describeAccount: (account, cfg) => {
+      return {
+        accountId: account.accountId,
+        name: account.name,
+        enabled: account.enabled,
+        configured: Boolean(resolveAgentName(cfg)),
+        agentName: resolveAgentName(cfg),
+        database: process.env.PGDATABASE ?? null,
+        host: process.env.PGHOST ?? "localhost",
+      };
+    },
   },
 
   outbound: {
@@ -572,7 +546,7 @@ export const agentChatPlugin: ChannelPlugin<ResolvedAgentChatAccount> = {
         throw new Error(`agent_chat account ${accountId} not configured`);
       }
 
-      const client = createPgClient(account.config);
+      const client = createPgClient();
 
       try {
         await client.connect();
@@ -628,26 +602,22 @@ export const agentChatPlugin: ChannelPlugin<ResolvedAgentChatAccount> = {
       database: (snapshot.probe as { database?: string })?.database ?? null,
     }),
 
-    buildAccountSnapshot: ({ account, runtime, cfg }) => ({
-      accountId: account.accountId,
-      name: account.name,
-      enabled: account.enabled,
-      configured: Boolean(
-        resolveAgentName(cfg) &&
-          account.config.database &&
-          account.config.host &&
-          account.config.user &&
-          account.config.password,
-      ),
-      running: runtime?.running ?? false,
-      lastStartAt: runtime?.lastStartAt ?? null,
-      lastStopAt: runtime?.lastStopAt ?? null,
-      lastError: runtime?.lastError ?? null,
-      // Store custom info in probe
-      probe: {
-        agentName: resolveAgentName(cfg),
-        database: account.config.database,
-      },
-    }),
+    buildAccountSnapshot: ({ account, runtime, cfg }) => {
+      return {
+        accountId: account.accountId,
+        name: account.name,
+        enabled: account.enabled,
+        configured: Boolean(resolveAgentName(cfg)),
+        running: runtime?.running ?? false,
+        lastStartAt: runtime?.lastStartAt ?? null,
+        lastStopAt: runtime?.lastStopAt ?? null,
+        lastError: runtime?.lastError ?? null,
+        // Store custom info in probe
+        probe: {
+          agentName: resolveAgentName(cfg),
+          database: process.env.PGDATABASE ?? null,
+        },
+      };
+    },
   },
 };

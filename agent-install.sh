@@ -1791,6 +1791,16 @@ if [ $VERIFICATION_WARNINGS -gt 0 ]; then
 fi
 
 # ============================================
+# Run local post-install overrides if present
+# ============================================
+POST_INSTALL="$HOME/.openclaw/post-install.sh"
+if [ -x "$POST_INSTALL" ]; then
+  echo ""
+  echo "Running post-install hook: $POST_INSTALL"
+  bash "$POST_INSTALL"
+fi
+
+# ============================================
 # Gateway restart (if systemd service is running)
 # ============================================
 if systemctl --user is-active openclaw-gateway &>/dev/null; then

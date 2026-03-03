@@ -71,9 +71,6 @@ CREATE TABLE IF NOT EXISTS agent_chat (
     recipients text[] NOT NULL,
     reply_to integer,
     timestamp timestamptz DEFAULT now() NOT NULL,
-    channel varchar(50) DEFAULT 'agent',
-    mentions text[] DEFAULT ARRAY[]::text[],
-    created_at timestamptz DEFAULT now(),
     CONSTRAINT agent_chat_pkey PRIMARY KEY (id),
     CONSTRAINT agent_chat_reply_to_fkey FOREIGN KEY (reply_to) REFERENCES agent_chat (id),
     CONSTRAINT agent_chat_recipients_check CHECK (array_length(recipients, 1) > 0)
@@ -3570,9 +3567,9 @@ BEGIN
         UNION ALL
 
         -- 4. WORKFLOW (dynamic from workflows/workflow_steps)
-        -- Matches workflows where agent is assigned to steps,
-        -- workflow domains overlap agent domains,
-        -- OR agent is the workflow orchestrator
+        -- All assignment is domain-based:
+        --   - orchestrator_domain on workflows matches agent domains
+        --   - step domain/domains fields match agent domains
         SELECT
             'WORKFLOW_' || upper(replace(w.name, '-', '_')) || '.md' AS filename,
             w.name || ': ' || w.description ||
@@ -3586,31 +3583,39 @@ BEGIN
         LEFT JOIN LATERAL (
             SELECT string_agg(
                 ws.step_order || '. ' || ws.description ||
-                COALESCE(' [agent: ' || a2.name || ']', '') ||
-                COALESCE(' [domain: ' || ws.domain || ']', ''),
+                COALESCE(' [domain: ' || ws.domain || ']', '') ||
+                CASE WHEN ws.domains IS NOT NULL AND array_length(ws.domains, 1) > 0
+                     THEN ' [domains: ' || array_to_string(ws.domains, ', ') || ']'
+                     ELSE ''
+                END,
                 E'\n' ORDER BY ws.step_order
             ) AS steps_text
             FROM workflow_steps ws
-            LEFT JOIN agents a2 ON a2.id = ws.agent_id
             WHERE ws.workflow_id = w.id
         ) ws_agg ON true
         WHERE w.status = 'active'
           AND (
-            -- Agent is the workflow orchestrator
-            w.orchestrator_agent_id = v_agent_id
-            OR
-            -- Agent is directly assigned to a step
+            -- Agent's domain matches the workflow's orchestrator domain
             EXISTS (
-                SELECT 1 FROM workflow_steps ws2
-                WHERE ws2.workflow_id = w.id AND ws2.agent_id = v_agent_id
+                SELECT 1 FROM agent_domains ad
+                WHERE ad.agent_id = v_agent_id
+                  AND ad.domain_topic = w.orchestrator_domain
             )
             OR
-            -- Workflow step domains overlap with agent's domains
+            -- Workflow step domain matches agent's domains
+            EXISTS (
+                SELECT 1 FROM workflow_steps ws2
+                JOIN agent_domains ad ON ad.agent_id = v_agent_id
+                WHERE ws2.workflow_id = w.id
+                  AND ad.domain_topic = ws2.domain
+            )
+            OR
+            -- Workflow step domains array matches agent's domains
             EXISTS (
                 SELECT 1 FROM workflow_steps ws3
                 JOIN agent_domains ad ON ad.agent_id = v_agent_id
                 WHERE ws3.workflow_id = w.id
-                  AND (ad.domain_topic = ws3.domain OR ad.domain_topic = ANY(ws3.domains))
+                  AND ad.domain_topic = ANY(ws3.domains)
             )
           )
 
@@ -5723,7 +5728,7 @@ CREATE OR REPLACE VIEW workflow_steps_detail AS
 
 GRANT SELECT ON TABLE agent_turn_context TO nova;
 
-ing(50) DEFAULT 'unexplored'::character varying,
+rying,
     total_time_spent_minutes integer DEFAULT 0,
     last_worked_at timestamp with time zone,
     work_sessions integer DEFAULT 0,
@@ -9654,5 +9659,5 @@ ALTER EVENT TRIGGER schema_change_trigger OWNER TO postgres;
 -- PostgreSQL database dump complete
 --
 
-\unrestrict xUenawWUEDKbh9MtfrNiYpUUUkbXzgxYs3Y0jA74bpMMWtyYj9jOTN1B9h9pVeJ
+\unrestrict rqch8QuIfKbut7XbtV0aUkJey1dgd9KXrm2L781ZsVg3tTRU17subkLPXLrcasg
 

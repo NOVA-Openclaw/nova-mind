@@ -2,17 +2,15 @@ import { z } from "zod";
 import type { ChannelConfigSchema } from "openclaw/plugin-sdk";
 
 /**
- * Zod schema for agent_chat account configuration
+ * Zod schema for agent_chat account configuration.
+ * DB credentials (host, port, database, user, password) are read from
+ * ~/.openclaw/postgres.json at runtime via loadPgEnv() — they are not
+ * required here.
  */
 export const AgentChatAccountSchemaBase = z
   .object({
     name: z.string().optional(),
     enabled: z.boolean().optional(),
-    database: z.string(),
-    host: z.string(),
-    port: z.number().int().positive().optional().default(5432),
-    user: z.string(),
-    password: z.string(),
     pollIntervalMs: z.number().int().positive().optional().default(1000),
   })
   .strict();
@@ -23,11 +21,6 @@ export const AgentChatAccountSchema = AgentChatAccountSchemaBase;
 const AgentChatFullSchema = z.object({
   name: z.string().optional(),
   enabled: z.boolean().optional(),
-  database: z.string(),
-  host: z.string(),
-  port: z.number().int().positive().optional().default(5432),
-  user: z.string(),
-  password: z.string(),
   pollIntervalMs: z.number().int().positive().optional().default(1000),
   accounts: z.record(z.string(), AgentChatAccountSchema.optional()).optional(),
 }).passthrough();
@@ -39,11 +32,6 @@ export const AgentChatConfigSchema: ChannelConfigSchema = {
     properties: {
       name: { type: "string" },
       enabled: { type: "boolean" },
-      database: { type: "string" },
-      host: { type: "string" },
-      port: { type: "integer", default: 5432 },
-      user: { type: "string" },
-      password: { type: "string" },
       pollIntervalMs: { type: "integer", default: 1000 },
       accounts: {
         type: "object",
@@ -52,17 +40,12 @@ export const AgentChatConfigSchema: ChannelConfigSchema = {
           properties: {
             name: { type: "string" },
             enabled: { type: "boolean" },
-            database: { type: "string" },
-            host: { type: "string" },
-            port: { type: "integer" },
-            user: { type: "string" },
-            password: { type: "string" },
             pollIntervalMs: { type: "integer" },
           },
         },
       },
     },
-    required: ["database", "host", "user", "password"],
+    required: [],
   },
 };
 
@@ -71,11 +54,6 @@ export type ResolvedAgentChatAccount = {
   name: string;
   enabled: boolean;
   config: {
-    database: string;
-    host: string;
-    port: number;
-    user: string;
-    password: string;
     pollIntervalMs: number;
   };
 };

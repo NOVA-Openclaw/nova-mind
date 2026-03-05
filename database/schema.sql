@@ -3790,43 +3790,32 @@ COMMENT ON FUNCTION get_agent_bootstrap(text) IS 'Get all bootstrap files for an
 CREATE OR REPLACE FUNCTION get_agent_skills(
     p_agent_name text
 )
-RETURNS TABLE(skill_name text, description text, source_type text, location_path text, instructions text, emoji text, requires_bins text[], requires_any_bins text[], requires_env text[], requires_config text[], primary_env text, requires_os text[], enabled boolean)
+RETURNS TABLE(skill_name text, description text, source_type text, domain_name text, location_path text, instructions text, emoji text, requires_bins text[], requires_any_bins text[], requires_env text[], requires_config text[], primary_env text, requires_os text[], enabled boolean)
 LANGUAGE sql
 STABLE
 AS $$
-    -- Return one row per skill_name, with highest-precedence source winning.
-    -- Precedence: WORKSPACE (agent-specific) > WORKSPACE (shared) > MANAGED > BUNDLED
     SELECT DISTINCT ON (s.skill_name)
-        s.skill_name,
-        s.description,
-        s.source_type,
-        s.location_path,
-        s.instructions,
-        s.emoji,
-        s.requires_bins,
-        s.requires_any_bins,
-        s.requires_env,
-        s.requires_config,
-        s.primary_env,
-        s.requires_os,
-        s.enabled
+        s.skill_name, s.description, s.source_type, s.domain_name,
+        s.location_path, s.instructions, s.emoji,
+        s.requires_bins, s.requires_any_bins, s.requires_env,
+        s.requires_config, s.primary_env, s.requires_os, s.enabled
     FROM skills s
+    LEFT JOIN agents a ON a.name = p_agent_name
+    LEFT JOIN agent_domains ad ON ad.agent_id = a.id AND s.source_type = 'DOMAIN' AND ad.domain_topic = s.domain_name
     WHERE s.enabled = TRUE
-      AND (s.agent_name IS NULL OR s.agent_name = p_agent_name)
+      AND (
+          s.source_type IN ('BUNDLED', 'MANAGED')
+          OR (s.source_type = 'WORKSPACE' AND (s.agent_name IS NULL OR s.agent_name = p_agent_name))
+          OR (s.source_type = 'DOMAIN' AND ad.id IS NOT NULL)
+      )
     ORDER BY s.skill_name,
-        -- Agent-specific WORKSPACE first
         CASE WHEN s.source_type = 'WORKSPACE' AND s.agent_name = p_agent_name THEN 1
              WHEN s.source_type = 'WORKSPACE' AND s.agent_name IS NULL THEN 2
-             WHEN s.source_type = 'MANAGED' THEN 3
-             WHEN s.source_type = 'BUNDLED' THEN 4
+             WHEN s.source_type = 'DOMAIN' THEN 3
+             WHEN s.source_type = 'MANAGED' THEN 4
+             WHEN s.source_type = 'BUNDLED' THEN 5
         END;
 $$;
-
---
--- Name: get_agent_skills(text); Type: FUNCTION; Schema: -; Owner: -
---
-
-COMMENT ON FUNCTION get_agent_skills(text) IS 'Returns de-duplicated skills for an agent with WORKSPACE > MANAGED > BUNDLED precedence.';
 
 --
 -- Name: build_skills_xml(text); Type: FUNCTION; Schema: -; Owner: -
@@ -3869,34 +3858,30 @@ COMMENT ON FUNCTION build_skills_xml(text) IS 'Generates the <available_skills> 
 CREATE OR REPLACE FUNCTION get_agent_tools(
     p_agent_name text
 )
-RETURNS TABLE(tool_name text, description text, source_type text, category text, notes text, metadata jsonb, enabled boolean)
+RETURNS TABLE(tool_name text, description text, source_type text, domain_name text, category text, notes text, metadata jsonb, enabled boolean)
 LANGUAGE sql
 STABLE
 AS $$
     SELECT DISTINCT ON (t.tool_name)
-        t.tool_name,
-        t.description,
-        t.source_type,
-        t.category,
-        t.notes,
-        t.metadata,
-        t.enabled
+        t.tool_name, t.description, t.source_type, t.domain_name,
+        t.category, t.notes, t.metadata, t.enabled
     FROM tools t
+    LEFT JOIN agents a ON a.name = p_agent_name
+    LEFT JOIN agent_domains ad ON ad.agent_id = a.id AND t.source_type = 'DOMAIN' AND ad.domain_topic = t.domain_name
     WHERE t.enabled = TRUE
-      AND (t.agent_name IS NULL OR t.agent_name = p_agent_name)
+      AND (
+          t.source_type IN ('BUNDLED', 'MANAGED')
+          OR (t.source_type = 'WORKSPACE' AND (t.agent_name IS NULL OR t.agent_name = p_agent_name))
+          OR (t.source_type = 'DOMAIN' AND ad.id IS NOT NULL)
+      )
     ORDER BY t.tool_name,
         CASE WHEN t.source_type = 'WORKSPACE' AND t.agent_name = p_agent_name THEN 1
              WHEN t.source_type = 'WORKSPACE' AND t.agent_name IS NULL THEN 2
-             WHEN t.source_type = 'MANAGED' THEN 3
-             WHEN t.source_type = 'BUNDLED' THEN 4
+             WHEN t.source_type = 'DOMAIN' THEN 3
+             WHEN t.source_type = 'MANAGED' THEN 4
+             WHEN t.source_type = 'BUNDLED' THEN 5
         END;
 $$;
-
---
--- Name: get_agent_tools(text); Type: FUNCTION; Schema: -; Owner: -
---
-
-COMMENT ON FUNCTION get_agent_tools(text) IS 'Returns de-duplicated tool notes for an agent with WORKSPACE > MANAGED > BUNDLED precedence.';
 
 --
 -- Name: build_tools_md(text); Type: FUNCTION; Schema: -; Owner: -

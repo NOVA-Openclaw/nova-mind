@@ -2601,15 +2601,16 @@ CREATE TABLE IF NOT EXISTS skills (
     created_at timestamptz DEFAULT now(),
     updated_at timestamptz DEFAULT now(),
     updated_by text DEFAULT 'system',
+    domain_name text,
     CONSTRAINT skills_pkey PRIMARY KEY (id),
-    CONSTRAINT skills_source_type_check CHECK (source_type IN ('BUNDLED'::text, 'MANAGED'::text, 'WORKSPACE'::text))
+    CONSTRAINT skills_source_type_check CHECK (source_type IN ('BUNDLED'::text, 'MANAGED'::text, 'WORKSPACE'::text, 'DOMAIN'::text))
 );
 
 
 COMMENT ON TABLE skills IS 'Skill definitions mirroring OpenClaw SKILL.md files. Override precedence: WORKSPACE > MANAGED > BUNDLED.';
 
 
-COMMENT ON COLUMN skills.source_type IS 'BUNDLED=shipped with OpenClaw, MANAGED=~/.openclaw/skills, WORKSPACE=per-agent workspace skills';
+COMMENT ON COLUMN skills.source_type IS 'BUNDLED=shipped with OpenClaw, MANAGED=~/.openclaw/skills, DOMAIN=domain-scoped, WORKSPACE=per-agent workspace skills';
 
 
 COMMENT ON COLUMN skills.agent_name IS 'NULL=available to all agents; set for WORKSPACE-scoped or agent-specific skills';
@@ -2620,11 +2621,20 @@ COMMENT ON COLUMN skills.instructions IS 'Full SKILL.md content (loaded on-deman
 
 COMMENT ON COLUMN skills.location_path IS 'Filesystem path hint for skills with scripts/resources on disk';
 
+
+COMMENT ON COLUMN skills.domain_name IS 'Required when source_type=DOMAIN. Matched via agent_domains.';
+
 --
 -- Name: idx_skills_agent; Type: INDEX; Schema: -; Owner: -
 --
 
 CREATE INDEX IF NOT EXISTS idx_skills_agent ON skills (agent_name) WHERE (agent_name IS NOT NULL);
+
+--
+-- Name: idx_skills_domain; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_skills_domain ON skills (domain_name) WHERE (domain_name IS NOT NULL);
 
 --
 -- Name: idx_skills_enabled; Type: INDEX; Schema: -; Owner: -
@@ -2642,7 +2652,7 @@ CREATE INDEX IF NOT EXISTS idx_skills_source ON skills (source_type);
 -- Name: idx_skills_unique; Type: INDEX; Schema: -; Owner: -
 --
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_skills_unique ON skills (skill_name, source_type, COALESCE(agent_name, ''::text));
+CREATE UNIQUE INDEX IF NOT EXISTS idx_skills_unique ON skills (skill_name, source_type, COALESCE(agent_name, ''::text), COALESCE(domain_name, ''::text));
 
 --
 -- Name: tags; Type: TABLE; Schema: -; Owner: -
@@ -2767,18 +2777,25 @@ CREATE TABLE IF NOT EXISTS tools (
     created_at timestamptz DEFAULT now(),
     updated_at timestamptz DEFAULT now(),
     updated_by text DEFAULT 'system',
+    domain_name text,
     CONSTRAINT tools_pkey PRIMARY KEY (id),
-    CONSTRAINT tools_source_type_check CHECK (source_type IN ('BUNDLED'::text, 'MANAGED'::text, 'WORKSPACE'::text))
+    CONSTRAINT tools_source_type_check CHECK (source_type IN ('BUNDLED'::text, 'MANAGED'::text, 'WORKSPACE'::text, 'DOMAIN'::text))
 );
 
 
 COMMENT ON TABLE tools IS 'Tool usage notes and environment-specific details. NOT tool availability (OpenClaw controls that). Override precedence: WORKSPACE > MANAGED > BUNDLED.';
 
 
+COMMENT ON COLUMN tools.source_type IS 'BUNDLED=shipped with OpenClaw, MANAGED=~/.openclaw/tools, DOMAIN=domain-scoped, WORKSPACE=per-agent workspace tools';
+
+
 COMMENT ON COLUMN tools.category IS 'Grouping key for assembling TOOLS.md sections';
 
 
 COMMENT ON COLUMN tools.notes IS 'Markdown guidance content — camera names, SSH hosts, preferred voices, etc.';
+
+
+COMMENT ON COLUMN tools.domain_name IS 'Required when source_type=DOMAIN. Matched via agent_domains.';
 
 --
 -- Name: idx_tools_agent; Type: INDEX; Schema: -; Owner: -
@@ -2791,6 +2808,12 @@ CREATE INDEX IF NOT EXISTS idx_tools_agent ON tools (agent_name) WHERE (agent_na
 --
 
 CREATE INDEX IF NOT EXISTS idx_tools_category ON tools (category) WHERE (category IS NOT NULL);
+
+--
+-- Name: idx_tools_domain; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_tools_domain ON tools (domain_name) WHERE (domain_name IS NOT NULL);
 
 --
 -- Name: idx_tools_enabled; Type: INDEX; Schema: -; Owner: -
@@ -2808,7 +2831,7 @@ CREATE INDEX IF NOT EXISTS idx_tools_source ON tools (source_type);
 -- Name: idx_tools_unique; Type: INDEX; Schema: -; Owner: -
 --
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_tools_unique ON tools (tool_name, source_type, COALESCE(agent_name, ''::text));
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tools_unique ON tools (tool_name, source_type, COALESCE(agent_name, ''::text), COALESCE(domain_name, ''::text));
 
 --
 -- Name: unsolved_problems; Type: TABLE; Schema: -; Owner: -

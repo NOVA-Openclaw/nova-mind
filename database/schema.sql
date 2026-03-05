@@ -2607,7 +2607,7 @@ CREATE TABLE IF NOT EXISTS skills (
 );
 
 
-COMMENT ON TABLE skills IS 'Skill definitions mirroring OpenClaw SKILL.md files. Override precedence: WORKSPACE > MANAGED > BUNDLED.';
+COMMENT ON TABLE skills IS 'Skill definitions mirroring OpenClaw SKILL.md files. Override precedence: WORKSPACE > DOMAIN > MANAGED > BUNDLED.';
 
 
 COMMENT ON COLUMN skills.source_type IS 'BUNDLED=shipped with OpenClaw, MANAGED=~/.openclaw/skills, DOMAIN=domain-scoped, WORKSPACE=per-agent workspace skills';
@@ -3882,38 +3882,6 @@ AS $$
              WHEN t.source_type = 'BUNDLED' THEN 5
         END;
 $$;
-
---
--- Name: build_tools_md(text); Type: FUNCTION; Schema: -; Owner: -
---
-
-CREATE OR REPLACE FUNCTION build_tools_md(
-    p_agent_name text
-)
-RETURNS text
-LANGUAGE sql
-STABLE
-AS $$
-    SELECT '# TOOLS.md - Local Notes' || E'\n\n' ||
-        string_agg(
-            CASE WHEN t.category IS NOT NULL
-                 THEN '## ' || t.category || E'\n\n'
-                 ELSE ''
-            END ||
-            '### ' || t.tool_name || E'\n' ||
-            COALESCE(t.notes, t.description) || E'\n',
-            E'\n'
-            ORDER BY COALESCE(t.category, 'zzz'), t.tool_name
-        )
-    FROM get_agent_tools(p_agent_name) t
-    WHERE t.enabled = TRUE;
-$$;
-
---
--- Name: build_tools_md(text); Type: FUNCTION; Schema: -; Owner: -
---
-
-COMMENT ON FUNCTION build_tools_md(text) IS 'Assembles a TOOLS.md document from per-tool records for an agent.';
 
 --
 -- Name: get_agent_turn_context(text); Type: FUNCTION; Schema: -; Owner: -

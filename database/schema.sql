@@ -2783,7 +2783,7 @@ CREATE TABLE IF NOT EXISTS tools (
 );
 
 
-COMMENT ON TABLE tools IS 'Tool usage notes and environment-specific details. NOT tool availability (OpenClaw controls that). Override precedence: WORKSPACE > MANAGED > BUNDLED.';
+COMMENT ON TABLE tools IS 'Tool usage notes and environment-specific details. NOT tool availability (OpenClaw controls that). Override precedence: WORKSPACE > DOMAIN > MANAGED > BUNDLED.';
 
 
 COMMENT ON COLUMN tools.source_type IS 'BUNDLED=shipped with OpenClaw, MANAGED=~/.openclaw/tools, DOMAIN=domain-scoped, WORKSPACE=per-agent workspace tools';

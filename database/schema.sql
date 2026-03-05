@@ -2574,6 +2574,77 @@ CREATE INDEX IF NOT EXISTS idx_wishlist_entity ON shopping_wishlist (entity_id);
 CREATE INDEX IF NOT EXISTS idx_wishlist_status ON shopping_wishlist (status);
 
 --
+-- Name: skills; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS skills (
+    id SERIAL,
+    skill_name text NOT NULL,
+    description text NOT NULL,
+    source_type text NOT NULL,
+    agent_name text,
+    homepage text,
+    emoji text,
+    requires_bins text[],
+    requires_any_bins text[],
+    requires_env text[],
+    requires_config text[],
+    primary_env text,
+    requires_os text[],
+    instructions text,
+    location_path text,
+    enabled boolean DEFAULT true NOT NULL,
+    user_invocable boolean DEFAULT true NOT NULL,
+    disable_model_invocation boolean DEFAULT false NOT NULL,
+    install_specs jsonb,
+    config jsonb,
+    created_at timestamptz DEFAULT now(),
+    updated_at timestamptz DEFAULT now(),
+    updated_by text DEFAULT 'system',
+    CONSTRAINT skills_pkey PRIMARY KEY (id),
+    CONSTRAINT skills_source_type_check CHECK (source_type IN ('BUNDLED'::text, 'MANAGED'::text, 'WORKSPACE'::text))
+);
+
+
+COMMENT ON TABLE skills IS 'Skill definitions mirroring OpenClaw SKILL.md files. Override precedence: WORKSPACE > MANAGED > BUNDLED.';
+
+
+COMMENT ON COLUMN skills.source_type IS 'BUNDLED=shipped with OpenClaw, MANAGED=~/.openclaw/skills, WORKSPACE=per-agent workspace skills';
+
+
+COMMENT ON COLUMN skills.agent_name IS 'NULL=available to all agents; set for WORKSPACE-scoped or agent-specific skills';
+
+
+COMMENT ON COLUMN skills.instructions IS 'Full SKILL.md content (loaded on-demand, not injected into prompt)';
+
+
+COMMENT ON COLUMN skills.location_path IS 'Filesystem path hint for skills with scripts/resources on disk';
+
+--
+-- Name: idx_skills_agent; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_skills_agent ON skills (agent_name) WHERE (agent_name IS NOT NULL);
+
+--
+-- Name: idx_skills_enabled; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_skills_enabled ON skills (enabled) WHERE (enabled = true);
+
+--
+-- Name: idx_skills_source; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_skills_source ON skills (source_type);
+
+--
+-- Name: idx_skills_unique; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_skills_unique ON skills (skill_name, source_type, COALESCE(agent_name, ''::text));
+
+--
 -- Name: tags; Type: TABLE; Schema: -; Owner: -
 --
 
@@ -2678,6 +2749,66 @@ CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks (project_id);
 --
 
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks (status);
+
+--
+-- Name: tools; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS tools (
+    id SERIAL,
+    tool_name text NOT NULL,
+    description text NOT NULL,
+    source_type text NOT NULL,
+    agent_name text,
+    category text,
+    notes text,
+    metadata jsonb,
+    enabled boolean DEFAULT true NOT NULL,
+    created_at timestamptz DEFAULT now(),
+    updated_at timestamptz DEFAULT now(),
+    updated_by text DEFAULT 'system',
+    CONSTRAINT tools_pkey PRIMARY KEY (id),
+    CONSTRAINT tools_source_type_check CHECK (source_type IN ('BUNDLED'::text, 'MANAGED'::text, 'WORKSPACE'::text))
+);
+
+
+COMMENT ON TABLE tools IS 'Tool usage notes and environment-specific details. NOT tool availability (OpenClaw controls that). Override precedence: WORKSPACE > MANAGED > BUNDLED.';
+
+
+COMMENT ON COLUMN tools.category IS 'Grouping key for assembling TOOLS.md sections';
+
+
+COMMENT ON COLUMN tools.notes IS 'Markdown guidance content — camera names, SSH hosts, preferred voices, etc.';
+
+--
+-- Name: idx_tools_agent; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_tools_agent ON tools (agent_name) WHERE (agent_name IS NOT NULL);
+
+--
+-- Name: idx_tools_category; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_tools_category ON tools (category) WHERE (category IS NOT NULL);
+
+--
+-- Name: idx_tools_enabled; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_tools_enabled ON tools (enabled) WHERE (enabled = true);
+
+--
+-- Name: idx_tools_source; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_tools_source ON tools (source_type);
+
+--
+-- Name: idx_tools_unique; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tools_unique ON tools (tool_name, source_type, COALESCE(agent_name, ''::text));
 
 --
 -- Name: unsolved_problems; Type: TABLE; Schema: -; Owner: -
@@ -3628,6 +3759,153 @@ $$;
 --
 
 COMMENT ON FUNCTION get_agent_bootstrap(text) IS 'Get all bootstrap files for an agent: universal + GLOBAL + agent domains + workflows (dynamic, includes orchestrator_agent_id matching) + agent-specific. Issue #97: orchestrator_agent_id support.';
+
+--
+-- Name: get_agent_skills(text); Type: FUNCTION; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE FUNCTION get_agent_skills(
+    p_agent_name text
+)
+RETURNS TABLE(skill_name text, description text, source_type text, location_path text, instructions text, emoji text, requires_bins text[], requires_any_bins text[], requires_env text[], requires_config text[], primary_env text, requires_os text[], enabled boolean)
+LANGUAGE sql
+STABLE
+AS $$
+    -- Return one row per skill_name, with highest-precedence source winning.
+    -- Precedence: WORKSPACE (agent-specific) > WORKSPACE (shared) > MANAGED > BUNDLED
+    SELECT DISTINCT ON (s.skill_name)
+        s.skill_name,
+        s.description,
+        s.source_type,
+        s.location_path,
+        s.instructions,
+        s.emoji,
+        s.requires_bins,
+        s.requires_any_bins,
+        s.requires_env,
+        s.requires_config,
+        s.primary_env,
+        s.requires_os,
+        s.enabled
+    FROM skills s
+    WHERE s.enabled = TRUE
+      AND (s.agent_name IS NULL OR s.agent_name = p_agent_name)
+    ORDER BY s.skill_name,
+        -- Agent-specific WORKSPACE first
+        CASE WHEN s.source_type = 'WORKSPACE' AND s.agent_name = p_agent_name THEN 1
+             WHEN s.source_type = 'WORKSPACE' AND s.agent_name IS NULL THEN 2
+             WHEN s.source_type = 'MANAGED' THEN 3
+             WHEN s.source_type = 'BUNDLED' THEN 4
+        END;
+$$;
+
+--
+-- Name: get_agent_skills(text); Type: FUNCTION; Schema: -; Owner: -
+--
+
+COMMENT ON FUNCTION get_agent_skills(text) IS 'Returns de-duplicated skills for an agent with WORKSPACE > MANAGED > BUNDLED precedence.';
+
+--
+-- Name: build_skills_xml(text); Type: FUNCTION; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE FUNCTION build_skills_xml(
+    p_agent_name text
+)
+RETURNS text
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT '<available_skills>' || E'\n' ||
+        string_agg(
+            '  <skill>' || E'\n' ||
+            '    <name>' || s.skill_name || '</name>' || E'\n' ||
+            '    <description>' || s.description || '</description>' || E'\n' ||
+            CASE WHEN s.location_path IS NOT NULL
+                 THEN '    <location>' || s.location_path || '</location>' || E'\n'
+                 ELSE ''
+            END ||
+            '  </skill>',
+            E'\n'
+        ) || E'\n' ||
+        '</available_skills>'
+    FROM get_agent_skills(p_agent_name) s
+    WHERE s.enabled = TRUE;
+$$;
+
+--
+-- Name: build_skills_xml(text); Type: FUNCTION; Schema: -; Owner: -
+--
+
+COMMENT ON FUNCTION build_skills_xml(text) IS 'Generates the <available_skills> XML block matching OpenClaw prompt format.';
+
+--
+-- Name: get_agent_tools(text); Type: FUNCTION; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE FUNCTION get_agent_tools(
+    p_agent_name text
+)
+RETURNS TABLE(tool_name text, description text, source_type text, category text, notes text, metadata jsonb, enabled boolean)
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT DISTINCT ON (t.tool_name)
+        t.tool_name,
+        t.description,
+        t.source_type,
+        t.category,
+        t.notes,
+        t.metadata,
+        t.enabled
+    FROM tools t
+    WHERE t.enabled = TRUE
+      AND (t.agent_name IS NULL OR t.agent_name = p_agent_name)
+    ORDER BY t.tool_name,
+        CASE WHEN t.source_type = 'WORKSPACE' AND t.agent_name = p_agent_name THEN 1
+             WHEN t.source_type = 'WORKSPACE' AND t.agent_name IS NULL THEN 2
+             WHEN t.source_type = 'MANAGED' THEN 3
+             WHEN t.source_type = 'BUNDLED' THEN 4
+        END;
+$$;
+
+--
+-- Name: get_agent_tools(text); Type: FUNCTION; Schema: -; Owner: -
+--
+
+COMMENT ON FUNCTION get_agent_tools(text) IS 'Returns de-duplicated tool notes for an agent with WORKSPACE > MANAGED > BUNDLED precedence.';
+
+--
+-- Name: build_tools_md(text); Type: FUNCTION; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE FUNCTION build_tools_md(
+    p_agent_name text
+)
+RETURNS text
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT '# TOOLS.md - Local Notes' || E'\n\n' ||
+        string_agg(
+            CASE WHEN t.category IS NOT NULL
+                 THEN '## ' || t.category || E'\n\n'
+                 ELSE ''
+            END ||
+            '### ' || t.tool_name || E'\n' ||
+            COALESCE(t.notes, t.description) || E'\n',
+            E'\n'
+            ORDER BY COALESCE(t.category, 'zzz'), t.tool_name
+        )
+    FROM get_agent_tools(p_agent_name) t
+    WHERE t.enabled = TRUE;
+$$;
+
+--
+-- Name: build_tools_md(text); Type: FUNCTION; Schema: -; Owner: -
+--
+
+COMMENT ON FUNCTION build_tools_md(text) IS 'Assembles a TOOLS.md document from per-tool records for an agent.';
 
 --
 -- Name: get_agent_turn_context(text); Type: FUNCTION; Schema: -; Owner: -

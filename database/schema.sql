@@ -2607,7 +2607,7 @@ CREATE TABLE IF NOT EXISTS skills (
 );
 
 
-COMMENT ON TABLE skills IS 'Skill definitions mirroring OpenClaw SKILL.md files. Override precedence: WORKSPACE > DOMAIN > MANAGED > BUNDLED.';
+COMMENT ON TABLE skills IS 'Skill definitions. Override precedence: WORKSPACE > DOMAIN > MANAGED > BUNDLED. See get_agent_skills().';
 
 
 COMMENT ON COLUMN skills.source_type IS 'BUNDLED=shipped with OpenClaw, MANAGED=~/.openclaw/skills, DOMAIN=domain-scoped, WORKSPACE=per-agent workspace skills';

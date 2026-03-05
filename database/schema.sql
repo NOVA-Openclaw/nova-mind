@@ -3528,10 +3528,12 @@ AS $$
 DECLARE
     v_agent_id INTEGER;
 BEGIN
+    -- Check if bootstrap is enabled
     IF NOT (SELECT value::boolean FROM bootstrap_context_config WHERE key = 'enabled') THEN
         RETURN;
     END IF;
 
+    -- Resolve agent_id from agents table (for domain lookups)
     SELECT id INTO v_agent_id FROM agents WHERE name = p_agent_name LIMIT 1;
 
     RETURN QUERY
@@ -3556,7 +3558,7 @@ BEGIN
 
         UNION ALL
 
-        -- 3. DOMAIN (matched via agent_domains)
+        -- 3. DOMAIN (matched via agent_domains cross-reference)
         SELECT abc.file_key || '.md' AS filename, abc.content,
             'domain:' || abc.domain_name AS source, 3 AS priority
         FROM agent_bootstrap_context abc
@@ -3567,9 +3569,9 @@ BEGIN
         UNION ALL
 
         -- 4. WORKFLOW (dynamic from workflows/workflow_steps)
-        -- Matches workflows where agent is assigned to steps,
-        -- workflow domains overlap agent domains,
-        -- OR agent is the workflow orchestrator
+        -- Matches workflows where:
+        --   - orchestrator_domain matches an agent domain, OR
+        --   - workflow step domains overlap with agent domains
         SELECT
             'WORKFLOW_' || upper(replace(w.name, '-', '_')) || '.md' AS filename,
             w.name || ': ' || w.description ||
@@ -3583,23 +3585,20 @@ BEGIN
         LEFT JOIN LATERAL (
             SELECT string_agg(
                 ws.step_order || '. ' || ws.description ||
-                COALESCE(' [agent: ' || a2.name || ']', '') ||
                 COALESCE(' [domain: ' || ws.domain || ']', ''),
                 E'\n' ORDER BY ws.step_order
             ) AS steps_text
             FROM workflow_steps ws
-            LEFT JOIN agents a2 ON a2.id = ws.agent_id
             WHERE ws.workflow_id = w.id
         ) ws_agg ON true
         WHERE w.status = 'active'
+          AND v_agent_id IS NOT NULL
           AND (
-            -- Agent is the workflow orchestrator
-            w.orchestrator_agent_id = v_agent_id
-            OR
-            -- Agent is directly assigned to a step
+            -- Agent's domain matches the workflow orchestrator domain
             EXISTS (
-                SELECT 1 FROM workflow_steps ws2
-                WHERE ws2.workflow_id = w.id AND ws2.agent_id = v_agent_id
+                SELECT 1 FROM agent_domains ad
+                WHERE ad.agent_id = v_agent_id
+                  AND ad.domain_topic = w.orchestrator_domain
             )
             OR
             -- Workflow step domains overlap with agent's domains
@@ -3613,7 +3612,7 @@ BEGIN
 
         UNION ALL
 
-        -- 5. AGENT-specific (lowest priority)
+        -- 5. AGENT-specific (lowest priority — by agent name)
         SELECT abc.file_key || '.md' AS filename, abc.content,
             'agent'::TEXT AS source, 5 AS priority
         FROM agent_bootstrap_context abc

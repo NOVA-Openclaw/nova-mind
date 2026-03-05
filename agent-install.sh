@@ -1303,17 +1303,17 @@ else
     echo -e "  ${WARNING} cognition/focus/agent_chat not found (skipping extension)"
 fi
 
-# --- Cognition skills ---
+# --- Cognition focus skills (managed tier — all sessions) ---
 echo ""
-echo "Cognition skills installation..."
+echo "Cognition focus skills installation..."
 
-COG_SKILLS_SOURCE="$SCRIPT_DIR/cognition/focus/skills"
-if [ -d "$COG_SKILLS_SOURCE" ]; then
-    SKILLS_DIR="$WORKSPACE/skills"
-    mkdir -p "$SKILLS_DIR"
-    install_skills "$COG_SKILLS_SOURCE" "$SKILLS_DIR" "cognition skills"
+# Focus skills (agent-ecosystem, agent-chat, agent-spawn) install to managed tier
+# so they're available to all sessions including subagents
+COG_FOCUS_SKILLS="$SCRIPT_DIR/cognition/focus/skills"
+if [ -d "$COG_FOCUS_SKILLS" ]; then
+    install_skills "$COG_FOCUS_SKILLS" "$HOME/.openclaw/skills" "cognition focus skills"
 else
-    echo -e "  ${INFO} No cognition skills directory found (skipping)"
+    echo -e "  ${INFO} No cognition focus skills directory found (skipping)"
 fi
 
 # --- Bootstrap context system ---

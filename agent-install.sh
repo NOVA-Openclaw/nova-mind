@@ -1309,9 +1309,7 @@ echo "Cognition skills installation..."
 
 COG_SKILLS_SOURCE="$SCRIPT_DIR/cognition/focus/skills"
 if [ -d "$COG_SKILLS_SOURCE" ]; then
-    SKILLS_DIR="$WORKSPACE/skills"
-    mkdir -p "$SKILLS_DIR"
-    install_skills "$COG_SKILLS_SOURCE" "$SKILLS_DIR" "cognition skills"
+    install_skills "$COG_SKILLS_SOURCE" "$HOME/.openclaw/skills" "cognition skills"
 else
     echo -e "  ${INFO} No cognition skills directory found (skipping)"
 fi

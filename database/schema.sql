@@ -2229,6 +2229,17 @@ CREATE INDEX IF NOT EXISTS idx_snapshots_date ON portfolio_snapshots (snapshot_a
 CREATE UNIQUE INDEX IF NOT EXISTS idx_snapshots_day ON portfolio_snapshots ((snapshot_at::date));
 
 --
+-- Name: portfolio_updates; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS portfolio_updates (
+    id SERIAL,
+    timestamp timestamp DEFAULT CURRENT_TIMESTAMP,
+    data jsonb,
+    CONSTRAINT portfolio_updates_pkey PRIMARY KEY (id)
+);
+
+--
 -- Name: positions; Type: TABLE; Schema: -; Owner: -
 --
 

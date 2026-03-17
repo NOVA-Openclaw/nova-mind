@@ -1227,8 +1227,8 @@ if [ "$SUBSCRIPTION_COUNT" -gt 0 ]; then
     psql -U "$DB_USER" -d "$DB_NAME" -c "ALTER TABLE agent_chat ENABLE ALWAYS TRIGGER trg_notify_agent_chat;" >/dev/null 2>&1 && \
         echo -e "  ${CHECK_MARK} Notification trigger configured (ALWAYS)" || \
         echo -e "  ${WARNING} Failed to configure notification trigger"
-    psql -U "$DB_USER" -d "$DB_NAME" -c "ALTER TABLE agent_chat ENABLE REPLICA TRIGGER trg_embed_chat_message;" >/dev/null 2>&1 && \
-        echo -e "  ${CHECK_MARK} Embedding trigger configured (REPLICA only)" || \
+    psql -U "$DB_USER" -d "$DB_NAME" -c "ALTER TABLE agent_chat DISABLE TRIGGER trg_embed_chat_message;" >/dev/null 2>&1 && \
+        echo -e "  ${CHECK_MARK} Embedding trigger DISABLED (source-only embeddings)" || \
         echo -e "  ${WARNING} Failed to configure embedding trigger"
 else
     echo "  No agent_chat subscriptions found — using default trigger configuration"
@@ -1303,15 +1303,15 @@ else
     echo -e "  ${WARNING} cognition/focus/agent_chat not found (skipping extension)"
 fi
 
-# --- Cognition skills ---
+# --- Cognition focus skills (managed tier — all sessions) ---
 echo ""
-echo "Cognition skills installation..."
+echo "Cognition focus skills installation..."
 
 COG_SKILLS_SOURCE="$SCRIPT_DIR/cognition/focus/skills"
 if [ -d "$COG_SKILLS_SOURCE" ]; then
     install_skills "$COG_SKILLS_SOURCE" "$HOME/.openclaw/skills" "cognition skills"
 else
-    echo -e "  ${INFO} No cognition skills directory found (skipping)"
+    echo -e "  ${INFO} No cognition focus skills directory found (skipping)"
 fi
 
 # --- Bootstrap context system ---

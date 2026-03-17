@@ -495,12 +495,20 @@ CREATE TABLE IF NOT EXISTS ai_models (
     notes text,
     created_at timestamptz DEFAULT now(),
     updated_at timestamptz DEFAULT now(),
+    input_price_per_mtok numeric(10,4) DEFAULT NULL,
+    output_price_per_mtok numeric(10,4) DEFAULT NULL,
     CONSTRAINT models_pkey PRIMARY KEY (id),
     CONSTRAINT models_model_id_key UNIQUE (model_id)
 );
 
 
 COMMENT ON TABLE ai_models IS 'Available AI models. NOVA maintains this; Newhart reads for agent assignments. Credentials and endpoints stored in 1Password (see credential_ref column).';
+
+
+COMMENT ON COLUMN ai_models.input_price_per_mtok IS 'Cost per million input tokens in USD. NULL = unknown, 0 = free (local models).';
+
+
+COMMENT ON COLUMN ai_models.output_price_per_mtok IS 'Cost per million output tokens in USD. NULL = unknown, 0 = free (local models).';
 
 --
 -- Name: artwork; Type: TABLE; Schema: -; Owner: -
@@ -2221,6 +2229,17 @@ CREATE INDEX IF NOT EXISTS idx_snapshots_date ON portfolio_snapshots (snapshot_a
 CREATE UNIQUE INDEX IF NOT EXISTS idx_snapshots_day ON portfolio_snapshots ((snapshot_at::date));
 
 --
+-- Name: portfolio_updates; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS portfolio_updates (
+    id SERIAL,
+    timestamp timestamp DEFAULT CURRENT_TIMESTAMP,
+    data jsonb,
+    CONSTRAINT portfolio_updates_pkey PRIMARY KEY (id)
+);
+
+--
 -- Name: positions; Type: TABLE; Schema: -; Owner: -
 --
 
@@ -2607,7 +2626,7 @@ CREATE TABLE IF NOT EXISTS skills (
 );
 
 
-COMMENT ON TABLE skills IS 'Skill definitions mirroring OpenClaw SKILL.md files. Override precedence: WORKSPACE > DOMAIN > MANAGED > BUNDLED.';
+COMMENT ON TABLE skills IS 'Skill definitions. Override precedence: WORKSPACE > DOMAIN > MANAGED > BUNDLED. See get_agent_skills().';
 
 
 COMMENT ON COLUMN skills.source_type IS 'BUNDLED=shipped with OpenClaw, MANAGED=~/.openclaw/skills, DOMAIN=domain-scoped, WORKSPACE=per-agent workspace skills';
@@ -2783,7 +2802,7 @@ CREATE TABLE IF NOT EXISTS tools (
 );
 
 
-COMMENT ON TABLE tools IS 'Tool usage notes and environment-specific details. NOT tool availability (OpenClaw controls that). Override precedence: WORKSPACE > DOMAIN > MANAGED > BUNDLED.';
+COMMENT ON TABLE tools IS 'Tool usage notes. Override: WORKSPACE > DOMAIN > MANAGED > BUNDLED. See get_agent_tools().';
 
 
 COMMENT ON COLUMN tools.source_type IS 'BUNDLED=shipped with OpenClaw, MANAGED=~/.openclaw/tools, DOMAIN=domain-scoped, WORKSPACE=per-agent workspace tools';

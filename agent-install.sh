@@ -1307,11 +1307,9 @@ fi
 echo ""
 echo "Cognition focus skills installation..."
 
-# Focus skills (agent-ecosystem, agent-chat, agent-spawn) install to managed tier
-# so they're available to all sessions including subagents
-COG_FOCUS_SKILLS="$SCRIPT_DIR/cognition/focus/skills"
-if [ -d "$COG_FOCUS_SKILLS" ]; then
-    install_skills "$COG_FOCUS_SKILLS" "$HOME/.openclaw/skills" "cognition focus skills"
+COG_SKILLS_SOURCE="$SCRIPT_DIR/cognition/focus/skills"
+if [ -d "$COG_SKILLS_SOURCE" ]; then
+    install_skills "$COG_SKILLS_SOURCE" "$HOME/.openclaw/skills" "cognition skills"
 else
     echo -e "  ${INFO} No cognition focus skills directory found (skipping)"
 fi

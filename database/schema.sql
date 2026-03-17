@@ -495,12 +495,20 @@ CREATE TABLE IF NOT EXISTS ai_models (
     notes text,
     created_at timestamptz DEFAULT now(),
     updated_at timestamptz DEFAULT now(),
+    input_price_per_mtok numeric(10,4) DEFAULT NULL,
+    output_price_per_mtok numeric(10,4) DEFAULT NULL,
     CONSTRAINT models_pkey PRIMARY KEY (id),
     CONSTRAINT models_model_id_key UNIQUE (model_id)
 );
 
 
 COMMENT ON TABLE ai_models IS 'Available AI models. NOVA maintains this; Newhart reads for agent assignments. Credentials and endpoints stored in 1Password (see credential_ref column).';
+
+
+COMMENT ON COLUMN ai_models.input_price_per_mtok IS 'Cost per million input tokens in USD. NULL = unknown, 0 = free (local models).';
+
+
+COMMENT ON COLUMN ai_models.output_price_per_mtok IS 'Cost per million output tokens in USD. NULL = unknown, 0 = free (local models).';
 
 --
 -- Name: artwork; Type: TABLE; Schema: -; Owner: -
@@ -2219,6 +2227,17 @@ CREATE INDEX IF NOT EXISTS idx_snapshots_date ON portfolio_snapshots (snapshot_a
 --
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_snapshots_day ON portfolio_snapshots ((snapshot_at::date));
+
+--
+-- Name: portfolio_updates; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS portfolio_updates (
+    id SERIAL,
+    timestamp timestamp DEFAULT CURRENT_TIMESTAMP,
+    data jsonb,
+    CONSTRAINT portfolio_updates_pkey PRIMARY KEY (id)
+);
 
 --
 -- Name: positions; Type: TABLE; Schema: -; Owner: -

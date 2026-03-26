@@ -1,22 +1,27 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Daily embedding cron job
 # Runs both file-based and database embedders
 
-LOG_FILE="$HOME/.openclaw/logs/embed-memories.log"
-VENV_DIR="${HOME}/.local/share/${USER}/venv"
-VENV="$VENV_DIR/bin/activate"
+set -euo pipefail
+
+STATE_DIR="${OPENCLAW_STATE_DIR:-$HOME/.openclaw}"
+SCRIPTS_DIR="$STATE_DIR/scripts"
+LOG_DIR="$STATE_DIR/logs"
+LOG_FILE="$LOG_DIR/embed-memories.log"
+VENV_PYTHON="$HOME/.local/share/$USER/venv/bin/python"
+
+mkdir -p "$LOG_DIR"
 
 echo "=== $(date -Iseconds) ===" >> "$LOG_FILE"
-source "$VENV"
 
 # Embed file-based memories (daily logs, MEMORY.md)
 echo "--- embed-memories (files) ---" >> "$LOG_FILE"
-python "$HOME/.openclaw/workspace/scripts/embed-memories.py" >> "$LOG_FILE" 2>&1
+"$VENV_PYTHON" "$SCRIPTS_DIR/embed-memories.py" >> "$LOG_FILE" 2>&1
 echo "embed-memories exit: $?" >> "$LOG_FILE"
 
 # Embed database tables (entities, tasks, projects, library, etc.)
 echo "--- embed-full-database ---" >> "$LOG_FILE"
-python "$HOME/.openclaw/workspace/scripts/embed-full-database.py" >> "$LOG_FILE" 2>&1
+"$VENV_PYTHON" "$SCRIPTS_DIR/embed-full-database.py" >> "$LOG_FILE" 2>&1
 echo "embed-full-database exit: $?" >> "$LOG_FILE"
 
 echo "" >> "$LOG_FILE"

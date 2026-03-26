@@ -38,6 +38,7 @@ trap cleanup_tmp EXIT
 # ============================================
 # SECTION 2: Source shared library
 # ============================================
+STATE_DIR="${OPENCLAW_STATE_DIR:-$HOME/.openclaw}"
 PG_ENV="$SCRIPT_DIR/lib/pg-env.sh"
 if [ ! -f "$PG_ENV" ]; then
     echo -e "  ${RED}❌${NC} $PG_ENV not found"
@@ -48,7 +49,7 @@ source "$PG_ENV"
 # ============================================
 # SECTION 3: Load environment
 # ============================================
-PG_CONFIG="${HOME}/.openclaw/postgres.json"
+PG_CONFIG="$STATE_DIR/postgres.json"
 if [ -f "$PG_CONFIG" ] && [ -r "$PG_CONFIG" ]; then
     load_pg_env
 else
@@ -62,9 +63,10 @@ fi
 
 # Derived variables
 DB_USER="${PGUSER:-$(whoami)}"
+STATE_DIR="${OPENCLAW_STATE_DIR:-$OPENCLAW_DIR}"
 DB_NAME="${PGDATABASE:-${DB_USER//-/_}_memory}"
-WORKSPACE="${OPENCLAW_WORKSPACE:-$HOME/.openclaw/workspace-coder}"
-OPENCLAW_DIR="$HOME/.openclaw"
+WORKSPACE="${OPENCLAW_WORKSPACE:-$STATE_DIR/workspace-coder}"
+OPENCLAW_DIR="$STATE_DIR"
 OPENCLAW_PROJECTS="$OPENCLAW_DIR/projects"
 EXTENSIONS_DIR="$OPENCLAW_DIR/extensions"
 
@@ -347,10 +349,10 @@ install_hook() {
     return 0
 }
 
-# install_lib_files: Install shared PG loader files to ~/.openclaw/lib/
+# install_lib_files: Install shared PG loader files to $OPENCLAW_DIR/lib/
 install_lib_files() {
     local lib_src="$SCRIPT_DIR/memory/lib"
-    local lib_dst="$HOME/.openclaw/lib"
+    local lib_dst="$OPENCLAW_DIR/lib"
     local files=("pg-env.sh" "pg_env.py" "pg-env.ts" "env-loader.sh" "env_loader.py")
 
     mkdir -p "$lib_dst"
@@ -382,6 +384,95 @@ install_lib_files() {
             fi
         fi
     done
+}
+
+install_entity_resolver_lib() {
+    local resolver_src="$SCRIPT_DIR/relationships/lib/entity-resolver"
+    local resolver_dst="$OPENCLAW_DIR/lib/entity-resolver"
+
+    if [ ! -d "$resolver_src" ]; then
+        echo -e "  ${WARNING} entity-resolver source not found at $resolver_src (skipping)"
+        return 1
+    fi
+
+    mkdir -p "$OPENCLAW_DIR/lib"
+    sync_directory "$resolver_src" "$resolver_dst" "entity-resolver files"
+
+    if [ ! -f "$resolver_dst/package.json" ]; then
+        echo -e "  ${CROSS_MARK} entity-resolver package.json missing after sync"
+        return 1
+    fi
+
+    if [ ! -d "$resolver_dst/node_modules" ] || [ "$FORCE_INSTALL" -eq 1 ]; then
+        echo "  Installing entity-resolver dependencies in $resolver_dst..."
+        local npm_log
+        npm_log=$(mktemp /tmp/npm-install-entity-resolver-lib-XXXXXX.log)
+        TMPFILES+=("$npm_log")
+        if (cd "$resolver_dst" && npm install) >"$npm_log" 2>&1; then
+            echo -e "  ${CHECK_MARK} entity-resolver dependencies installed in lib/"
+        else
+            echo -e "  ${CROSS_MARK} entity-resolver npm install failed"
+            tail -20 "$npm_log"
+            return 1
+        fi
+    else
+        echo -e "  ${CHECK_MARK} entity-resolver dependencies already installed in lib/"
+    fi
+
+    if [ -d "$resolver_dst/node_modules/pg" ]; then
+        echo -e "  ${CHECK_MARK} entity-resolver node_modules/pg present"
+    else
+        echo -e "  ${WARNING} entity-resolver node_modules/pg missing after install"
+        return 1
+    fi
+}
+
+manage_memory_crontab() {
+    local logs_dir="$OPENCLAW_DIR/logs"
+    local scripts_dir="$OPENCLAW_DIR/scripts"
+    local venv_python="$HOME/.local/share/$USER/venv/bin/python"
+    local cron_tmp existing_tmp filtered_tmp final_tmp
+    local embed_entry maintenance_entry expire_entry
+
+    mkdir -p "$logs_dir"
+
+    embed_entry="0 11 * * * $scripts_dir/embed-memories-cron.sh >> $logs_dir/embed-memories.log 2>&1 # nova-mind:embed-memories"
+    maintenance_entry="0 4 * * * $venv_python $scripts_dir/memory-maintenance.py >> $logs_dir/memory-maintenance.log 2>&1 # nova-mind:memory-maintenance"
+    expire_entry="0 3 * * * psql -d \"$DB_NAME\" -c \"SELECT expire_old_chat();\" >> $logs_dir/expire-old-chat.log 2>&1 # nova-mind:expire-old-chat"
+
+    cron_tmp=$(mktemp /tmp/nova-mind-cron-XXXXXX)
+    existing_tmp=$(mktemp /tmp/nova-mind-cron-existing-XXXXXX)
+    filtered_tmp=$(mktemp /tmp/nova-mind-cron-filtered-XXXXXX)
+    final_tmp=$(mktemp /tmp/nova-mind-cron-final-XXXXXX)
+    TMPFILES+=("$cron_tmp" "$existing_tmp" "$filtered_tmp" "$final_tmp")
+
+    if crontab -l >"$existing_tmp" 2>/dev/null; then
+        :
+    else
+        : >"$existing_tmp"
+    fi
+
+    grep -Ev '(nova-mind:(embed-memories|memory-maintenance|expire-old-chat)|embed-memories-cron\.sh|memory-maintenance\.py|expire_old_chat\(\)|~/clawd|/clawd/|\.openclaw/workspace/scripts/(embed-memories|embed-full-database)\.py)' "$existing_tmp" >"$filtered_tmp" || true
+
+    cat "$filtered_tmp" >"$final_tmp"
+    {
+        printf '%s\n' "$embed_entry"
+        printf '%s\n' "$maintenance_entry"
+        printf '%s\n' "$expire_entry"
+    } >>"$final_tmp"
+
+    awk 'NF || !blank { print; blank = !NF }' "$final_tmp" >"$cron_tmp"
+
+    if cmp -s "$existing_tmp" "$cron_tmp"; then
+        echo -e "  ${INFO} Cron entries already up to date"
+        return 0
+    fi
+
+    crontab "$cron_tmp"
+    echo -e "  ${CHECK_MARK} Installed/updated nova-mind cron entries"
+    echo "      • embed-memories-cron.sh"
+    echo "      • memory-maintenance.py"
+    echo "      • expire_old_chat()"
 }
 
 # install_skills <source_skills_dir> <target_skills_dir> [label]
@@ -505,6 +596,7 @@ verify_relationships() {
     echo ""
     echo "Verification (relationships)..."
 
+    local installed_resolver_dir="$OPENCLAW_DIR/lib/entity-resolver"
     local required_tables=("entities" "entity_facts" "entity_relationships")
     local missing_tables=()
     for table in "${required_tables[@]}"; do
@@ -521,10 +613,16 @@ verify_relationships() {
         VERIFICATION_ERRORS=$((VERIFICATION_ERRORS + ${#missing_tables[@]}))
     fi
 
-    if [ -d "$SCRIPT_DIR/relationships/lib/entity-resolver" ]; then
-        echo -e "  ${CHECK_MARK} entity-resolver library present"
+    if [ -d "$installed_resolver_dir" ] && [ -f "$installed_resolver_dir/index.ts" ]; then
+        echo -e "  ${CHECK_MARK} entity-resolver library installed"
+        if [ -d "$installed_resolver_dir/node_modules/pg" ]; then
+            echo -e "  ${CHECK_MARK} entity-resolver dependencies present"
+        else
+            echo -e "  ${CROSS_MARK} entity-resolver dependencies missing"
+            VERIFICATION_ERRORS=$((VERIFICATION_ERRORS + 1))
+        fi
     else
-        echo -e "  ${CROSS_MARK} entity-resolver library not found"
+        echo -e "  ${CROSS_MARK} entity-resolver library not installed"
         VERIFICATION_ERRORS=$((VERIFICATION_ERRORS + 1))
     fi
 }
@@ -584,7 +682,7 @@ verify_config() {
         VERIFICATION_ERRORS=$((VERIFICATION_ERRORS + 1))
     fi
 
-    local HOOK_CONFIG="$HOME/.openclaw/hooks.json"
+    local HOOK_CONFIG="$OPENCLAW_DIR/hooks.json"
     if [ -f "$HOOK_CONFIG" ]; then
         echo -e "  ${CHECK_MARK} OpenClaw hook config exists"
         for hook in "memory-extract" "semantic-recall" "session-init" "agent-turn-context"; do
@@ -641,33 +739,18 @@ echo "════════════════════════�
 echo "  [1/3] RELATIONSHIPS"
 echo "════════════════════════════════"
 
-# --- Install entity-resolver npm dependencies ---
+# --- Install entity-resolver into managed lib/ ---
 echo ""
-echo "Entity-resolver dependencies..."
+echo "Entity-resolver library installation..."
 
-ENTITY_RESOLVER_DIR="$SCRIPT_DIR/relationships/lib/entity-resolver"
+install_entity_resolver_lib
 
+ENTITY_RESOLVER_DIR="$OPENCLAW_DIR/lib/entity-resolver"
 if [ -d "$ENTITY_RESOLVER_DIR" ]; then
-    cd "$ENTITY_RESOLVER_DIR"
-
-    if [ -d "node_modules" ] && [ "$FORCE_INSTALL" -eq 0 ]; then
-        echo -e "  ${CHECK_MARK} Dependencies already installed (use --force to reinstall)"
-    else
-        echo "  Running npm install..."
-        NPM_LOG=$(mktemp /tmp/npm-install-entity-resolver-XXXXXX.log)
-        TMPFILES+=("$NPM_LOG")
-        if npm install >"$NPM_LOG" 2>&1; then
-            echo -e "  ${CHECK_MARK} npm install completed"
-        else
-            echo -e "  ${CROSS_MARK} npm install failed"
-            tail -20 "$NPM_LOG"
-        fi
-    fi
-
-    cd "$SCRIPT_DIR"
-else
-    echo -e "  ${WARNING} entity-resolver directory not found at $ENTITY_RESOLVER_DIR (skipping)"
+    echo -e "  ${CHECK_MARK} entity-resolver installed to $ENTITY_RESOLVER_DIR"
 fi
+
+cd "$SCRIPT_DIR"
 
 # --- Sync relationship hooks ---
 echo ""
@@ -998,8 +1081,8 @@ echo "Memory scripts setup..."
 
 SCRIPTS_SOURCE="$SCRIPT_DIR/memory/scripts"
 SCRIPTS_TARGET_WORKSPACE="$WORKSPACE/scripts"
-SCRIPTS_TARGET_OPENCLAW="$HOME/.openclaw/scripts"
-OPENCLAW_LOGS_DIR="$HOME/.openclaw/logs"
+SCRIPTS_TARGET_OPENCLAW="$OPENCLAW_DIR/scripts"
+OPENCLAW_LOGS_DIR="$OPENCLAW_DIR/logs"
 
 mkdir -p "$OPENCLAW_LOGS_DIR"
 echo -e "  ${INFO} Logs directory: $OPENCLAW_LOGS_DIR"
@@ -1074,7 +1157,7 @@ echo "Memory skills installation..."
 
 MEM_SKILLS_SOURCE="$SCRIPT_DIR/memory/skills"
 if [ -d "$MEM_SKILLS_SOURCE" ]; then
-    install_skills "$MEM_SKILLS_SOURCE" "$HOME/.openclaw/skills" "memory skills"
+    install_skills "$MEM_SKILLS_SOURCE" "$OPENCLAW_DIR/skills" "memory skills"
 else
     echo -e "  ${INFO} No memory skills directory found (skipping)"
 fi
@@ -1192,6 +1275,11 @@ else
     echo -e "  ${CHECK_MARK} All Python dependencies verified"
 fi
 
+# --- Cron management ---
+echo ""
+echo "Cron entry management..."
+manage_memory_crontab
+
 # ============================================
 # SECTION 9: COGNITION install
 # ============================================
@@ -1257,7 +1345,7 @@ if [ -d "$EXTENSION_SOURCE" ]; then
         fi
     fi
 
-    # Install pg to shared ~/.openclaw/node_modules/
+    # Install pg to shared $OPENCLAW_DIR/node_modules/
     echo ""
     echo "  Installing pg to shared $OPENCLAW_DIR/node_modules/..."
 
@@ -1309,7 +1397,7 @@ echo "Cognition focus skills installation..."
 
 COG_SKILLS_SOURCE="$SCRIPT_DIR/cognition/focus/skills"
 if [ -d "$COG_SKILLS_SOURCE" ]; then
-    install_skills "$COG_SKILLS_SOURCE" "$HOME/.openclaw/skills" "cognition skills"
+    install_skills "$COG_SKILLS_SOURCE" "$OPENCLAW_DIR/skills" "cognition skills"
 else
     echo -e "  ${INFO} No cognition focus skills directory found (skipping)"
 fi
@@ -1738,7 +1826,7 @@ if [ -d "$REL_SKILLS_SOURCE" ] 2>/dev/null; then
     echo "    • relationship skills"
 fi
 echo "  [memory]"
-echo "    • Shared PG loader libraries → ~/.openclaw/lib/"
+echo "    • Shared PG loader libraries → $OPENCLAW_DIR/lib/"
 echo "    • Schema managed via pgschema (database/schema.sql)"
 if [ ${#INSTALLED_HOOKS[@]} -gt 0 ]; then
     for hook in "${INSTALLED_HOOKS[@]}"; do
@@ -1764,7 +1852,7 @@ echo "2. Verify installation:"
 echo "   $0 --verify-only"
 echo ""
 echo "3. Check logs:"
-echo "   tail -f ~/.openclaw/logs/memory-extract-hook.log"
+echo "   tail -f $OPENCLAW_DIR/logs/memory-extract-hook.log"
 echo ""
 
 if [ $VERIFICATION_WARNINGS -gt 0 ]; then
@@ -1775,7 +1863,7 @@ fi
 # ============================================
 # Run local post-install overrides if present
 # ============================================
-POST_INSTALL="$HOME/.openclaw/post-install.sh"
+POST_INSTALL="$OPENCLAW_DIR/post-install.sh"
 if [ -x "$POST_INSTALL" ]; then
   echo ""
   echo "Running post-install hook: $POST_INSTALL"

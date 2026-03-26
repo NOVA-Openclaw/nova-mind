@@ -8,9 +8,11 @@ import type { Entity, EntityFacts, EntityIdentifiers, DbEntity, DbEntityFact } f
 import { join } from "path";
 
 const { Pool } = pg;
+const STATE_DIR = process.env.OPENCLAW_STATE_DIR || join(os.homedir(), ".openclaw");
+const LIB_DIR = join(STATE_DIR, "lib");
 
-// Load PG* env vars from ~/.openclaw/postgres.json before any DB connections
-const pgEnvPath = join(process.env.HOME || os.homedir(), ".openclaw", "lib", "pg-env.ts");
+// Load PG* env vars from postgres.json before any DB connections
+const pgEnvPath = join(LIB_DIR, "pg-env.ts");
 const { loadPgEnv } = await import(pgEnvPath);
 loadPgEnv();
 

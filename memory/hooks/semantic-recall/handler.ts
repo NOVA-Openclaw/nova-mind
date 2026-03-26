@@ -1,38 +1,69 @@
-import { execSync } from "child_process";
-import { fileURLToPath } from "url";
-import { dirname, join } from "path";
+import { execFileSync } from "child_process";
+import { existsSync } from "fs";
+import { join } from "path";
 import * as os from "os";
+
+const STATE_DIR = process.env.OPENCLAW_STATE_DIR || join(os.homedir(), ".openclaw");
+const SCRIPTS_DIR = join(STATE_DIR, "scripts");
+const LIB_DIR = join(STATE_DIR, "lib");
 
 // Load PG env vars from postgres.json BEFORE importing entity-resolver,
 // which creates a pg.Pool at module scope. Without this, PGPASSWORD may be
 // unset and node-pg falls back to ~/.pgpass (which can have stale creds).
 // See: https://github.com/NOVA-Openclaw/nova-memory/issues/136
-const pgEnvPath = join(os.homedir(), ".openclaw", "lib", "pg-env.ts");
-const { loadPgEnv } = await import(pgEnvPath);
-loadPgEnv();
+const pgEnvPath = join(LIB_DIR, "pg-env.ts");
+try {
+  const { loadPgEnv } = await import(pgEnvPath);
+  loadPgEnv();
+} catch (err) {
+  console.error(
+    "[semantic-recall] Failed to load pg-env:",
+    err instanceof Error ? err.message : String(err),
+  );
+}
 
-import {
-  resolveEntity,
-  getEntityProfile,
-  getCachedEntity,
-  setCachedEntity,
-  type Entity,
-  type EntityFacts,
-} from "../../../nova-relationships/lib/entity-resolver/index.ts";
+interface Entity {
+  id: number;
+  name: string;
+  fullName?: string;
+  type?: string;
+}
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-const RECALL_SCRIPT = join(__dirname, '../../scripts/proactive-recall.py');
-const WORKSPACE = process.env.OPENCLAW_WORKSPACE || join(process.env.HOME || os.homedir(), '.openclaw');
+interface EntityFacts {
+  [key: string]: string;
+}
 
-// Standard venv location (installed by nova-memory installer)
-const STANDARD_VENV = join(process.env.HOME || os.homedir(), '.local/share', os.userInfo().username, 'venv/bin/python');
-// Fallback to workspace venv for backward compatibility
-const WORKSPACE_VENV = join(WORKSPACE, 'scripts/tts-venv/bin/python');
+type EntityResolverModule = {
+  resolveEntity: (identifiers: { uuid?: string; phone?: string }) => Promise<Entity | null>;
+  getEntityProfile: (entityId: number) => Promise<EntityFacts>;
+  getCachedEntity: (sessionId: string) => Entity | null;
+  setCachedEntity: (sessionId: string, entity: Entity) => void;
+};
 
-// Use standard venv if it exists, otherwise fall back to workspace venv
-import { existsSync } from 'fs';
-const PYTHON_VENV = existsSync(STANDARD_VENV) ? STANDARD_VENV : WORKSPACE_VENV;
+const entityResolverPath = join(LIB_DIR, "entity-resolver", "index.ts");
+let entityResolver: EntityResolverModule | null = null;
+
+try {
+  entityResolver = (await import(entityResolverPath)) as EntityResolverModule;
+} catch (err) {
+  console.error(
+    `[semantic-recall] Entity resolver unavailable at ${entityResolverPath}:`,
+    err instanceof Error ? err.message : String(err),
+  );
+}
+
+const RECALL_SCRIPT = join(SCRIPTS_DIR, "proactive-recall.py");
+const STANDARD_VENV = join(
+  os.homedir(),
+  ".local",
+  "share",
+  os.userInfo().username,
+  "venv",
+  "bin",
+  "python",
+);
+const FALLBACK_VENV = join(SCRIPTS_DIR, "tts-venv", "bin", "python");
+const PYTHON_VENV = existsSync(STANDARD_VENV) ? STANDARD_VENV : FALLBACK_VENV;
 
 // Configurable via environment variables
 const TOKEN_BUDGET = parseInt(process.env.SEMANTIC_RECALL_TOKEN_BUDGET || "1000", 10);
@@ -41,7 +72,7 @@ const HIGH_CONFIDENCE_THRESHOLD = parseFloat(process.env.SEMANTIC_RECALL_HIGH_CO
 function formatEntityContext(entity: Entity, facts: EntityFacts): string {
   const displayName = entity.fullName || entity.name;
   let context = `👤 **Talking with:** ${displayName}`;
-  
+
   const factEntries = Object.entries(facts);
   if (factEntries.length > 0) {
     context += "\n";
@@ -50,11 +81,11 @@ function formatEntityContext(entity: Entity, facts: EntityFacts): string {
       context += `\n• **${label}:** ${value}`;
     }
   }
-  
+
   return context;
 }
 
-const handler = async (event) => {
+const handler = async (event: any) => {
   // Check if OPENAI_API_KEY is set before executing
   if (!process.env.OPENAI_API_KEY) {
     console.error("[semantic-recall] ERROR: OPENAI_API_KEY not set - semantic recall disabled");
@@ -80,25 +111,25 @@ const handler = async (event) => {
   // Extract sender identifier from event context
   const senderId = (event.context as { senderId?: string })?.senderId;
   const senderName = (event.context as { senderName?: string })?.senderName;
-  const sessionId = (event.context as { sessionId?: string })?.sessionId || `session:${senderId || 'unknown'}`;
+  const sessionId = (event.context as { sessionId?: string })?.sessionId || `session:${senderId || "unknown"}`;
 
   // Try to resolve entity context (with caching)
   let entity: Entity | null = null;
-  if (senderId) {
+  if (senderId && entityResolver) {
     // Check cache first
-    entity = getCachedEntity(sessionId);
-    
+    entity = entityResolver.getCachedEntity(sessionId);
+
     if (!entity) {
       // Resolve from database
       try {
         entity = await Promise.race([
-          resolveEntity({ uuid: senderId, phone: senderId }),
-          new Promise<null>((resolve) => setTimeout(() => resolve(null), 2000))
+          entityResolver.resolveEntity({ uuid: senderId, phone: senderId }),
+          new Promise<null>((resolve) => setTimeout(() => resolve(null), 2000)),
         ]);
-        
+
         // Cache the result if found
         if (entity) {
-          setCachedEntity(sessionId, entity);
+          entityResolver.setCachedEntity(sessionId, entity);
         }
       } catch (err) {
         console.error("[semantic-recall] Entity resolution error:", err instanceof Error ? err.message : String(err));
@@ -106,37 +137,53 @@ const handler = async (event) => {
     } else {
       console.log(`[semantic-recall] Using cached entity for session: ${sessionId}`);
     }
+  } else if (senderId && !entityResolver) {
+    console.error("[semantic-recall] Skipping entity enrichment because entity-resolver is unavailable");
   }
 
   // Run semantic recall (parallel with entity profile loading if needed)
-  let recallResult: { 
+  let recallResult: {
     memories?: Array<{ source: string; content: string; similarity: number; full?: boolean }>;
     tokens_used?: number;
     token_budget?: number;
   } | null = null;
-  try {
-    const escapedMessage = message.replace(/"/g, '\\"').replace(/\$/g, '\\$').substring(0, 500);
-    const result = execSync(
-      `${PYTHON_VENV} ${RECALL_SCRIPT} "${escapedMessage}" --max-tokens ${TOKEN_BUDGET} --high-confidence ${HIGH_CONFIDENCE_THRESHOLD}`,
-      { 
-        encoding: "utf-8",
-        timeout: 5000,  // 5 second timeout
-        env: { ...process.env }
-      }
+
+  if (!existsSync(PYTHON_VENV)) {
+    console.error(
+      `[semantic-recall] Python venv not found. Tried ${STANDARD_VENV} and ${FALLBACK_VENV}`,
     );
-    recallResult = JSON.parse(result);
-  } catch (err) {
-    // Fail silently - don't block message processing
-    console.error("[semantic-recall] Recall error:", err instanceof Error ? err.message : String(err));
+  } else {
+    try {
+      const result = execFileSync(
+        PYTHON_VENV,
+        [
+          RECALL_SCRIPT,
+          message.substring(0, 500),
+          "--max-tokens",
+          TOKEN_BUDGET.toString(),
+          "--high-confidence",
+          HIGH_CONFIDENCE_THRESHOLD.toString(),
+        ],
+        {
+          encoding: "utf-8",
+          timeout: 5000,
+          env: { ...process.env },
+        },
+      );
+      recallResult = JSON.parse(result);
+    } catch (err) {
+      // Fail silently - don't block message processing
+      console.error("[semantic-recall] Recall error:", err instanceof Error ? err.message : String(err));
+    }
   }
 
   // Load entity facts if entity found
   let entityFacts: EntityFacts = {};
-  if (entity) {
+  if (entity && entityResolver) {
     try {
       entityFacts = await Promise.race([
-        getEntityProfile(entity.id),
-        new Promise<EntityFacts>((resolve) => setTimeout(() => resolve({}), 1000))
+        entityResolver.getEntityProfile(entity.id),
+        new Promise<EntityFacts>((resolve) => setTimeout(() => resolve({}), 1000)),
       ]);
     } catch (err) {
       console.error("[semantic-recall] Entity facts loading error:", err instanceof Error ? err.message : String(err));
@@ -157,14 +204,14 @@ const handler = async (event) => {
     // Format memories for injection with tiered indicators
     const memoryText = recallResult.memories
       .map((m) => {
-        const confidence = m.full ? "🎯" : "📝";  // Full content vs summary
+        const confidence = m.full ? "🎯" : "📝"; // Full content vs summary
         return `${confidence} [${m.source}] (${(m.similarity * 100).toFixed(0)}%): ${m.content}`;
       })
       .join("\n\n");
 
     // Add to event messages (will be shown to agent)
     event.messages.push(`🧠 **Relevant Context:**\n${memoryText}`);
-    
+
     const tokensInfo = recallResult.tokens_used ? ` (~${recallResult.tokens_used}/${recallResult.token_budget} tokens)` : "";
     console.log(`[semantic-recall] Found ${recallResult.memories.length} relevant memories${tokensInfo}`);
   }

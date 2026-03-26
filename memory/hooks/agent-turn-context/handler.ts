@@ -12,12 +12,15 @@
 
 import pg from "pg";
 import { join } from "path";
-import { homedir } from "os";
+import * as os from "os";
+
+const STATE_DIR = process.env.OPENCLAW_STATE_DIR || join(os.homedir(), ".openclaw");
+const LIB_DIR = join(STATE_DIR, "lib");
 
 // Load PG env vars from postgres.json BEFORE creating the Pool.
 // Without this, PGPASSWORD may be unset and node-pg falls back to ~/.pgpass.
 // See: https://github.com/NOVA-Openclaw/nova-memory/issues/136
-const pgEnvPath = join(homedir(), ".openclaw", "lib", "pg-env.ts");
+const pgEnvPath = join(LIB_DIR, "pg-env.ts");
 const { loadPgEnv } = await import(pgEnvPath);
 loadPgEnv();
 

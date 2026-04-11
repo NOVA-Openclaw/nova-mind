@@ -1,6 +1,5 @@
 import { execSync } from "child_process";
-import { fileURLToPath } from "url";
-import { dirname, join } from "path";
+import { join } from "path";
 import * as os from "os";
 
 // Load PG env vars from postgres.json BEFORE importing entity-resolver,
@@ -11,18 +10,18 @@ const pgEnvPath = join(os.homedir(), ".openclaw", "lib", "pg-env.ts");
 const { loadPgEnv } = await import(pgEnvPath);
 loadPgEnv();
 
-import {
+// Dynamic import of entity-resolver from installed location ($HOME/.openclaw/lib/)
+const entityResolverPath = join(os.homedir(), ".openclaw", "lib", "entity-resolver", "index.ts");
+const {
   resolveEntity,
   getEntityProfile,
   getCachedEntity,
   setCachedEntity,
-  type Entity,
-  type EntityFacts,
-} from "../../../nova-relationships/lib/entity-resolver/index.ts";
+} = await import(entityResolverPath);
+type Entity = Awaited<ReturnType<typeof resolveEntity>>;
+type EntityFacts = Awaited<ReturnType<typeof getEntityProfile>>;
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-const RECALL_SCRIPT = join(__dirname, '../../scripts/proactive-recall.py');
+const RECALL_SCRIPT = join(os.homedir(), ".openclaw", "scripts", "proactive-recall.py");
 const WORKSPACE = process.env.OPENCLAW_WORKSPACE || join(process.env.HOME || os.homedir(), '.openclaw');
 
 // Standard venv location (installed by nova-memory installer)

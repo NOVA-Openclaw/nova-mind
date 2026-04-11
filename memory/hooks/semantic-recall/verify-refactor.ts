@@ -4,13 +4,18 @@
  * Verification script to ensure the refactored handler can import and use the entity-resolver library
  */
 
-import {
+import { join } from "path";
+import * as os from "os";
+
+// Dynamic import of entity-resolver from installed location ($HOME/.openclaw/lib/)
+const entityResolverPath = join(os.homedir(), ".openclaw", "lib", "entity-resolver", "index.ts");
+const {
   resolveEntity,
   getEntityProfile,
   getCachedEntity,
   setCachedEntity,
   closeDbPool,
-} from "../../../nova-relationships/lib/entity-resolver/index.ts";
+} = await import(entityResolverPath);
 
 async function verify() {
   console.log("\n✅ Successfully imported entity-resolver library from hook!\n");

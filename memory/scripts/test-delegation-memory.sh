@@ -54,7 +54,7 @@ psql -t -c "
 echo ""
 
 # Test 4: Semantic search (if proactive-recall.py is available)
-if [ -f "$HOME/.openclaw/workspace/nova-memory/scripts/proactive-recall.py" ]; then
+if [ -f "$HOME/.openclaw/scripts/proactive-recall.py" ]; then
     echo "📊 Test 4: Semantic search for delegation"
     
     if [ -z "$OPENAI_API_KEY" ]; then
@@ -63,7 +63,7 @@ if [ -f "$HOME/.openclaw/workspace/nova-memory/scripts/proactive-recall.py" ]; t
     else
         export OPENAI_API_KEY
         echo "   Query: 'help me debug this Python code'"
-        RESULT=$(python3 "$HOME/.openclaw/workspace/nova-memory/scripts/proactive-recall.py" "help me debug this Python code" --max-tokens 300 2>/dev/null || echo "failed")
+        RESULT=$(python3 "$HOME/.openclaw/scripts/proactive-recall.py" "help me debug this Python code" --max-tokens 300 2>/dev/null || echo "failed")
         if [ "$RESULT" = "failed" ]; then
             echo "   ⚠️  Semantic search failed"
         else
@@ -79,7 +79,7 @@ echo ""
 
 # Test 5: Memory extraction test
 echo "📊 Test 5: Memory extraction with delegation"
-if [ -f "$HOME/.openclaw/workspace/nova-memory/scripts/extract-memories.sh" ]; then
+if [ -f "$HOME/.openclaw/scripts/extract-memories.sh" ]; then
     export SENDER_NAME="I)ruid"
     export SENDER_ID=""
     export IS_GROUP="false"
@@ -87,7 +87,7 @@ if [ -f "$HOME/.openclaw/workspace/nova-memory/scripts/extract-memories.sh" ]; t
     TEST_CONVO="[USER] Can you help me fix this bug?
 [CURRENT NOVA MESSAGE] Let me get Coder to help with that code issue."
     
-    EXTRACTED=$(echo "$TEST_CONVO" | "$HOME/.openclaw/workspace/nova-memory/scripts/extract-memories.sh" 2>/dev/null || echo "{}")
+    EXTRACTED=$(echo "$TEST_CONVO" | "$HOME/.openclaw/scripts/extract-memories.sh" 2>/dev/null || echo "{}")
     
     if echo "$EXTRACTED" | jq -e '.facts[]? | select(.predicate == "delegates_to")' > /dev/null 2>&1; then
         echo "   ✅ Extraction recognizes delegation patterns"

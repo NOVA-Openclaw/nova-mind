@@ -641,32 +641,37 @@ echo "════════════════════════�
 echo "  [1/3] RELATIONSHIPS"
 echo "════════════════════════════════"
 
-# --- Install entity-resolver npm dependencies ---
+# --- Install entity-resolver library to ~/.openclaw/lib/entity-resolver/ ---
 echo ""
-echo "Entity-resolver dependencies..."
+echo "Entity-resolver library..."
 
-ENTITY_RESOLVER_DIR="$SCRIPT_DIR/relationships/lib/entity-resolver"
+ENTITY_RESOLVER_SRC="$SCRIPT_DIR/relationships/lib/entity-resolver"
+ENTITY_RESOLVER_DST="$HOME/.openclaw/lib/entity-resolver"
 
-if [ -d "$ENTITY_RESOLVER_DIR" ]; then
-    cd "$ENTITY_RESOLVER_DIR"
+if [ -d "$ENTITY_RESOLVER_SRC" ]; then
+    # Sync source files (excludes node_modules via sync_directory)
+    sync_directory "$ENTITY_RESOLVER_SRC" "$ENTITY_RESOLVER_DST" "entity-resolver files"
 
-    if [ -d "node_modules" ] && [ "$FORCE_INSTALL" -eq 0 ]; then
+    # Install npm dependencies in the INSTALLED copy (not the repo)
+    cd "$ENTITY_RESOLVER_DST"
+
+    if [ -d "node_modules" ] && [ "$FORCE_INSTALL" -eq 0 ] && [ "$SYNC_UPDATED" -eq 0 ] && [ "$SYNC_ADDED" -eq 0 ]; then
         echo -e "  ${CHECK_MARK} Dependencies already installed (use --force to reinstall)"
     else
-        echo "  Running npm install..."
+        echo "  Running npm install in installed copy..."
         NPM_LOG=$(mktemp /tmp/npm-install-entity-resolver-XXXXXX.log)
         TMPFILES+=("$NPM_LOG")
-        if npm install >"$NPM_LOG" 2>&1; then
+        if npm install --production >"$NPM_LOG" 2>&1; then
             echo -e "  ${CHECK_MARK} npm install completed"
         else
-            echo -e "  ${CROSS_MARK} npm install failed"
+            echo -e "  ${CROSS_MARK} npm install failed (see log)"
             tail -20 "$NPM_LOG"
         fi
     fi
 
     cd "$SCRIPT_DIR"
 else
-    echo -e "  ${WARNING} entity-resolver directory not found at $ENTITY_RESOLVER_DIR (skipping)"
+    echo -e "  ${WARNING} entity-resolver directory not found at $ENTITY_RESOLVER_SRC (skipping)"
 fi
 
 # --- Sync relationship hooks ---

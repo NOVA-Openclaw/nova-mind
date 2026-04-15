@@ -297,6 +297,7 @@ CREATE TABLE IF NOT EXISTS agents (
     allowed_subagents text[],
     is_default boolean DEFAULT false NOT NULL,
     context_type text DEFAULT 'persistent' NOT NULL,
+    model_rationale text,
     CONSTRAINT agents_pkey PRIMARY KEY (id),
     CONSTRAINT agents_name_key UNIQUE (name),
     CONSTRAINT agents_context_type_check CHECK (context_type IN ('ephemeral'::text, 'persistent'::text)),
@@ -344,6 +345,9 @@ COMMENT ON COLUMN agents.collaborate IS 'Collaboration scope: null = task-only, 
 
 
 COMMENT ON COLUMN agents.decision_criteria IS 'Criteria for when to spawn this agent - helps NOVA route tasks';
+
+
+COMMENT ON COLUMN agents.model_rationale IS 'Model selection goals and justification: WHY this agent uses its model, what the role requires, past issues that drove changes, tradeoffs considered. Maintained by Newhart for weekly agent review.';
 
 --
 -- Name: idx_agents_provider; Type: INDEX; Schema: -; Owner: -

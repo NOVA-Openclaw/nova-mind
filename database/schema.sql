@@ -1845,11 +1845,11 @@ CREATE TABLE IF NOT EXISTS memory_embeddings (
     source_type varchar(50) NOT NULL,
     source_id text,
     content text NOT NULL,
-    embedding vector(1536),
     created_at timestamptz DEFAULT now(),
     updated_at timestamptz DEFAULT now(),
     confidence real DEFAULT 1.0,
     last_confirmed_at timestamptz DEFAULT now(),
+    embedding vector(1024),
     CONSTRAINT memory_embeddings_pkey PRIMARY KEY (id)
 );
 
@@ -2137,6 +2137,38 @@ COMMENT ON TABLE place_properties IS 'Properties and attributes of places. Key-v
 --
 
 CREATE INDEX IF NOT EXISTS idx_place_props_place ON place_properties (place_id);
+
+--
+-- Name: portfolio_history; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS portfolio_history (
+    id SERIAL,
+    timestamp timestamp,
+    total_value numeric,
+    total_pl numeric,
+    total_pl_pct numeric,
+    prices jsonb,
+    CONSTRAINT portfolio_history_pkey PRIMARY KEY (id)
+);
+
+--
+-- Name: portfolio_metrics; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS portfolio_metrics (
+    id SERIAL,
+    timestamp timestamptz DEFAULT CURRENT_TIMESTAMP,
+    total_value numeric(10,2),
+    total_pl numeric(10,2),
+    total_pl_pct numeric(5,2),
+    amd_price numeric(10,2),
+    nvda_price numeric(10,2),
+    meta_price numeric(10,2),
+    smci_price numeric(10,2),
+    crwd_price numeric(10,2),
+    CONSTRAINT portfolio_metrics_pkey PRIMARY KEY (id)
+);
 
 --
 -- Name: portfolio_positions; Type: TABLE; Schema: -; Owner: -
@@ -2492,6 +2524,348 @@ CREATE INDEX IF NOT EXISTS idx_ralph_series_latest ON ralph_sessions (session_se
 --
 
 CREATE INDEX IF NOT EXISTS idx_ralph_status ON ralph_sessions (status) WHERE status IN ('PENDING'::text, 'RUNNING'::text);
+
+--
+-- Name: research_projects; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS research_projects (
+    id SERIAL,
+    name varchar(255) NOT NULL,
+    description text,
+    status varchar(50) DEFAULT 'active' NOT NULL,
+    requested_by varchar(100),
+    created_by varchar(100) DEFAULT CURRENT_USER NOT NULL,
+    created_at timestamptz DEFAULT now() NOT NULL,
+    updated_at timestamptz DEFAULT now() NOT NULL,
+    metadata jsonb DEFAULT '{}' NOT NULL,
+    CONSTRAINT research_projects_pkey PRIMARY KEY (id),
+    CONSTRAINT research_projects_status_check CHECK (status::text IN ('active'::character varying, 'completed'::character varying, 'archived'::character varying, 'paused'::character varying))
+);
+
+
+COMMENT ON TABLE research_projects IS 'Top-level research project containers. Write access: Research domain (scout) only.';
+
+--
+-- Name: idx_research_projects_created; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_research_projects_created ON research_projects (created_at DESC);
+
+--
+-- Name: idx_research_projects_status; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_research_projects_status ON research_projects (status);
+
+--
+-- Name: research_provenance; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS research_provenance (
+    id SERIAL,
+    entity_type varchar(50) NOT NULL,
+    entity_id integer NOT NULL,
+    activity_type varchar(50) NOT NULL,
+    source_entities jsonb,
+    agent varchar(100) DEFAULT CURRENT_USER NOT NULL,
+    method text,
+    started_at timestamptz,
+    ended_at timestamptz DEFAULT now() NOT NULL,
+    metadata jsonb DEFAULT '{}' NOT NULL,
+    CONSTRAINT research_provenance_pkey PRIMARY KEY (id),
+    CONSTRAINT research_provenance_activity_type_check CHECK (activity_type::text IN ('creation'::character varying, 'derivation'::character varying, 'revision'::character varying, 'aggregation'::character varying, 'review'::character varying, 'archival'::character varying)),
+    CONSTRAINT research_provenance_entity_type_check CHECK (entity_type::text IN ('project'::character varying, 'task'::character varying, 'finding'::character varying, 'conclusion'::character varying))
+);
+
+
+COMMENT ON TABLE research_provenance IS 'W3C PROV-O inspired lineage tracking for research data. Write access: Research domain (scout) only.';
+
+--
+-- Name: idx_research_provenance_activity; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_research_provenance_activity ON research_provenance (activity_type);
+
+--
+-- Name: idx_research_provenance_agent; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_research_provenance_agent ON research_provenance (agent);
+
+--
+-- Name: idx_research_provenance_entity; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_research_provenance_entity ON research_provenance (entity_type, entity_id);
+
+--
+-- Name: research_tags; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS research_tags (
+    id SERIAL,
+    name varchar(255) NOT NULL,
+    slug varchar(255) NOT NULL,
+    parent_id integer,
+    tag_type varchar(50) DEFAULT 'topic' NOT NULL,
+    description text,
+    created_at timestamptz DEFAULT now() NOT NULL,
+    CONSTRAINT research_tags_pkey PRIMARY KEY (id),
+    CONSTRAINT research_tags_slug_key UNIQUE (slug),
+    CONSTRAINT research_tags_parent_id_fkey FOREIGN KEY (parent_id) REFERENCES research_tags (id) ON DELETE SET NULL,
+    CONSTRAINT research_tags_tag_type_check CHECK (tag_type::text IN ('topic'::character varying, 'domain'::character varying, 'method'::character varying, 'source_type'::character varying, 'confidence'::character varying, 'status'::character varying))
+);
+
+
+COMMENT ON TABLE research_tags IS 'Hierarchical, polymorphic tag taxonomy for research entities. Write access: Research domain (scout) only.';
+
+--
+-- Name: idx_research_tags_parent; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_research_tags_parent ON research_tags (parent_id) WHERE (parent_id IS NOT NULL);
+
+--
+-- Name: idx_research_tags_type; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_research_tags_type ON research_tags (tag_type);
+
+--
+-- Name: research_taggings; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS research_taggings (
+    id SERIAL,
+    tag_id integer NOT NULL,
+    taggable_id integer NOT NULL,
+    taggable_type varchar(50) NOT NULL,
+    created_at timestamptz DEFAULT now() NOT NULL,
+    created_by varchar(100) DEFAULT CURRENT_USER NOT NULL,
+    CONSTRAINT research_taggings_pkey PRIMARY KEY (id),
+    CONSTRAINT research_taggings_tag_id_taggable_id_taggable_type_key UNIQUE (tag_id, taggable_id, taggable_type),
+    CONSTRAINT research_taggings_tag_id_fkey FOREIGN KEY (tag_id) REFERENCES research_tags (id) ON DELETE CASCADE,
+    CONSTRAINT research_taggings_taggable_type_check CHECK (taggable_type::text IN ('project'::character varying, 'task'::character varying, 'finding'::character varying, 'conclusion'::character varying))
+);
+
+
+COMMENT ON TABLE research_taggings IS 'Junction table linking tags to research entities. Write access: Research domain (scout) only.';
+
+--
+-- Name: idx_research_taggings_tag; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_research_taggings_tag ON research_taggings (tag_id);
+
+--
+-- Name: idx_research_taggings_target; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_research_taggings_target ON research_taggings (taggable_id, taggable_type);
+
+--
+-- Name: research_tasks; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS research_tasks (
+    id SERIAL,
+    project_id integer,
+    title varchar(500) NOT NULL,
+    query text NOT NULL,
+    methodology text,
+    status varchar(50) DEFAULT 'pending' NOT NULL,
+    priority integer DEFAULT 5 NOT NULL,
+    assigned_to varchar(100) DEFAULT CURRENT_USER NOT NULL,
+    started_at timestamptz,
+    completed_at timestamptz,
+    created_at timestamptz DEFAULT now() NOT NULL,
+    updated_at timestamptz DEFAULT now() NOT NULL,
+    metadata jsonb DEFAULT '{}' NOT NULL,
+    search_vector tsvector,
+    CONSTRAINT research_tasks_pkey PRIMARY KEY (id),
+    CONSTRAINT research_tasks_project_id_fkey FOREIGN KEY (project_id) REFERENCES research_projects (id) ON DELETE CASCADE,
+    CONSTRAINT research_tasks_priority_check CHECK (priority >= 1 AND priority <= 10),
+    CONSTRAINT research_tasks_status_check CHECK (status::text IN ('pending'::character varying, 'in_progress'::character varying, 'completed'::character varying, 'failed'::character varying, 'superseded'::character varying))
+);
+
+
+COMMENT ON TABLE research_tasks IS 'Individual research investigation tasks within projects. Write access: Research domain (scout) only.';
+
+--
+-- Name: idx_research_tasks_assigned; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_research_tasks_assigned ON research_tasks (assigned_to);
+
+--
+-- Name: idx_research_tasks_fts; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_research_tasks_fts ON research_tasks USING gin (search_vector);
+
+--
+-- Name: idx_research_tasks_project; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_research_tasks_project ON research_tasks (project_id);
+
+--
+-- Name: idx_research_tasks_status; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_research_tasks_status ON research_tasks (status);
+
+--
+-- Name: research_conclusions; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS research_conclusions (
+    id SERIAL,
+    task_id integer NOT NULL,
+    title varchar(500),
+    summary text NOT NULL,
+    full_content text,
+    finding_ids integer[] DEFAULT '{}'::integer[] NOT NULL,
+    version integer DEFAULT 1 NOT NULL,
+    is_current boolean DEFAULT true NOT NULL,
+    superseded_by integer,
+    superseded_at timestamptz,
+    created_at timestamptz DEFAULT now() NOT NULL,
+    updated_at timestamptz DEFAULT now() NOT NULL,
+    metadata jsonb DEFAULT '{}' NOT NULL,
+    search_vector tsvector,
+    CONSTRAINT research_conclusions_pkey PRIMARY KEY (id),
+    CONSTRAINT research_conclusions_superseded_by_fkey FOREIGN KEY (superseded_by) REFERENCES research_conclusions (id),
+    CONSTRAINT research_conclusions_task_id_fkey FOREIGN KEY (task_id) REFERENCES research_tasks (id) ON DELETE CASCADE
+);
+
+
+COMMENT ON TABLE research_conclusions IS 'Synthesized conclusions aggregating multiple findings. Write access: Research domain (scout) only.';
+
+--
+-- Name: idx_research_conclusions_current; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_research_conclusions_current ON research_conclusions (task_id) WHERE (is_current = true);
+
+--
+-- Name: idx_research_conclusions_fts; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_research_conclusions_fts ON research_conclusions USING gin (search_vector);
+
+--
+-- Name: idx_research_conclusions_task; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_research_conclusions_task ON research_conclusions (task_id);
+
+--
+-- Name: research_findings; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS research_findings (
+    id SERIAL,
+    task_id integer NOT NULL,
+    finding_type varchar(50) NOT NULL,
+    content text NOT NULL,
+    confidence numeric(3,2),
+    importance varchar(20) DEFAULT 'normal' NOT NULL,
+    version integer DEFAULT 1 NOT NULL,
+    is_current boolean DEFAULT true NOT NULL,
+    superseded_by integer,
+    superseded_at timestamptz,
+    created_at timestamptz DEFAULT now() NOT NULL,
+    updated_at timestamptz DEFAULT now() NOT NULL,
+    metadata jsonb DEFAULT '{}' NOT NULL,
+    search_vector tsvector,
+    CONSTRAINT research_findings_pkey PRIMARY KEY (id),
+    CONSTRAINT research_findings_superseded_by_fkey FOREIGN KEY (superseded_by) REFERENCES research_findings (id),
+    CONSTRAINT research_findings_task_id_fkey FOREIGN KEY (task_id) REFERENCES research_tasks (id) ON DELETE CASCADE,
+    CONSTRAINT research_findings_confidence_check CHECK (confidence >= 0.00 AND confidence <= 1.00),
+    CONSTRAINT research_findings_finding_type_check CHECK (finding_type::text IN ('fact'::character varying, 'insight'::character varying, 'conclusion'::character varying, 'warning'::character varying, 'recommendation'::character varying, 'definition'::character varying, 'example'::character varying)),
+    CONSTRAINT research_findings_importance_check CHECK (importance::text IN ('low'::character varying, 'normal'::character varying, 'high'::character varying, 'critical'::character varying))
+);
+
+
+COMMENT ON TABLE research_findings IS 'Discrete facts, insights, and conclusions from research. Supports copy-on-write versioning. Write access: Research domain (scout) only.';
+
+--
+-- Name: idx_research_findings_current; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_research_findings_current ON research_findings (task_id) WHERE (is_current = true);
+
+--
+-- Name: idx_research_findings_fts; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_research_findings_fts ON research_findings USING gin (search_vector);
+
+--
+-- Name: idx_research_findings_importance; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_research_findings_importance ON research_findings (importance) WHERE (importance)::text = ANY ((ARRAY['high'::character varying, 'critical'::character varying])::text[]);
+
+--
+-- Name: idx_research_findings_task; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_research_findings_task ON research_findings (task_id);
+
+--
+-- Name: idx_research_findings_type; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_research_findings_type ON research_findings (finding_type);
+
+--
+-- Name: research_citations; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS research_citations (
+    id SERIAL,
+    finding_id integer NOT NULL,
+    source_type varchar(50) NOT NULL,
+    source_url text,
+    source_title varchar(500),
+    source_author varchar(255),
+    source_date date,
+    quote text,
+    page_or_section varchar(100),
+    reliability numeric(3,2),
+    library_work_id integer,
+    accessed_at timestamptz DEFAULT now() NOT NULL,
+    metadata jsonb DEFAULT '{}' NOT NULL,
+    CONSTRAINT research_citations_pkey PRIMARY KEY (id),
+    CONSTRAINT fk_citation_library_work FOREIGN KEY (library_work_id) REFERENCES library_works (id) ON DELETE SET NULL,
+    CONSTRAINT research_citations_finding_id_fkey FOREIGN KEY (finding_id) REFERENCES research_findings (id) ON DELETE CASCADE,
+    CONSTRAINT research_citations_reliability_check CHECK (reliability >= 0.00 AND reliability <= 1.00),
+    CONSTRAINT research_citations_source_type_check CHECK (source_type::text IN ('url'::character varying, 'paper'::character varying, 'book'::character varying, 'library_work'::character varying, 'api'::character varying, 'agent'::character varying, 'database'::character varying, 'document'::character varying, 'interview'::character varying))
+);
+
+
+COMMENT ON TABLE research_citations IS 'Source citations linking findings to original sources. Write access: Research domain (scout) only.';
+
+--
+-- Name: idx_research_citations_finding; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_research_citations_finding ON research_citations (finding_id);
+
+--
+-- Name: idx_research_citations_library; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_research_citations_library ON research_citations (library_work_id) WHERE (library_work_id IS NOT NULL);
+
+--
+-- Name: idx_research_citations_source_type; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_research_citations_source_type ON research_citations (source_type);
 
 --
 -- Name: shopping_history; Type: TABLE; Schema: -; Owner: -
@@ -3701,12 +4075,10 @@ AS $$
 DECLARE
     v_agent_id INTEGER;
 BEGIN
-    -- Check if bootstrap is enabled
     IF NOT (SELECT value::boolean FROM bootstrap_context_config WHERE key = 'enabled') THEN
         RETURN;
     END IF;
 
-    -- Resolve agent_id from agents table (for domain lookups)
     SELECT id INTO v_agent_id FROM agents WHERE name = p_agent_name LIMIT 1;
 
     RETURN QUERY
@@ -3731,7 +4103,7 @@ BEGIN
 
         UNION ALL
 
-        -- 3. DOMAIN (matched via agent_domains cross-reference)
+        -- 3. DOMAIN (matched via agent_domains)
         SELECT abc.file_key || '.md' AS filename, abc.content,
             'domain:' || abc.domain_name AS source, 3 AS priority
         FROM agent_bootstrap_context abc
@@ -3742,9 +4114,8 @@ BEGIN
         UNION ALL
 
         -- 4. WORKFLOW (dynamic from workflows/workflow_steps)
-        -- Matches workflows where:
-        --   - orchestrator_domain matches an agent domain, OR
-        --   - workflow step domains overlap with agent domains
+        -- Matches workflows where agent's domains overlap step domains,
+        -- OR agent's domain matches the workflow orchestrator_domain
         SELECT
             'WORKFLOW_' || upper(replace(w.name, '-', '_')) || '.md' AS filename,
             w.name || ': ' || w.description ||
@@ -3765,9 +4136,8 @@ BEGIN
             WHERE ws.workflow_id = w.id
         ) ws_agg ON true
         WHERE w.status = 'active'
-          AND v_agent_id IS NOT NULL
           AND (
-            -- Agent's domain matches the workflow orchestrator domain
+            -- Agent's domain matches the workflow orchestrator_domain
             EXISTS (
                 SELECT 1 FROM agent_domains ad
                 WHERE ad.agent_id = v_agent_id
@@ -3785,7 +4155,7 @@ BEGIN
 
         UNION ALL
 
-        -- 5. AGENT-specific (lowest priority — by agent name)
+        -- 5. AGENT-specific (lowest priority)
         SELECT abc.file_key || '.md' AS filename, abc.content,
             'agent'::TEXT AS source, 5 AS priority
         FROM agent_bootstrap_context abc
@@ -3997,6 +4367,28 @@ AS $$
   WHERE session_series_id = p_series_id
   ORDER BY iteration DESC
   LIMIT 1;
+$$;
+
+--
+-- Name: get_research_tag_tree(integer); Type: FUNCTION; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE FUNCTION get_research_tag_tree(
+    root_tag_id integer
+)
+RETURNS TABLE(id integer, name varchar, slug varchar, depth integer)
+LANGUAGE sql
+VOLATILE
+AS $$
+WITH RECURSIVE tag_tree AS (
+    SELECT rt.id, rt.name, rt.slug, 0 AS depth
+    FROM research_tags rt WHERE rt.id = root_tag_id
+    UNION ALL
+    SELECT t.id, t.name, t.slug, tt.depth + 1
+    FROM research_tags t
+    JOIN tag_tree tt ON t.parent_id = tt.id
+)
+SELECT * FROM tag_tree;
 $$;
 
 --
@@ -4553,6 +4945,25 @@ END;
 $$;
 
 --
+-- Name: notify_agents_changed(); Type: FUNCTION; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE FUNCTION notify_agents_changed()
+RETURNS trigger
+LANGUAGE plpgsql
+VOLATILE
+AS $$
+BEGIN
+    PERFORM pg_notify('agent_config_changed', json_build_object(
+        'op', TG_OP,
+        'agent', COALESCE(NEW.name, OLD.name),
+        'ts', NOW()
+    )::text);
+    RETURN COALESCE(NEW, OLD);
+END;
+$$;
+
+--
 -- Name: notify_coder_queue_change(); Type: FUNCTION; Schema: -; Owner: -
 --
 
@@ -4736,6 +5147,40 @@ END;
 $$;
 
 --
+-- Name: protect_library_writes(); Type: FUNCTION; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE FUNCTION protect_library_writes()
+RETURNS trigger
+LANGUAGE plpgsql
+VOLATILE
+AS $$
+BEGIN
+    IF current_user NOT IN ('athena', 'postgres') THEN
+        RAISE EXCEPTION 'Library tables are managed by the Library domain (athena). Contact the Library domain for changes.';
+    END IF;
+    RETURN COALESCE(NEW, OLD);
+END;
+$$;
+
+--
+-- Name: protect_research_writes(); Type: FUNCTION; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE FUNCTION protect_research_writes()
+RETURNS trigger
+LANGUAGE plpgsql
+VOLATILE
+AS $$
+BEGIN
+    IF current_user NOT IN ('scout', 'postgres') THEN
+        RAISE EXCEPTION 'Research tables are managed by the Research domain (scout). Contact the Research domain for changes.';
+    END IF;
+    RETURN COALESCE(NEW, OLD);
+END;
+$$;
+
+--
 -- Name: queue_test_failure(text, integer, text, text, integer); Type: FUNCTION; Schema: -; Owner: -
 --
 
@@ -4880,6 +5325,54 @@ END;
 $$;
 
 --
+-- Name: research_conclusions_search_trigger(); Type: FUNCTION; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE FUNCTION research_conclusions_search_trigger()
+RETURNS trigger
+LANGUAGE plpgsql
+VOLATILE
+AS $$
+BEGIN
+    NEW.search_vector := to_tsvector('english', COALESCE(NEW.title, '') || ' ' || COALESCE(NEW.summary, '') || ' ' || COALESCE(NEW.full_content, ''));
+    NEW.updated_at := NOW();
+    RETURN NEW;
+END;
+$$;
+
+--
+-- Name: research_findings_search_trigger(); Type: FUNCTION; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE FUNCTION research_findings_search_trigger()
+RETURNS trigger
+LANGUAGE plpgsql
+VOLATILE
+AS $$
+BEGIN
+    NEW.search_vector := to_tsvector('english', COALESCE(NEW.content, ''));
+    NEW.updated_at := NOW();
+    RETURN NEW;
+END;
+$$;
+
+--
+-- Name: research_tasks_search_trigger(); Type: FUNCTION; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE FUNCTION research_tasks_search_trigger()
+RETURNS trigger
+LANGUAGE plpgsql
+VOLATILE
+AS $$
+BEGIN
+    NEW.search_vector := to_tsvector('english', COALESCE(NEW.title, '') || ' ' || COALESCE(NEW.query, '') || ' ' || COALESCE(NEW.methodology, ''));
+    NEW.updated_at := NOW();
+    RETURN NEW;
+END;
+$$;
+
+--
 -- Name: roll_d100(); Type: FUNCTION; Schema: -; Owner: -
 --
 
@@ -4965,6 +5458,43 @@ BEGIN
     WHERE 1 - (me.embedding <=> query_embedding) > similarity_threshold
     ORDER BY me.embedding <=> query_embedding
     LIMIT match_count;
+END;
+$$;
+
+--
+-- Name: search_research_text(text, integer); Type: FUNCTION; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE FUNCTION search_research_text(
+    search_query text,
+    result_limit integer DEFAULT 20
+)
+RETURNS TABLE(source_type text, source_id integer, title text, content_snippet text, rank real)
+LANGUAGE plpgsql
+VOLATILE
+AS $$
+BEGIN
+    RETURN QUERY
+    SELECT * FROM (
+        SELECT 'task'::TEXT, rt.id, rt.title, LEFT(rt.query, 300),
+               ts_rank(rt.search_vector, plainto_tsquery('english', search_query))
+        FROM research_tasks rt
+        WHERE rt.search_vector @@ plainto_tsquery('english', search_query)
+        UNION ALL
+        SELECT 'finding'::TEXT, rf.id, rf.finding_type::TEXT, LEFT(rf.content, 300),
+               ts_rank(rf.search_vector, plainto_tsquery('english', search_query))
+        FROM research_findings rf
+        WHERE rf.search_vector @@ plainto_tsquery('english', search_query)
+          AND rf.is_current = true
+        UNION ALL
+        SELECT 'conclusion'::TEXT, rc.id, rc.title, LEFT(rc.summary, 300),
+               ts_rank(rc.search_vector, plainto_tsquery('english', search_query))
+        FROM research_conclusions rc
+        WHERE rc.search_vector @@ plainto_tsquery('english', search_query)
+          AND rc.is_current = true
+    ) combined
+    ORDER BY rank DESC
+    LIMIT result_limit;
 END;
 $$;
 
@@ -5390,6 +5920,132 @@ CREATE OR REPLACE TRIGGER protect_bootstrap_context
     EXECUTE FUNCTION protect_bootstrap_context_writes();
 
 --
+-- Name: protect_library_authors; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER protect_library_authors
+    BEFORE INSERT OR UPDATE OR DELETE ON library_authors
+    FOR EACH ROW
+    EXECUTE FUNCTION protect_library_writes();
+
+--
+-- Name: protect_library_tags; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER protect_library_tags
+    BEFORE INSERT OR UPDATE OR DELETE ON library_tags
+    FOR EACH ROW
+    EXECUTE FUNCTION protect_library_writes();
+
+--
+-- Name: protect_library_work_authors; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER protect_library_work_authors
+    BEFORE INSERT OR UPDATE OR DELETE ON library_work_authors
+    FOR EACH ROW
+    EXECUTE FUNCTION protect_library_writes();
+
+--
+-- Name: protect_library_work_relationships; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER protect_library_work_relationships
+    BEFORE INSERT OR UPDATE OR DELETE ON library_work_relationships
+    FOR EACH ROW
+    EXECUTE FUNCTION protect_library_writes();
+
+--
+-- Name: protect_library_work_tags; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER protect_library_work_tags
+    BEFORE INSERT OR UPDATE OR DELETE ON library_work_tags
+    FOR EACH ROW
+    EXECUTE FUNCTION protect_library_writes();
+
+--
+-- Name: protect_library_works; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER protect_library_works
+    BEFORE INSERT OR UPDATE OR DELETE ON library_works
+    FOR EACH ROW
+    EXECUTE FUNCTION protect_library_writes();
+
+--
+-- Name: protect_research_citations; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER protect_research_citations
+    BEFORE INSERT OR UPDATE OR DELETE ON research_citations
+    FOR EACH ROW
+    EXECUTE FUNCTION protect_research_writes();
+
+--
+-- Name: protect_research_conclusions; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER protect_research_conclusions
+    BEFORE INSERT OR UPDATE OR DELETE ON research_conclusions
+    FOR EACH ROW
+    EXECUTE FUNCTION protect_research_writes();
+
+--
+-- Name: protect_research_findings; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER protect_research_findings
+    BEFORE INSERT OR UPDATE OR DELETE ON research_findings
+    FOR EACH ROW
+    EXECUTE FUNCTION protect_research_writes();
+
+--
+-- Name: protect_research_projects; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER protect_research_projects
+    BEFORE INSERT OR UPDATE OR DELETE ON research_projects
+    FOR EACH ROW
+    EXECUTE FUNCTION protect_research_writes();
+
+--
+-- Name: protect_research_provenance; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER protect_research_provenance
+    BEFORE INSERT OR UPDATE OR DELETE ON research_provenance
+    FOR EACH ROW
+    EXECUTE FUNCTION protect_research_writes();
+
+--
+-- Name: protect_research_taggings; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER protect_research_taggings
+    BEFORE INSERT OR UPDATE OR DELETE ON research_taggings
+    FOR EACH ROW
+    EXECUTE FUNCTION protect_research_writes();
+
+--
+-- Name: protect_research_tags; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER protect_research_tags
+    BEFORE INSERT OR UPDATE OR DELETE ON research_tags
+    FOR EACH ROW
+    EXECUTE FUNCTION protect_research_writes();
+
+--
+-- Name: protect_research_tasks; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER protect_research_tasks
+    BEFORE INSERT OR UPDATE OR DELETE ON research_tasks
+    FOR EACH ROW
+    EXECUTE FUNCTION protect_research_writes();
+
+--
 -- Name: protect_turn_context; Type: TRIGGER; Schema: -; Owner: -
 --
 
@@ -5424,6 +6080,15 @@ CREATE OR REPLACE TRIGGER trg_agent_turn_context_updated_at
     BEFORE UPDATE ON agent_turn_context
     FOR EACH ROW
     EXECUTE FUNCTION update_agent_turn_context_timestamp();
+
+--
+-- Name: trg_agents_changed; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER trg_agents_changed
+    AFTER INSERT OR UPDATE OR DELETE ON agents
+    FOR EACH ROW
+    EXECUTE FUNCTION notify_agents_changed();
 
 --
 -- Name: trg_audit_bootstrap_agents; Type: TRIGGER; Schema: -; Owner: -
@@ -5487,6 +6152,33 @@ CREATE OR REPLACE TRIGGER trg_notify_agent_chat
     AFTER INSERT ON agent_chat
     FOR EACH ROW
     EXECUTE FUNCTION notify_agent_chat();
+
+--
+-- Name: trg_research_conclusions_search; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER trg_research_conclusions_search
+    BEFORE INSERT OR UPDATE ON research_conclusions
+    FOR EACH ROW
+    EXECUTE FUNCTION research_conclusions_search_trigger();
+
+--
+-- Name: trg_research_findings_search; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER trg_research_findings_search
+    BEFORE INSERT OR UPDATE ON research_findings
+    FOR EACH ROW
+    EXECUTE FUNCTION research_findings_search_trigger();
+
+--
+-- Name: trg_research_tasks_search; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER trg_research_tasks_search
+    BEFORE INSERT OR UPDATE ON research_tasks
+    FOR EACH ROW
+    EXECUTE FUNCTION research_tasks_search_trigger();
 
 --
 -- Name: workflow_step_change_trigger; Type: TRIGGER; Schema: -; Owner: -
@@ -5949,8 +6641,2048 @@ CREATE OR REPLACE VIEW workflow_steps_detail AS
   ORDER BY w.name, ws.step_order;
 
 --
+-- Name: agent_actions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE agent_actions_id_seq TO athena;
+
+--
+-- Name: agent_actions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE agent_actions_id_seq TO scout;
+
+--
+-- Name: agent_bootstrap_context_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE agent_bootstrap_context_id_seq TO athena;
+
+--
+-- Name: agent_bootstrap_context_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE agent_bootstrap_context_id_seq TO scout;
+
+--
+-- Name: agent_chat_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE agent_chat_id_seq TO athena;
+
+--
+-- Name: agent_chat_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE agent_chat_id_seq TO scout;
+
+--
+-- Name: agent_domains_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE agent_domains_id_seq TO athena;
+
+--
+-- Name: agent_domains_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE agent_domains_id_seq TO scout;
+
+--
+-- Name: agent_jobs_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE agent_jobs_id_seq TO athena;
+
+--
+-- Name: agent_jobs_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE agent_jobs_id_seq TO scout;
+
+--
+-- Name: agent_modifications_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE agent_modifications_id_seq TO athena;
+
+--
+-- Name: agent_modifications_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE agent_modifications_id_seq TO scout;
+
+--
+-- Name: agent_spawns_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE agent_spawns_id_seq TO athena;
+
+--
+-- Name: agent_spawns_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE agent_spawns_id_seq TO scout;
+
+--
+-- Name: agent_turn_context_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE agent_turn_context_id_seq TO athena;
+
+--
+-- Name: agent_turn_context_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE agent_turn_context_id_seq TO scout;
+
+--
+-- Name: agents_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE agents_id_seq TO athena;
+
+--
+-- Name: agents_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE agents_id_seq TO scout;
+
+--
+-- Name: ai_models_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE ai_models_id_seq TO athena;
+
+--
+-- Name: ai_models_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE ai_models_id_seq TO scout;
+
+--
+-- Name: artwork_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE artwork_id_seq TO athena;
+
+--
+-- Name: artwork_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE artwork_id_seq TO scout;
+
+--
+-- Name: bootstrap_context_agents_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE bootstrap_context_agents_id_seq TO athena;
+
+--
+-- Name: bootstrap_context_agents_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE bootstrap_context_agents_id_seq TO scout;
+
+--
+-- Name: bootstrap_context_audit_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE bootstrap_context_audit_id_seq TO athena;
+
+--
+-- Name: bootstrap_context_audit_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE bootstrap_context_audit_id_seq TO scout;
+
+--
+-- Name: bootstrap_context_universal_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE bootstrap_context_universal_id_seq TO athena;
+
+--
+-- Name: bootstrap_context_universal_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE bootstrap_context_universal_id_seq TO scout;
+
+--
+-- Name: certificates_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE certificates_id_seq TO athena;
+
+--
+-- Name: certificates_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE certificates_id_seq TO scout;
+
+--
+-- Name: conversations_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE conversations_id_seq TO athena;
+
+--
+-- Name: conversations_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE conversations_id_seq TO scout;
+
+--
+-- Name: entities_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE entities_id_seq TO athena;
+
+--
+-- Name: entities_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE entities_id_seq TO scout;
+
+--
+-- Name: entity_fact_conflicts_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE entity_fact_conflicts_id_seq TO athena;
+
+--
+-- Name: entity_fact_conflicts_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE entity_fact_conflicts_id_seq TO scout;
+
+--
+-- Name: entity_facts_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE entity_facts_id_seq TO athena;
+
+--
+-- Name: entity_facts_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE entity_facts_id_seq TO scout;
+
+--
+-- Name: entity_relationships_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE entity_relationships_id_seq TO athena;
+
+--
+-- Name: entity_relationships_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE entity_relationships_id_seq TO scout;
+
+--
+-- Name: events_archive_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE events_archive_id_seq TO athena;
+
+--
+-- Name: events_archive_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE events_archive_id_seq TO scout;
+
+--
+-- Name: events_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE events_id_seq TO athena;
+
+--
+-- Name: events_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE events_id_seq TO scout;
+
+--
+-- Name: extraction_metrics_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE extraction_metrics_id_seq TO athena;
+
+--
+-- Name: extraction_metrics_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE extraction_metrics_id_seq TO scout;
+
+--
+-- Name: fact_change_log_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE fact_change_log_id_seq TO athena;
+
+--
+-- Name: fact_change_log_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE fact_change_log_id_seq TO scout;
+
+--
+-- Name: gambling_entries_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE gambling_entries_id_seq TO athena;
+
+--
+-- Name: gambling_entries_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE gambling_entries_id_seq TO scout;
+
+--
+-- Name: gambling_logs_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE gambling_logs_id_seq TO athena;
+
+--
+-- Name: gambling_logs_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE gambling_logs_id_seq TO scout;
+
+--
+-- Name: git_issue_queue_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE git_issue_queue_id_seq TO athena;
+
+--
+-- Name: git_issue_queue_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE git_issue_queue_id_seq TO scout;
+
+--
+-- Name: job_messages_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE job_messages_id_seq TO athena;
+
+--
+-- Name: job_messages_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE job_messages_id_seq TO scout;
+
+--
+-- Name: lessons_archive_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE lessons_archive_id_seq TO athena;
+
+--
+-- Name: lessons_archive_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE lessons_archive_id_seq TO scout;
+
+--
+-- Name: lessons_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE lessons_id_seq TO athena;
+
+--
+-- Name: lessons_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE lessons_id_seq TO scout;
+
+--
+-- Name: library_authors_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE library_authors_id_seq TO athena;
+
+--
+-- Name: library_authors_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE library_authors_id_seq TO scout;
+
+--
+-- Name: library_tags_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE library_tags_id_seq TO athena;
+
+--
+-- Name: library_tags_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE library_tags_id_seq TO scout;
+
+--
+-- Name: library_works_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE library_works_id_seq TO athena;
+
+--
+-- Name: library_works_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE library_works_id_seq TO scout;
+
+--
+-- Name: media_consumed_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE media_consumed_id_seq TO athena;
+
+--
+-- Name: media_consumed_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE media_consumed_id_seq TO scout;
+
+--
+-- Name: media_queue_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE media_queue_id_seq TO athena;
+
+--
+-- Name: media_queue_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE media_queue_id_seq TO scout;
+
+--
+-- Name: media_tags_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE media_tags_id_seq TO athena;
+
+--
+-- Name: media_tags_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE media_tags_id_seq TO scout;
+
+--
+-- Name: memory_embeddings_archive_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE memory_embeddings_archive_id_seq TO athena;
+
+--
+-- Name: memory_embeddings_archive_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE memory_embeddings_archive_id_seq TO scout;
+
+--
+-- Name: memory_embeddings_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE memory_embeddings_id_seq TO athena;
+
+--
+-- Name: memory_embeddings_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE memory_embeddings_id_seq TO scout;
+
+--
+-- Name: music_analysis_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE music_analysis_id_seq TO athena;
+
+--
+-- Name: music_analysis_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE music_analysis_id_seq TO scout;
+
+--
+-- Name: music_library_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE music_library_id_seq TO athena;
+
+--
+-- Name: music_library_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE music_library_id_seq TO scout;
+
+--
+-- Name: place_properties_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE place_properties_id_seq TO athena;
+
+--
+-- Name: place_properties_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE place_properties_id_seq TO scout;
+
+--
+-- Name: places_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE places_id_seq TO athena;
+
+--
+-- Name: places_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE places_id_seq TO scout;
+
+--
+-- Name: portfolio_history_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE portfolio_history_id_seq TO athena;
+
+--
+-- Name: portfolio_history_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE portfolio_history_id_seq TO scout;
+
+--
+-- Name: portfolio_metrics_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE portfolio_metrics_id_seq TO athena;
+
+--
+-- Name: portfolio_metrics_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE portfolio_metrics_id_seq TO scout;
+
+--
+-- Name: portfolio_positions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE portfolio_positions_id_seq TO athena;
+
+--
+-- Name: portfolio_positions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE portfolio_positions_id_seq TO scout;
+
+--
+-- Name: portfolio_snapshots_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE portfolio_snapshots_id_seq TO athena;
+
+--
+-- Name: portfolio_snapshots_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE portfolio_snapshots_id_seq TO scout;
+
+--
+-- Name: portfolio_updates_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE portfolio_updates_id_seq TO athena;
+
+--
+-- Name: portfolio_updates_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE portfolio_updates_id_seq TO scout;
+
+--
+-- Name: positions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE positions_id_seq TO athena;
+
+--
+-- Name: positions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE positions_id_seq TO scout;
+
+--
+-- Name: preferences_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE preferences_id_seq TO athena;
+
+--
+-- Name: preferences_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE preferences_id_seq TO scout;
+
+--
+-- Name: project_tasks_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE project_tasks_id_seq TO athena;
+
+--
+-- Name: project_tasks_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE project_tasks_id_seq TO scout;
+
+--
+-- Name: projects_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE projects_id_seq TO athena;
+
+--
+-- Name: projects_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE projects_id_seq TO scout;
+
+--
+-- Name: publications_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE publications_id_seq TO athena;
+
+--
+-- Name: publications_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE publications_id_seq TO scout;
+
+--
+-- Name: ralph_sessions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE ralph_sessions_id_seq TO athena;
+
+--
+-- Name: ralph_sessions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE ralph_sessions_id_seq TO scout;
+
+--
+-- Name: research_citations_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE research_citations_id_seq TO athena;
+
+--
+-- Name: research_citations_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE research_citations_id_seq TO scout;
+
+--
+-- Name: research_conclusions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE research_conclusions_id_seq TO athena;
+
+--
+-- Name: research_conclusions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE research_conclusions_id_seq TO scout;
+
+--
+-- Name: research_findings_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE research_findings_id_seq TO athena;
+
+--
+-- Name: research_findings_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE research_findings_id_seq TO scout;
+
+--
+-- Name: research_projects_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE research_projects_id_seq TO athena;
+
+--
+-- Name: research_projects_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE research_projects_id_seq TO scout;
+
+--
+-- Name: research_provenance_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE research_provenance_id_seq TO athena;
+
+--
+-- Name: research_provenance_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE research_provenance_id_seq TO scout;
+
+--
+-- Name: research_taggings_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE research_taggings_id_seq TO athena;
+
+--
+-- Name: research_taggings_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE research_taggings_id_seq TO scout;
+
+--
+-- Name: research_tags_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE research_tags_id_seq TO athena;
+
+--
+-- Name: research_tags_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE research_tags_id_seq TO scout;
+
+--
+-- Name: research_tasks_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE research_tasks_id_seq TO athena;
+
+--
+-- Name: research_tasks_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE research_tasks_id_seq TO scout;
+
+--
+-- Name: shopping_history_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE shopping_history_id_seq TO athena;
+
+--
+-- Name: shopping_history_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE shopping_history_id_seq TO scout;
+
+--
+-- Name: shopping_preferences_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE shopping_preferences_id_seq TO athena;
+
+--
+-- Name: shopping_preferences_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE shopping_preferences_id_seq TO scout;
+
+--
+-- Name: shopping_wishlist_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE shopping_wishlist_id_seq TO athena;
+
+--
+-- Name: shopping_wishlist_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE shopping_wishlist_id_seq TO scout;
+
+--
+-- Name: skills_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE skills_id_seq TO athena;
+
+--
+-- Name: skills_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE skills_id_seq TO scout;
+
+--
+-- Name: tags_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE tags_id_seq TO athena;
+
+--
+-- Name: tags_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE tags_id_seq TO scout;
+
+--
+-- Name: tasks_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE tasks_id_seq TO athena;
+
+--
+-- Name: tasks_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE tasks_id_seq TO scout;
+
+--
+-- Name: tools_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE tools_id_seq TO athena;
+
+--
+-- Name: tools_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE tools_id_seq TO scout;
+
+--
+-- Name: unsolved_problems_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE unsolved_problems_id_seq TO athena;
+
+--
+-- Name: unsolved_problems_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE unsolved_problems_id_seq TO scout;
+
+--
+-- Name: vehicles_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE vehicles_id_seq TO athena;
+
+--
+-- Name: vehicles_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE vehicles_id_seq TO scout;
+
+--
+-- Name: vocabulary_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE vocabulary_id_seq TO athena;
+
+--
+-- Name: vocabulary_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE vocabulary_id_seq TO scout;
+
+--
+-- Name: workflow_steps_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE workflow_steps_id_seq TO athena;
+
+--
+-- Name: workflow_steps_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE workflow_steps_id_seq TO scout;
+
+--
+-- Name: workflows_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE workflows_id_seq TO athena;
+
+--
+-- Name: workflows_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE workflows_id_seq TO scout;
+
+--
+-- Name: works_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE works_id_seq TO athena;
+
+--
+-- Name: works_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE works_id_seq TO scout;
+
+--
+-- Name: agent_aliases; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE agent_aliases TO graybeard;
+
+--
+-- Name: agent_bootstrap_context; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE agent_bootstrap_context TO graybeard;
+
+--
+-- Name: agent_domains; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE agent_domains TO graybeard;
+
+--
 -- Name: agent_turn_context; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
 GRANT SELECT ON TABLE agent_turn_context TO nova;
+
+--
+-- Name: agents; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE agents TO graybeard;
+
+--
+-- Name: bootstrap_context_config; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE bootstrap_context_config TO graybeard;
+
+--
+-- Name: entities; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE entities TO graybeard;
+
+--
+-- Name: entity_facts; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE entity_facts TO graybeard;
+
+--
+-- Name: library_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE library_authors TO athena;
+
+--
+-- Name: library_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE library_authors TO coder;
+
+--
+-- Name: library_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE library_authors TO erato;
+
+--
+-- Name: library_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE library_authors TO gem;
+
+--
+-- Name: library_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE library_authors TO gidget;
+
+--
+-- Name: library_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE library_authors TO graybeard;
+
+--
+-- Name: library_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE library_authors TO iris;
+
+--
+-- Name: library_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE library_authors TO newhart;
+
+--
+-- Name: library_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE library_authors TO "nova-staging";
+
+--
+-- Name: library_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE library_authors TO openproject;
+
+--
+-- Name: library_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE library_authors TO openproject_user;
+
+--
+-- Name: library_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE library_authors TO scout;
+
+--
+-- Name: library_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE library_authors TO ticker;
+
+--
+-- Name: library_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE library_tags TO athena;
+
+--
+-- Name: library_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE library_tags TO coder;
+
+--
+-- Name: library_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE library_tags TO erato;
+
+--
+-- Name: library_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE library_tags TO gem;
+
+--
+-- Name: library_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE library_tags TO gidget;
+
+--
+-- Name: library_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE library_tags TO graybeard;
+
+--
+-- Name: library_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE library_tags TO iris;
+
+--
+-- Name: library_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE library_tags TO newhart;
+
+--
+-- Name: library_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE library_tags TO "nova-staging";
+
+--
+-- Name: library_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE library_tags TO openproject;
+
+--
+-- Name: library_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE library_tags TO openproject_user;
+
+--
+-- Name: library_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE library_tags TO scout;
+
+--
+-- Name: library_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE library_tags TO ticker;
+
+--
+-- Name: library_work_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE library_work_authors TO athena;
+
+--
+-- Name: library_work_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE library_work_authors TO coder;
+
+--
+-- Name: library_work_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE library_work_authors TO erato;
+
+--
+-- Name: library_work_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE library_work_authors TO gem;
+
+--
+-- Name: library_work_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE library_work_authors TO gidget;
+
+--
+-- Name: library_work_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE library_work_authors TO graybeard;
+
+--
+-- Name: library_work_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE library_work_authors TO iris;
+
+--
+-- Name: library_work_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE library_work_authors TO newhart;
+
+--
+-- Name: library_work_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE library_work_authors TO "nova-staging";
+
+--
+-- Name: library_work_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE library_work_authors TO openproject;
+
+--
+-- Name: library_work_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE library_work_authors TO openproject_user;
+
+--
+-- Name: library_work_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE library_work_authors TO scout;
+
+--
+-- Name: library_work_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE library_work_authors TO ticker;
+
+--
+-- Name: library_work_relationships; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE library_work_relationships TO athena;
+
+--
+-- Name: library_work_relationships; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE library_work_relationships TO coder;
+
+--
+-- Name: library_work_relationships; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE library_work_relationships TO erato;
+
+--
+-- Name: library_work_relationships; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE library_work_relationships TO gem;
+
+--
+-- Name: library_work_relationships; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE library_work_relationships TO gidget;
+
+--
+-- Name: library_work_relationships; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE library_work_relationships TO graybeard;
+
+--
+-- Name: library_work_relationships; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE library_work_relationships TO iris;
+
+--
+-- Name: library_work_relationships; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE library_work_relationships TO newhart;
+
+--
+-- Name: library_work_relationships; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE library_work_relationships TO "nova-staging";
+
+--
+-- Name: library_work_relationships; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE library_work_relationships TO openproject;
+
+--
+-- Name: library_work_relationships; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE library_work_relationships TO openproject_user;
+
+--
+-- Name: library_work_relationships; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE library_work_relationships TO scout;
+
+--
+-- Name: library_work_relationships; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE library_work_relationships TO ticker;
+
+--
+-- Name: library_work_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE library_work_tags TO athena;
+
+--
+-- Name: library_work_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE library_work_tags TO coder;
+
+--
+-- Name: library_work_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE library_work_tags TO erato;
+
+--
+-- Name: library_work_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE library_work_tags TO gem;
+
+--
+-- Name: library_work_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE library_work_tags TO gidget;
+
+--
+-- Name: library_work_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE library_work_tags TO graybeard;
+
+--
+-- Name: library_work_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE library_work_tags TO iris;
+
+--
+-- Name: library_work_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE library_work_tags TO newhart;
+
+--
+-- Name: library_work_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE library_work_tags TO "nova-staging";
+
+--
+-- Name: library_work_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE library_work_tags TO openproject;
+
+--
+-- Name: library_work_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE library_work_tags TO openproject_user;
+
+--
+-- Name: library_work_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE library_work_tags TO scout;
+
+--
+-- Name: library_work_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE library_work_tags TO ticker;
+
+--
+-- Name: library_works; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE library_works TO athena;
+
+--
+-- Name: library_works; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE library_works TO coder;
+
+--
+-- Name: library_works; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE library_works TO erato;
+
+--
+-- Name: library_works; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE library_works TO gem;
+
+--
+-- Name: library_works; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE library_works TO gidget;
+
+--
+-- Name: library_works; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE library_works TO graybeard;
+
+--
+-- Name: library_works; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE library_works TO iris;
+
+--
+-- Name: library_works; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE library_works TO newhart;
+
+--
+-- Name: library_works; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE library_works TO "nova-staging";
+
+--
+-- Name: library_works; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE library_works TO openproject;
+
+--
+-- Name: library_works; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE library_works TO openproject_user;
+
+--
+-- Name: library_works; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE library_works TO scout;
+
+--
+-- Name: library_works; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE library_works TO ticker;
+
+--
+-- Name: memory_type_priorities; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE memory_type_priorities TO graybeard;
+
+--
+-- Name: research_citations; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_citations TO athena;
+
+--
+-- Name: research_citations; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_citations TO coder;
+
+--
+-- Name: research_citations; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_citations TO erato;
+
+--
+-- Name: research_citations; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_citations TO gem;
+
+--
+-- Name: research_citations; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_citations TO gidget;
+
+--
+-- Name: research_citations; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_citations TO graybeard;
+
+--
+-- Name: research_citations; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_citations TO iris;
+
+--
+-- Name: research_citations; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_citations TO nova;
+
+--
+-- Name: research_citations; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_citations TO "nova-staging";
+
+--
+-- Name: research_citations; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_citations TO openproject;
+
+--
+-- Name: research_citations; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_citations TO openproject_user;
+
+--
+-- Name: research_citations; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE research_citations TO scout;
+
+--
+-- Name: research_citations; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_citations TO ticker;
+
+--
+-- Name: research_conclusions; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_conclusions TO athena;
+
+--
+-- Name: research_conclusions; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_conclusions TO coder;
+
+--
+-- Name: research_conclusions; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_conclusions TO erato;
+
+--
+-- Name: research_conclusions; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_conclusions TO gem;
+
+--
+-- Name: research_conclusions; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_conclusions TO gidget;
+
+--
+-- Name: research_conclusions; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_conclusions TO graybeard;
+
+--
+-- Name: research_conclusions; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_conclusions TO iris;
+
+--
+-- Name: research_conclusions; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_conclusions TO nova;
+
+--
+-- Name: research_conclusions; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_conclusions TO "nova-staging";
+
+--
+-- Name: research_conclusions; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_conclusions TO openproject;
+
+--
+-- Name: research_conclusions; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_conclusions TO openproject_user;
+
+--
+-- Name: research_conclusions; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE research_conclusions TO scout;
+
+--
+-- Name: research_conclusions; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_conclusions TO ticker;
+
+--
+-- Name: research_findings; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_findings TO athena;
+
+--
+-- Name: research_findings; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_findings TO coder;
+
+--
+-- Name: research_findings; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_findings TO erato;
+
+--
+-- Name: research_findings; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_findings TO gem;
+
+--
+-- Name: research_findings; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_findings TO gidget;
+
+--
+-- Name: research_findings; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_findings TO graybeard;
+
+--
+-- Name: research_findings; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_findings TO iris;
+
+--
+-- Name: research_findings; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_findings TO nova;
+
+--
+-- Name: research_findings; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_findings TO "nova-staging";
+
+--
+-- Name: research_findings; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_findings TO openproject;
+
+--
+-- Name: research_findings; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_findings TO openproject_user;
+
+--
+-- Name: research_findings; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE research_findings TO scout;
+
+--
+-- Name: research_findings; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_findings TO ticker;
+
+--
+-- Name: research_projects; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_projects TO athena;
+
+--
+-- Name: research_projects; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_projects TO coder;
+
+--
+-- Name: research_projects; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_projects TO erato;
+
+--
+-- Name: research_projects; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_projects TO gem;
+
+--
+-- Name: research_projects; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_projects TO gidget;
+
+--
+-- Name: research_projects; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_projects TO graybeard;
+
+--
+-- Name: research_projects; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_projects TO iris;
+
+--
+-- Name: research_projects; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_projects TO nova;
+
+--
+-- Name: research_projects; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_projects TO "nova-staging";
+
+--
+-- Name: research_projects; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_projects TO openproject;
+
+--
+-- Name: research_projects; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_projects TO openproject_user;
+
+--
+-- Name: research_projects; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE research_projects TO scout;
+
+--
+-- Name: research_projects; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_projects TO ticker;
+
+--
+-- Name: research_provenance; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_provenance TO athena;
+
+--
+-- Name: research_provenance; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_provenance TO coder;
+
+--
+-- Name: research_provenance; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_provenance TO erato;
+
+--
+-- Name: research_provenance; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_provenance TO gem;
+
+--
+-- Name: research_provenance; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_provenance TO gidget;
+
+--
+-- Name: research_provenance; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_provenance TO graybeard;
+
+--
+-- Name: research_provenance; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_provenance TO iris;
+
+--
+-- Name: research_provenance; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_provenance TO nova;
+
+--
+-- Name: research_provenance; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_provenance TO "nova-staging";
+
+--
+-- Name: research_provenance; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_provenance TO openproject;
+
+--
+-- Name: research_provenance; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_provenance TO openproject_user;
+
+--
+-- Name: research_provenance; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE research_provenance TO scout;
+
+--
+-- Name: research_provenance; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_provenance TO ticker;
+
+--
+-- Name: research_taggings; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_taggings TO athena;
+
+--
+-- Name: research_taggings; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_taggings TO coder;
+
+--
+-- Name: research_taggings; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_taggings TO erato;
+
+--
+-- Name: research_taggings; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_taggings TO gem;
+
+--
+-- Name: research_taggings; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_taggings TO gidget;
+
+--
+-- Name: research_taggings; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_taggings TO graybeard;
+
+--
+-- Name: research_taggings; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_taggings TO iris;
+
+--
+-- Name: research_taggings; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_taggings TO nova;
+
+--
+-- Name: research_taggings; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_taggings TO "nova-staging";
+
+--
+-- Name: research_taggings; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_taggings TO openproject;
+
+--
+-- Name: research_taggings; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_taggings TO openproject_user;
+
+--
+-- Name: research_taggings; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE research_taggings TO scout;
+
+--
+-- Name: research_taggings; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_taggings TO ticker;
+
+--
+-- Name: research_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_tags TO athena;
+
+--
+-- Name: research_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_tags TO coder;
+
+--
+-- Name: research_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_tags TO erato;
+
+--
+-- Name: research_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_tags TO gem;
+
+--
+-- Name: research_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_tags TO gidget;
+
+--
+-- Name: research_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_tags TO graybeard;
+
+--
+-- Name: research_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_tags TO iris;
+
+--
+-- Name: research_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_tags TO nova;
+
+--
+-- Name: research_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_tags TO "nova-staging";
+
+--
+-- Name: research_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_tags TO openproject;
+
+--
+-- Name: research_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_tags TO openproject_user;
+
+--
+-- Name: research_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE research_tags TO scout;
+
+--
+-- Name: research_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_tags TO ticker;
+
+--
+-- Name: research_tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_tasks TO athena;
+
+--
+-- Name: research_tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_tasks TO coder;
+
+--
+-- Name: research_tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_tasks TO erato;
+
+--
+-- Name: research_tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_tasks TO gem;
+
+--
+-- Name: research_tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_tasks TO gidget;
+
+--
+-- Name: research_tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_tasks TO graybeard;
+
+--
+-- Name: research_tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_tasks TO iris;
+
+--
+-- Name: research_tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_tasks TO nova;
+
+--
+-- Name: research_tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_tasks TO "nova-staging";
+
+--
+-- Name: research_tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_tasks TO openproject;
+
+--
+-- Name: research_tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_tasks TO openproject_user;
+
+--
+-- Name: research_tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE research_tasks TO scout;
+
+--
+-- Name: research_tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE research_tasks TO ticker;
+
+--
+-- Name: workflow_steps; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE workflow_steps TO graybeard;
+
+--
+-- Name: workflows; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE workflows TO graybeard;
 

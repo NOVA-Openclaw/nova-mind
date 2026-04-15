@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Embed file-based memory content using OpenAI and store in PostgreSQL pgvector.
+Embed file-based memory content using Ollama and store in PostgreSQL pgvector.
 
 Scoped to FILE sources only:
   - Daily log files (memory/*.md)
@@ -20,45 +20,28 @@ import sys
 import json
 import argparse
 import hashlib
+import urllib.request
+import urllib.error
 from pathlib import Path
 import psycopg2
-import openai
 
 # Configuration
 MEMORY_DIR = Path.home() / ".openclaw" / "workspace" / "memory"
 MEMORY_MD = Path.home() / ".openclaw" / "workspace" / "MEMORY.md"
 CHUNK_SIZE = 1000  # Characters per chunk (with overlap)
 CHUNK_OVERLAP = 200
-EMBEDDING_MODEL = "text-embedding-3-small"
+EMBEDDING_MODEL = "mxbai-embed-large"
 DB_NAME = os.environ.get("NOVA_MEMORY_DB", "nova_memory")
 
 
-def get_openai_client():
-    """Get OpenAI client with API key from environment or config."""
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
-        # Try to load from OpenClaw config
-        sys.path.insert(0, os.path.expanduser('~/.openclaw/lib'))
-        try:
-            from env_loader import load_openclaw_env
-            load_openclaw_env()
-            api_key = os.environ.get("OPENAI_API_KEY")
-        except ImportError:
-            pass
-
-    if not api_key:
-        # Legacy fallback
-        config_path = Path.home() / ".openclaw" / "openclaw.json"
-        if config_path.exists():
-            with open(config_path) as f:
-                config = json.load(f)
-                api_key = config.get("skills", {}).get("entries", {}).get("openai-image-gen", {}).get("apiKey")
-
-    if not api_key:
-        print("Error: No OpenAI API key found", file=sys.stderr)
+def load_embedding_config():
+    """Load embedding configuration from the script's directory."""
+    config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'embedding-config.json')
+    if not os.path.exists(config_path):
+        print(f"Error: Config file not found: {config_path}", file=sys.stderr)
         sys.exit(1)
-
-    return openai.OpenAI(api_key=api_key)
+    with open(config_path) as f:
+        return json.load(f)
 
 
 def chunk_text(text, chunk_size=CHUNK_SIZE, overlap=CHUNK_OVERLAP):
@@ -74,16 +57,20 @@ def chunk_text(text, chunk_size=CHUNK_SIZE, overlap=CHUNK_OVERLAP):
     return chunks
 
 
-def get_embedding(client, text):
-    """Get embedding vector from OpenAI."""
-    response = client.embeddings.create(
-        model=EMBEDDING_MODEL,
-        input=text
-    )
-    return response.data[0].embedding
+def get_embedding(config, text):
+    """Get embedding vector from Ollama."""
+    url = f"{config['base_url']}/api/embeddings"
+    payload = json.dumps({"model": config["model"], "prompt": text}).encode()
+    req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        result = json.loads(resp.read())
+    embedding = result["embedding"]
+    if len(embedding) != config["dimensions"]:
+        raise ValueError(f"Dimension mismatch: got {len(embedding)}, expected {config['dimensions']}")
+    return embedding
 
 
-def embed_daily_logs(conn, client, force=False):
+def embed_daily_logs(conn, config, force=False):
     """Embed daily memory log files."""
     cur = conn.cursor()
     count = 0
@@ -93,6 +80,7 @@ def embed_daily_logs(conn, client, force=False):
         content = log_file.read_text()
 
         if not content.strip():
+            print(f"  ⚠️  Skipping {source_id}: empty content", file=sys.stderr)
             continue
 
         if not force:
@@ -107,7 +95,7 @@ def embed_daily_logs(conn, client, force=False):
         chunks = chunk_text(content)
         for i, chunk in enumerate(chunks):
             chunk_id = f"{source_id}:chunk{i}"
-            embedding = get_embedding(client, chunk)
+            embedding = get_embedding(config, chunk)
 
             cur.execute("""
                 INSERT INTO memory_embeddings (source_type, source_id, content, embedding)
@@ -122,7 +110,7 @@ def embed_daily_logs(conn, client, force=False):
     return count
 
 
-def embed_memory_md(conn, client, force=False):
+def embed_memory_md(conn, config, force=False):
     """Embed MEMORY.md file."""
     cur = conn.cursor()
 
@@ -147,7 +135,7 @@ def embed_memory_md(conn, client, force=False):
     count = 0
     for i, chunk in enumerate(chunks):
         chunk_id = f"{source_id}:chunk{i}"
-        embedding = get_embedding(client, chunk)
+        embedding = get_embedding(config, chunk)
 
         cur.execute("""
             INSERT INTO memory_embeddings (source_type, source_id, content, embedding)
@@ -167,21 +155,24 @@ def main():
     parser.add_argument("--reindex", action="store_true", help="Force re-embed everything")
     args = parser.parse_args()
 
+    print("Loading embedding config...")
+    config = load_embedding_config()
+    print(f"  Provider: {config['provider']}")
+    print(f"  Model: {config['model']}")
+    print(f"  Dimensions: {config['dimensions']}")
+
     print("Connecting to database...")
     conn = psycopg2.connect(dbname=DB_NAME, host="localhost")
-
-    print("Initializing OpenAI client...")
-    client = get_openai_client()
 
     total = 0
 
     if args.source in ["daily_log", "all"]:
         print("\nEmbedding daily logs...")
-        total += embed_daily_logs(conn, client, args.reindex)
+        total += embed_daily_logs(conn, config, args.reindex)
 
     if args.source in ["memory_md", "all"]:
         print("\nEmbedding MEMORY.md...")
-        total += embed_memory_md(conn, client, args.reindex)
+        total += embed_memory_md(conn, config, args.reindex)
 
     print(f"\nDone! Embedded {total} chunks total.")
 

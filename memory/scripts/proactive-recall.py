@@ -16,6 +16,8 @@ import os
 import sys
 import json
 import argparse
+import urllib.request
+import urllib.error
 from pathlib import Path
 
 # Load OpenClaw environment (API keys from openclaw.json)
@@ -27,14 +29,13 @@ except ImportError:
     pass  # Library not installed yet
 
 import psycopg2
-import openai
 
 # Load centralized PostgreSQL configuration
 sys.path.insert(0, os.path.expanduser("~/.openclaw/lib"))
 from pg_env import load_pg_env
 load_pg_env()
 
-EMBEDDING_MODEL = "text-embedding-3-small"
+EMBEDDING_MODEL = "mxbai-embed-large"
 
 # Default configuration
 DEFAULT_MAX_RESULTS = 10  # Fetch more, then filter by token budget
@@ -51,31 +52,34 @@ CONTENT_LIMITS = {
     "max_full": 600,      # Full content when few results
 }
 
-def get_openai_client():
-    """Get OpenAI client with API key from environment.
-    
-    API key must be set in environment (inherited from OpenClaw).
-    Returns None if API key is not set.
-    """
-    api_key = os.environ.get("OPENAI_API_KEY")
-    
-    if not api_key:
-        # Don't print to stderr anymore - caller handles the error
-        return None
-    
-    return openai.OpenAI(api_key=api_key)
 
-def get_embedding(client, text):
-    """Get embedding vector from OpenAI."""
-    response = client.embeddings.create(
-        model=EMBEDDING_MODEL,
-        input=text
-    )
-    return response.data[0].embedding
+def load_embedding_config():
+    """Load embedding configuration from the script's directory."""
+    config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'embedding-config.json')
+    if not os.path.exists(config_path):
+        print(f"Error: Config file not found: {config_path}", file=sys.stderr)
+        sys.exit(1)
+    with open(config_path) as f:
+        return json.load(f)
+
+
+def get_embedding(config, text):
+    """Get single embedding via Ollama API."""
+    url = f"{config['base_url']}/api/embeddings"
+    payload = json.dumps({"model": config["model"], "prompt": text}).encode()
+    req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        result = json.loads(resp.read())
+    embedding = result["embedding"]
+    if len(embedding) != config["dimensions"]:
+        raise ValueError(f"Dimension mismatch: got {len(embedding)}, expected {config['dimensions']}")
+    return embedding
+
 
 def estimate_tokens(text):
     """Rough token estimate: ~4 chars per token for English."""
     return len(text) // 4
+
 
 def calculate_dynamic_limits(result_count):
     """
@@ -117,25 +121,23 @@ def truncate_content(content, similarity, result_count=5, high_threshold=HIGH_CO
     
     return content[:max_len].rsplit(' ', 1)[0] + suffix
 
-def recall(message, token_budget=DEFAULT_TOKEN_BUDGET, threshold=DEFAULT_THRESHOLD, 
+
+def recall(config, message, token_budget=DEFAULT_TOKEN_BUDGET, threshold=DEFAULT_THRESHOLD, 
            max_results=DEFAULT_MAX_RESULTS, high_confidence=HIGH_CONFIDENCE_THRESHOLD):
     """
     Get relevant memories for a message with token budget control.
     
     Args:
+        config: Embedding configuration dict
         message: Query text
         token_budget: Maximum tokens to return (approximate)
         threshold: Minimum similarity score
         max_results: Maximum results to fetch from DB
         high_confidence: Threshold for full content vs summary
     """
-    client = get_openai_client()
-    if not client:
-        return {"error": "No OpenAI API key", "memories": []}
-    
     try:
         conn = psycopg2.connect()
-        query_embedding = get_embedding(client, message)
+        query_embedding = get_embedding(config, message)
         
         cur = conn.cursor()
         # Priority-weighted semantic search (#53)
@@ -204,6 +206,7 @@ def recall(message, token_budget=DEFAULT_TOKEN_BUDGET, threshold=DEFAULT_THRESHO
     except Exception as e:
         return {"error": str(e), "memories": []}
 
+
 def format_for_injection(recall_result):
     """Format recall results for context injection."""
     if not recall_result.get("memories"):
@@ -215,6 +218,7 @@ def format_for_injection(recall_result):
         lines.append(f"- {confidence} [{mem['source']}] ({mem['similarity']:.0%}): {mem['content']}")
     
     return "\n".join(lines)
+
 
 def main():
     parser = argparse.ArgumentParser(description="Proactive memory recall with semantic search")
@@ -235,7 +239,11 @@ def main():
         sys.exit(1)
     
     message = " ".join(args.message)
+    config = load_embedding_config()
+    print(f"Using Ollama config: {config['provider']} / {config['model']} ({config['dimensions']} dims)", file=sys.stderr)
+    
     result = recall(
+        config,
         message, 
         token_budget=args.max_tokens,
         threshold=args.threshold,
@@ -246,6 +254,7 @@ def main():
         print(format_for_injection(result))
     else:
         print(json.dumps(result, indent=2))
+
 
 if __name__ == "__main__":
     main()

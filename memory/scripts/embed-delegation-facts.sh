@@ -7,23 +7,24 @@
 
 set -e
 
-# Load OpenClaw environment (API keys from openclaw.json)
-ENV_LOADER="${HOME}/.openclaw/lib/env-loader.sh"
-[ -f "$ENV_LOADER" ] && source "$ENV_LOADER" && load_openclaw_env
+# Resolve config from same directory as this script
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+CONFIG_FILE="$SCRIPT_DIR/embedding-config.json"
+
+if [ ! -f "$CONFIG_FILE" ]; then
+    echo "ERROR: Config file not found: $CONFIG_FILE" >&2
+    exit 1
+fi
+
+OLLAMA_URL=$(jq -r '.base_url' "$CONFIG_FILE")
+OLLAMA_MODEL=$(jq -r '.model' "$CONFIG_FILE")
 
 # Load centralized PostgreSQL configuration
 PG_ENV="${HOME}/.openclaw/lib/pg-env.sh"
 [ -f "$PG_ENV" ] && source "$PG_ENV" && load_pg_env
 
-
-# API key must be set in environment (inherited from OpenClaw)
-if [ -z "$OPENAI_API_KEY" ]; then
-    echo "ERROR: OPENAI_API_KEY not set in environment" >&2
-    echo "This script should be run from OpenClaw hooks which inherit the API key" >&2
-    exit 1
-fi
-
 echo "🧠 Embedding delegation facts for semantic recall..."
+echo "   Model: $OLLAMA_MODEL @ $OLLAMA_URL"
 
 # Get all delegation facts that aren't already embedded
 QUERY="
@@ -41,7 +42,7 @@ WHERE ef.entity_id = 1
 ORDER BY ef.confidence DESC, ef.id;
 "
 
-# Export as JSON
+# Export as pipe-delimited rows
 FACTS=$(psql -t -A -F'|' -c "$QUERY" 2>/dev/null)
 
 if [ -z "$FACTS" ]; then
@@ -58,7 +59,6 @@ echo "$FACTS" | while IFS='|' read -r fact_id key value confidence source_id; do
     [ -z "$fact_id" ] && continue
     
     # Format content for embedding
-    # Make it conversational and searchable
     case "$key" in
         delegates_to)
             CONTENT="NOVA delegates to $value"
@@ -80,14 +80,17 @@ echo "$FACTS" | while IFS='|' read -r fact_id key value confidence source_id; do
             ;;
     esac
     
-    # Get embedding from OpenAI
-    EMBEDDING=$(curl -s https://api.openai.com/v1/embeddings \
-        -H "Authorization: Bearer $OPENAI_API_KEY" \
+    # Skip empty content
+    if [ -z "$CONTENT" ]; then
+        echo "⚠️  Skipping fact $fact_id: empty content"
+        continue
+    fi
+    
+    # Get embedding from Ollama (local, no API key needed)
+    EMBEDDING=$(curl -s --max-time 30 "${OLLAMA_URL}/api/embeddings" \
         -H "Content-Type: application/json" \
-        -d "{
-            \"input\": \"$CONTENT\",
-            \"model\": \"text-embedding-3-small\"
-        }" | jq -r '.data[0].embedding | @json')
+        -d "{\"model\": \"${OLLAMA_MODEL}\", \"prompt\": $(echo "$CONTENT" | jq -Rs .)}" \
+        | jq -r '.embedding | @json')
     
     if [ -z "$EMBEDDING" ] || [ "$EMBEDDING" = "null" ]; then
         echo "⚠️  Failed to embed fact $fact_id: $CONTENT"
@@ -112,14 +115,11 @@ echo "$FACTS" | while IFS='|' read -r fact_id key value confidence source_id; do
     
     PROCESSED=$((PROCESSED + 1))
     echo "✅ [$PROCESSED/$COUNT] Embedded: $CONTENT"
-    
-    # Rate limit (OpenAI: 3000 RPM for tier 1, ~50/sec safe)
-    sleep 0.1
 done
 
 echo ""
 echo "🎯 Embedding complete!"
 echo ""
 echo "Test with:"
-echo "  python3 ~/.openclaw/workspace/nova-memory/scripts/proactive-recall.py 'help me debug this code'"
-echo "  python3 ~/.openclaw/workspace/nova-memory/scripts/proactive-recall.py 'commit these changes'"
+echo "  python3 ~/.openclaw/scripts/proactive-recall.py 'help me debug this code'"
+echo "  python3 ~/.openclaw/scripts/proactive-recall.py 'commit these changes'"

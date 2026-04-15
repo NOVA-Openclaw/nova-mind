@@ -19,4 +19,9 @@ echo "--- embed-full-database ---" >> "$LOG_FILE"
 python "$HOME/.openclaw/workspace/scripts/embed-full-database.py" >> "$LOG_FILE" 2>&1
 echo "embed-full-database exit: $?" >> "$LOG_FILE"
 
+# Embed research data
+echo "--- embed-research ---" >> "$LOG_FILE"
+python "$HOME/.openclaw/workspace/nova-mind/memory/scripts/embed-research.py" >> "$LOG_FILE" 2>&1
+echo "embed-research exit: $?" >> "$LOG_FILE"
+
 echo "" >> "$LOG_FILE"

@@ -8,18 +8,20 @@ Usage:
     python embed-library.py --reindex    # Force re-embed all library works
 
 Requires:
-    - OPENAI_API_KEY environment variable
+    - Ollama running with mxbai-embed-large model
     - PostgreSQL with pgvector extension
     - library_works, library_authors, library_work_authors, library_tags, library_work_tags tables
 """
 
 import os
 import sys
+import json
 import argparse
+import urllib.request
+import urllib.error
 import psycopg2
-import openai
 
-EMBEDDING_MODEL = "text-embedding-3-small"
+EMBEDDING_MODEL = "mxbai-embed-large"
 DB_NAME = os.environ.get("NOVA_MEMORY_DB", "nova_memory")
 BATCH_SIZE = 50
 SOURCE_TYPE = "library"
@@ -49,27 +51,33 @@ LIBRARY_QUERY = """
 """
 
 
-def get_openai_client():
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
-        # Try to load from OpenClaw config
-        sys.path.insert(0, os.path.expanduser('~/.openclaw/lib'))
-        try:
-            from env_loader import load_openclaw_env
-            load_openclaw_env()
-            api_key = os.environ.get("OPENAI_API_KEY")
-        except ImportError:
-            pass
-
-    if not api_key:
-        print("Error: OPENAI_API_KEY not set", file=sys.stderr)
+def load_embedding_config():
+    """Load embedding configuration from the script's directory."""
+    config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'embedding-config.json')
+    if not os.path.exists(config_path):
+        print(f"Error: Config file not found: {config_path}", file=sys.stderr)
         sys.exit(1)
-    return openai.OpenAI(api_key=api_key)
+    with open(config_path) as f:
+        return json.load(f)
 
 
-def get_embeddings_batch(client, texts):
-    response = client.embeddings.create(model=EMBEDDING_MODEL, input=texts)
-    return [item.embedding for item in response.data]
+def get_embeddings_batch(config, texts):
+    """Get embeddings via Ollama batch API."""
+    url = f"{config['base_url']}/api/embed"
+    payload = json.dumps({"model": config["model"], "input": texts}).encode()
+    req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            result = json.loads(resp.read())
+        embeddings = result["embeddings"]
+        # Validate dimensions
+        for emb in embeddings:
+            if len(emb) != config["dimensions"]:
+                raise ValueError(f"Dimension mismatch: got {len(emb)}, expected {config['dimensions']}")
+        return embeddings
+    except urllib.error.URLError as e:
+        print(f"  ⚠️  Ollama connection error: {e}", file=sys.stderr)
+        raise
 
 
 def main():
@@ -77,7 +85,9 @@ def main():
     parser.add_argument("--reindex", action="store_true", help="Force re-embed all library works")
     args = parser.parse_args()
 
-    client = get_openai_client()
+    config = load_embedding_config()
+    print(f"Using Ollama config: {config['provider']} / {config['model']} ({config['dimensions']} dims)")
+
     conn = psycopg2.connect(dbname=DB_NAME, host="localhost")
 
     print(f"📚 Embedding library works...")
@@ -130,7 +140,7 @@ def main():
         texts = [item[1] for item in batch]
 
         try:
-            embeddings = get_embeddings_batch(client, texts)
+            embeddings = get_embeddings_batch(config, texts)
 
             cur = conn.cursor()
             for (src_id, content), embedding in zip(batch, embeddings):

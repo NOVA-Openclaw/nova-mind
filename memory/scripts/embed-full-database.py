@@ -5,10 +5,13 @@ Creates embeddings for all relevant tables in nova_memory.
 """
 
 import os
+import sys
+import json
+import urllib.request
+import urllib.error
 import psycopg2
-import openai
 
-EMBEDDING_MODEL = "text-embedding-3-small"
+EMBEDDING_MODEL = "mxbai-embed-large"
 DB_NAME = "nova_memory"
 BATCH_SIZE = 50
 
@@ -86,18 +89,40 @@ TABLES_TO_EMBED = {
     """,
 }
 
-def get_openai_client():
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
-        raise ValueError("OPENAI_API_KEY not set")
-    return openai.OpenAI(api_key=api_key)
 
-def get_embeddings_batch(client, texts):
-    response = client.embeddings.create(model=EMBEDDING_MODEL, input=texts)
-    return [item.embedding for item in response.data]
+def load_embedding_config():
+    """Load embedding configuration from the script's directory."""
+    config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'embedding-config.json')
+    if not os.path.exists(config_path):
+        print(f"Error: Config file not found: {config_path}", file=sys.stderr)
+        sys.exit(1)
+    with open(config_path) as f:
+        return json.load(f)
+
+
+def get_embeddings_batch(config, texts):
+    """Get embeddings via Ollama batch API."""
+    url = f"{config['base_url']}/api/embed"
+    payload = json.dumps({"model": config["model"], "input": texts}).encode()
+    req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            result = json.loads(resp.read())
+        embeddings = result["embeddings"]
+        # Validate dimensions
+        for emb in embeddings:
+            if len(emb) != config["dimensions"]:
+                raise ValueError(f"Dimension mismatch: got {len(emb)}, expected {config['dimensions']}")
+        return embeddings
+    except urllib.error.URLError as e:
+        print(f"  ⚠️  Ollama connection error: {e}", file=sys.stderr)
+        raise
+
 
 def main():
-    client = get_openai_client()
+    config = load_embedding_config()
+    print(f"Using Ollama config: {config['provider']} / {config['model']} ({config['dimensions']} dims)")
+    
     conn = psycopg2.connect(dbname=DB_NAME, host="localhost", user="nova")
     
     total_embedded = 0
@@ -143,7 +168,7 @@ def main():
             texts = [item[1] for item in batch]
             
             try:
-                embeddings = get_embeddings_batch(client, texts)
+                embeddings = get_embeddings_batch(config, texts)
                 
                 cur = conn.cursor()
                 for (src_id, content), embedding in zip(batch, embeddings):
@@ -164,6 +189,7 @@ def main():
     
     conn.close()
     print(f"\n✅ Total: {total_embedded} new embeddings")
+
 
 if __name__ == "__main__":
     main()

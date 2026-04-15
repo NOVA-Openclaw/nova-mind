@@ -34,7 +34,7 @@ A PostgreSQL-based long-term memory system for AI assistants, with natural langu
 
 This is the human-facing wrapper. It:
 - Prompts for database connection details → writes `~/.openclaw/postgres.json`
-- Prompts for API keys (OpenAI, Anthropic) → writes `~/.openclaw/openclaw.json`
+- Prompts for API keys (Anthropic, optional OpenAI for other features) → writes `~/.openclaw/openclaw.json`
 - Loads all config into environment
 - Automatically execs `agent-install.sh` to complete installation
 
@@ -869,6 +869,56 @@ openclaw hooks disable memory-extract
 openclaw hooks disable semantic-recall
 openclaw hooks disable session-init
 openclaw hooks disable agent-turn-context
+```
+
+## Embedding Configuration (Ollama)
+
+All embedding scripts now use local Ollama with the `mxbai-embed-large` model (1024 dimensions) instead of OpenAI's `text-embedding-3-small`. This eliminates the need for an OpenAI API key for semantic recall.
+
+### Shared Configuration
+
+A centralized configuration file `embedding-config.json` is used by all embedding scripts:
+
+```json
+{
+  "provider": "ollama",
+  "model": "mxbai-embed-large",
+  "base_url": "http://localhost:11434",
+  "dimensions": 1024
+}
+```
+
+The file resides in the `memory/scripts/` directory and is automatically loaded by:
+
+- `embed-memories.py`
+- `embed-library.py`
+- `embed-full-database.py`
+- `proactive-recall.py`
+- `embed-research.py` (new)
+
+### New Script: `embed-research.py`
+
+A new script `embed-research.py` generates embeddings for research findings in the `research_*` tables, enabling semantic search across research content.
+
+### Migration Notes
+
+- The `memory_embeddings` table column changed from `vector(1536)` to `vector(1024)`.
+- Existing embeddings were cleared and must be regenerated using the new scripts.
+- The `semantic-recall` hook no longer requires an `OPENAI_API_KEY` environment variable.
+
+### Running Embedding Scripts
+
+To regenerate all embeddings after the migration:
+
+```bash
+cd memory/scripts
+./embed-full-database.py
+```
+
+For incremental updates, use the cron script:
+
+```bash
+./embed-memories-cron.sh
 ```
 
 ## Resource Policies (1Password Integration)

@@ -25,20 +25,24 @@ Before installing the nova-mind memory subsystem, ensure you have the following:
   - Install: `sudo apt install jq`
   - Required for config file parsing and automatic OpenClaw config patching
 
-- **OPENAI_API_KEY** - OpenAI API key for embeddings
-  - **Required for semantic recall** - generates embeddings using `text-embedding-3-small`
-  - Get your API key from: [https://platform.openai.com/api-keys](https://platform.openai.com/api-keys)
-  - The installer will prompt you for this if not set in your environment
-  - Alternatively, set it before running the installer:
-    ```bash
-    export OPENAI_API_KEY='your-key-here'
-    ```
+- **Ollama with mxbai-embed-large model** - Local embedding model for semantic recall
+  - **Required for semantic recall** - generates embeddings using `mxbai-embed-large` (1024 dimensions)
+  - Install Ollama from: [https://ollama.com/](https://ollama.com/)
+  - Pull the model: `ollama pull mxbai-embed-large`
+  - Ensure Ollama service is running: `ollama serve`
 
 ### Recommended
 
 - **ANTHROPIC_API_KEY** - Claude API key for memory extraction
   - Used by the memory-extract hook to analyze messages
   - Get your API key from: [https://console.anthropic.com/](https://console.anthropic.com/)
+
+- **OPENAI_API_KEY** - OpenAI API key (optional, for other features like image generation)
+  - The installer will prompt you for this if not set in your environment
+  - Alternatively, set it before running the installer:
+    ```bash
+    export OPENAI_API_KEY='your-key-here'
+    ```
 
 - **pgvector extension** - For semantic search performance
   - Install: `sudo apt install postgresql-16-pgvector` (Ubuntu/Debian)
@@ -277,7 +281,7 @@ The installer and hooks use these environment variables:
 
 ### Required for Operation
 - `ANTHROPIC_API_KEY` - For memory extraction (Claude API)
-- `OPENAI_API_KEY` - For embeddings (semantic search)
+- **Embeddings**: Uses local Ollama with `mxbai-embed-large` model (no API key required)
 
 ### Optional Configuration
 - `OPENCLAW_WORKSPACE` - Override default workspace path

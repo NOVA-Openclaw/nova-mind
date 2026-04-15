@@ -1010,7 +1010,7 @@ if [ -d "$SCRIPTS_SOURCE" ]; then
 
     scripts_copied=0
 
-    for source_file in "$SCRIPTS_SOURCE"/*.sh "$SCRIPTS_SOURCE"/*.py; do
+    for source_file in "$SCRIPTS_SOURCE"/*.sh "$SCRIPTS_SOURCE"/*.py "$SCRIPTS_SOURCE"/*.json; do
         [ -f "$source_file" ] || continue
         filename=$(basename "$source_file")
         target_file_workspace="$SCRIPTS_TARGET_WORKSPACE/$filename"

@@ -55,7 +55,7 @@ The installer is **idempotent** — safe to run multiple times. It installs all 
 - Python 3 with `python3-venv`
 - `pgschema` — `go install github.com/pgplex/pgschema@latest`
 - `jq`
-- OpenAI API key (for semantic recall embeddings)
+- Ollama with mxbai-embed-large model (local, for semantic recall embeddings)
 - Anthropic API key (for memory extraction)
 
 ### Flags

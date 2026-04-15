@@ -1,0 +1,6 @@
+{
+  "provider": "ollama",
+  "model": "mxbai-embed-large",
+  "base_url": "http://localhost:11434",
+  "dimensions": 1024
+}

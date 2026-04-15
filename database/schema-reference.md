@@ -1,6 +1,6 @@
 # Database Schema Reference
 
-*Auto-generated: 2026-03-17T00:17:15.749754*
+*Auto-generated: 2026-04-11T08:33:19.017380*
 
 ## Tables
 
@@ -63,6 +63,8 @@
 | music_library | Music-specific metadata extending media_consumed. Managed by Erato. | 37 |
 | place_properties | Properties and attributes of places. Key-value storage for place characteristics. | 5 |
 | places | Locations (houses, venues, cities). Reference I)ruid houses in USER.md. | 15 |
+| portfolio_history | - | 6 |
+| portfolio_metrics | - | 10 |
 | portfolio_positions | Individual stock/investment positions tracking purchases, sales, and P&L. Core table for portfolio management. | 9 |
 | portfolio_snapshots | Historical snapshots of portfolio values and performance metrics over time. | 8 |
 | portfolio_updates | - | 3 |
@@ -74,6 +76,14 @@
 | projects | Project tracking. For repo-backed projects (locked=TRUE, repo_url set), use GitHub for management. For non-repo projects, use notes field here. | 12 |
 | publications | - | 8 |
 | ralph_sessions | Tracks Ralph-style iterative agent sessions. Each iteration runs with fresh context, state persists in DB. | 15 |
+| research_citations | Source citations linking findings to original sources. Write access: Research domain (scout) only. | 13 |
+| research_conclusions | Synthesized conclusions aggregating multiple findings. Write access: Research domain (scout) only. | 14 |
+| research_findings | Discrete facts, insights, and conclusions from research. Supports copy-on-write versioning. Write access: Research domain (scout) only. | 14 |
+| research_projects | Top-level research project containers. Write access: Research domain (scout) only. | 9 |
+| research_provenance | W3C PROV-O inspired lineage tracking for research data. Write access: Research domain (scout) only. | 10 |
+| research_taggings | Junction table linking tags to research entities. Write access: Research domain (scout) only. | 6 |
+| research_tags | Hierarchical, polymorphic tag taxonomy for research entities. Write access: Research domain (scout) only. | 7 |
+| research_tasks | Individual research investigation tasks within projects. Write access: Research domain (scout) only. | 14 |
 | shopping_history | - | 13 |
 | shopping_preferences | - | 8 |
 | shopping_wishlist | - | 11 |

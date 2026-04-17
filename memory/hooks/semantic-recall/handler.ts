@@ -1,4 +1,4 @@
-import { execSync } from "child_process";
+import { spawnSync } from "child_process";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
 import * as os from "os";
@@ -109,16 +109,22 @@ const handler = async (event) => {
     token_budget?: number;
   } | null = null;
   try {
-    const escapedMessage = message.replace(/"/g, '\\"').replace(/\$/g, '\\$').substring(0, 500);
-    const result = execSync(
-      `${PYTHON_VENV} ${RECALL_SCRIPT} "${escapedMessage}" --max-tokens ${TOKEN_BUDGET} --high-confidence ${HIGH_CONFIDENCE_THRESHOLD}`,
-      { 
-        encoding: "utf-8",
-        timeout: 5000,  // 5 second timeout
-        env: { ...process.env }
-      }
-    );
-    recallResult = JSON.parse(result);
+    const truncatedMessage = message.substring(0, 500);
+    const result = spawnSync(PYTHON_VENV, [
+      RECALL_SCRIPT, '--stdin',
+      '--max-tokens', String(TOKEN_BUDGET),
+      '--high-confidence', String(HIGH_CONFIDENCE_THRESHOLD)
+    ], {
+      input: truncatedMessage,
+      encoding: 'utf-8',
+      timeout: 5000,  // 5 second timeout
+      env: { ...process.env }
+    });
+    if (result.status === 0 && result.stdout) {
+      recallResult = JSON.parse(result.stdout);
+    } else {
+      throw new Error(result.stderr || `Exit code: ${result.status}`);
+    }
   } catch (err) {
     // Fail silently - don't block message processing
     console.error("[semantic-recall] Recall error:", err instanceof Error ? err.message : String(err));

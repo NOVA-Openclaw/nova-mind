@@ -3174,6 +3174,14 @@ CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks (project_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks (status);
 
 --
+-- Name: ticker_portfolio; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS ticker_portfolio (
+    data jsonb
+);
+
+--
 -- Name: tools; Type: TABLE; Schema: -; Owner: -
 --
 

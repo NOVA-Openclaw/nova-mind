@@ -223,6 +223,7 @@ def format_for_injection(recall_result):
 def main():
     parser = argparse.ArgumentParser(description="Proactive memory recall with semantic search")
     parser.add_argument("message", nargs="*", help="Message to search for")
+    parser.add_argument("--stdin", action="store_true", help="Read message from stdin instead of positional arg")
     parser.add_argument("--max-tokens", type=int, default=DEFAULT_TOKEN_BUDGET,
                         help=f"Maximum tokens to return (default: {DEFAULT_TOKEN_BUDGET})")
     parser.add_argument("--threshold", type=float, default=DEFAULT_THRESHOLD,
@@ -234,17 +235,23 @@ def main():
     
     args = parser.parse_args()
     
-    if not args.message:
+    if args.stdin:
+        message_text = sys.stdin.read().strip()
+    elif args.message:
+        message_text = " ".join(args.message)
+    else:
         parser.print_help()
         sys.exit(1)
     
-    message = " ".join(args.message)
+    if not message_text:
+        parser.print_help()
+        sys.exit(1)
     config = load_embedding_config()
     print(f"Using Ollama config: {config['provider']} / {config['model']} ({config['dimensions']} dims)", file=sys.stderr)
     
     result = recall(
         config,
-        message, 
+        message_text, 
         token_budget=args.max_tokens,
         threshold=args.threshold,
         high_confidence=args.high_confidence

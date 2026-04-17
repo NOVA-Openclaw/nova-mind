@@ -1,6 +1,6 @@
 # Database Schema Reference
 
-*Auto-generated: 2026-04-15T05:56:55.279616*
+*Auto-generated: 2026-04-15T08:21:16.370782*
 
 ## Tables
 
@@ -17,7 +17,7 @@
 | agent_spawns | Tracks all agent spawns from the general-purpose spawner daemon | 14 |
 | agent_system_config | Agent system configuration. READ-ONLY except Newhart. | 6 |
 | agent_turn_context | - | 8 |
-| agents | Agent registry | 31 |
+| agents | Agent registry | 32 |
 | ai_models | Available AI models. NOVA maintains this; Newhart reads for agent assignments. Credentials and endpoints stored in 1Password (see credential_ref column). | 16 |
 | artwork | Archive of NOVAs Instagram artwork. Reference for future compilation. | 19 |
 | asset_classes | Asset class definitions for financial portfolio management. Defines tradeable asset types with pricing sources and trading characteristics. | 6 |

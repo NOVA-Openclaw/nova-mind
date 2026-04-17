@@ -62,7 +62,7 @@ echo "=== Stage 1: Grammar parser ===" >&2
 START_TIME=$(date +%s%3N)
 
 # Run grammar parser (using wrapper script with venv)
-GRAMMAR_OUTPUT=$("$PROJECT_ROOT/grammar_parser/run_extract.sh" "$INPUT" 2>&1)
+GRAMMAR_OUTPUT=$(printf "%s" "$INPUT" | "$PROJECT_ROOT/grammar_parser/run_extract.sh" 2>&1)
 GRAMMAR_EXIT=$?
 
 END_TIME=$(date +%s%3N)
@@ -144,7 +144,7 @@ fi
 echo "=== Stage 2: LLM extraction (fallback) ===" >&2
 START_TIME=$(date +%s%3N)
 
-EXTRACTED=$("$SCRIPT_DIR/extract-memories.sh" "$INPUT")
+EXTRACTED=$(printf "%s" "$INPUT" | "$SCRIPT_DIR/extract-memories.sh")
 LLM_EXIT=$?
 
 END_TIME=$(date +%s%3N)

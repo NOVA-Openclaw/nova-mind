@@ -22,6 +22,8 @@
   - Reachability check now uses plain `psql` (picks up `PGPASSWORD` from env); previously used `pg_isready` which does not test authentication
   - Added **empty password warning** for TCP hosts: if `PGHOST` is not a Unix socket and `PGPASSWORD` is unset, installer warns and suggests adding a password to `postgres.json`
   - Added **non-interactive detection**: if config is needed and stdin is not a TTY, installer exits (non-zero) with a clear error message instead of hanging on `read`
+- **Shell injection fixes in memory-extract and semantic-recall hooks** (#155, #38) — Replaced `exec()`/`execSync()` with `spawn()`/`spawnSync()` using stdin pipes for safe argument passing. Message text is now piped via stdin instead of passed as shell arguments, preventing shell injection vulnerabilities. Environment variables are passed via the `env` option instead of shell string interpolation. The `proactive-recall.py` script now supports `--stdin` flag for stdin input. SENDER_ID sanitized to digits-only and SQL injection prevented via psql `-v` parameterized variables.
+- **Shell injection fix in session-init hook** — Updated `exec()` to `spawn()` with argument array, removing shell string interpolation for participant IDs.
 
 ### Changed
 - **Replaced `pg-schema-diff` with `pgschema` for declarative schema management** (#155) — The installer now uses [`pgschema`](https://github.com/pgplex/pgschema) (pgplex/pgschema) to diff and apply `schema/schema.sql` against the live database. Key changes:

@@ -658,57 +658,6 @@ COMMENT ON COLUMN asset_classes.trading_hours IS 'When this asset class typicall
 COMMENT ON COLUMN asset_classes.typical_unit IS 'Standard trading unit (shares, contracts, etc.)';
 
 --
--- Name: bootstrap_context_agents; Type: TABLE; Schema: -; Owner: -
---
-
-CREATE TABLE IF NOT EXISTS bootstrap_context_agents (
-    id SERIAL,
-    agent_name text NOT NULL,
-    file_key text NOT NULL,
-    content text NOT NULL,
-    description text,
-    updated_at timestamptz DEFAULT now(),
-    updated_by text,
-    CONSTRAINT bootstrap_context_agents_pkey PRIMARY KEY (id),
-    CONSTRAINT bootstrap_context_agents_agent_name_file_key_key UNIQUE (agent_name, file_key),
-    CONSTRAINT bootstrap_context_agents_file_key_check CHECK (file_key <> ''::text)
-);
-
-
-COMMENT ON TABLE bootstrap_context_agents IS 'Per-agent context files (SEED_CONTEXT.md, domain knowledge)';
-
---
--- Name: idx_bootstrap_agents_name; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_bootstrap_agents_name ON bootstrap_context_agents (agent_name);
-
---
--- Name: bootstrap_context_audit; Type: TABLE; Schema: -; Owner: -
---
-
-CREATE TABLE IF NOT EXISTS bootstrap_context_audit (
-    id SERIAL,
-    table_name text NOT NULL,
-    record_id integer,
-    operation text NOT NULL,
-    old_content text,
-    new_content text,
-    changed_by text,
-    changed_at timestamptz DEFAULT now(),
-    CONSTRAINT bootstrap_context_audit_pkey PRIMARY KEY (id)
-);
-
-
-COMMENT ON TABLE bootstrap_context_audit IS 'Audit trail of all context modifications';
-
---
--- Name: idx_bootstrap_audit_table; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_bootstrap_audit_table ON bootstrap_context_audit (table_name, changed_at);
-
---
 -- Name: bootstrap_context_config; Type: TABLE; Schema: -; Owner: -
 --
 
@@ -722,25 +671,6 @@ CREATE TABLE IF NOT EXISTS bootstrap_context_config (
 
 
 COMMENT ON TABLE bootstrap_context_config IS 'Configuration for bootstrap system behavior';
-
---
--- Name: bootstrap_context_universal; Type: TABLE; Schema: -; Owner: -
---
-
-CREATE TABLE IF NOT EXISTS bootstrap_context_universal (
-    id SERIAL,
-    file_key text NOT NULL,
-    content text NOT NULL,
-    description text,
-    updated_at timestamptz DEFAULT now(),
-    updated_by text,
-    CONSTRAINT bootstrap_context_universal_pkey PRIMARY KEY (id),
-    CONSTRAINT bootstrap_context_universal_file_key_key UNIQUE (file_key),
-    CONSTRAINT bootstrap_context_universal_file_key_check CHECK (file_key <> ''::text)
-);
-
-
-COMMENT ON TABLE bootstrap_context_universal IS 'Universal context files loaded for all agents (AGENTS.md, SOUL.md, etc.)';
 
 --
 -- Name: channel_activity; Type: TABLE; Schema: -; Owner: -
@@ -2215,6 +2145,20 @@ COMMENT ON TABLE place_properties IS 'Properties and attributes of places. Key-v
 CREATE INDEX IF NOT EXISTS idx_place_props_place ON place_properties (place_id);
 
 --
+-- Name: pm_domain_portfolio_snapshots; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS pm_domain_portfolio_snapshots (
+    id SERIAL,
+    timestamp timestamptz DEFAULT CURRENT_TIMESTAMP,
+    total_value numeric,
+    total_pl numeric,
+    total_pl_pct numeric,
+    prices jsonb,
+    CONSTRAINT pm_domain_portfolio_snapshots_pkey PRIMARY KEY (id)
+);
+
+--
 -- Name: portfolio_history; Type: TABLE; Schema: -; Owner: -
 --
 
@@ -3228,6 +3172,14 @@ CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks (project_id);
 --
 
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks (status);
+
+--
+-- Name: ticker_portfolio; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS ticker_portfolio (
+    data jsonb
+);
 
 --
 -- Name: tools; Type: TABLE; Schema: -; Owner: -
@@ -6167,24 +6119,6 @@ CREATE OR REPLACE TRIGGER trg_agents_changed
     EXECUTE FUNCTION notify_agents_changed();
 
 --
--- Name: trg_audit_bootstrap_agents; Type: TRIGGER; Schema: -; Owner: -
---
-
-CREATE OR REPLACE TRIGGER trg_audit_bootstrap_agents
-    AFTER INSERT OR UPDATE OR DELETE ON bootstrap_context_agents
-    FOR EACH ROW
-    EXECUTE FUNCTION audit_bootstrap_agents();
-
---
--- Name: trg_audit_bootstrap_universal; Type: TRIGGER; Schema: -; Owner: -
---
-
-CREATE OR REPLACE TRIGGER trg_audit_bootstrap_universal
-    AFTER INSERT OR UPDATE OR DELETE ON bootstrap_context_universal
-    FOR EACH ROW
-    EXECUTE FUNCTION audit_bootstrap_universal();
-
---
 -- Name: trg_embed_chat_message; Type: TRIGGER; Schema: -; Owner: -
 --
 
@@ -6777,28 +6711,10 @@ REVOKE SELECT ON TABLE agent_turn_context FROM newhart;
 REVOKE SELECT ON TABLE agents FROM newhart;
 
 --
--- Name: bootstrap_context_agents; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE SELECT ON TABLE bootstrap_context_agents FROM newhart;
-
---
--- Name: bootstrap_context_audit; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE SELECT ON TABLE bootstrap_context_audit FROM newhart;
-
---
 -- Name: bootstrap_context_config; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
 REVOKE SELECT ON TABLE bootstrap_context_config FROM newhart;
-
---
--- Name: bootstrap_context_universal; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE SELECT ON TABLE bootstrap_context_universal FROM newhart;
 
 --
 -- Name: publications; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -7021,42 +6937,6 @@ GRANT SELECT, USAGE ON SEQUENCE artwork_id_seq TO athena;
 --
 
 GRANT SELECT, USAGE ON SEQUENCE artwork_id_seq TO scout;
-
---
--- Name: bootstrap_context_agents_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT, USAGE ON SEQUENCE bootstrap_context_agents_id_seq TO athena;
-
---
--- Name: bootstrap_context_agents_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT, USAGE ON SEQUENCE bootstrap_context_agents_id_seq TO scout;
-
---
--- Name: bootstrap_context_audit_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT, USAGE ON SEQUENCE bootstrap_context_audit_id_seq TO athena;
-
---
--- Name: bootstrap_context_audit_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT, USAGE ON SEQUENCE bootstrap_context_audit_id_seq TO scout;
-
---
--- Name: bootstrap_context_universal_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT, USAGE ON SEQUENCE bootstrap_context_universal_id_seq TO athena;
-
---
--- Name: bootstrap_context_universal_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT, USAGE ON SEQUENCE bootstrap_context_universal_id_seq TO scout;
 
 --
 -- Name: certificates_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -

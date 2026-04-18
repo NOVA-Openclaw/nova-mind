@@ -28,11 +28,12 @@ fi
 # Look up user's default visibility preference
 DEFAULT_VIS="public"
 if [ -n "$SENDER_ID" ]; then
-    DEFAULT_VIS=$(psql -t -A -c "
+    CLEAN_SENDER_ID=$(echo "$SENDER_ID" | sed 's/[^0-9+]//g')
+    DEFAULT_VIS=$(psql -t -A -v "sender_id=$CLEAN_SENDER_ID" -c "
         SELECT ef2.value FROM entity_facts ef1
         JOIN entity_facts ef2 ON ef1.entity_id = ef2.entity_id
         WHERE ef1.key IN ('phone', 'has_phone_number', 'signal')
-          AND REPLACE(REPLACE(ef1.value, '-', ''), ' ', '') LIKE '%$(echo "$SENDER_ID" | sed 's/[+ -]//g')%'
+          AND REPLACE(REPLACE(ef1.value, '-', ''), ' ', '') LIKE '%' || :'sender_id' || '%'
           AND ef2.key = 'default_visibility'
         LIMIT 1;
     " 2>/dev/null || echo "public")

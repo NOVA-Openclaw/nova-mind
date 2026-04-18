@@ -1,4 +1,4 @@
-import { execSync, exec } from "child_process";
+import { spawn } from "child_process";
 import { existsSync, statSync } from "fs";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
@@ -54,14 +54,21 @@ const handler = async (event) => {
   const __filename = fileURLToPath(import.meta.url);
   const __dirname = dirname(__filename);
   const scriptPath = join(__dirname, '../../scripts/generate-session-context.sh');
-  const args = participants.map(p => `"${p}"`).join(" ");
   
-  exec(`"${scriptPath}" "${CONTEXT_FILE}" ${args}`, (err) => {
-    if (err) {
-      console.error(`[session-init] Error generating context: ${err.message}`);
+  const child = spawn(scriptPath, [CONTEXT_FILE, ...participants], {
+    stdio: 'ignore'  // we don't need output
+  });
+  
+  child.on('close', (code) => {
+    if (code !== 0) {
+      console.error(`[session-init] Error generating context: exit code ${code}`);
     } else {
       console.log(`[session-init] Context refreshed for participants: ${participantHash}`);
     }
+  });
+  
+  child.on('error', (err) => {
+    console.error(`[session-init] Spawn error: ${err.message}`);
   });
 };
 

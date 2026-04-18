@@ -18,6 +18,10 @@ from the database and loads entity profile information before the agent processe
 5. Injects entity context and relevant memories into the hook event messages
 6. Agent sees both entity profile and semantic context before formulating a response
 
+## Security
+
+The hook uses `spawnSync()` with the `input` option to pass message text via stdin, preventing shell injection vulnerabilities. The `proactive-recall.py` script supports the `--stdin` flag for stdin input. Arguments like `--max-tokens` and `--high-confidence` are passed as an array, not shell-interpolated.
+
 ## Entity Resolution
 
 The hook attempts to resolve the message sender to an entity by:

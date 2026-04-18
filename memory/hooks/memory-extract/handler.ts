@@ -1,4 +1,4 @@
-import { exec } from "child_process";
+import { spawn } from "child_process";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
 
@@ -109,26 +109,43 @@ const handler = async (event) => {
     messagePreview: rawBody.substring(0, 80) + (rawBody.length > 80 ? '...' : '')
   });
   
-  // Run extraction with attribution env vars (include senderId for unique matching)
-  const escaped = rawBody.replace(/'/g, "'\\''");
-  const envVars = `SENDER_NAME='${senderName}' SENDER_ID='${senderId}' IS_GROUP='${isGroup}'`;
+  // Run extraction via stdin pipe — never pass untrusted message text as shell args (#155)
   const __filename = fileURLToPath(import.meta.url);
   const __dirname = dirname(__filename);
   // Use grammar-enhanced extraction (issue #22)
   const scriptPath = join(__dirname, '../../scripts/process-input-with-grammar.sh');
   
-  exec(`${envVars} ${scriptPath} '${escaped}'`, (err) => {
-    if (err) {
+  const child = spawn(scriptPath, [], {
+    stdio: ['pipe', 'pipe', 'pipe'],
+    env: {
+      ...process.env,
+      SENDER_NAME: senderName,
+      SENDER_ID: senderId,
+      IS_GROUP: String(isGroup)
+    }
+  });
+
+  child.stdin.write(rawBody);
+  child.stdin.end();
+
+  child.on('close', (code) => {
+    if (code !== 0) {
       console.error('[memory-extract] Extraction failed', {
         sender: senderName,
-        error: err.message,
-        code: err.code
+        exitCode: code
       });
     } else {
       console.info('[memory-extract] Extraction complete', {
         sender: senderName
       });
     }
+  });
+
+  child.on('error', (err) => {
+    console.error('[memory-extract] Spawn error', {
+      sender: senderName,
+      error: err.message
+    });
   });
 };
 

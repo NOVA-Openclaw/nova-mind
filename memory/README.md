@@ -871,6 +871,18 @@ openclaw hooks disable session-init
 openclaw hooks disable agent-turn-context
 ```
 
+### Security Best Practices
+
+To prevent shell injection vulnerabilities, all hooks now use safe patterns:
+
+- **Use stdin pipes for untrusted text**: Instead of passing message text as shell arguments (`$1`), hooks pipe input via stdin using `spawn()` with `stdio: ['pipe', ...]` or `spawnSync()` with `input` option.
+- **Pass environment variables via `env` option**: Environment variables like `SENDER_NAME`, `SENDER_ID`, `IS_GROUP` are passed via the `env` option of `spawn()` instead of shell string interpolation.
+- **Use argument arrays for known-safe arguments**: For known-safe arguments (e.g., file paths, flags), use an array of arguments passed to `spawn()` rather than constructing a shell string.
+- **Sanitize identifiers**: The `extract-memories.sh` script sanitizes `SENDER_ID` to digits-only using `sed 's/[^0-9+]//g'`.
+- **Prevent SQL injection with parameterized queries**: SQL queries use psql's `-v` parameterized variables and `:'variable'` syntax instead of shell interpolation.
+
+Scripts support both stdin and positional arguments for backward compatibility, but stdin is the recommended and secure method.
+
 ## Embedding Configuration (Ollama)
 
 All embedding scripts now use local Ollama with the `mxbai-embed-large` model (1024 dimensions) instead of OpenAI's `text-embedding-3-small`. This eliminates the need for an OpenAI API key for semantic recall.

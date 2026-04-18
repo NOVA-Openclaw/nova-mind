@@ -1,6 +1,6 @@
 # Database Schema Reference
 
-*Auto-generated: 2026-04-15T05:56:55.279616*
+*Auto-generated: 2026-04-17T20:00:56.440282*
 
 ## Tables
 
@@ -17,14 +17,11 @@
 | agent_spawns | Tracks all agent spawns from the general-purpose spawner daemon | 14 |
 | agent_system_config | Agent system configuration. READ-ONLY except Newhart. | 6 |
 | agent_turn_context | - | 8 |
-| agents | Agent registry | 31 |
+| agents | Agent registry | 32 |
 | ai_models | Available AI models. NOVA maintains this; Newhart reads for agent assignments. Credentials and endpoints stored in 1Password (see credential_ref column). | 16 |
 | artwork | Archive of NOVAs Instagram artwork. Reference for future compilation. | 19 |
 | asset_classes | Asset class definitions for financial portfolio management. Defines tradeable asset types with pricing sources and trading characteristics. | 6 |
-| bootstrap_context_agents | Per-agent context files (SEED_CONTEXT.md, domain knowledge) | 7 |
-| bootstrap_context_audit | Audit trail of all context modifications | 8 |
 | bootstrap_context_config | Configuration for bootstrap system behavior | 4 |
-| bootstrap_context_universal | Universal context files loaded for all agents (AGENTS.md, SOUL.md, etc.) | 6 |
 | certificates | Client certificates issued by NOVA CA. Security-sensitive. Verify before modifications. | 12 |
 | channel_activity | Tracks last message per channel for idle detection. Read/write: NOVA, Newhart. | 3 |
 | conversations | Conversation session tracking. Logs chat sessions with metadata for analysis and continuity. | 6 |
@@ -63,6 +60,7 @@
 | music_library | Music-specific metadata extending media_consumed. Managed by Erato. | 37 |
 | place_properties | Properties and attributes of places. Key-value storage for place characteristics. | 5 |
 | places | Locations (houses, venues, cities). Reference I)ruid houses in USER.md. | 15 |
+| pm_domain_portfolio_snapshots | - | 6 |
 | portfolio_history | - | 6 |
 | portfolio_metrics | - | 10 |
 | portfolio_positions | Individual stock/investment positions tracking purchases, sales, and P&L. Core table for portfolio management. | 9 |
@@ -90,6 +88,7 @@
 | skills | Skill definitions. Override precedence: WORKSPACE > DOMAIN > MANAGED > BUNDLED. See get_agent_skills(). | 24 |
 | tags | - | 5 |
 | tasks | Task tracking. NOVA can create, update status, assign. Check before starting work. | 23 |
+| ticker_portfolio | - | 1 |
 | tools | Tool usage notes. Override: WORKSPACE > DOMAIN > MANAGED > BUNDLED. See get_agent_tools(). | 13 |
 | unsolved_problems | Humanity's unsolved problems for NOVA to work on during idle time. Part of the Motivation System - provides meaningful default work when task queue is empty. | 18 |
 | vehicles | Vehicle tracking and management. Cars, bikes, boats, planes owned or used. | 13 |

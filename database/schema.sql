@@ -244,36 +244,6 @@ CREATE TABLE IF NOT EXISTS agent_jobs (
 COMMENT ON TABLE agent_jobs IS 'Agent job definitions. READ-ONLY except Newhart.';
 
 --
--- Name: idx_jobs_agent; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_jobs_agent ON agent_jobs (agent_name, status);
-
---
--- Name: idx_jobs_parent; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_jobs_parent ON agent_jobs (parent_job_id);
-
---
--- Name: idx_jobs_requester; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_jobs_requester ON agent_jobs (requester_agent, status);
-
---
--- Name: idx_jobs_root; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_jobs_root ON agent_jobs (root_job_id);
-
---
--- Name: idx_jobs_topic; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_jobs_topic ON agent_jobs (agent_name, topic) WHERE (status)::text <> ALL (ARRAY[('completed'::character varying)::text, ('cancelled'::character varying)::text]);
-
---
 -- Name: agent_jobs; Type: RLS; Schema: -; Owner: -
 --
 
@@ -422,18 +392,6 @@ COMMENT ON COLUMN agents.decision_criteria IS 'Criteria for when to spawn this a
 COMMENT ON COLUMN agents.model_rationale IS 'Model selection goals and justification: WHY this agent uses its model, what the role requires, past issues that drove changes, tradeoffs considered. Maintained by Newhart for weekly agent review.';
 
 --
--- Name: idx_agents_provider; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_agents_provider ON agents (provider);
-
---
--- Name: idx_agents_role; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_agents_role ON agents (role);
-
---
 -- Name: idx_agents_single_default; Type: INDEX; Schema: -; Owner: -
 --
 
@@ -463,12 +421,6 @@ COMMENT ON TABLE agent_aliases IS 'Agent aliases for flexible mention matching. 
 
 
 COMMENT ON COLUMN agent_aliases.alias IS 'Alternative name/identifier for the agent (e.g., "assistant", "helper")';
-
---
--- Name: idx_agent_aliases_alias_lower; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_agent_aliases_alias_lower ON agent_aliases (lower(alias::text));
 
 --
 -- Name: agent_modifications; Type: TABLE; Schema: -; Owner: -
@@ -533,18 +485,6 @@ COMMENT ON TABLE agent_spawns IS 'Tracks all agent spawns from the general-purpo
 --
 
 CREATE INDEX IF NOT EXISTS idx_agent_spawns_agent ON agent_spawns (agent_id);
-
---
--- Name: idx_agent_spawns_domain; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_agent_spawns_domain ON agent_spawns (domain);
-
---
--- Name: idx_agent_spawns_status; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_agent_spawns_status ON agent_spawns (status);
 
 --
 -- Name: idx_agent_spawns_trigger; Type: INDEX; Schema: -; Owner: -
@@ -790,12 +730,6 @@ CREATE INDEX IF NOT EXISTS idx_entities_name ON entities (name);
 CREATE INDEX IF NOT EXISTS idx_entities_type ON entities (type);
 
 --
--- Name: idx_entities_user_id; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_entities_user_id ON entities (user_id) WHERE (user_id IS NOT NULL);
-
---
 -- Name: agent_domains; Type: TABLE; Schema: -; Owner: -
 --
 
@@ -839,12 +773,6 @@ CREATE INDEX IF NOT EXISTS idx_agent_domains_agent ON agent_domains (agent_id);
 CREATE INDEX IF NOT EXISTS idx_agent_domains_topic ON agent_domains (domain_topic);
 
 --
--- Name: idx_agent_domains_votes; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_agent_domains_votes ON agent_domains (vote_count DESC);
-
---
 -- Name: certificates; Type: TABLE; Schema: -; Owner: -
 --
 
@@ -884,18 +812,6 @@ COMMENT ON COLUMN certificates.revoked_at IS 'If set, certificate is revoked and
 --
 
 CREATE INDEX IF NOT EXISTS idx_certificates_entity_id ON certificates (entity_id);
-
---
--- Name: idx_certificates_fingerprint; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_certificates_fingerprint ON certificates (fingerprint);
-
---
--- Name: idx_certificates_serial; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_certificates_serial ON certificates (serial);
 
 --
 -- Name: entity_fact_conflicts; Type: TABLE; Schema: -; Owner: -
@@ -979,12 +895,6 @@ COMMENT ON COLUMN entity_facts.last_confirmed IS 'Timestamp of most recent confi
 --
 
 CREATE INDEX IF NOT EXISTS idx_entity_facts_confidence ON entity_facts (confidence) WHERE (confidence < (1.0)::double precision);
-
---
--- Name: idx_entity_facts_data; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_entity_facts_data ON entity_facts USING gin (data);
 
 --
 -- Name: idx_entity_facts_data_type; Type: INDEX; Schema: -; Owner: -
@@ -1076,24 +986,6 @@ COMMENT ON COLUMN entity_facts_archive.archive_reason IS 'Why the fact was archi
 COMMENT ON COLUMN entity_facts_archive.archived_by IS 'System or agent that archived the fact';
 
 --
--- Name: idx_entity_facts_archive_date; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_entity_facts_archive_date ON entity_facts_archive (archived_at);
-
---
--- Name: idx_entity_facts_archive_entity; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_entity_facts_archive_entity ON entity_facts_archive (entity_id);
-
---
--- Name: idx_entity_facts_archive_key; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_entity_facts_archive_key ON entity_facts_archive (key);
-
---
 -- Name: entity_relationships; Type: TABLE; Schema: -; Owner: -
 --
 
@@ -1154,12 +1046,6 @@ COMMENT ON TABLE events IS 'Historical events, milestones, activities. Log signi
 CREATE INDEX IF NOT EXISTS idx_events_date ON events (event_date);
 
 --
--- Name: idx_events_search; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_events_search ON events USING gin (search_vector);
-
---
 -- Name: event_entities; Type: TABLE; Schema: -; Owner: -
 --
 
@@ -1196,18 +1082,6 @@ CREATE TABLE IF NOT EXISTS events_archive (
 
 
 COMMENT ON TABLE events_archive IS 'Archived historical events. Long-term storage for events moved out of active events table.';
-
---
--- Name: events_archive_event_date_idx; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS events_archive_event_date_idx ON events_archive (event_date);
-
---
--- Name: events_archive_search_vector_idx; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS events_archive_search_vector_idx ON events_archive USING gin (search_vector);
 
 --
 -- Name: extraction_metrics; Type: TABLE; Schema: -; Owner: -
@@ -1362,12 +1236,6 @@ COMMENT ON COLUMN git_issue_queue.status IS 'pending_tests→tests_approved→im
 COMMENT ON COLUMN git_issue_queue.labels IS 'GitHub labels. Gem skips issues with paused, blocked, on-hold, wontfix labels.';
 
 --
--- Name: idx_git_queue_priority; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_git_queue_priority ON git_issue_queue (priority DESC, created_at);
-
---
 -- Name: idx_git_queue_status; Type: INDEX; Schema: -; Owner: -
 --
 
@@ -1390,12 +1258,6 @@ CREATE TABLE IF NOT EXISTS job_messages (
 
 
 COMMENT ON TABLE job_messages IS 'Message log per job for conversation threading';
-
---
--- Name: idx_job_messages; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_job_messages ON job_messages (job_id, added_at);
 
 --
 -- Name: lessons; Type: TABLE; Schema: -; Owner: -
@@ -1547,34 +1409,10 @@ COMMENT ON COLUMN library_works.notable_quotes IS 'Array of notable quotes from 
 CREATE INDEX IF NOT EXISTS idx_library_works_arxiv ON library_works (arxiv_id) WHERE (arxiv_id IS NOT NULL);
 
 --
--- Name: idx_library_works_doi; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_library_works_doi ON library_works (doi) WHERE (doi IS NOT NULL);
-
---
 -- Name: idx_library_works_embed; Type: INDEX; Schema: -; Owner: -
 --
 
 CREATE INDEX IF NOT EXISTS idx_library_works_embed ON library_works (embed) WHERE (embed = true);
-
---
--- Name: idx_library_works_isbn; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_library_works_isbn ON library_works (isbn) WHERE (isbn IS NOT NULL);
-
---
--- Name: idx_library_works_search; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_library_works_search ON library_works USING gin (search_vector);
-
---
--- Name: idx_library_works_subjects; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_library_works_subjects ON library_works USING gin (subjects);
 
 --
 -- Name: idx_library_works_title_edition; Type: INDEX; Schema: -; Owner: -
@@ -1693,30 +1531,6 @@ COMMENT ON COLUMN media_consumed.search_vector IS 'Full-text search vector (titl
 COMMENT ON COLUMN media_consumed.insights IS 'NOVA personal insights - analysis, connections, opinions';
 
 --
--- Name: idx_media_consumed_by; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_media_consumed_by ON media_consumed (consumed_by);
-
---
--- Name: idx_media_search; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_media_search ON media_consumed USING gin (search_vector);
-
---
--- Name: idx_media_status; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_media_status ON media_consumed (status);
-
---
--- Name: idx_media_type; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_media_type ON media_consumed (media_type);
-
---
 -- Name: agent_actions; Type: TABLE; Schema: -; Owner: -
 --
 
@@ -1749,12 +1563,6 @@ CREATE INDEX IF NOT EXISTS idx_agent_actions_agent ON agent_actions (agent_id);
 --
 
 CREATE INDEX IF NOT EXISTS idx_agent_actions_time ON agent_actions (created_at DESC);
-
---
--- Name: idx_agent_actions_type; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_agent_actions_type ON agent_actions (action_type);
 
 --
 -- Name: media_queue; Type: TABLE; Schema: -; Owner: -
@@ -1794,18 +1602,6 @@ COMMENT ON COLUMN media_queue.status IS 'pending, processing, completed, failed,
 COMMENT ON COLUMN media_queue.result_media_id IS 'Foreign key to resulting media_consumed record';
 
 --
--- Name: idx_media_queue_priority; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_media_queue_priority ON media_queue (priority, requested_at);
-
---
--- Name: idx_media_queue_status; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_media_queue_status ON media_queue (status);
-
---
 -- Name: media_tags; Type: TABLE; Schema: -; Owner: -
 --
 
@@ -1835,12 +1631,6 @@ COMMENT ON COLUMN media_tags.confidence IS 'AI confidence score for auto-generat
 --
 
 CREATE INDEX IF NOT EXISTS idx_media_tags_media ON media_tags (media_id);
-
---
--- Name: idx_media_tags_tag; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_media_tags_tag ON media_tags (tag);
 
 --
 -- Name: memory_embeddings; Type: TABLE; Schema: -; Owner: -
@@ -1895,18 +1685,6 @@ CREATE TABLE IF NOT EXISTS memory_embeddings_archive (
 
 
 COMMENT ON TABLE memory_embeddings_archive IS 'Archived vector embeddings from semantic memory system. Historical embeddings for backup/analysis.';
-
---
--- Name: memory_embeddings_archive_embedding_idx; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS memory_embeddings_archive_embedding_idx ON memory_embeddings_archive USING ivfflat (embedding vector_cosine_ops);
-
---
--- Name: memory_embeddings_archive_source_type_idx; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS memory_embeddings_archive_source_type_idx ON memory_embeddings_archive (source_type);
 
 --
 -- Name: memory_type_priorities; Type: TABLE; Schema: -; Owner: -
@@ -1977,58 +1755,10 @@ CREATE TABLE IF NOT EXISTS music_library (
 COMMENT ON TABLE music_library IS 'Music-specific metadata extending media_consumed. Managed by Erato.';
 
 --
--- Name: idx_music_library_album; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_music_library_album ON music_library (musicbrainz_album_id);
-
---
--- Name: idx_music_library_artist; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_music_library_artist ON music_library (musicbrainz_artist_id);
-
---
--- Name: idx_music_library_bpm; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_music_library_bpm ON music_library (bpm);
-
---
--- Name: idx_music_library_genre; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_music_library_genre ON music_library (genre);
-
---
--- Name: idx_music_library_key; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_music_library_key ON music_library (key);
-
---
 -- Name: idx_music_library_media; Type: INDEX; Schema: -; Owner: -
 --
 
 CREATE INDEX IF NOT EXISTS idx_music_library_media ON music_library (media_id);
-
---
--- Name: idx_music_library_mood; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_music_library_mood ON music_library (mood);
-
---
--- Name: idx_music_library_year; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_music_library_year ON music_library (year);
-
---
--- Name: idx_music_search; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_music_search ON music_library USING gin (search_vector);
 
 --
 -- Name: music_analysis; Type: TABLE; Schema: -; Owner: -
@@ -2053,24 +1783,6 @@ CREATE TABLE IF NOT EXISTS music_analysis (
 
 
 COMMENT ON TABLE music_analysis IS 'Deep musical analysis (harmonic, rhythmic, lyrical, spectral). Managed by Erato.';
-
---
--- Name: idx_music_analysis_music; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_music_analysis_music ON music_analysis (music_id);
-
---
--- Name: idx_music_analysis_search; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_music_analysis_search ON music_analysis USING gin (search_vector);
-
---
--- Name: idx_music_analysis_type; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_music_analysis_type ON music_analysis (analysis_type);
 
 --
 -- Name: places; Type: TABLE; Schema: -; Owner: -
@@ -2244,12 +1956,6 @@ COMMENT ON COLUMN portfolio_positions.created_at IS 'Record creation timestamp';
 CREATE INDEX IF NOT EXISTS idx_positions_held ON portfolio_positions (sold_at) WHERE (sold_at IS NULL);
 
 --
--- Name: idx_positions_symbol; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_positions_symbol ON portfolio_positions (symbol);
-
---
 -- Name: portfolio_snapshots; Type: TABLE; Schema: -; Owner: -
 --
 
@@ -2329,12 +2035,6 @@ COMMENT ON TABLE positions IS 'Legacy or alternative positions tracking table. M
 CREATE INDEX IF NOT EXISTS idx_positions_account ON positions (account_id) WHERE (sold_at IS NULL);
 
 --
--- Name: idx_positions_asset_class; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_positions_asset_class ON positions (asset_class) WHERE (sold_at IS NULL);
-
---
 -- Name: preferences; Type: TABLE; Schema: -; Owner: -
 --
 
@@ -2386,12 +2086,6 @@ CREATE TABLE IF NOT EXISTS price_cache_v2 (
 
 
 COMMENT ON TABLE price_cache_v2 IS 'Cached price data for assets to reduce API calls. Version 2 of price caching system.';
-
---
--- Name: idx_price_cache_v2_lookup; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_price_cache_v2_lookup ON price_cache_v2 (symbol, asset_class, cached_at DESC);
 
 --
 -- Name: projects; Type: TABLE; Schema: -; Owner: -
@@ -2495,12 +2189,6 @@ COMMENT ON TABLE project_tasks IS 'Project-specific task breakdown. Links tasks 
 CREATE INDEX IF NOT EXISTS idx_project_tasks_project ON project_tasks (project_id);
 
 --
--- Name: idx_project_tasks_status; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_project_tasks_status ON project_tasks (status);
-
---
 -- Name: ralph_sessions; Type: TABLE; Schema: -; Owner: -
 --
 
@@ -2540,12 +2228,6 @@ COMMENT ON COLUMN ralph_sessions.status IS 'PENDING=not started, RUNNING=in prog
 CREATE INDEX IF NOT EXISTS idx_ralph_series_latest ON ralph_sessions (session_series_id, iteration DESC);
 
 --
--- Name: idx_ralph_status; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_ralph_status ON ralph_sessions (status) WHERE status IN ('PENDING'::text, 'RUNNING'::text);
-
---
 -- Name: research_projects; Type: TABLE; Schema: -; Owner: -
 --
 
@@ -2565,18 +2247,6 @@ CREATE TABLE IF NOT EXISTS research_projects (
 
 
 COMMENT ON TABLE research_projects IS 'Top-level research project containers. Write access: Research domain (scout) only.';
-
---
--- Name: idx_research_projects_created; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_research_projects_created ON research_projects (created_at DESC);
-
---
--- Name: idx_research_projects_status; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_research_projects_status ON research_projects (status);
 
 --
 -- Name: research_provenance; Type: TABLE; Schema: -; Owner: -
@@ -2602,24 +2272,6 @@ CREATE TABLE IF NOT EXISTS research_provenance (
 COMMENT ON TABLE research_provenance IS 'W3C PROV-O inspired lineage tracking for research data. Write access: Research domain (scout) only.';
 
 --
--- Name: idx_research_provenance_activity; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_research_provenance_activity ON research_provenance (activity_type);
-
---
--- Name: idx_research_provenance_agent; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_research_provenance_agent ON research_provenance (agent);
-
---
--- Name: idx_research_provenance_entity; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_research_provenance_entity ON research_provenance (entity_type, entity_id);
-
---
 -- Name: research_tags; Type: TABLE; Schema: -; Owner: -
 --
 
@@ -2641,18 +2293,6 @@ CREATE TABLE IF NOT EXISTS research_tags (
 COMMENT ON TABLE research_tags IS 'Hierarchical, polymorphic tag taxonomy for research entities. Write access: Research domain (scout) only.';
 
 --
--- Name: idx_research_tags_parent; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_research_tags_parent ON research_tags (parent_id) WHERE (parent_id IS NOT NULL);
-
---
--- Name: idx_research_tags_type; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_research_tags_type ON research_tags (tag_type);
-
---
 -- Name: research_taggings; Type: TABLE; Schema: -; Owner: -
 --
 
@@ -2671,18 +2311,6 @@ CREATE TABLE IF NOT EXISTS research_taggings (
 
 
 COMMENT ON TABLE research_taggings IS 'Junction table linking tags to research entities. Write access: Research domain (scout) only.';
-
---
--- Name: idx_research_taggings_tag; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_research_taggings_tag ON research_taggings (tag_id);
-
---
--- Name: idx_research_taggings_target; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_research_taggings_target ON research_taggings (taggable_id, taggable_type);
 
 --
 -- Name: research_tasks; Type: TABLE; Schema: -; Owner: -
@@ -2713,28 +2341,10 @@ CREATE TABLE IF NOT EXISTS research_tasks (
 COMMENT ON TABLE research_tasks IS 'Individual research investigation tasks within projects. Write access: Research domain (scout) only.';
 
 --
--- Name: idx_research_tasks_assigned; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_research_tasks_assigned ON research_tasks (assigned_to);
-
---
--- Name: idx_research_tasks_fts; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_research_tasks_fts ON research_tasks USING gin (search_vector);
-
---
 -- Name: idx_research_tasks_project; Type: INDEX; Schema: -; Owner: -
 --
 
 CREATE INDEX IF NOT EXISTS idx_research_tasks_project ON research_tasks (project_id);
-
---
--- Name: idx_research_tasks_status; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_research_tasks_status ON research_tasks (status);
 
 --
 -- Name: research_conclusions; Type: TABLE; Schema: -; Owner: -
@@ -2768,12 +2378,6 @@ COMMENT ON TABLE research_conclusions IS 'Synthesized conclusions aggregating mu
 --
 
 CREATE INDEX IF NOT EXISTS idx_research_conclusions_current ON research_conclusions (task_id) WHERE (is_current = true);
-
---
--- Name: idx_research_conclusions_fts; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_research_conclusions_fts ON research_conclusions USING gin (search_vector);
 
 --
 -- Name: idx_research_conclusions_task; Type: INDEX; Schema: -; Owner: -
@@ -2812,36 +2416,6 @@ CREATE TABLE IF NOT EXISTS research_findings (
 COMMENT ON TABLE research_findings IS 'Discrete facts, insights, and conclusions from research. Supports copy-on-write versioning. Write access: Research domain (scout) only.';
 
 --
--- Name: idx_research_findings_current; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_research_findings_current ON research_findings (task_id) WHERE (is_current = true);
-
---
--- Name: idx_research_findings_fts; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_research_findings_fts ON research_findings USING gin (search_vector);
-
---
--- Name: idx_research_findings_importance; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_research_findings_importance ON research_findings (importance) WHERE (importance)::text = ANY ((ARRAY['high'::character varying, 'critical'::character varying])::text[]);
-
---
--- Name: idx_research_findings_task; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_research_findings_task ON research_findings (task_id);
-
---
--- Name: idx_research_findings_type; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_research_findings_type ON research_findings (finding_type);
-
---
 -- Name: research_citations; Type: TABLE; Schema: -; Owner: -
 --
 
@@ -2870,24 +2444,6 @@ CREATE TABLE IF NOT EXISTS research_citations (
 COMMENT ON TABLE research_citations IS 'Source citations linking findings to original sources. Write access: Research domain (scout) only.';
 
 --
--- Name: idx_research_citations_finding; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_research_citations_finding ON research_citations (finding_id);
-
---
--- Name: idx_research_citations_library; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_research_citations_library ON research_citations (library_work_id) WHERE (library_work_id IS NOT NULL);
-
---
--- Name: idx_research_citations_source_type; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_research_citations_source_type ON research_citations (source_type);
-
---
 -- Name: shopping_history; Type: TABLE; Schema: -; Owner: -
 --
 
@@ -2911,18 +2467,6 @@ CREATE TABLE IF NOT EXISTS shopping_history (
 );
 
 --
--- Name: idx_history_entity; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_history_entity ON shopping_history (entity_id);
-
---
--- Name: idx_history_restock; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_history_restock ON shopping_history (next_restock_at) WHERE (next_restock_at IS NOT NULL);
-
---
 -- Name: shopping_preferences; Type: TABLE; Schema: -; Owner: -
 --
 
@@ -2939,12 +2483,6 @@ CREATE TABLE IF NOT EXISTS shopping_preferences (
     CONSTRAINT shopping_preferences_entity_id_category_key_key UNIQUE (entity_id, category, key),
     CONSTRAINT shopping_preferences_entity_id_fkey FOREIGN KEY (entity_id) REFERENCES entities (id)
 );
-
---
--- Name: idx_prefs_entity_cat; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_prefs_entity_cat ON shopping_preferences (entity_id, category);
 
 --
 -- Name: shopping_wishlist; Type: TABLE; Schema: -; Owner: -
@@ -2967,24 +2505,6 @@ CREATE TABLE IF NOT EXISTS shopping_wishlist (
     CONSTRAINT shopping_wishlist_priority_check CHECK (priority IN ('low'::text, 'normal'::text, 'high'::text, 'urgent'::text)),
     CONSTRAINT shopping_wishlist_status_check CHECK (status IN ('active'::text, 'purchased'::text, 'dropped'::text, 'watching'::text))
 );
-
---
--- Name: idx_wishlist_category; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_wishlist_category ON shopping_wishlist (category);
-
---
--- Name: idx_wishlist_entity; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_wishlist_entity ON shopping_wishlist (entity_id);
-
---
--- Name: idx_wishlist_status; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_wishlist_status ON shopping_wishlist (status);
 
 --
 -- Name: skills; Type: TABLE; Schema: -; Owner: -
@@ -3038,30 +2558,6 @@ COMMENT ON COLUMN skills.location_path IS 'Filesystem path hint for skills with 
 COMMENT ON COLUMN skills.domain_name IS 'Required when source_type=DOMAIN. Matched via agent_domains.';
 
 --
--- Name: idx_skills_agent; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_skills_agent ON skills (agent_name) WHERE (agent_name IS NOT NULL);
-
---
--- Name: idx_skills_domain; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_skills_domain ON skills (domain_name) WHERE (domain_name IS NOT NULL);
-
---
--- Name: idx_skills_enabled; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_skills_enabled ON skills (enabled) WHERE (enabled = true);
-
---
--- Name: idx_skills_source; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_skills_source ON skills (source_type);
-
---
 -- Name: idx_skills_unique; Type: INDEX; Schema: -; Owner: -
 --
 
@@ -3082,18 +2578,6 @@ CREATE TABLE IF NOT EXISTS tags (
     CONSTRAINT lowercase_name CHECK (name::text = lower(name::text)),
     CONSTRAINT valid_category CHECK (category IS NULL OR (category::text IN ('genre'::character varying, 'mood'::character varying, 'theme'::character varying, 'style'::character varying, 'audience'::character varying, 'project'::character varying)))
 );
-
---
--- Name: idx_tags_category; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_tags_category ON tags (category);
-
---
--- Name: idx_tags_name; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_tags_name ON tags (name);
 
 --
 -- Name: tasks; Type: TABLE; Schema: -; Owner: -
@@ -3142,12 +2626,6 @@ COMMENT ON COLUMN tasks.recurrence_interval IS 'How often recurring tasks reset 
 
 
 COMMENT ON COLUMN tasks.last_completed_at IS 'When task was last completed (for recurring reset logic)';
-
---
--- Name: idx_tasks_due; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_tasks_due ON tasks (due_date);
 
 --
 -- Name: idx_tasks_parent; Type: INDEX; Schema: -; Owner: -
@@ -3219,36 +2697,6 @@ COMMENT ON COLUMN tools.notes IS 'Markdown guidance content — camera names, SS
 COMMENT ON COLUMN tools.domain_name IS 'Required when source_type=DOMAIN. Matched via agent_domains.';
 
 --
--- Name: idx_tools_agent; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_tools_agent ON tools (agent_name) WHERE (agent_name IS NOT NULL);
-
---
--- Name: idx_tools_category; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_tools_category ON tools (category) WHERE (category IS NOT NULL);
-
---
--- Name: idx_tools_domain; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_tools_domain ON tools (domain_name) WHERE (domain_name IS NOT NULL);
-
---
--- Name: idx_tools_enabled; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_tools_enabled ON tools (enabled) WHERE (enabled = true);
-
---
--- Name: idx_tools_source; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_tools_source ON tools (source_type);
-
---
 -- Name: idx_tools_unique; Type: INDEX; Schema: -; Owner: -
 --
 
@@ -3290,12 +2738,6 @@ COMMENT ON TABLE unsolved_problems IS 'Humanity''s unsolved problems for NOVA to
 CREATE INDEX IF NOT EXISTS idx_unsolved_problems_priority ON unsolved_problems (priority DESC);
 
 --
--- Name: idx_unsolved_problems_status; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_unsolved_problems_status ON unsolved_problems (status);
-
---
 -- Name: vehicles; Type: TABLE; Schema: -; Owner: -
 --
 
@@ -3327,12 +2769,6 @@ COMMENT ON TABLE vehicles IS 'Vehicle tracking and management. Cars, bikes, boat
 CREATE INDEX IF NOT EXISTS idx_vehicles_owner ON vehicles (owner_id);
 
 --
--- Name: idx_vehicles_vin; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_vehicles_vin ON vehicles (vin);
-
---
 -- Name: vocabulary; Type: TABLE; Schema: -; Owner: -
 --
 
@@ -3359,12 +2795,6 @@ COMMENT ON COLUMN vocabulary.vote_count IS 'Reinforcement count - incremented ea
 COMMENT ON COLUMN vocabulary.last_confirmed IS 'Timestamp of most recent confirmation';
 
 --
--- Name: idx_vocabulary_vote_count; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_vocabulary_vote_count ON vocabulary (vote_count DESC);
-
---
 -- Name: workflows; Type: TABLE; Schema: -; Owner: -
 --
 
@@ -3386,12 +2816,6 @@ CREATE TABLE IF NOT EXISTS workflows (
 
 
 COMMENT ON TABLE workflows IS 'Defines multi-agent workflows with ordered steps and deliverable handoffs';
-
---
--- Name: idx_workflows_department; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_workflows_department ON workflows (department);
 
 --
 -- Name: idx_workflows_name; Type: INDEX; Schema: -; Owner: -
@@ -3490,22 +2914,10 @@ COMMENT ON COLUMN workflow_steps.domain IS 'Subject-matter domain for agent rout
 CREATE INDEX IF NOT EXISTS idx_workflow_steps_domain ON workflow_steps (domain);
 
 --
--- Name: idx_workflow_steps_domains; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_workflow_steps_domains ON workflow_steps USING gin (domains);
-
---
 -- Name: idx_workflow_steps_order; Type: INDEX; Schema: -; Owner: -
 --
 
 CREATE INDEX IF NOT EXISTS idx_workflow_steps_order ON workflow_steps (workflow_id, step_order);
-
---
--- Name: idx_workflow_steps_workflow; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_workflow_steps_workflow ON workflow_steps (workflow_id);
 
 --
 -- Name: works; Type: TABLE; Schema: -; Owner: -
@@ -3534,42 +2946,6 @@ CREATE TABLE IF NOT EXISTS works (
 );
 
 --
--- Name: idx_works_created; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_works_created ON works (created_at DESC);
-
---
--- Name: idx_works_language; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_works_language ON works (language);
-
---
--- Name: idx_works_metadata; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_works_metadata ON works USING gin (metadata);
-
---
--- Name: idx_works_status; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_works_status ON works (status);
-
---
--- Name: idx_works_type; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_works_type ON works (work_type);
-
---
--- Name: idx_works_updated; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_works_updated ON works (updated_at DESC);
-
---
 -- Name: publications; Type: TABLE; Schema: -; Owner: -
 --
 
@@ -3588,30 +2964,6 @@ CREATE TABLE IF NOT EXISTS publications (
 );
 
 --
--- Name: idx_publications_by; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_publications_by ON publications (published_by);
-
---
--- Name: idx_publications_date; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_publications_date ON publications (published_at DESC);
-
---
--- Name: idx_publications_type; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_publications_type ON publications (publication_type);
-
---
--- Name: idx_publications_work; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_publications_work ON publications (work_id);
-
---
 -- Name: work_tags; Type: TABLE; Schema: -; Owner: -
 --
 
@@ -3623,18 +2975,6 @@ CREATE TABLE IF NOT EXISTS work_tags (
     CONSTRAINT work_tags_tag_id_fkey FOREIGN KEY (tag_id) REFERENCES tags (id) ON DELETE CASCADE,
     CONSTRAINT work_tags_work_id_fkey FOREIGN KEY (work_id) REFERENCES works (id) ON DELETE CASCADE
 );
-
---
--- Name: idx_work_tags_tag; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_work_tags_tag ON work_tags (tag_id);
-
---
--- Name: idx_work_tags_work; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_work_tags_work ON work_tags (work_id);
 
 --
 -- Name: audit_bootstrap_agents(); Type: FUNCTION; Schema: -; Owner: -
@@ -4142,8 +3482,9 @@ BEGIN
         UNION ALL
 
         -- 4. WORKFLOW (dynamic from workflows/workflow_steps)
-        -- Matches workflows where agent's domains overlap step domains,
-        -- OR agent's domain matches the workflow orchestrator_domain
+        -- Matches workflows where agent is assigned to steps,
+        -- workflow domains overlap agent domains,
+        -- OR agent is the workflow orchestrator
         SELECT
             'WORKFLOW_' || upper(replace(w.name, '-', '_')) || '.md' AS filename,
             w.name || ': ' || w.description ||
@@ -4157,19 +3498,23 @@ BEGIN
         LEFT JOIN LATERAL (
             SELECT string_agg(
                 ws.step_order || '. ' || ws.description ||
+                COALESCE(' [agent: ' || a2.name || ']', '') ||
                 COALESCE(' [domain: ' || ws.domain || ']', ''),
                 E'\n' ORDER BY ws.step_order
             ) AS steps_text
             FROM workflow_steps ws
+            LEFT JOIN agents a2 ON a2.id = ws.agent_id
             WHERE ws.workflow_id = w.id
         ) ws_agg ON true
         WHERE w.status = 'active'
           AND (
-            -- Agent's domain matches the workflow orchestrator_domain
+            -- Agent is the workflow orchestrator
+            w.orchestrator_agent_id = v_agent_id
+            OR
+            -- Agent is directly assigned to a step
             EXISTS (
-                SELECT 1 FROM agent_domains ad
-                WHERE ad.agent_id = v_agent_id
-                  AND ad.domain_topic = w.orchestrator_domain
+                SELECT 1 FROM workflow_steps ws2
+                WHERE ws2.workflow_id = w.id AND ws2.agent_id = v_agent_id
             )
             OR
             -- Workflow step domains overlap with agent's domains

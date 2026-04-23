@@ -2134,6 +2134,7 @@ CREATE OR REPLACE FUNCTION roll_d100()
 RETURNS TABLE(roll integer, task_name varchar, task_description text, workflow_id integer, skill_name varchar, tool_name varchar, estimated_minutes integer)
 LANGUAGE plpgsql
 VOLATILE
+SECURITY DEFINER
 AS $$
 DECLARE
     rolled_value INTEGER;

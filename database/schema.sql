@@ -4503,6 +4503,40 @@ END;
 $$;
 
 --
+-- Name: protect_agent_deletes(); Type: FUNCTION; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE FUNCTION protect_agent_deletes()
+RETURNS trigger
+LANGUAGE plpgsql
+VOLATILE
+AS $$
+BEGIN
+    IF current_user NOT IN ('newhart', 'postgres') THEN
+        RAISE EXCEPTION 'Agent tables are managed by the Agent Architecture domain (newhart). Contact the Agent Architecture domain for changes.';
+    END IF;
+    RETURN OLD;
+END;
+$$;
+
+--
+-- Name: protect_agent_writes(); Type: FUNCTION; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE FUNCTION protect_agent_writes()
+RETURNS trigger
+LANGUAGE plpgsql
+VOLATILE
+AS $$
+BEGIN
+    IF current_user NOT IN ('newhart', 'postgres') THEN
+        RAISE EXCEPTION 'Agent tables are managed by the Agent Architecture domain (newhart). Contact the Agent Architecture domain for changes.';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+--
 -- Name: protect_bootstrap_context_writes(); Type: FUNCTION; Schema: -; Owner: -
 --
 
@@ -5282,6 +5316,141 @@ CREATE OR REPLACE TRIGGER music_search_update
     BEFORE INSERT OR UPDATE ON music_library
     FOR EACH ROW
     EXECUTE FUNCTION update_music_search_vector();
+
+--
+-- Name: protect_agent_aliases_delete; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER protect_agent_aliases_delete
+    BEFORE DELETE ON agent_aliases
+    FOR EACH ROW
+    EXECUTE FUNCTION protect_agent_deletes();
+
+--
+-- Name: protect_agent_aliases_insert; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER protect_agent_aliases_insert
+    BEFORE INSERT ON agent_aliases
+    FOR EACH ROW
+    EXECUTE FUNCTION protect_agent_writes();
+
+--
+-- Name: protect_agent_aliases_update; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER protect_agent_aliases_update
+    BEFORE UPDATE ON agent_aliases
+    FOR EACH ROW
+    EXECUTE FUNCTION protect_agent_writes();
+
+--
+-- Name: protect_agent_domains_delete; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER protect_agent_domains_delete
+    BEFORE DELETE ON agent_domains
+    FOR EACH ROW
+    EXECUTE FUNCTION protect_agent_deletes();
+
+--
+-- Name: protect_agent_domains_insert; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER protect_agent_domains_insert
+    BEFORE INSERT ON agent_domains
+    FOR EACH ROW
+    EXECUTE FUNCTION protect_agent_writes();
+
+--
+-- Name: protect_agent_domains_update; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER protect_agent_domains_update
+    BEFORE UPDATE ON agent_domains
+    FOR EACH ROW
+    EXECUTE FUNCTION protect_agent_writes();
+
+--
+-- Name: protect_agent_mods_delete; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER protect_agent_mods_delete
+    BEFORE DELETE ON agent_modifications
+    FOR EACH ROW
+    EXECUTE FUNCTION protect_agent_deletes();
+
+--
+-- Name: protect_agent_mods_insert; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER protect_agent_mods_insert
+    BEFORE INSERT ON agent_modifications
+    FOR EACH ROW
+    EXECUTE FUNCTION protect_agent_writes();
+
+--
+-- Name: protect_agent_mods_update; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER protect_agent_mods_update
+    BEFORE UPDATE ON agent_modifications
+    FOR EACH ROW
+    EXECUTE FUNCTION protect_agent_writes();
+
+--
+-- Name: protect_agent_spawns_delete; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER protect_agent_spawns_delete
+    BEFORE DELETE ON agent_spawns
+    FOR EACH ROW
+    EXECUTE FUNCTION protect_agent_deletes();
+
+--
+-- Name: protect_agent_spawns_insert; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER protect_agent_spawns_insert
+    BEFORE INSERT ON agent_spawns
+    FOR EACH ROW
+    EXECUTE FUNCTION protect_agent_writes();
+
+--
+-- Name: protect_agent_spawns_update; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER protect_agent_spawns_update
+    BEFORE UPDATE ON agent_spawns
+    FOR EACH ROW
+    EXECUTE FUNCTION protect_agent_writes();
+
+--
+-- Name: protect_agents_delete; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER protect_agents_delete
+    BEFORE DELETE ON agents
+    FOR EACH ROW
+    EXECUTE FUNCTION protect_agent_deletes();
+
+--
+-- Name: protect_agents_insert; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER protect_agents_insert
+    BEFORE INSERT ON agents
+    FOR EACH ROW
+    EXECUTE FUNCTION protect_agent_writes();
+
+--
+-- Name: protect_agents_update; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER protect_agents_update
+    BEFORE UPDATE ON agents
+    FOR EACH ROW
+    EXECUTE FUNCTION protect_agent_writes();
 
 --
 -- Name: protect_bootstrap_context; Type: TRIGGER; Schema: -; Owner: -

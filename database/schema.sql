@@ -2809,8 +2809,12 @@ CREATE TABLE IF NOT EXISTS workflows (
     tags text[] DEFAULT '{}',
     department text,
     orchestrator_domain text,
+    last_run_at timestamptz,
+    last_run_status text,
+    last_run_error text,
     CONSTRAINT workflows_pkey PRIMARY KEY (id),
     CONSTRAINT workflows_name_key UNIQUE (name),
+    CONSTRAINT workflows_last_run_status_check CHECK (last_run_status IN ('success'::text, 'partial'::text, 'failed'::text, 'skipped'::text)),
     CONSTRAINT workflows_status_check CHECK (status IN ('active'::text, 'deprecated'::text, 'archived'::text))
 );
 

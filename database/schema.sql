@@ -3108,10 +3108,22 @@ REVOKE SELECT ON TABLE agent_turn_context FROM newhart;
 REVOKE SELECT ON TABLE research_citations FROM newhart;
 
 --
+-- Name: research_citations; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE research_citations FROM scout;
+
+--
 -- Name: research_conclusions; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
 REVOKE SELECT ON TABLE research_conclusions FROM newhart;
+
+--
+-- Name: research_conclusions; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE research_conclusions FROM scout;
 
 --
 -- Name: research_findings; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -3120,10 +3132,22 @@ REVOKE SELECT ON TABLE research_conclusions FROM newhart;
 REVOKE SELECT ON TABLE research_findings FROM newhart;
 
 --
+-- Name: research_findings; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE research_findings FROM scout;
+
+--
 -- Name: research_projects; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
 REVOKE SELECT ON TABLE research_projects FROM newhart;
+
+--
+-- Name: research_projects; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE research_projects FROM scout;
 
 --
 -- Name: research_provenance; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -3132,10 +3156,22 @@ REVOKE SELECT ON TABLE research_projects FROM newhart;
 REVOKE SELECT ON TABLE research_provenance FROM newhart;
 
 --
+-- Name: research_provenance; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE research_provenance FROM scout;
+
+--
 -- Name: research_taggings; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
 REVOKE SELECT ON TABLE research_taggings FROM newhart;
+
+--
+-- Name: research_taggings; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE research_taggings FROM scout;
 
 --
 -- Name: research_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -3144,10 +3180,22 @@ REVOKE SELECT ON TABLE research_taggings FROM newhart;
 REVOKE SELECT ON TABLE research_tags FROM newhart;
 
 --
+-- Name: research_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE research_tags FROM scout;
+
+--
 -- Name: research_tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
 REVOKE SELECT ON TABLE research_tasks FROM newhart;
+
+--
+-- Name: research_tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE research_tasks FROM scout;
 
 --
 -- Name: agent_actions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -3477,31 +3525,13 @@ GRANT SELECT, USAGE ON SEQUENCE lessons_id_seq TO scout;
 -- Name: library_authors_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-GRANT SELECT, USAGE ON SEQUENCE library_authors_id_seq TO athena;
-
---
--- Name: library_authors_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
 GRANT SELECT, USAGE ON SEQUENCE library_authors_id_seq TO scout;
 
 --
 -- Name: library_tags_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-GRANT SELECT, USAGE ON SEQUENCE library_tags_id_seq TO athena;
-
---
--- Name: library_tags_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
 GRANT SELECT, USAGE ON SEQUENCE library_tags_id_seq TO scout;
-
---
--- Name: library_works_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT, USAGE ON SEQUENCE library_works_id_seq TO athena;
 
 --
 -- Name: library_works_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -3756,22 +3786,10 @@ GRANT SELECT, USAGE ON SEQUENCE ralph_sessions_id_seq TO scout;
 GRANT SELECT, USAGE ON SEQUENCE research_citations_id_seq TO athena;
 
 --
--- Name: research_citations_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT, USAGE ON SEQUENCE research_citations_id_seq TO scout;
-
---
 -- Name: research_conclusions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
 GRANT SELECT, USAGE ON SEQUENCE research_conclusions_id_seq TO athena;
-
---
--- Name: research_conclusions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT, USAGE ON SEQUENCE research_conclusions_id_seq TO scout;
 
 --
 -- Name: research_findings_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -3780,22 +3798,10 @@ GRANT SELECT, USAGE ON SEQUENCE research_conclusions_id_seq TO scout;
 GRANT SELECT, USAGE ON SEQUENCE research_findings_id_seq TO athena;
 
 --
--- Name: research_findings_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT, USAGE ON SEQUENCE research_findings_id_seq TO scout;
-
---
 -- Name: research_projects_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
 GRANT SELECT, USAGE ON SEQUENCE research_projects_id_seq TO athena;
-
---
--- Name: research_projects_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT, USAGE ON SEQUENCE research_projects_id_seq TO scout;
 
 --
 -- Name: research_provenance_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -3804,22 +3810,10 @@ GRANT SELECT, USAGE ON SEQUENCE research_projects_id_seq TO scout;
 GRANT SELECT, USAGE ON SEQUENCE research_provenance_id_seq TO athena;
 
 --
--- Name: research_provenance_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT, USAGE ON SEQUENCE research_provenance_id_seq TO scout;
-
---
 -- Name: research_taggings_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
 GRANT SELECT, USAGE ON SEQUENCE research_taggings_id_seq TO athena;
-
---
--- Name: research_taggings_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT, USAGE ON SEQUENCE research_taggings_id_seq TO scout;
 
 --
 -- Name: research_tags_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -3828,22 +3822,10 @@ GRANT SELECT, USAGE ON SEQUENCE research_taggings_id_seq TO scout;
 GRANT SELECT, USAGE ON SEQUENCE research_tags_id_seq TO athena;
 
 --
--- Name: research_tags_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT, USAGE ON SEQUENCE research_tags_id_seq TO scout;
-
---
 -- Name: research_tasks_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
 GRANT SELECT, USAGE ON SEQUENCE research_tasks_id_seq TO athena;
-
---
--- Name: research_tasks_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT, USAGE ON SEQUENCE research_tasks_id_seq TO scout;
 
 --
 -- Name: shopping_history_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -6387,12 +6369,6 @@ GRANT SELECT ON TABLE lessons_archive TO ticker;
 -- Name: library_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-GRANT DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE library_authors TO athena;
-
---
--- Name: library_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
 GRANT SELECT ON TABLE library_authors TO coder;
 
 --
@@ -6454,12 +6430,6 @@ GRANT SELECT ON TABLE library_authors TO scout;
 --
 
 GRANT SELECT ON TABLE library_authors TO ticker;
-
---
--- Name: library_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE library_tags TO athena;
 
 --
 -- Name: library_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -6531,12 +6501,6 @@ GRANT SELECT ON TABLE library_tags TO ticker;
 -- Name: library_work_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-GRANT DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE library_work_authors TO athena;
-
---
--- Name: library_work_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
 GRANT SELECT ON TABLE library_work_authors TO coder;
 
 --
@@ -6598,12 +6562,6 @@ GRANT SELECT ON TABLE library_work_authors TO scout;
 --
 
 GRANT SELECT ON TABLE library_work_authors TO ticker;
-
---
--- Name: library_work_relationships; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE library_work_relationships TO athena;
 
 --
 -- Name: library_work_relationships; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -6675,12 +6633,6 @@ GRANT SELECT ON TABLE library_work_relationships TO ticker;
 -- Name: library_work_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-GRANT DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE library_work_tags TO athena;
-
---
--- Name: library_work_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
 GRANT SELECT ON TABLE library_work_tags TO coder;
 
 --
@@ -6742,12 +6694,6 @@ GRANT SELECT ON TABLE library_work_tags TO scout;
 --
 
 GRANT SELECT ON TABLE library_work_tags TO ticker;
-
---
--- Name: library_works; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE library_works TO athena;
 
 --
 -- Name: library_works; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -7668,12 +7614,6 @@ GRANT SELECT ON TABLE portfolio_history TO openproject_user;
 GRANT SELECT ON TABLE portfolio_history TO scout;
 
 --
--- Name: portfolio_history; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE portfolio_history TO ticker;
-
---
 -- Name: portfolio_metrics; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
@@ -7734,12 +7674,6 @@ GRANT SELECT ON TABLE portfolio_metrics TO openproject_user;
 GRANT SELECT ON TABLE portfolio_metrics TO scout;
 
 --
--- Name: portfolio_metrics; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE portfolio_metrics TO ticker;
-
---
 -- Name: portfolio_positions; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
@@ -7798,12 +7732,6 @@ GRANT SELECT ON TABLE portfolio_positions TO openproject_user;
 --
 
 GRANT SELECT ON TABLE portfolio_positions TO scout;
-
---
--- Name: portfolio_positions; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE portfolio_positions TO ticker;
 
 --
 -- Name: portfolio_snapshots; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -8472,12 +8400,6 @@ GRANT SELECT ON TABLE research_citations TO nova;
 GRANT SELECT ON TABLE research_citations TO openproject;
 
 --
--- Name: research_citations; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE research_citations TO scout;
-
---
 -- Name: research_conclusions; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
@@ -8488,12 +8410,6 @@ GRANT SELECT ON TABLE research_conclusions TO nova;
 --
 
 GRANT SELECT ON TABLE research_conclusions TO openproject;
-
---
--- Name: research_conclusions; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE research_conclusions TO scout;
 
 --
 -- Name: research_findings; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -8508,12 +8424,6 @@ GRANT SELECT ON TABLE research_findings TO nova;
 GRANT SELECT ON TABLE research_findings TO openproject;
 
 --
--- Name: research_findings; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE research_findings TO scout;
-
---
 -- Name: research_projects; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
@@ -8524,12 +8434,6 @@ GRANT SELECT ON TABLE research_projects TO nova;
 --
 
 GRANT SELECT ON TABLE research_projects TO openproject;
-
---
--- Name: research_projects; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE research_projects TO scout;
 
 --
 -- Name: research_provenance; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -8544,12 +8448,6 @@ GRANT SELECT ON TABLE research_provenance TO nova;
 GRANT SELECT ON TABLE research_provenance TO openproject;
 
 --
--- Name: research_provenance; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE research_provenance TO scout;
-
---
 -- Name: research_taggings; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
@@ -8560,12 +8458,6 @@ GRANT SELECT ON TABLE research_taggings TO nova;
 --
 
 GRANT SELECT ON TABLE research_taggings TO openproject;
-
---
--- Name: research_taggings; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE research_taggings TO scout;
 
 --
 -- Name: research_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -8580,12 +8472,6 @@ GRANT SELECT ON TABLE research_tags TO nova;
 GRANT SELECT ON TABLE research_tags TO openproject;
 
 --
--- Name: research_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE research_tags TO scout;
-
---
 -- Name: research_tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
@@ -8596,12 +8482,6 @@ GRANT SELECT ON TABLE research_tasks TO nova;
 --
 
 GRANT SELECT ON TABLE research_tasks TO openproject;
-
---
--- Name: research_tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE research_tasks TO scout;
 
 --
 -- Name: shopping_history; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10921,6 +10801,11 @@ GRANT SELECT ON TABLE workflow_steps_detail TO scout;
 
 --
 -- Name: workflow_steps_detail; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE workflow_steps_detail TO ticker;
+
+- Name: workflow_steps_detail; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
 GRANT SELECT ON TABLE workflow_steps_detail TO ticker;

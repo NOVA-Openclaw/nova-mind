@@ -90,6 +90,261 @@ ALTER DEFAULT PRIVILEGES FOR ROLE nova IN SCHEMA public GRANT SELECT ON TABLES T
 ALTER DEFAULT PRIVILEGES FOR ROLE nova IN SCHEMA public GRANT SELECT ON TABLES TO ticker;
 
 --
+-- Name: postgres:TABLES:athena; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
+--
+
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT SELECT ON TABLES TO athena;
+
+--
+-- Name: postgres:TABLES:coder; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
+--
+
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT SELECT ON TABLES TO coder;
+
+--
+-- Name: postgres:TABLES:erato; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
+--
+
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT SELECT ON TABLES TO erato;
+
+--
+-- Name: postgres:TABLES:gem; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
+--
+
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT SELECT ON TABLES TO gem;
+
+--
+-- Name: postgres:TABLES:gidget; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
+--
+
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT SELECT ON TABLES TO gidget;
+
+--
+-- Name: postgres:TABLES:iris; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
+--
+
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT SELECT ON TABLES TO iris;
+
+--
+-- Name: postgres:TABLES:newhart; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
+--
+
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT SELECT ON TABLES TO newhart;
+
+--
+-- Name: postgres:TABLES:nova; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
+--
+
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT SELECT ON TABLES TO nova;
+
+--
+-- Name: postgres:TABLES:scout; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
+--
+
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT SELECT ON TABLES TO scout;
+
+--
+-- Name: postgres:TABLES:ticker; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
+--
+
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT SELECT ON TABLES TO ticker;
+
+--
+-- Name: agent_bootstrap_context; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS agent_bootstrap_context (
+    id SERIAL,
+    context_type text NOT NULL,
+    domain_name text,
+    file_key text NOT NULL,
+    content text NOT NULL,
+    description text,
+    updated_at timestamptz DEFAULT now(),
+    updated_by text DEFAULT 'system',
+    agent_name text,
+    CONSTRAINT agent_bootstrap_context_pkey PRIMARY KEY (id),
+    CONSTRAINT agent_bootstrap_context_context_type_check CHECK (context_type IN ('UNIVERSAL'::text, 'GLOBAL'::text, 'DOMAIN'::text, 'AGENT'::text)),
+    CONSTRAINT chk_universal_global_no_names CHECK ((context_type <> ALL (ARRAY['UNIVERSAL'::text, 'GLOBAL'::text])) OR agent_name IS NULL AND domain_name IS NULL)
+);
+
+
+COMMENT ON TABLE agent_bootstrap_context IS 'Bootstrap context entries. READ-ONLY except Newhart (Agent Design/Management domain).';
+
+
+COMMENT ON COLUMN agent_bootstrap_context.context_type IS 'GLOBAL (all agents) or DOMAIN (agents in specific domain)';
+
+
+COMMENT ON COLUMN agent_bootstrap_context.domain_name IS 'NULL for GLOBAL, domain name from agent_domains for DOMAIN type';
+
+
+COMMENT ON COLUMN agent_bootstrap_context.file_key IS 'Identifier for context block, becomes filename in bootstrap';
+
+--
+-- Name: agent_bootstrap_context_unique_idx; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE UNIQUE INDEX IF NOT EXISTS agent_bootstrap_context_unique_idx ON agent_bootstrap_context (context_type, COALESCE(agent_name, ''::text), COALESCE(domain_name, ''::text), file_key);
+
+--
+-- Name: idx_abc_agent_name; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_abc_agent_name ON agent_bootstrap_context (agent_name) WHERE (agent_name IS NOT NULL);
+
+--
+-- Name: agent_chat; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS agent_chat (
+    id SERIAL,
+    sender varchar(50) NOT NULL,
+    message text NOT NULL,
+    recipients text[] NOT NULL,
+    reply_to integer,
+    timestamp timestamptz DEFAULT now() NOT NULL,
+    CONSTRAINT agent_chat_pkey PRIMARY KEY (id),
+    CONSTRAINT agent_chat_reply_to_fkey FOREIGN KEY (reply_to) REFERENCES agent_chat (id),
+    CONSTRAINT agent_chat_recipients_check CHECK (array_length(recipients, 1) > 0)
+);
+
+
+COMMENT ON TABLE agent_chat IS 'Agent messaging. INSERT allowed for all, UPDATE/DELETE only Newhart.';
+
+--
+-- Name: idx_agent_chat_recipients; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_agent_chat_recipients ON agent_chat USING gin (recipients);
+
+--
+-- Name: idx_agent_chat_sender; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_agent_chat_sender ON agent_chat (sender, "timestamp" DESC);
+
+--
+-- Name: idx_agent_chat_timestamp; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_agent_chat_timestamp ON agent_chat ("timestamp");
+
+--
+-- Name: agent_chat_processed; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS agent_chat_processed (
+    chat_id integer,
+    agent varchar(50),
+    received_at timestamp,
+    routed_at timestamp,
+    responded_at timestamp,
+    error_message text,
+    status agent_chat_status DEFAULT 'responded'::agent_chat_status,
+    CONSTRAINT agent_chat_processed_pkey PRIMARY KEY (chat_id, agent),
+    CONSTRAINT agent_chat_processed_chat_id_fkey FOREIGN KEY (chat_id) REFERENCES agent_chat (id)
+);
+
+
+COMMENT ON TABLE agent_chat_processed IS 'Message processing state. Agents can track, Newhart manages.';
+
+--
+-- Name: idx_agent_chat_processed_agent; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_agent_chat_processed_agent ON agent_chat_processed (agent);
+
+--
+-- Name: idx_agent_chat_processed_status; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_agent_chat_processed_status ON agent_chat_processed (status);
+
+--
+-- Name: idx_agent_chat_processed_unique; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_chat_processed_unique ON agent_chat_processed (chat_id, agent);
+
+--
+-- Name: idx_chat_processed_agent; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_chat_processed_agent ON agent_chat_processed (agent);
+
+--
+-- Name: agent_jobs; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS agent_jobs (
+    id SERIAL,
+    title varchar(200),
+    topic text,
+    job_type varchar(50) DEFAULT 'message_response',
+    agent_name varchar(50) NOT NULL,
+    requester_agent varchar(50),
+    parent_job_id integer,
+    root_job_id integer,
+    status varchar(20) DEFAULT 'pending',
+    priority integer DEFAULT 5,
+    notify_agents text[],
+    deliverable_path text,
+    deliverable_summary text,
+    error_message text,
+    created_at timestamptz DEFAULT now(),
+    started_at timestamptz,
+    completed_at timestamptz,
+    updated_at timestamptz DEFAULT now(),
+    CONSTRAINT agent_jobs_pkey PRIMARY KEY (id),
+    CONSTRAINT agent_jobs_parent_job_id_fkey FOREIGN KEY (parent_job_id) REFERENCES agent_jobs (id),
+    CONSTRAINT agent_jobs_root_job_id_fkey FOREIGN KEY (root_job_id) REFERENCES agent_jobs (id)
+);
+
+
+COMMENT ON TABLE agent_jobs IS 'Agent job definitions. READ-ONLY except Newhart.';
+
+--
+-- Name: agent_jobs; Type: RLS; Schema: -; Owner: -
+--
+
+ALTER TABLE agent_jobs ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: agent_system_config; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS agent_system_config (
+    key text,
+    value text NOT NULL,
+    value_type text DEFAULT 'text' NOT NULL,
+    description text,
+    updated_at timestamp DEFAULT now(),
+    updated_by text DEFAULT 'system',
+    CONSTRAINT agent_system_config_pkey PRIMARY KEY (key)
+);
+
+
+COMMENT ON TABLE agent_system_config IS 'Agent system configuration. READ-ONLY except Newhart.';
+
+
+COMMENT ON COLUMN agent_system_config.key IS 'Unique configuration key identifier';
+
+
+COMMENT ON COLUMN agent_system_config.value IS 'Configuration value (stored as text, cast based on value_type)';
+
+
+COMMENT ON COLUMN agent_system_config.value_type IS 'Type hint: text, json, boolean, number';
+
+
+COMMENT ON COLUMN agent_system_config.description IS 'Human-readable description of what this config controls';
+
+
+COMMENT ON COLUMN agent_system_config.updated_at IS 'Last modification timestamp';
+
+
+COMMENT ON COLUMN agent_system_config.updated_by IS 'Agent or system that last modified this config';
+
+--
 -- Name: agent_turn_context; Type: TABLE; Schema: -; Owner: -
 --
 
@@ -107,6 +362,1930 @@ CREATE TABLE IF NOT EXISTS agent_turn_context (
     CONSTRAINT agent_turn_context_content_check CHECK (length(content) > 0 AND length(content) <= 500),
     CONSTRAINT agent_turn_context_context_type_check CHECK (context_type IN ('UNIVERSAL'::text, 'GLOBAL'::text, 'DOMAIN'::text, 'AGENT'::text))
 );
+
+--
+-- Name: agents; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS agents (
+    id SERIAL,
+    name varchar(100) NOT NULL,
+    description text,
+    role varchar(100),
+    provider varchar(50),
+    model varchar(100),
+    access_method varchar(50) NOT NULL,
+    access_details jsonb,
+    skills text[],
+    credential_ref varchar(200),
+    status varchar(20) DEFAULT 'active',
+    notes text,
+    created_at timestamptz DEFAULT now(),
+    updated_at timestamptz DEFAULT now(),
+    persistent boolean DEFAULT true,
+    instantiation_sop varchar(100),
+    nickname varchar(50),
+    instance_type varchar(20) DEFAULT 'subagent',
+    home_dir varchar(255),
+    unix_user varchar(50),
+    collaborative boolean DEFAULT false,
+    config_reasoning text,
+    fallback_model varchar(100),
+    collaborate jsonb,
+    decision_criteria text,
+    thinking varchar(20),
+    fallback_models text[],
+    pronouns varchar(50),
+    allowed_subagents text[],
+    is_default boolean DEFAULT false NOT NULL,
+    context_type text DEFAULT 'persistent' NOT NULL,
+    model_rationale text,
+    CONSTRAINT agents_pkey PRIMARY KEY (id),
+    CONSTRAINT agents_name_key UNIQUE (name),
+    CONSTRAINT agents_context_type_check CHECK (context_type IN ('ephemeral'::text, 'persistent'::text)),
+    CONSTRAINT agents_thinking_check CHECK (thinking::text IN ('off'::character varying, 'minimal'::character varying, 'low'::character varying, 'medium'::character varying, 'high'::character varying, 'xhigh'::character varying))
+);
+
+
+COMMENT ON TABLE agents IS 'Agent registry';
+
+
+COMMENT ON COLUMN agents.access_details IS 'JSON: session_key, cli_command, endpoint URL, etc.';
+
+
+COMMENT ON COLUMN agents.credential_ref IS '1Password item name or clawdbot config path for credentials';
+
+
+COMMENT ON COLUMN agents.persistent IS 'true = always running, false = instantiated on-demand';
+
+
+COMMENT ON COLUMN agents.instantiation_sop IS 'SOP name for how to instantiate this agent (for ephemeral agents)';
+
+
+COMMENT ON COLUMN agents.nickname IS 'Short friendly name for easy reference';
+
+
+COMMENT ON COLUMN agents.instance_type IS 'subagent (spawned session) or peer (separate Clawdbot instance)';
+
+
+COMMENT ON COLUMN agents.home_dir IS 'Workspace path for peer agents';
+
+
+COMMENT ON COLUMN agents.unix_user IS 'Unix username for peer agents';
+
+
+COMMENT ON COLUMN agents.collaborative IS 'TRUE = work WITH NOVA in dialogue, FALSE = work FOR NOVA on tasks';
+
+
+COMMENT ON COLUMN agents.config_reasoning IS 'Newhart-maintained notes explaining why this agent is configured as it is (model, persistent, collaborative, etc.)';
+
+
+COMMENT ON COLUMN agents.fallback_model IS 'Fallback model if primary fails (auth issues, rate limits, etc.)';
+
+
+COMMENT ON COLUMN agents.collaborate IS 'Collaboration scope: null = task-only, JSONB defines topics/areas where this agent can collaborate vs just execute. Example: {"allowed": ["architecture", "design"], "excluded": ["execution"]}';
+
+
+COMMENT ON COLUMN agents.decision_criteria IS 'Criteria for when to spawn this agent - helps NOVA route tasks';
+
+
+COMMENT ON COLUMN agents.model_rationale IS 'Model selection goals and justification: WHY this agent uses its model, what the role requires, past issues that drove changes, tradeoffs considered. Maintained by Newhart for weekly agent review.';
+
+--
+-- Name: idx_agents_single_default; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_agents_single_default ON agents (is_default) WHERE (is_default = true);
+
+--
+-- Name: idx_agents_status; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_agents_status ON agents (status);
+
+--
+-- Name: agent_aliases; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS agent_aliases (
+    agent_id integer,
+    alias varchar(100),
+    created_at timestamptz DEFAULT now(),
+    updated_at timestamptz DEFAULT now(),
+    CONSTRAINT agent_aliases_pkey PRIMARY KEY (agent_id, alias),
+    CONSTRAINT agent_aliases_agent_id_fkey FOREIGN KEY (agent_id) REFERENCES agents (id) ON DELETE CASCADE
+);
+
+
+COMMENT ON TABLE agent_aliases IS 'Agent aliases for flexible mention matching. Supports case-insensitive routing.';
+
+
+COMMENT ON COLUMN agent_aliases.alias IS 'Alternative name/identifier for the agent (e.g., "assistant", "helper")';
+
+--
+-- Name: agent_modifications; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS agent_modifications (
+    id SERIAL,
+    agent_id integer NOT NULL,
+    modified_by text NOT NULL,
+    field_changed text NOT NULL,
+    old_value text,
+    new_value text,
+    modified_at timestamptz DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT agent_modifications_pkey PRIMARY KEY (id),
+    CONSTRAINT fk_agent_modifications_agent FOREIGN KEY (agent_id) REFERENCES agents (id) ON DELETE CASCADE
+);
+
+
+COMMENT ON TABLE agent_modifications IS 'Agent modification history. READ-ONLY except Newhart.';
+
+--
+-- Name: idx_agent_modifications_agent_id; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_agent_modifications_agent_id ON agent_modifications (agent_id);
+
+--
+-- Name: idx_agent_modifications_modified_at; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_agent_modifications_modified_at ON agent_modifications (modified_at DESC);
+
+--
+-- Name: agent_spawns; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS agent_spawns (
+    id SERIAL,
+    trigger_source text NOT NULL,
+    trigger_id text,
+    trigger_payload jsonb,
+    domain text,
+    agent_id integer,
+    agent_name text,
+    session_key text,
+    session_label text,
+    task_summary text,
+    status text DEFAULT 'pending',
+    spawned_at timestamptz DEFAULT now(),
+    completed_at timestamptz,
+    result jsonb,
+    CONSTRAINT agent_spawns_pkey PRIMARY KEY (id),
+    CONSTRAINT agent_spawns_agent_id_fkey FOREIGN KEY (agent_id) REFERENCES agents (id),
+    CONSTRAINT valid_status CHECK (status IN ('pending'::text, 'spawning'::text, 'running'::text, 'completed'::text, 'failed'::text, 'skipped'::text))
+);
+
+
+COMMENT ON TABLE agent_spawns IS 'Tracks all agent spawns from the general-purpose spawner daemon';
+
+--
+-- Name: idx_agent_spawns_agent; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_agent_spawns_agent ON agent_spawns (agent_id);
+
+--
+-- Name: idx_agent_spawns_trigger; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_agent_spawns_trigger ON agent_spawns (trigger_source, trigger_id);
+
+--
+-- Name: ai_models; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS ai_models (
+    id SERIAL,
+    model_id varchar(100) NOT NULL,
+    provider varchar(50) NOT NULL,
+    display_name varchar(100),
+    context_window integer,
+    cost_tier varchar(20),
+    strengths text[],
+    weaknesses text[],
+    available boolean DEFAULT false,
+    last_verified_at timestamptz,
+    credential_ref varchar(200),
+    notes text,
+    created_at timestamptz DEFAULT now(),
+    updated_at timestamptz DEFAULT now(),
+    input_price_per_mtok numeric(10,4) DEFAULT NULL,
+    output_price_per_mtok numeric(10,4) DEFAULT NULL,
+    CONSTRAINT models_pkey PRIMARY KEY (id),
+    CONSTRAINT models_model_id_key UNIQUE (model_id)
+);
+
+
+COMMENT ON TABLE ai_models IS 'Available AI models. NOVA maintains this; Newhart reads for agent assignments. Credentials and endpoints stored in 1Password (see credential_ref column).';
+
+
+COMMENT ON COLUMN ai_models.input_price_per_mtok IS 'Cost per million input tokens in USD. NULL = unknown, 0 = free (local models).';
+
+
+COMMENT ON COLUMN ai_models.output_price_per_mtok IS 'Cost per million output tokens in USD. NULL = unknown, 0 = free (local models).';
+
+--
+-- Name: artwork; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS artwork (
+    id SERIAL,
+    instagram_url text,
+    instagram_media_id text,
+    title text,
+    caption text,
+    theme text,
+    original_prompt text,
+    revised_prompt text,
+    image_data bytea,
+    image_filename text,
+    posted_at timestamptz DEFAULT now(),
+    created_at timestamptz DEFAULT now(),
+    notes text,
+    inspiration_source text,
+    quality_score integer,
+    nostr_event_id text,
+    nostr_image_url text,
+    x_tweet_id text,
+    x_url text,
+    CONSTRAINT artwork_pkey PRIMARY KEY (id)
+);
+
+
+COMMENT ON TABLE artwork IS 'Archive of NOVAs Instagram artwork. Reference for future compilation.';
+
+
+COMMENT ON COLUMN artwork.image_data IS 'Raw image binary data (PNG/JPG)';
+
+
+COMMENT ON COLUMN artwork.inspiration_source IS 'News snippet or source that inspired this artwork';
+
+--
+-- Name: asset_classes; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS asset_classes (
+    code varchar(20),
+    name varchar(100) NOT NULL,
+    description text,
+    price_source varchar(50),
+    trading_hours varchar(100),
+    typical_unit varchar(20),
+    CONSTRAINT asset_classes_pkey PRIMARY KEY (code)
+);
+
+
+COMMENT ON TABLE asset_classes IS 'Asset class definitions for financial portfolio management. Defines tradeable asset types with pricing sources and trading characteristics.';
+
+
+COMMENT ON COLUMN asset_classes.code IS 'Unique asset class identifier (e.g., STOCK, BOND, CRYPTO)';
+
+
+COMMENT ON COLUMN asset_classes.name IS 'Human-readable asset class name';
+
+
+COMMENT ON COLUMN asset_classes.description IS 'Detailed description of the asset class';
+
+
+COMMENT ON COLUMN asset_classes.price_source IS 'Data source for price information (e.g., Yahoo Finance, Alpha Vantage)';
+
+
+COMMENT ON COLUMN asset_classes.trading_hours IS 'When this asset class typically trades';
+
+
+COMMENT ON COLUMN asset_classes.typical_unit IS 'Standard trading unit (shares, contracts, etc.)';
+
+--
+-- Name: bootstrap_context_config; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS bootstrap_context_config (
+    key text,
+    value jsonb NOT NULL,
+    description text,
+    updated_at timestamptz DEFAULT now(),
+    CONSTRAINT bootstrap_context_config_pkey PRIMARY KEY (key)
+);
+
+
+COMMENT ON TABLE bootstrap_context_config IS 'Configuration for bootstrap system behavior';
+
+--
+-- Name: channel_activity; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS channel_activity (
+    channel varchar(50),
+    last_message_at timestamptz DEFAULT now(),
+    last_message_from varchar(100),
+    CONSTRAINT channel_activity_pkey PRIMARY KEY (channel)
+);
+
+
+COMMENT ON TABLE channel_activity IS 'Tracks last message per channel for idle detection. Read/write: NOVA, Newhart.';
+
+--
+-- Name: conversations; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS conversations (
+    id SERIAL,
+    session_key varchar(255),
+    channel varchar(50),
+    started_at timestamp DEFAULT CURRENT_TIMESTAMP,
+    summary text,
+    notes text,
+    CONSTRAINT conversations_pkey PRIMARY KEY (id)
+);
+
+
+COMMENT ON TABLE conversations IS 'Conversation session tracking. Logs chat sessions with metadata for analysis and continuity.';
+
+
+COMMENT ON COLUMN conversations.id IS 'Unique conversation identifier';
+
+
+COMMENT ON COLUMN conversations.session_key IS 'Session identifier for grouping related messages';
+
+
+COMMENT ON COLUMN conversations.channel IS 'Communication channel (signal, discord, etc.)';
+
+
+COMMENT ON COLUMN conversations.started_at IS 'Conversation start timestamp';
+
+
+COMMENT ON COLUMN conversations.summary IS 'Conversation summary or key points';
+
+
+COMMENT ON COLUMN conversations.notes IS 'Additional notes about the conversation';
+
+--
+-- Name: entities; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS entities (
+    id SERIAL,
+    name varchar(255) NOT NULL,
+    type varchar(50) NOT NULL,
+    created_at timestamp DEFAULT CURRENT_TIMESTAMP,
+    last_seen timestamp,
+    photo bytea,
+    notes text,
+    full_name varchar(255),
+    nicknames text[],
+    gender varchar(50),
+    pronouns varchar(50),
+    user_id varchar(255),
+    auth_token varchar(255),
+    collaborate boolean,
+    collaboration_scope text,
+    trust_level varchar(20) DEFAULT 'unknown',
+    introduction_context text,
+    capabilities jsonb,
+    access_constraints jsonb,
+    preferred_contact varchar(50),
+    CONSTRAINT entities_pkey PRIMARY KEY (id),
+    CONSTRAINT entities_name_type_key UNIQUE (name, type),
+    CONSTRAINT entities_user_id_key UNIQUE (user_id),
+    CONSTRAINT entities_type_check CHECK (type::text IN ('person'::character varying, 'ai'::character varying, 'organization'::character varying, 'pet'::character varying, 'stuffed_animal'::character varying, 'character'::character varying, 'other'::character varying)),
+    CONSTRAINT valid_collaboration_scope CHECK (collaboration_scope IS NULL OR (collaboration_scope IN ('full'::text, 'domain-specific'::text, 'supervised'::text)))
+);
+
+
+COMMENT ON TABLE entities IS 'People, AIs, organizations. NOVA has full access. Use entity_facts for attributes.';
+
+
+COMMENT ON COLUMN entities.collaborate IS 'If true, collaborate with this entity. If false, task them. NULL = not assessed.';
+
+
+COMMENT ON COLUMN entities.collaboration_scope IS 'full | domain-specific | supervised - determines collaboration breadth';
+
+
+COMMENT ON COLUMN entities.trust_level IS 'Trust level for confidence scoring: owner, admin, user, unknown, untrusted';
+
+
+COMMENT ON COLUMN entities.introduction_context IS 'How/why we connected with this entity, relationship context';
+
+
+COMMENT ON COLUMN entities.capabilities IS 'What this entity can do - domains, skills, tools';
+
+
+COMMENT ON COLUMN entities.access_constraints IS 'Topics/data this entity should not see';
+
+
+COMMENT ON COLUMN entities.preferred_contact IS 'Preferred communication method: signal, email, slack, telegram, whatsapp, etc.';
+
+--
+-- Name: idx_entities_name; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_entities_name ON entities (name);
+
+--
+-- Name: idx_entities_type; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_entities_type ON entities (type);
+
+--
+-- Name: agent_domains; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS agent_domains (
+    id SERIAL,
+    agent_id integer NOT NULL,
+    domain_topic varchar(255) NOT NULL,
+    source_entity_id integer,
+    vote_count integer DEFAULT 1,
+    created_at timestamp DEFAULT now(),
+    last_confirmed timestamp DEFAULT now(),
+    notes text,
+    CONSTRAINT agent_domains_pkey PRIMARY KEY (id),
+    CONSTRAINT agent_domains_domain_topic_key UNIQUE (domain_topic),
+    CONSTRAINT agent_domains_agent_id_fkey FOREIGN KEY (agent_id) REFERENCES agents (id) ON DELETE CASCADE,
+    CONSTRAINT agent_domains_source_entity_id_fkey FOREIGN KEY (source_entity_id) REFERENCES entities (id)
+);
+
+
+COMMENT ON TABLE agent_domains IS 'Agent domain assignments. READ-ONLY except Newhart.';
+
+
+COMMENT ON COLUMN agent_domains.domain_topic IS 'The topic/responsibility this agent owns';
+
+
+COMMENT ON COLUMN agent_domains.source_entity_id IS 'Entity who assigned this domain (for attribution)';
+
+
+COMMENT ON COLUMN agent_domains.vote_count IS 'Reinforcement count - incremented when domain assignment is reconfirmed';
+
+--
+-- Name: idx_agent_domains_agent; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_agent_domains_agent ON agent_domains (agent_id);
+
+--
+-- Name: idx_agent_domains_topic; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_agent_domains_topic ON agent_domains (domain_topic);
+
+--
+-- Name: certificates; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS certificates (
+    id SERIAL,
+    entity_id integer NOT NULL,
+    fingerprint varchar(128) NOT NULL,
+    serial varchar(64) NOT NULL,
+    subject_dn varchar(512) NOT NULL,
+    issued_at timestamp DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    expires_at timestamp,
+    revoked_at timestamp,
+    revocation_reason varchar(255),
+    device_name varchar(255),
+    notes text,
+    created_at timestamp DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT certificates_pkey PRIMARY KEY (id),
+    CONSTRAINT certificates_fingerprint_key UNIQUE (fingerprint),
+    CONSTRAINT certificates_serial_key UNIQUE (serial),
+    CONSTRAINT certificates_entity_id_fkey FOREIGN KEY (entity_id) REFERENCES entities (id)
+);
+
+
+COMMENT ON TABLE certificates IS 'Client certificates issued by NOVA CA. Security-sensitive. Verify before modifications.';
+
+
+COMMENT ON COLUMN certificates.fingerprint IS 'SHA256 fingerprint of the certificate';
+
+
+COMMENT ON COLUMN certificates.serial IS 'Certificate serial number';
+
+
+COMMENT ON COLUMN certificates.revoked_at IS 'If set, certificate is revoked and should be rejected';
+
+--
+-- Name: idx_certificates_entity_id; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_certificates_entity_id ON certificates (entity_id);
+
+--
+-- Name: entity_fact_conflicts; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS entity_fact_conflicts (
+    id SERIAL,
+    entity_id integer,
+    key varchar(255),
+    fact_id_a integer,
+    fact_id_b integer,
+    value_a text,
+    value_b text,
+    confidence_a real,
+    confidence_b real,
+    resolution varchar(50),
+    resolved_at timestamptz,
+    resolved_by varchar(50),
+    created_at timestamptz DEFAULT now(),
+    CONSTRAINT entity_fact_conflicts_pkey PRIMARY KEY (id),
+    CONSTRAINT entity_fact_conflicts_entity_id_fkey FOREIGN KEY (entity_id) REFERENCES entities (id)
+);
+
+
+COMMENT ON TABLE entity_fact_conflicts IS 'Conflicts between entity facts requiring resolution. Part of the truth reconciliation system.';
+
+--
+-- Name: entity_facts; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS entity_facts (
+    id SERIAL,
+    entity_id integer,
+    key varchar(255) NOT NULL,
+    value text NOT NULL,
+    data jsonb,
+    source varchar(255),
+    confidence double precision DEFAULT 1.0,
+    learned_at timestamp DEFAULT CURRENT_TIMESTAMP,
+    updated_at timestamp DEFAULT CURRENT_TIMESTAMP,
+    visibility varchar(20) DEFAULT 'public',
+    privacy_scope integer[],
+    source_entity_id integer,
+    visibility_reason text,
+    vote_count integer DEFAULT 1,
+    last_confirmed timestamp DEFAULT now(),
+    data_type varchar(20) DEFAULT 'observation',
+    last_confirmed_at timestamptz DEFAULT now(),
+    confirmation_count integer DEFAULT 1,
+    decay_rate real,
+    CONSTRAINT entity_facts_pkey PRIMARY KEY (id),
+    CONSTRAINT entity_facts_entity_id_fkey FOREIGN KEY (entity_id) REFERENCES entities (id) ON DELETE CASCADE,
+    CONSTRAINT entity_facts_source_entity_id_fkey FOREIGN KEY (source_entity_id) REFERENCES entities (id),
+    CONSTRAINT chk_confidence CHECK (confidence >= 0::double precision AND confidence <= 1::double precision),
+    CONSTRAINT chk_data_type CHECK (data_type::text IN ('permanent'::character varying, 'identity'::character varying, 'preference'::character varying, 'temporal'::character varying, 'observation'::character varying))
+);
+
+
+COMMENT ON TABLE entity_facts IS 'Key-value facts about entities. Check current_timezone for I)ruid before time-based actions.';
+
+
+COMMENT ON COLUMN entity_facts.visibility IS 'Privacy level: public (anyone), trusted (close relationships), private (source only)';
+
+
+COMMENT ON COLUMN entity_facts.privacy_scope IS 'Array of entity IDs explicitly allowed to see this fact (overrides visibility)';
+
+
+COMMENT ON COLUMN entity_facts.source_entity_id IS 'FK to entity who provided this information (for privacy ownership)';
+
+
+COMMENT ON COLUMN entity_facts.visibility_reason IS 'Reason visibility deviated from user default (audit trail)';
+
+
+COMMENT ON COLUMN entity_facts.vote_count IS 'Reinforcement count - incremented each time this fact is re-confirmed in conversation';
+
+
+COMMENT ON COLUMN entity_facts.last_confirmed IS 'Timestamp of most recent confirmation/reinforcement';
+
+--
+-- Name: idx_entity_facts_confidence; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_entity_facts_confidence ON entity_facts (confidence) WHERE (confidence < (1.0)::double precision);
+
+--
+-- Name: idx_entity_facts_data_type; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_entity_facts_data_type ON entity_facts (data_type);
+
+--
+-- Name: idx_entity_facts_entity; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_entity_facts_entity ON entity_facts (entity_id);
+
+--
+-- Name: idx_entity_facts_key; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_entity_facts_key ON entity_facts (key);
+
+--
+-- Name: idx_entity_facts_privacy_scope; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_entity_facts_privacy_scope ON entity_facts USING gin (privacy_scope);
+
+--
+-- Name: idx_entity_facts_source_entity; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_entity_facts_source_entity ON entity_facts (source_entity_id);
+
+--
+-- Name: idx_entity_facts_value_trgm; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_entity_facts_value_trgm ON entity_facts USING gin (lower(value) gin_trgm_ops);
+
+--
+-- Name: idx_entity_facts_visibility; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_entity_facts_visibility ON entity_facts (visibility);
+
+--
+-- Name: idx_entity_facts_vote_count; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_entity_facts_vote_count ON entity_facts (vote_count DESC);
+
+--
+-- Name: entity_facts_archive; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS entity_facts_archive (
+    id integer,
+    entity_id integer,
+    key varchar(255),
+    value text,
+    data jsonb,
+    source varchar(255),
+    confidence double precision,
+    learned_at timestamp,
+    updated_at timestamp,
+    visibility varchar(20),
+    privacy_scope integer[],
+    source_entity_id integer,
+    visibility_reason text,
+    vote_count integer,
+    last_confirmed timestamp,
+    data_type varchar(20),
+    last_confirmed_at timestamptz,
+    confirmation_count integer,
+    decay_rate real,
+    archived_at timestamptz DEFAULT now(),
+    archive_reason varchar(50),
+    archived_by varchar(50) DEFAULT 'decay_script'
+);
+
+
+COMMENT ON TABLE entity_facts_archive IS 'Archived entity facts from decay/cleanup processes. Historical record of previously stored knowledge.';
+
+
+COMMENT ON COLUMN entity_facts_archive.archived_at IS 'When the fact was archived';
+
+
+COMMENT ON COLUMN entity_facts_archive.archive_reason IS 'Why the fact was archived (decay, conflict, manual)';
+
+
+COMMENT ON COLUMN entity_facts_archive.archived_by IS 'System or agent that archived the fact';
+
+--
+-- Name: entity_relationships; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS entity_relationships (
+    id SERIAL,
+    entity_a integer,
+    entity_b integer,
+    relationship varchar(100) NOT NULL,
+    since timestamp,
+    notes text,
+    is_long_distance boolean DEFAULT false,
+    seriousness varchar(20) DEFAULT 'standard',
+    CONSTRAINT entity_relationships_pkey PRIMARY KEY (id),
+    CONSTRAINT entity_relationships_entity_a_entity_b_relationship_key UNIQUE (entity_a, entity_b, relationship),
+    CONSTRAINT entity_relationships_entity_a_fkey FOREIGN KEY (entity_a) REFERENCES entities (id) ON DELETE CASCADE,
+    CONSTRAINT entity_relationships_entity_b_fkey FOREIGN KEY (entity_b) REFERENCES entities (id) ON DELETE CASCADE
+);
+
+
+COMMENT ON TABLE entity_relationships IS 'Relationships between entities (family, work, friendship, etc).';
+
+--
+-- Name: idx_entity_rel_a; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_entity_rel_a ON entity_relationships (entity_a);
+
+--
+-- Name: idx_entity_rel_b; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_entity_rel_b ON entity_relationships (entity_b);
+
+--
+-- Name: events; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS events (
+    id SERIAL,
+    event_date timestamp NOT NULL,
+    title varchar(500) NOT NULL,
+    description text,
+    source varchar(255),
+    created_at timestamp DEFAULT CURRENT_TIMESTAMP,
+    search_vector tsvector GENERATED ALWAYS AS (to_tsvector('english'::regconfig, (((COALESCE(title, ''::character varying))::text || ' '::text) || COALESCE(description, ''::text)))) STORED,
+    confidence real DEFAULT 1.0,
+    last_confirmed_at timestamptz DEFAULT now(),
+    CONSTRAINT events_pkey PRIMARY KEY (id)
+);
+
+
+COMMENT ON TABLE events IS 'Historical events, milestones, activities. Log significant occurrences.';
+
+--
+-- Name: idx_events_date; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_events_date ON events (event_date);
+
+--
+-- Name: event_entities; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS event_entities (
+    event_id integer,
+    entity_id integer,
+    role varchar(100),
+    CONSTRAINT event_entities_pkey PRIMARY KEY (event_id, entity_id),
+    CONSTRAINT event_entities_entity_id_fkey FOREIGN KEY (entity_id) REFERENCES entities (id) ON DELETE CASCADE,
+    CONSTRAINT event_entities_event_id_fkey FOREIGN KEY (event_id) REFERENCES events (id) ON DELETE CASCADE
+);
+
+
+COMMENT ON TABLE event_entities IS 'Links events to entities (people, orgs, AIs). Many-to-many relationship table.';
+
+--
+-- Name: events_archive; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS events_archive (
+    id SERIAL,
+    event_date timestamp NOT NULL,
+    title varchar(500) NOT NULL,
+    description text,
+    source varchar(255),
+    created_at timestamp DEFAULT CURRENT_TIMESTAMP,
+    search_vector tsvector GENERATED ALWAYS AS (to_tsvector('english'::regconfig, (((COALESCE(title, ''::character varying))::text || ' '::text) || COALESCE(description, ''::text)))) STORED,
+    confidence real DEFAULT 1.0,
+    last_confirmed_at timestamptz DEFAULT now(),
+    archived_at timestamptz DEFAULT now(),
+    archive_reason varchar(50),
+    CONSTRAINT events_archive_pkey PRIMARY KEY (id)
+);
+
+
+COMMENT ON TABLE events_archive IS 'Archived historical events. Long-term storage for events moved out of active events table.';
+
+--
+-- Name: extraction_metrics; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS extraction_metrics (
+    id SERIAL,
+    timestamp timestamptz DEFAULT now(),
+    method text,
+    num_relations integer,
+    avg_confidence real,
+    processing_time_ms integer,
+    CONSTRAINT extraction_metrics_pkey PRIMARY KEY (id)
+);
+
+
+COMMENT ON TABLE extraction_metrics IS 'Performance metrics for data extraction processes. Tracks accuracy and efficiency of knowledge extraction.';
+
+--
+-- Name: fact_change_log; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS fact_change_log (
+    id SERIAL,
+    fact_id integer NOT NULL,
+    old_value text,
+    new_value text,
+    changed_by_entity_id integer,
+    reason varchar(100),
+    changed_at timestamptz DEFAULT now(),
+    CONSTRAINT fact_change_log_pkey PRIMARY KEY (id)
+);
+
+
+COMMENT ON TABLE fact_change_log IS 'Audit trail for entity fact modifications. Tracks who changed what and when for accountability.';
+
+--
+-- Name: gambling_logs; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS gambling_logs (
+    id SERIAL,
+    entity_id integer,
+    name varchar(255) NOT NULL,
+    location varchar(255),
+    started_at date,
+    ended_at date,
+    notes text,
+    created_at timestamp DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT gambling_logs_pkey PRIMARY KEY (id),
+    CONSTRAINT gambling_logs_entity_id_fkey FOREIGN KEY (entity_id) REFERENCES entities (id) ON DELETE CASCADE
+);
+
+
+COMMENT ON TABLE gambling_logs IS 'High-level gambling session summaries. Groups multiple gambling_entries by session.';
+
+--
+-- Name: idx_gambling_logs_entity; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_gambling_logs_entity ON gambling_logs (entity_id);
+
+--
+-- Name: gambling_entries; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS gambling_entries (
+    id SERIAL,
+    log_id integer,
+    session_date timestamp,
+    casino varchar(255),
+    game varchar(100),
+    amount numeric(10,2) NOT NULL,
+    notes text,
+    created_at timestamp DEFAULT CURRENT_TIMESTAMP,
+    duration_minutes numeric(6,2),
+    base_bet numeric(10,2),
+    CONSTRAINT gambling_entries_pkey PRIMARY KEY (id),
+    CONSTRAINT gambling_entries_log_id_fkey FOREIGN KEY (log_id) REFERENCES gambling_logs (id) ON DELETE CASCADE
+);
+
+
+COMMENT ON TABLE gambling_entries IS 'Individual gambling session records. Tracks bets, outcomes, and session details for analysis.';
+
+
+COMMENT ON COLUMN gambling_entries.log_id IS 'References gambling_logs for session grouping';
+
+
+COMMENT ON COLUMN gambling_entries.session_date IS 'Date and time of gambling session';
+
+
+COMMENT ON COLUMN gambling_entries.casino IS 'Casino or venue name';
+
+
+COMMENT ON COLUMN gambling_entries.game IS 'Game type (poker, blackjack, etc.)';
+
+
+COMMENT ON COLUMN gambling_entries.amount IS 'Win/loss amount (positive for wins, negative for losses)';
+
+
+COMMENT ON COLUMN gambling_entries.duration_minutes IS 'Session duration in minutes';
+
+
+COMMENT ON COLUMN gambling_entries.base_bet IS 'Typical bet size for the session';
+
+--
+-- Name: idx_gambling_entries_date; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_gambling_entries_date ON gambling_entries (session_date);
+
+--
+-- Name: idx_gambling_entries_log; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_gambling_entries_log ON gambling_entries (log_id);
+
+--
+-- Name: git_issue_queue; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS git_issue_queue (
+    id SERIAL,
+    repo text NOT NULL,
+    issue_number integer NOT NULL,
+    title text,
+    priority integer DEFAULT 5,
+    status text DEFAULT 'pending_tests',
+    source text DEFAULT 'github',
+    parent_issue_id integer,
+    labels text[],
+    created_at timestamptz DEFAULT now(),
+    started_at timestamptz,
+    completed_at timestamptz,
+    error_message text,
+    context jsonb DEFAULT '{}',
+    test_file text,
+    code_files text[],
+    CONSTRAINT git_issue_queue_pkey PRIMARY KEY (id),
+    CONSTRAINT git_issue_queue_repo_issue_number_key UNIQUE (repo, issue_number),
+    CONSTRAINT coder_issue_queue_parent_issue_id_fkey FOREIGN KEY (parent_issue_id) REFERENCES git_issue_queue (id),
+    CONSTRAINT coder_issue_queue_status_check CHECK (status IN ('pending_tests'::text, 'tests_approved'::text, 'implementing'::text, 'testing'::text, 'done'::text, 'failed'::text, 'paused'::text, 'blocked'::text))
+);
+
+
+COMMENT ON TABLE git_issue_queue IS 'Issue queue for git-based workflows. NOTIFY triggers dispatch work automatically.';
+
+
+COMMENT ON COLUMN git_issue_queue.status IS 'pending_tests→tests_approved→implementing→testing→done/failed';
+
+
+COMMENT ON COLUMN git_issue_queue.labels IS 'GitHub labels. Gem skips issues with paused, blocked, on-hold, wontfix labels.';
+
+--
+-- Name: idx_git_queue_status; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_git_queue_status ON git_issue_queue (status);
+
+--
+-- Name: job_messages; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS job_messages (
+    id SERIAL,
+    job_id integer NOT NULL,
+    message_id integer NOT NULL,
+    role varchar(20) DEFAULT 'context',
+    added_at timestamptz DEFAULT now(),
+    CONSTRAINT job_messages_pkey PRIMARY KEY (id),
+    CONSTRAINT job_messages_job_id_fkey FOREIGN KEY (job_id) REFERENCES agent_jobs (id),
+    CONSTRAINT job_messages_message_id_fkey FOREIGN KEY (message_id) REFERENCES agent_chat (id)
+);
+
+
+COMMENT ON TABLE job_messages IS 'Message log per job for conversation threading';
+
+--
+-- Name: lessons; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS lessons (
+    id SERIAL,
+    lesson text NOT NULL,
+    context text,
+    source varchar(255),
+    learned_at timestamp DEFAULT CURRENT_TIMESTAMP,
+    original_behavior text,
+    correction_source text,
+    reinforced_at timestamp,
+    confidence double precision DEFAULT 1.0,
+    last_referenced timestamp,
+    last_confirmed_at timestamptz DEFAULT now(),
+    CONSTRAINT lessons_pkey PRIMARY KEY (id)
+);
+
+
+COMMENT ON TABLE lessons IS 'Lessons and insights learned. Update when learning something worth remembering.';
+
+
+COMMENT ON COLUMN lessons.confidence IS 'Confidence score 0-1, decays over time if not reinforced';
+
+--
+-- Name: lessons_archive; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS lessons_archive (
+    id SERIAL,
+    lesson text NOT NULL,
+    context text,
+    source varchar(255),
+    learned_at timestamp DEFAULT CURRENT_TIMESTAMP,
+    original_behavior text,
+    correction_source text,
+    reinforced_at timestamp,
+    confidence double precision DEFAULT 1.0,
+    last_referenced timestamp,
+    last_confirmed_at timestamptz DEFAULT now(),
+    archived_at timestamptz DEFAULT now(),
+    archive_reason varchar(50),
+    CONSTRAINT lessons_archive_pkey PRIMARY KEY (id)
+);
+
+
+COMMENT ON TABLE lessons_archive IS 'Archived lessons and insights. Historical record of previously stored learnings.';
+
+
+COMMENT ON COLUMN lessons_archive.confidence IS 'Confidence score 0-1, decays over time if not reinforced';
+
+--
+-- Name: library_authors; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS library_authors (
+    id SERIAL,
+    name text NOT NULL,
+    biography text,
+    created_at timestamptz DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT library_authors_pkey PRIMARY KEY (id),
+    CONSTRAINT library_authors_name_key UNIQUE (name)
+);
+
+
+COMMENT ON TABLE library_authors IS 'Library domain: normalized author records. Managed by Athena (librarian agent).';
+
+--
+-- Name: idx_library_authors_name; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_library_authors_name ON library_authors (name);
+
+--
+-- Name: library_tags; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS library_tags (
+    id SERIAL,
+    name text NOT NULL,
+    created_at timestamptz DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT library_tags_pkey PRIMARY KEY (id),
+    CONSTRAINT library_tags_name_key UNIQUE (name)
+);
+
+
+COMMENT ON TABLE library_tags IS 'Library domain: subject/genre/topic tags for works. Managed by Athena.';
+
+--
+-- Name: library_works; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS library_works (
+    id SERIAL,
+    title text NOT NULL,
+    work_type text NOT NULL,
+    publication_date date NOT NULL,
+    language text DEFAULT 'en' NOT NULL,
+    summary text NOT NULL,
+    url text,
+    doi text,
+    arxiv_id text,
+    isbn text,
+    external_ids jsonb DEFAULT '{}',
+    abstract text,
+    content_text text,
+    insights text NOT NULL,
+    subjects text[] DEFAULT '{}' NOT NULL,
+    publisher text,
+    source_path text,
+    shared_by text NOT NULL,
+    added_at timestamptz DEFAULT CURRENT_TIMESTAMP,
+    updated_at timestamptz DEFAULT CURRENT_TIMESTAMP,
+    search_vector tsvector,
+    extra_metadata jsonb DEFAULT '{}',
+    notable_quotes text[],
+    edition text,
+    embed boolean DEFAULT true NOT NULL,
+    CONSTRAINT library_works_pkey PRIMARY KEY (id),
+    CONSTRAINT insights_not_empty CHECK (length(TRIM(BOTH FROM insights)) > 20),
+    CONSTRAINT summary_not_empty CHECK (length(TRIM(BOTH FROM summary)) > 50),
+    CONSTRAINT valid_work_type CHECK (work_type IN ('paper'::text, 'book'::text, 'novel'::text, 'poem'::text, 'short_story'::text, 'essay'::text, 'article'::text, 'blog_post'::text, 'whitepaper'::text, 'report'::text, 'thesis'::text, 'dissertation'::text, 'magazine'::text, 'newsletter'::text, 'speech'::text, 'other'::text))
+);
+
+
+COMMENT ON TABLE library_works IS 'Library domain: all written works (papers, books, poems, etc). Managed by Athena (librarian agent). ALL core fields are NOT NULL — Athena must generate summary and insights during ingestion. The summary field is used for semantic embedding (200-400 words, high-density). On semantic recall hit, query this table for full details.';
+
+
+COMMENT ON COLUMN library_works.summary IS 'REQUIRED. Concise semantic summary for embedding. 200-400 words. Must capture: what the work is, who wrote it, key findings/themes, and why it matters. Athena generates this during ingestion.';
+
+
+COMMENT ON COLUMN library_works.abstract IS 'Original abstract verbatim from source. May be NULL if source has none (e.g. poems).';
+
+
+COMMENT ON COLUMN library_works.content_text IS 'Full text of the work. Optional — only store if available and not too large.';
+
+
+COMMENT ON COLUMN library_works.insights IS 'REQUIRED. Key takeaways, relevance to our work, notable connections. Athena generates this during ingestion.';
+
+
+COMMENT ON COLUMN library_works.notable_quotes IS 'Array of notable quotes from the work. Included in semantic embedding for recall. Generated during ingestion.';
+
+--
+-- Name: idx_library_works_arxiv; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_library_works_arxiv ON library_works (arxiv_id) WHERE (arxiv_id IS NOT NULL);
+
+--
+-- Name: idx_library_works_embed; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_library_works_embed ON library_works (embed) WHERE (embed = true);
+
+--
+-- Name: idx_library_works_title_edition; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_library_works_title_edition ON library_works (lower(TRIM(BOTH FROM title)), COALESCE(edition, ''::text));
+
+--
+-- Name: idx_library_works_type; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_library_works_type ON library_works (work_type);
+
+--
+-- Name: library_work_authors; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS library_work_authors (
+    work_id integer,
+    author_id integer,
+    author_order integer DEFAULT 0,
+    CONSTRAINT library_work_authors_pkey PRIMARY KEY (work_id, author_id),
+    CONSTRAINT library_work_authors_author_id_fkey FOREIGN KEY (author_id) REFERENCES library_authors (id) ON DELETE CASCADE,
+    CONSTRAINT library_work_authors_work_id_fkey FOREIGN KEY (work_id) REFERENCES library_works (id) ON DELETE CASCADE
+);
+
+
+COMMENT ON TABLE library_work_authors IS 'Links works to their authors. author_order preserves original ordering.';
+
+--
+-- Name: library_work_relationships; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS library_work_relationships (
+    from_work_id integer,
+    to_work_id integer,
+    relation_type text,
+    CONSTRAINT library_work_relationships_pkey PRIMARY KEY (from_work_id, to_work_id, relation_type),
+    CONSTRAINT library_work_relationships_from_work_id_fkey FOREIGN KEY (from_work_id) REFERENCES library_works (id) ON DELETE CASCADE,
+    CONSTRAINT library_work_relationships_to_work_id_fkey FOREIGN KEY (to_work_id) REFERENCES library_works (id) ON DELETE CASCADE
+);
+
+
+COMMENT ON TABLE library_work_relationships IS 'Tracks relationships between works (citations, sequels, responses, etc).';
+
+--
+-- Name: library_work_tags; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS library_work_tags (
+    work_id integer,
+    tag_id integer,
+    CONSTRAINT library_work_tags_pkey PRIMARY KEY (work_id, tag_id),
+    CONSTRAINT library_work_tags_tag_id_fkey FOREIGN KEY (tag_id) REFERENCES library_tags (id) ON DELETE CASCADE,
+    CONSTRAINT library_work_tags_work_id_fkey FOREIGN KEY (work_id) REFERENCES library_works (id) ON DELETE CASCADE
+);
+
+
+COMMENT ON TABLE library_work_tags IS 'Links works to subject/topic tags.';
+
+--
+-- Name: media_consumed; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS media_consumed (
+    id SERIAL,
+    media_type varchar(50) NOT NULL,
+    title varchar(500) NOT NULL,
+    creator varchar(255),
+    url text,
+    consumed_date date,
+    consumed_by integer,
+    rating integer,
+    notes text,
+    transcript text,
+    created_at timestamp DEFAULT CURRENT_TIMESTAMP,
+    summary text,
+    metadata jsonb DEFAULT '{}',
+    source_file text,
+    status varchar(20) DEFAULT 'completed',
+    ingested_by integer,
+    ingested_at timestamp DEFAULT CURRENT_TIMESTAMP,
+    search_vector tsvector,
+    insights text,
+    CONSTRAINT media_consumed_pkey PRIMARY KEY (id),
+    CONSTRAINT media_consumed_consumed_by_fkey FOREIGN KEY (consumed_by) REFERENCES entities (id),
+    CONSTRAINT media_consumed_ingested_by_fkey FOREIGN KEY (ingested_by) REFERENCES agents (id),
+    CONSTRAINT media_consumed_rating_check CHECK (rating >= 1 AND rating <= 10)
+);
+
+
+COMMENT ON TABLE media_consumed IS 'Books, movies, podcasts consumed by entities. Log completions here.';
+
+
+COMMENT ON COLUMN media_consumed.summary IS 'Athena (librarian-agent) generated summary - objective, factual';
+
+
+COMMENT ON COLUMN media_consumed.metadata IS 'Flexible metadata: duration, language, format, topics, word_count, etc.';
+
+
+COMMENT ON COLUMN media_consumed.source_file IS 'Local file path if media was downloaded';
+
+
+COMMENT ON COLUMN media_consumed.status IS 'Processing status: pending, processing, completed, failed, queued';
+
+
+COMMENT ON COLUMN media_consumed.ingested_by IS 'Agent ID that processed this media';
+
+
+COMMENT ON COLUMN media_consumed.ingested_at IS 'Timestamp when media was ingested/processed';
+
+
+COMMENT ON COLUMN media_consumed.search_vector IS 'Full-text search vector (title + notes + transcript + summary)';
+
+
+COMMENT ON COLUMN media_consumed.insights IS 'NOVA personal insights - analysis, connections, opinions';
+
+--
+-- Name: agent_actions; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS agent_actions (
+    id SERIAL,
+    agent_id integer DEFAULT 1,
+    action_type varchar(100) NOT NULL,
+    description text NOT NULL,
+    related_media_id integer,
+    related_event_id integer,
+    metadata jsonb,
+    created_at timestamp DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT agent_actions_pkey PRIMARY KEY (id),
+    CONSTRAINT agent_actions_agent_id_fkey FOREIGN KEY (agent_id) REFERENCES entities (id),
+    CONSTRAINT agent_actions_related_event_id_fkey FOREIGN KEY (related_event_id) REFERENCES events (id),
+    CONSTRAINT agent_actions_related_media_id_fkey FOREIGN KEY (related_media_id) REFERENCES media_consumed (id)
+);
+
+
+COMMENT ON TABLE agent_actions IS 'Agent action definitions. READ-ONLY except Newhart.';
+
+--
+-- Name: idx_agent_actions_agent; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_agent_actions_agent ON agent_actions (agent_id);
+
+--
+-- Name: idx_agent_actions_time; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_agent_actions_time ON agent_actions (created_at DESC);
+
+--
+-- Name: media_queue; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS media_queue (
+    id SERIAL,
+    url text,
+    file_path text,
+    media_type varchar(50),
+    title varchar(500),
+    creator varchar(255),
+    priority integer DEFAULT 5,
+    status varchar(20) DEFAULT 'pending',
+    requested_by integer,
+    requested_at timestamp DEFAULT CURRENT_TIMESTAMP,
+    processing_started_at timestamp,
+    completed_at timestamp,
+    result_media_id integer,
+    error_message text,
+    metadata jsonb DEFAULT '{}',
+    CONSTRAINT media_queue_pkey PRIMARY KEY (id),
+    CONSTRAINT media_queue_requested_by_fkey FOREIGN KEY (requested_by) REFERENCES entities (id),
+    CONSTRAINT media_queue_result_media_id_fkey FOREIGN KEY (result_media_id) REFERENCES media_consumed (id)
+);
+
+
+COMMENT ON TABLE media_queue IS 'Queue for media ingestion. Librarian agent processes these.';
+
+
+COMMENT ON COLUMN media_queue.priority IS '1=urgent, 5=normal, 10=low priority';
+
+
+COMMENT ON COLUMN media_queue.status IS 'pending, processing, completed, failed, duplicate';
+
+
+COMMENT ON COLUMN media_queue.result_media_id IS 'Foreign key to resulting media_consumed record';
+
+--
+-- Name: media_tags; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS media_tags (
+    id SERIAL,
+    media_id integer NOT NULL,
+    tag varchar(100) NOT NULL,
+    source varchar(20) DEFAULT 'auto',
+    confidence numeric(3,2),
+    created_at timestamp DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT media_tags_pkey PRIMARY KEY (id),
+    CONSTRAINT media_tags_media_id_tag_key UNIQUE (media_id, tag),
+    CONSTRAINT media_tags_media_id_fkey FOREIGN KEY (media_id) REFERENCES media_consumed (id) ON DELETE CASCADE
+);
+
+
+COMMENT ON TABLE media_tags IS 'Tags/topics for media items. Helps with recommendations and search.';
+
+
+COMMENT ON COLUMN media_tags.source IS 'auto=AI-generated, manual=user-added';
+
+
+COMMENT ON COLUMN media_tags.confidence IS 'AI confidence score for auto-generated tags';
+
+--
+-- Name: idx_media_tags_media; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_media_tags_media ON media_tags (media_id);
+
+--
+-- Name: memory_embeddings; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS memory_embeddings (
+    id SERIAL,
+    source_type varchar(50) NOT NULL,
+    source_id text,
+    content text NOT NULL,
+    created_at timestamptz DEFAULT now(),
+    updated_at timestamptz DEFAULT now(),
+    confidence real DEFAULT 1.0,
+    last_confirmed_at timestamptz DEFAULT now(),
+    embedding vector(1024),
+    CONSTRAINT memory_embeddings_pkey PRIMARY KEY (id)
+);
+
+
+COMMENT ON TABLE memory_embeddings IS 'Vector embeddings for semantic memory search. Used by proactive-recall.py.';
+
+--
+-- Name: idx_memory_embeddings_source; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_memory_embeddings_source ON memory_embeddings (source_type);
+
+--
+-- Name: idx_memory_embeddings_vector; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_memory_embeddings_vector ON memory_embeddings USING ivfflat (embedding vector_cosine_ops);
+
+--
+-- Name: memory_embeddings_archive; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS memory_embeddings_archive (
+    id SERIAL,
+    source_type varchar(50) NOT NULL,
+    source_id text,
+    content text NOT NULL,
+    embedding vector(1536),
+    created_at timestamptz DEFAULT now(),
+    updated_at timestamptz DEFAULT now(),
+    confidence real DEFAULT 1.0,
+    last_confirmed_at timestamptz DEFAULT now(),
+    archived_at timestamptz DEFAULT now(),
+    archive_reason varchar(50),
+    CONSTRAINT memory_embeddings_archive_pkey PRIMARY KEY (id)
+);
+
+
+COMMENT ON TABLE memory_embeddings_archive IS 'Archived vector embeddings from semantic memory system. Historical embeddings for backup/analysis.';
+
+--
+-- Name: memory_type_priorities; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS memory_type_priorities (
+    source_type text,
+    priority numeric(3,2) DEFAULT 1.00 NOT NULL,
+    description text,
+    created_at timestamptz DEFAULT now(),
+    updated_at timestamptz DEFAULT now(),
+    CONSTRAINT memory_type_priorities_pkey PRIMARY KEY (source_type)
+);
+
+
+COMMENT ON TABLE memory_type_priorities IS 'Priority weights for semantic recall by source_type. Higher = more likely to surface. NOVA can modify.';
+
+--
+-- Name: music_library; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS music_library (
+    id SERIAL,
+    media_id integer,
+    musicbrainz_track_id uuid,
+    musicbrainz_album_id uuid,
+    musicbrainz_artist_id uuid,
+    isrc varchar(12),
+    discogs_release_id integer,
+    spotify_uri varchar(255),
+    apple_music_id varchar(255),
+    key varchar(10),
+    bpm numeric(6,2),
+    time_signature varchar(10),
+    duration_ms integer,
+    genre varchar(100),
+    subgenre varchar(100),
+    mood varchar(100),
+    energy_level integer,
+    danceability integer,
+    year integer,
+    album varchar(255),
+    track_number integer,
+    disc_number integer DEFAULT 1,
+    label varchar(255),
+    producer varchar(255),
+    replaygain_track_gain numeric(6,2),
+    replaygain_album_gain numeric(6,2),
+    sample_rate integer,
+    bit_depth integer,
+    bitrate integer,
+    file_format varchar(20),
+    lyrics text,
+    language varchar(10),
+    explicit boolean DEFAULT false,
+    added_at timestamp DEFAULT now(),
+    last_played timestamp,
+    play_count integer DEFAULT 0,
+    search_vector tsvector,
+    CONSTRAINT music_library_pkey PRIMARY KEY (id),
+    CONSTRAINT music_library_media_id_key UNIQUE (media_id),
+    CONSTRAINT music_library_media_id_fkey FOREIGN KEY (media_id) REFERENCES media_consumed (id) ON DELETE CASCADE,
+    CONSTRAINT music_library_danceability_check CHECK (danceability >= 1 AND danceability <= 10),
+    CONSTRAINT music_library_energy_level_check CHECK (energy_level >= 1 AND energy_level <= 10)
+);
+
+
+COMMENT ON TABLE music_library IS 'Music-specific metadata extending media_consumed. Managed by Erato.';
+
+--
+-- Name: idx_music_library_media; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_music_library_media ON music_library (media_id);
+
+--
+-- Name: music_analysis; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS music_analysis (
+    id SERIAL,
+    music_id integer,
+    analysis_type varchar(50) NOT NULL,
+    analysis_summary text,
+    detailed_findings jsonb,
+    complexity_score numeric(4,2),
+    uniqueness_score numeric(4,2),
+    analyzed_by integer,
+    analyzed_at timestamp DEFAULT now(),
+    notes text,
+    search_vector tsvector,
+    CONSTRAINT music_analysis_pkey PRIMARY KEY (id),
+    CONSTRAINT music_analysis_analyzed_by_fkey FOREIGN KEY (analyzed_by) REFERENCES agents (id),
+    CONSTRAINT music_analysis_music_id_fkey FOREIGN KEY (music_id) REFERENCES music_library (id) ON DELETE CASCADE
+);
+
+
+COMMENT ON TABLE music_analysis IS 'Deep musical analysis (harmonic, rhythmic, lyrical, spectral). Managed by Erato.';
+
+--
+-- Name: places; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS places (
+    id SERIAL,
+    name varchar(255) NOT NULL,
+    type varchar(50),
+    address text,
+    network_subnet varchar(50),
+    network_theme varchar(100),
+    coordinates double precision[],
+    parent_place_id integer,
+    notes text,
+    created_at timestamp DEFAULT CURRENT_TIMESTAMP,
+    street_address varchar(255),
+    city varchar(100),
+    state varchar(100),
+    zipcode varchar(20),
+    country varchar(100) DEFAULT 'USA',
+    CONSTRAINT places_pkey PRIMARY KEY (id),
+    CONSTRAINT places_name_key UNIQUE (name),
+    CONSTRAINT places_parent_place_id_fkey FOREIGN KEY (parent_place_id) REFERENCES places (id)
+);
+
+
+COMMENT ON TABLE places IS 'Locations (houses, venues, cities). Reference I)ruid houses in USER.md.';
+
+--
+-- Name: idx_places_type; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_places_type ON places (type);
+
+--
+-- Name: event_places; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS event_places (
+    event_id integer,
+    place_id integer,
+    CONSTRAINT event_places_pkey PRIMARY KEY (event_id, place_id),
+    CONSTRAINT event_places_event_id_fkey FOREIGN KEY (event_id) REFERENCES events (id) ON DELETE CASCADE,
+    CONSTRAINT event_places_place_id_fkey FOREIGN KEY (place_id) REFERENCES places (id) ON DELETE CASCADE
+);
+
+
+COMMENT ON TABLE event_places IS 'Links events to places/locations. Many-to-many relationship table.';
+
+--
+-- Name: place_properties; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS place_properties (
+    id SERIAL,
+    place_id integer,
+    key varchar(255) NOT NULL,
+    value text NOT NULL,
+    data jsonb,
+    CONSTRAINT place_properties_pkey PRIMARY KEY (id),
+    CONSTRAINT place_properties_place_id_fkey FOREIGN KEY (place_id) REFERENCES places (id) ON DELETE CASCADE
+);
+
+
+COMMENT ON TABLE place_properties IS 'Properties and attributes of places. Key-value storage for place characteristics.';
+
+--
+-- Name: idx_place_props_place; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_place_props_place ON place_properties (place_id);
+
+--
+-- Name: pm_domain_portfolio_snapshots; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS pm_domain_portfolio_snapshots (
+    id SERIAL,
+    timestamp timestamptz DEFAULT CURRENT_TIMESTAMP,
+    total_value numeric,
+    total_pl numeric,
+    total_pl_pct numeric,
+    prices jsonb,
+    CONSTRAINT pm_domain_portfolio_snapshots_pkey PRIMARY KEY (id)
+);
+
+--
+-- Name: portfolio_history; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS portfolio_history (
+    id SERIAL,
+    timestamp timestamp,
+    total_value numeric,
+    total_pl numeric,
+    total_pl_pct numeric,
+    prices jsonb,
+    CONSTRAINT portfolio_history_pkey PRIMARY KEY (id)
+);
+
+--
+-- Name: portfolio_metrics; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS portfolio_metrics (
+    id SERIAL,
+    timestamp timestamptz DEFAULT CURRENT_TIMESTAMP,
+    total_value numeric(10,2),
+    total_pl numeric(10,2),
+    total_pl_pct numeric(5,2),
+    amd_price numeric(10,2),
+    nvda_price numeric(10,2),
+    meta_price numeric(10,2),
+    smci_price numeric(10,2),
+    crwd_price numeric(10,2),
+    CONSTRAINT portfolio_metrics_pkey PRIMARY KEY (id)
+);
+
+--
+-- Name: portfolio_positions; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS portfolio_positions (
+    id SERIAL,
+    symbol varchar(10) NOT NULL,
+    shares numeric(12,6) NOT NULL,
+    cost_basis numeric(12,2) NOT NULL,
+    purchased_at timestamp NOT NULL,
+    sold_at timestamp,
+    sale_proceeds numeric(12,2),
+    notes text,
+    created_at timestamp DEFAULT now(),
+    CONSTRAINT portfolio_positions_pkey PRIMARY KEY (id)
+);
+
+
+COMMENT ON TABLE portfolio_positions IS 'Individual stock/investment positions tracking purchases, sales, and P&L. Core table for portfolio management.';
+
+
+COMMENT ON COLUMN portfolio_positions.id IS 'Unique position identifier';
+
+
+COMMENT ON COLUMN portfolio_positions.symbol IS 'Ticker symbol or asset identifier';
+
+
+COMMENT ON COLUMN portfolio_positions.shares IS 'Number of shares/units held';
+
+
+COMMENT ON COLUMN portfolio_positions.cost_basis IS 'Total purchase price';
+
+
+COMMENT ON COLUMN portfolio_positions.purchased_at IS 'Date and time of purchase';
+
+
+COMMENT ON COLUMN portfolio_positions.sold_at IS 'Date and time of sale (NULL for open positions)';
+
+
+COMMENT ON COLUMN portfolio_positions.sale_proceeds IS 'Total sale proceeds (NULL for open positions)';
+
+
+COMMENT ON COLUMN portfolio_positions.notes IS 'Additional notes about the position';
+
+
+COMMENT ON COLUMN portfolio_positions.created_at IS 'Record creation timestamp';
+
+--
+-- Name: idx_positions_held; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_positions_held ON portfolio_positions (sold_at) WHERE (sold_at IS NULL);
+
+--
+-- Name: portfolio_snapshots; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS portfolio_snapshots (
+    id SERIAL,
+    snapshot_at timestamp DEFAULT now() NOT NULL,
+    total_value numeric(12,2) NOT NULL,
+    total_cost_basis numeric(12,2) NOT NULL,
+    unrealized_pl numeric(12,2),
+    unrealized_pl_pct numeric(8,4),
+    positions jsonb,
+    benchmark_m2 numeric(8,4),
+    CONSTRAINT portfolio_snapshots_pkey PRIMARY KEY (id)
+);
+
+
+COMMENT ON TABLE portfolio_snapshots IS 'Historical snapshots of portfolio values and performance metrics over time.';
+
+--
+-- Name: idx_snapshots_date; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_snapshots_date ON portfolio_snapshots (snapshot_at);
+
+--
+-- Name: idx_snapshots_day; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_snapshots_day ON portfolio_snapshots ((snapshot_at::date));
+
+--
+-- Name: portfolio_updates; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS portfolio_updates (
+    id SERIAL,
+    timestamp timestamp DEFAULT CURRENT_TIMESTAMP,
+    data jsonb,
+    CONSTRAINT portfolio_updates_pkey PRIMARY KEY (id)
+);
+
+--
+-- Name: positions; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS positions (
+    id SERIAL,
+    symbol varchar(20) NOT NULL,
+    asset_class varchar(20) NOT NULL,
+    asset_subclass varchar(50),
+    quantity numeric(18,8) NOT NULL,
+    unit varchar(20) DEFAULT 'shares',
+    cost_basis numeric(14,4) NOT NULL,
+    avg_price numeric(14,4),
+    purchased_at timestamp NOT NULL,
+    sold_at timestamp,
+    sale_proceeds numeric(14,4),
+    platform varchar(50),
+    account_id varchar(50) DEFAULT 'main',
+    notes text,
+    maturity_date date,
+    coupon_rate numeric(6,4),
+    strike_price numeric(14,4),
+    expiration_date date,
+    created_at timestamp DEFAULT now(),
+    updated_at timestamp DEFAULT now(),
+    CONSTRAINT positions_pkey PRIMARY KEY (id)
+);
+
+
+COMMENT ON TABLE positions IS 'Legacy or alternative positions tracking table. May be deprecated in favor of portfolio_positions.';
+
+--
+-- Name: idx_positions_account; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_positions_account ON positions (account_id) WHERE (sold_at IS NULL);
+
+--
+-- Name: preferences; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS preferences (
+    id SERIAL,
+    entity_id integer,
+    key varchar(255) NOT NULL,
+    value text NOT NULL,
+    context text,
+    learned_at timestamp DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT preferences_pkey PRIMARY KEY (id),
+    CONSTRAINT preferences_entity_id_fkey FOREIGN KEY (entity_id) REFERENCES entities (id) ON DELETE CASCADE
+);
+
+
+COMMENT ON TABLE preferences IS 'User preferences by entity_id. Check before making assumptions.';
+
+--
+-- Name: idx_preferences_entity; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_preferences_entity ON preferences (entity_id);
+
+--
+-- Name: idx_preferences_key; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_preferences_key ON preferences (key);
+
+--
+-- Name: price_cache_v2; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS price_cache_v2 (
+    symbol varchar(20),
+    asset_class varchar(20),
+    price numeric(14,4) NOT NULL,
+    price_currency varchar(3) DEFAULT 'USD',
+    bid numeric(14,4),
+    ask numeric(14,4),
+    volume numeric(20,0),
+    market_cap numeric(20,0),
+    day_change numeric(10,4),
+    day_change_pct numeric(8,4),
+    cached_at timestamp DEFAULT now(),
+    source varchar(50),
+    CONSTRAINT price_cache_v2_pkey PRIMARY KEY (symbol, asset_class)
+);
+
+
+COMMENT ON TABLE price_cache_v2 IS 'Cached price data for assets to reduce API calls. Version 2 of price caching system.';
+
+--
+-- Name: projects; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS projects (
+    id SERIAL,
+    name varchar(255) NOT NULL,
+    status varchar(50) DEFAULT 'active',
+    goal text,
+    started_at timestamp DEFAULT CURRENT_TIMESTAMP,
+    completed_at timestamp,
+    updated_at timestamp DEFAULT CURRENT_TIMESTAMP,
+    notes text,
+    git_config jsonb,
+    repo_url text,
+    locked boolean DEFAULT false,
+    skills text[],
+    CONSTRAINT projects_pkey PRIMARY KEY (id),
+    CONSTRAINT projects_name_key UNIQUE (name),
+    CONSTRAINT projects_status_check CHECK (status::text IN ('active'::character varying, 'blocked'::character varying, 'complete'::character varying, 'paused'::character varying, 'abandoned'::character varying))
+);
+
+
+COMMENT ON TABLE projects IS 'Project tracking. For repo-backed projects (locked=TRUE, repo_url set), use GitHub for management. For non-repo projects, use notes field here.';
+
+
+COMMENT ON COLUMN projects.git_config IS 'Per-project Git config: branch strategy, commit conventions, PR workflow, etc.';
+
+
+COMMENT ON COLUMN projects.repo_url IS 'GitHub repo URL. When set with locked=TRUE, this is the source of truth. Manage project via repo, not database.';
+
+
+COMMENT ON COLUMN projects.locked IS 'When TRUE, project is repo-backed. Use GitHub (repo_url) for docs/updates, not this table. Prevents accidental writes to notes field.';
+
+
+COMMENT ON COLUMN projects.skills IS 'Array of skill names (from ~/clawd/skills/) relevant to this project';
+
+--
+-- Name: idx_projects_status; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_projects_status ON projects (status);
+
+--
+-- Name: event_projects; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS event_projects (
+    event_id integer,
+    project_id integer,
+    CONSTRAINT event_projects_pkey PRIMARY KEY (event_id, project_id),
+    CONSTRAINT event_projects_event_id_fkey FOREIGN KEY (event_id) REFERENCES events (id) ON DELETE CASCADE,
+    CONSTRAINT event_projects_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects (id) ON DELETE CASCADE
+);
+
+
+COMMENT ON TABLE event_projects IS 'Links events to projects. Many-to-many relationship table for project milestones and activities.';
+
+--
+-- Name: project_entities; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS project_entities (
+    project_id integer,
+    entity_id integer,
+    role varchar(100),
+    CONSTRAINT project_entities_pkey PRIMARY KEY (project_id, entity_id),
+    CONSTRAINT project_entities_entity_id_fkey FOREIGN KEY (entity_id) REFERENCES entities (id) ON DELETE CASCADE,
+    CONSTRAINT project_entities_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects (id) ON DELETE CASCADE
+);
+
+
+COMMENT ON TABLE project_entities IS 'Links projects to entities (people, orgs, AIs). Many-to-many relationship table for project participants.';
+
+--
+-- Name: project_tasks; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS project_tasks (
+    id SERIAL,
+    project_id integer,
+    task text NOT NULL,
+    status varchar(50) DEFAULT 'pending',
+    blocked_by text,
+    due_date timestamp,
+    completed_at timestamp,
+    priority integer DEFAULT 0,
+    CONSTRAINT project_tasks_pkey PRIMARY KEY (id),
+    CONSTRAINT project_tasks_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects (id) ON DELETE CASCADE,
+    CONSTRAINT project_tasks_status_check CHECK (status::text IN ('pending'::character varying, 'in_progress'::character varying, 'blocked'::character varying, 'complete'::character varying))
+);
+
+
+COMMENT ON TABLE project_tasks IS 'Project-specific task breakdown. Links tasks to projects for organized project management.';
+
+--
+-- Name: idx_project_tasks_project; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_project_tasks_project ON project_tasks (project_id);
+
+--
+-- Name: ralph_sessions; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS ralph_sessions (
+    id SERIAL,
+    session_series_id text NOT NULL,
+    iteration integer DEFAULT 1 NOT NULL,
+    agent_id text NOT NULL,
+    spawned_session_key text,
+    task_description text,
+    iteration_goal text,
+    state jsonb DEFAULT '{}' NOT NULL,
+    status text DEFAULT 'PENDING' NOT NULL,
+    error_message text,
+    tokens_used integer,
+    cost numeric(10,4),
+    created_at timestamptz DEFAULT now(),
+    started_at timestamptz,
+    completed_at timestamptz,
+    CONSTRAINT ralph_sessions_pkey PRIMARY KEY (id),
+    CONSTRAINT ralph_sessions_session_series_id_iteration_key UNIQUE (session_series_id, iteration)
+);
+
+
+COMMENT ON TABLE ralph_sessions IS 'Tracks Ralph-style iterative agent sessions. Each iteration runs with fresh context, state persists in DB.';
+
+
+COMMENT ON COLUMN ralph_sessions.session_series_id IS 'UUID or descriptive ID linking all iterations of the same task';
+
+
+COMMENT ON COLUMN ralph_sessions.status IS 'PENDING=not started, RUNNING=in progress, CONTINUE=done but more needed, COMPLETE=finished, ERROR=failed';
+
+--
+-- Name: idx_ralph_series_latest; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_ralph_series_latest ON ralph_sessions (session_series_id, iteration DESC);
 
 --
 -- Name: research_projects; Type: TABLE; Schema: -; Owner: -
@@ -315,6 +2494,7 @@ CREATE TABLE IF NOT EXISTS research_citations (
     accessed_at timestamptz DEFAULT now() NOT NULL,
     metadata jsonb DEFAULT '{}' NOT NULL,
     CONSTRAINT research_citations_pkey PRIMARY KEY (id),
+    CONSTRAINT fk_citation_library_work FOREIGN KEY (library_work_id) REFERENCES library_works (id) ON DELETE SET NULL,
     CONSTRAINT research_citations_finding_id_fkey FOREIGN KEY (finding_id) REFERENCES research_findings (id) ON DELETE CASCADE,
     CONSTRAINT research_citations_reliability_check CHECK (reliability >= 0.00 AND reliability <= 1.00),
     CONSTRAINT research_citations_source_type_check CHECK (source_type::text IN ('url'::character varying, 'paper'::character varying, 'book'::character varying, 'library_work'::character varying, 'api'::character varying, 'agent'::character varying, 'database'::character varying, 'document'::character varying, 'interview'::character varying))
@@ -322,6 +2502,543 @@ CREATE TABLE IF NOT EXISTS research_citations (
 
 
 COMMENT ON TABLE research_citations IS 'Source citations linking findings to original sources. Write access: Research domain (scout) only.';
+
+--
+-- Name: shopping_history; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS shopping_history (
+    id SERIAL,
+    entity_id integer,
+    product_name text NOT NULL,
+    category text,
+    retailer text,
+    price numeric,
+    url text,
+    satisfaction_rating integer,
+    notes text,
+    purchased_at timestamptz,
+    restock_interval_days integer,
+    next_restock_at timestamptz,
+    created_at timestamptz DEFAULT now(),
+    CONSTRAINT shopping_history_pkey PRIMARY KEY (id),
+    CONSTRAINT shopping_history_entity_id_fkey FOREIGN KEY (entity_id) REFERENCES entities (id),
+    CONSTRAINT shopping_history_satisfaction_rating_check CHECK (satisfaction_rating >= 1 AND satisfaction_rating <= 5)
+);
+
+--
+-- Name: shopping_preferences; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS shopping_preferences (
+    id SERIAL,
+    entity_id integer,
+    category text NOT NULL,
+    key text NOT NULL,
+    value text NOT NULL,
+    notes text,
+    created_at timestamptz DEFAULT now(),
+    updated_at timestamptz DEFAULT now(),
+    CONSTRAINT shopping_preferences_pkey PRIMARY KEY (id),
+    CONSTRAINT shopping_preferences_entity_id_category_key_key UNIQUE (entity_id, category, key),
+    CONSTRAINT shopping_preferences_entity_id_fkey FOREIGN KEY (entity_id) REFERENCES entities (id)
+);
+
+--
+-- Name: shopping_wishlist; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS shopping_wishlist (
+    id SERIAL,
+    entity_id integer,
+    product_name text NOT NULL,
+    category text,
+    max_price numeric,
+    url text,
+    priority text DEFAULT 'normal',
+    status text DEFAULT 'active',
+    notes text,
+    created_at timestamptz DEFAULT now(),
+    updated_at timestamptz DEFAULT now(),
+    CONSTRAINT shopping_wishlist_pkey PRIMARY KEY (id),
+    CONSTRAINT shopping_wishlist_entity_id_fkey FOREIGN KEY (entity_id) REFERENCES entities (id),
+    CONSTRAINT shopping_wishlist_priority_check CHECK (priority IN ('low'::text, 'normal'::text, 'high'::text, 'urgent'::text)),
+    CONSTRAINT shopping_wishlist_status_check CHECK (status IN ('active'::text, 'purchased'::text, 'dropped'::text, 'watching'::text))
+);
+
+--
+-- Name: skills; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS skills (
+    id SERIAL,
+    skill_name text NOT NULL,
+    description text NOT NULL,
+    source_type text NOT NULL,
+    agent_name text,
+    homepage text,
+    emoji text,
+    requires_bins text[],
+    requires_any_bins text[],
+    requires_env text[],
+    requires_config text[],
+    primary_env text,
+    requires_os text[],
+    instructions text,
+    location_path text,
+    enabled boolean DEFAULT true NOT NULL,
+    user_invocable boolean DEFAULT true NOT NULL,
+    disable_model_invocation boolean DEFAULT false NOT NULL,
+    install_specs jsonb,
+    config jsonb,
+    created_at timestamptz DEFAULT now(),
+    updated_at timestamptz DEFAULT now(),
+    updated_by text DEFAULT 'system',
+    domain_name text,
+    CONSTRAINT skills_pkey PRIMARY KEY (id),
+    CONSTRAINT skills_source_type_check CHECK (source_type IN ('BUNDLED'::text, 'MANAGED'::text, 'WORKSPACE'::text, 'DOMAIN'::text))
+);
+
+
+COMMENT ON TABLE skills IS 'Skill definitions. Override precedence: WORKSPACE > DOMAIN > MANAGED > BUNDLED. See get_agent_skills().';
+
+
+COMMENT ON COLUMN skills.source_type IS 'BUNDLED=shipped with OpenClaw, MANAGED=~/.openclaw/skills, DOMAIN=domain-scoped, WORKSPACE=per-agent workspace skills';
+
+
+COMMENT ON COLUMN skills.agent_name IS 'NULL=available to all agents; set for WORKSPACE-scoped or agent-specific skills';
+
+
+COMMENT ON COLUMN skills.instructions IS 'Full SKILL.md content (loaded on-demand, not injected into prompt)';
+
+
+COMMENT ON COLUMN skills.location_path IS 'Filesystem path hint for skills with scripts/resources on disk';
+
+
+COMMENT ON COLUMN skills.domain_name IS 'Required when source_type=DOMAIN. Matched via agent_domains.';
+
+--
+-- Name: idx_skills_unique; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_skills_unique ON skills (skill_name, source_type, COALESCE(agent_name, ''::text), COALESCE(domain_name, ''::text));
+
+--
+-- Name: tags; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS tags (
+    id SERIAL,
+    name varchar(50) NOT NULL,
+    category varchar(50),
+    description text,
+    created_at timestamptz DEFAULT now() NOT NULL,
+    CONSTRAINT tags_pkey PRIMARY KEY (id),
+    CONSTRAINT tags_name_key UNIQUE (name),
+    CONSTRAINT lowercase_name CHECK (name::text = lower(name::text)),
+    CONSTRAINT valid_category CHECK (category IS NULL OR (category::text IN ('genre'::character varying, 'mood'::character varying, 'theme'::character varying, 'style'::character varying, 'audience'::character varying, 'project'::character varying)))
+);
+
+--
+-- Name: tasks; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS tasks (
+    id SERIAL,
+    title varchar(255) NOT NULL,
+    description text,
+    status varchar(50) DEFAULT 'pending',
+    priority integer DEFAULT 5,
+    parent_task_id integer,
+    project_id integer,
+    assigned_to integer,
+    created_by integer,
+    due_date timestamp,
+    completed_at timestamp,
+    notes text,
+    created_at timestamp DEFAULT CURRENT_TIMESTAMP,
+    updated_at timestamp DEFAULT CURRENT_TIMESTAMP,
+    task_number integer,
+    blocked boolean DEFAULT false,
+    blocked_reason text,
+    blocked_on integer,
+    last_worked_at timestamptz,
+    work_notes text,
+    task_type varchar(20) DEFAULT 'one_off',
+    recurrence_interval interval,
+    last_completed_at timestamptz,
+    CONSTRAINT tasks_pkey PRIMARY KEY (id),
+    CONSTRAINT tasks_assigned_to_fkey FOREIGN KEY (assigned_to) REFERENCES entities (id),
+    CONSTRAINT tasks_blocked_on_fkey FOREIGN KEY (blocked_on) REFERENCES entities (id),
+    CONSTRAINT tasks_created_by_fkey FOREIGN KEY (created_by) REFERENCES entities (id),
+    CONSTRAINT tasks_parent_task_id_fkey FOREIGN KEY (parent_task_id) REFERENCES tasks (id) ON DELETE CASCADE,
+    CONSTRAINT tasks_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects (id) ON DELETE SET NULL
+);
+
+
+COMMENT ON TABLE tasks IS 'Task tracking. NOVA can create, update status, assign. Check before starting work.';
+
+
+COMMENT ON COLUMN tasks.task_type IS 'one_off = complete once, recurring = resets after completion, fallback = low-priority repeatable when idle';
+
+
+COMMENT ON COLUMN tasks.recurrence_interval IS 'How often recurring tasks reset (e.g., 1 day, 1 week)';
+
+
+COMMENT ON COLUMN tasks.last_completed_at IS 'When task was last completed (for recurring reset logic)';
+
+--
+-- Name: idx_tasks_parent; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_tasks_parent ON tasks (parent_task_id);
+
+--
+-- Name: idx_tasks_priority; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_tasks_priority ON tasks (priority);
+
+--
+-- Name: idx_tasks_project; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks (project_id);
+
+--
+-- Name: idx_tasks_status; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks (status);
+
+--
+-- Name: ticker_portfolio; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS ticker_portfolio (
+    data jsonb
+);
+
+--
+-- Name: tools; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS tools (
+    id SERIAL,
+    tool_name text NOT NULL,
+    description text NOT NULL,
+    source_type text NOT NULL,
+    agent_name text,
+    category text,
+    notes text,
+    metadata jsonb,
+    enabled boolean DEFAULT true NOT NULL,
+    created_at timestamptz DEFAULT now(),
+    updated_at timestamptz DEFAULT now(),
+    updated_by text DEFAULT 'system',
+    domain_name text,
+    CONSTRAINT tools_pkey PRIMARY KEY (id),
+    CONSTRAINT tools_source_type_check CHECK (source_type IN ('BUNDLED'::text, 'MANAGED'::text, 'WORKSPACE'::text, 'DOMAIN'::text))
+);
+
+
+COMMENT ON TABLE tools IS 'Tool usage notes. Override: WORKSPACE > DOMAIN > MANAGED > BUNDLED. See get_agent_tools().';
+
+
+COMMENT ON COLUMN tools.source_type IS 'BUNDLED=shipped with OpenClaw, MANAGED=~/.openclaw/tools, DOMAIN=domain-scoped, WORKSPACE=per-agent workspace tools';
+
+
+COMMENT ON COLUMN tools.category IS 'Grouping key for assembling TOOLS.md sections';
+
+
+COMMENT ON COLUMN tools.notes IS 'Markdown guidance content — camera names, SSH hosts, preferred voices, etc.';
+
+
+COMMENT ON COLUMN tools.domain_name IS 'Required when source_type=DOMAIN. Matched via agent_domains.';
+
+--
+-- Name: idx_tools_unique; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tools_unique ON tools (tool_name, source_type, COALESCE(agent_name, ''::text), COALESCE(domain_name, ''::text));
+
+--
+-- Name: unsolved_problems; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS unsolved_problems (
+    id SERIAL,
+    name varchar(255) NOT NULL,
+    category varchar(100),
+    description text,
+    source_url text,
+    difficulty varchar(50),
+    status varchar(50) DEFAULT 'unexplored',
+    total_time_spent_minutes integer DEFAULT 0,
+    last_worked_at timestamptz,
+    work_sessions integer DEFAULT 0,
+    current_approach text,
+    progress_notes text,
+    blockers text,
+    subagents_used text[],
+    external_resources text[],
+    added_at timestamptz DEFAULT now(),
+    added_by varchar(100) DEFAULT 'NOVA',
+    priority integer DEFAULT 5,
+    CONSTRAINT unsolved_problems_pkey PRIMARY KEY (id)
+);
+
+
+COMMENT ON TABLE unsolved_problems IS 'Humanity''s unsolved problems for NOVA to work on during idle time. Part of the Motivation System - provides meaningful default work when task queue is empty.';
+
+--
+-- Name: idx_unsolved_problems_priority; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_unsolved_problems_priority ON unsolved_problems (priority DESC);
+
+--
+-- Name: vehicles; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS vehicles (
+    id SERIAL,
+    owner_id integer,
+    color varchar(50),
+    year integer,
+    make varchar(100),
+    model varchar(100),
+    vin varchar(17),
+    license_plate_state varchar(20),
+    license_plate_number varchar(20),
+    nickname varchar(100),
+    notes text,
+    created_at timestamp DEFAULT CURRENT_TIMESTAMP,
+    updated_at timestamp DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT vehicles_pkey PRIMARY KEY (id),
+    CONSTRAINT vehicles_owner_id_fkey FOREIGN KEY (owner_id) REFERENCES entities (id)
+);
+
+
+COMMENT ON TABLE vehicles IS 'Vehicle tracking and management. Cars, bikes, boats, planes owned or used.';
+
+--
+-- Name: idx_vehicles_owner; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_vehicles_owner ON vehicles (owner_id);
+
+--
+-- Name: vocabulary; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS vocabulary (
+    id SERIAL,
+    word varchar(255) NOT NULL,
+    category varchar(100),
+    pronunciation varchar(255),
+    misheard_as text[],
+    added_at timestamp DEFAULT CURRENT_TIMESTAMP,
+    vote_count integer DEFAULT 1,
+    last_confirmed timestamp DEFAULT now(),
+    CONSTRAINT vocabulary_pkey PRIMARY KEY (id),
+    CONSTRAINT vocabulary_word_key UNIQUE (word)
+);
+
+
+COMMENT ON TABLE vocabulary IS 'Custom vocabulary for speech recognition. Add names, terms, jargon as encountered.';
+
+
+COMMENT ON COLUMN vocabulary.vote_count IS 'Reinforcement count - incremented each time this word is mentioned';
+
+
+COMMENT ON COLUMN vocabulary.last_confirmed IS 'Timestamp of most recent confirmation';
+
+--
+-- Name: workflows; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS workflows (
+    id SERIAL,
+    name text NOT NULL,
+    description text NOT NULL,
+    created_at timestamptz DEFAULT now(),
+    updated_at timestamptz DEFAULT now(),
+    created_by text DEFAULT 'newhart',
+    status text DEFAULT 'active',
+    tags text[] DEFAULT '{}',
+    department text,
+    orchestrator_domain text,
+    last_run_at timestamptz,
+    last_run_status text,
+    last_run_error text,
+    CONSTRAINT workflows_pkey PRIMARY KEY (id),
+    CONSTRAINT workflows_name_key UNIQUE (name),
+    CONSTRAINT workflows_last_run_status_check CHECK (last_run_status IN ('success'::text, 'partial'::text, 'failed'::text, 'skipped'::text)),
+    CONSTRAINT workflows_status_check CHECK (status IN ('active'::text, 'deprecated'::text, 'archived'::text))
+);
+
+
+COMMENT ON TABLE workflows IS 'Defines multi-agent workflows with ordered steps and deliverable handoffs';
+
+--
+-- Name: idx_workflows_name; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_workflows_name ON workflows (name);
+
+--
+-- Name: idx_workflows_status; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_workflows_status ON workflows (status);
+
+--
+-- Name: motivation_d100; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS motivation_d100 (
+    roll integer,
+    task_name varchar(255),
+    task_description text,
+    workflow_id integer,
+    skill_name varchar(255),
+    tool_name varchar(255),
+    difficulty varchar(20) DEFAULT 'medium',
+    energy_required varchar(20) DEFAULT 'low',
+    estimated_minutes integer,
+    enabled boolean DEFAULT true,
+    times_rolled integer DEFAULT 0,
+    times_completed integer DEFAULT 0,
+    last_rolled timestamp,
+    last_completed timestamp,
+    created_at timestamp DEFAULT now(),
+    notes text,
+    CONSTRAINT motivation_d100_pkey PRIMARY KEY (roll),
+    CONSTRAINT motivation_d100_workflow_id_fkey FOREIGN KEY (workflow_id) REFERENCES workflows (id),
+    CONSTRAINT motivation_d100_roll_check CHECK (roll >= 1 AND roll <= 100)
+);
+
+
+COMMENT ON TABLE motivation_d100 IS 'D100 random task table for NOVA motivation system - roll when bored!';
+
+
+COMMENT ON COLUMN motivation_d100.roll IS 'Die value 1-100';
+
+
+COMMENT ON COLUMN motivation_d100.workflow_id IS 'Optional link to workflows table for structured execution';
+
+
+COMMENT ON COLUMN motivation_d100.skill_name IS 'Optional SKILL.md to follow (e.g., "daily-inspiration-art")';
+
+
+COMMENT ON COLUMN motivation_d100.tool_name IS 'Optional tool to use (e.g., "bird-x", "gog")';
+
+--
+-- Name: workflow_steps; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS workflow_steps (
+    id SERIAL,
+    workflow_id integer NOT NULL,
+    step_order integer NOT NULL,
+    description text NOT NULL,
+    produces_deliverable boolean DEFAULT false,
+    deliverable_type text,
+    deliverable_description text,
+    handoff_to_step integer,
+    required boolean DEFAULT true,
+    estimated_duration_minutes integer,
+    requires_authorization boolean DEFAULT false,
+    requires_discussion boolean DEFAULT false,
+    domain text,
+    domains text[],
+    CONSTRAINT workflow_steps_pkey PRIMARY KEY (id),
+    CONSTRAINT workflow_steps_workflow_id_step_order_key UNIQUE (workflow_id, step_order),
+    CONSTRAINT workflow_steps_handoff_to_step_fkey FOREIGN KEY (handoff_to_step) REFERENCES workflow_steps (id),
+    CONSTRAINT workflow_steps_workflow_id_fkey FOREIGN KEY (workflow_id) REFERENCES workflows (id) ON DELETE CASCADE
+);
+
+
+COMMENT ON TABLE workflow_steps IS 'Ordered steps in a workflow with agent assignments and deliverable specifications';
+
+
+COMMENT ON COLUMN workflow_steps.requires_authorization IS 'If true, must get explicit human authorization before proceeding to next step';
+
+
+COMMENT ON COLUMN workflow_steps.requires_discussion IS 'If true, discuss with human before proceeding (but can continue without explicit authorization if authorization=false)';
+
+
+COMMENT ON COLUMN workflow_steps.domain IS 'Subject-matter domain for agent routing (e.g., sql/database, python/daemon)';
+
+--
+-- Name: idx_workflow_steps_domain; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_workflow_steps_domain ON workflow_steps (domain);
+
+--
+-- Name: idx_workflow_steps_order; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_workflow_steps_order ON workflow_steps (workflow_id, step_order);
+
+--
+-- Name: works; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS works (
+    id SERIAL,
+    title varchar(255) NOT NULL,
+    work_type varchar(50) NOT NULL,
+    content text NOT NULL,
+    context_prompt text,
+    word_count integer,
+    character_count integer,
+    language varchar(10) DEFAULT 'en',
+    status varchar(20) DEFAULT 'draft',
+    created_at timestamptz DEFAULT now() NOT NULL,
+    updated_at timestamptz DEFAULT now() NOT NULL,
+    version integer DEFAULT 1,
+    parent_work_id integer,
+    metadata jsonb,
+    CONSTRAINT works_pkey PRIMARY KEY (id),
+    CONSTRAINT works_parent_work_id_fkey FOREIGN KEY (parent_work_id) REFERENCES works (id) ON DELETE SET NULL,
+    CONSTRAINT positive_counts CHECK (word_count >= 0 AND character_count >= 0),
+    CONSTRAINT valid_status CHECK (status::text IN ('draft'::character varying, 'complete'::character varying, 'published'::character varying, 'archived'::character varying)),
+    CONSTRAINT valid_work_type CHECK (work_type::text IN ('haiku'::character varying, 'poem'::character varying, 'prose'::character varying, 'documentation'::character varying, 'story'::character varying, 'dialogue'::character varying, 'microfiction'::character varying, 'essay'::character varying, 'other'::character varying))
+);
+
+--
+-- Name: publications; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS publications (
+    id SERIAL,
+    work_id integer NOT NULL,
+    published_to varchar(100) NOT NULL,
+    publication_type varchar(50) NOT NULL,
+    url text,
+    context text,
+    published_at timestamptz DEFAULT now() NOT NULL,
+    published_by varchar(50),
+    CONSTRAINT publications_pkey PRIMARY KEY (id),
+    CONSTRAINT publications_work_id_fkey FOREIGN KEY (work_id) REFERENCES works (id) ON DELETE CASCADE,
+    CONSTRAINT valid_publication_type CHECK (publication_type::text IN ('git_repo'::character varying, 'doc'::character varying, 'file'::character varying, 'agent_chat'::character varying, 'external'::character varying, 'other'::character varying))
+);
+
+--
+-- Name: work_tags; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS work_tags (
+    work_id integer,
+    tag_id integer,
+    added_at timestamptz DEFAULT now() NOT NULL,
+    CONSTRAINT work_tags_pkey PRIMARY KEY (work_id, tag_id),
+    CONSTRAINT work_tags_tag_id_fkey FOREIGN KEY (tag_id) REFERENCES tags (id) ON DELETE CASCADE,
+    CONSTRAINT work_tags_work_id_fkey FOREIGN KEY (work_id) REFERENCES works (id) ON DELETE CASCADE
+);
 
 --
 -- Name: audit_bootstrap_agents(); Type: FUNCTION; Schema: -; Owner: -
@@ -786,6 +3503,7 @@ CREATE OR REPLACE FUNCTION get_agent_bootstrap(
 RETURNS TABLE(filename text, content text, source text)
 LANGUAGE plpgsql
 VOLATILE
+SECURITY DEFINER
 AS $$
 DECLARE
     v_agent_id INTEGER;
@@ -829,9 +3547,8 @@ BEGIN
         UNION ALL
 
         -- 4. WORKFLOW (dynamic from workflows/workflow_steps)
-        -- Matches workflows where agent is assigned to steps,
-        -- workflow domains overlap agent domains,
-        -- OR agent is the workflow orchestrator
+        -- Matches workflows where step domains overlap agent domains,
+        -- OR agent's domain matches workflow orchestrator_domain
         SELECT
             'WORKFLOW_' || upper(replace(w.name, '-', '_')) || '.md' AS filename,
             w.name || ': ' || w.description ||
@@ -845,23 +3562,19 @@ BEGIN
         LEFT JOIN LATERAL (
             SELECT string_agg(
                 ws.step_order || '. ' || ws.description ||
-                COALESCE(' [agent: ' || a2.name || ']', '') ||
                 COALESCE(' [domain: ' || ws.domain || ']', ''),
                 E'\n' ORDER BY ws.step_order
             ) AS steps_text
             FROM workflow_steps ws
-            LEFT JOIN agents a2 ON a2.id = ws.agent_id
             WHERE ws.workflow_id = w.id
         ) ws_agg ON true
         WHERE w.status = 'active'
           AND (
-            -- Agent is the workflow orchestrator
-            w.orchestrator_agent_id = v_agent_id
-            OR
-            -- Agent is directly assigned to a step
+            -- Agent's domain matches workflow orchestrator_domain
             EXISTS (
-                SELECT 1 FROM workflow_steps ws2
-                WHERE ws2.workflow_id = w.id AND ws2.agent_id = v_agent_id
+                SELECT 1 FROM agent_domains ad
+                WHERE ad.agent_id = v_agent_id
+                  AND ad.domain_topic = w.orchestrator_domain
             )
             OR
             -- Workflow step domains overlap with agent's domains
@@ -2557,11 +5270,310 @@ END;
 $$;
 
 --
--- Name: fk_citation_library_work; Type: CONSTRAINT; Schema: -; Owner: -
+-- Name: agent_config_changed; Type: TRIGGER; Schema: -; Owner: -
 --
 
-ALTER TABLE research_citations
-ADD CONSTRAINT fk_citation_library_work FOREIGN KEY (library_work_id) REFERENCES library_works (id) ON DELETE SET NULL;
+CREATE OR REPLACE TRIGGER agent_config_changed
+    AFTER INSERT OR UPDATE OR DELETE ON agents
+    FOR EACH ROW
+    EXECUTE FUNCTION notify_agent_config_changed();
+
+--
+-- Name: agents_config_changed; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER agents_config_changed
+    AFTER INSERT OR UPDATE OR DELETE ON agents
+    FOR EACH ROW
+    EXECUTE FUNCTION notify_agent_config_changed();
+
+--
+-- Name: agents_delegation_notify; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER agents_delegation_notify
+    AFTER INSERT OR UPDATE OR DELETE ON agents
+    FOR EACH ROW
+    EXECUTE FUNCTION notify_delegation_change();
+
+--
+-- Name: agents_updated_at; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER agents_updated_at
+    BEFORE UPDATE ON agents
+    FOR EACH ROW
+    EXECUTE FUNCTION update_agents_timestamp();
+
+--
+-- Name: coder_queue_notify; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER coder_queue_notify
+    AFTER INSERT OR UPDATE ON git_issue_queue
+    FOR EACH ROW
+    EXECUTE FUNCTION notify_coder_queue_change();
+
+--
+-- Name: enforce_project_lock; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER enforce_project_lock
+    BEFORE UPDATE ON projects
+    FOR EACH ROW
+    EXECUTE FUNCTION prevent_locked_project_update();
+
+--
+-- Name: gambling_entries_notify; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER gambling_entries_notify
+    AFTER INSERT OR UPDATE OR DELETE ON gambling_entries
+    FOR EACH ROW
+    EXECUTE FUNCTION notify_gambling_change();
+
+--
+-- Name: gambling_logs_notify; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER gambling_logs_notify
+    AFTER INSERT OR UPDATE OR DELETE ON gambling_logs
+    FOR EACH ROW
+    EXECUTE FUNCTION notify_gambling_change();
+
+--
+-- Name: media_search_update; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER media_search_update
+    BEFORE INSERT OR UPDATE ON media_consumed
+    FOR EACH ROW
+    EXECUTE FUNCTION update_media_search_vector();
+
+--
+-- Name: media_search_vector_update; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER media_search_vector_update
+    BEFORE INSERT OR UPDATE ON media_consumed
+    FOR EACH ROW
+    EXECUTE FUNCTION update_media_search_vector();
+
+--
+-- Name: music_analysis_search_update; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER music_analysis_search_update
+    BEFORE INSERT OR UPDATE ON music_analysis
+    FOR EACH ROW
+    EXECUTE FUNCTION update_music_analysis_search_vector();
+
+--
+-- Name: music_search_update; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER music_search_update
+    BEFORE INSERT OR UPDATE ON music_library
+    FOR EACH ROW
+    EXECUTE FUNCTION update_music_search_vector();
+
+--
+-- Name: protect_agent_aliases_delete; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER protect_agent_aliases_delete
+    BEFORE DELETE ON agent_aliases
+    FOR EACH ROW
+    EXECUTE FUNCTION protect_agent_deletes();
+
+--
+-- Name: protect_agent_aliases_insert; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER protect_agent_aliases_insert
+    BEFORE INSERT ON agent_aliases
+    FOR EACH ROW
+    EXECUTE FUNCTION protect_agent_writes();
+
+--
+-- Name: protect_agent_aliases_update; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER protect_agent_aliases_update
+    BEFORE UPDATE ON agent_aliases
+    FOR EACH ROW
+    EXECUTE FUNCTION protect_agent_writes();
+
+--
+-- Name: protect_agent_domains_delete; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER protect_agent_domains_delete
+    BEFORE DELETE ON agent_domains
+    FOR EACH ROW
+    EXECUTE FUNCTION protect_agent_deletes();
+
+--
+-- Name: protect_agent_domains_insert; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER protect_agent_domains_insert
+    BEFORE INSERT ON agent_domains
+    FOR EACH ROW
+    EXECUTE FUNCTION protect_agent_writes();
+
+--
+-- Name: protect_agent_domains_update; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER protect_agent_domains_update
+    BEFORE UPDATE ON agent_domains
+    FOR EACH ROW
+    EXECUTE FUNCTION protect_agent_writes();
+
+--
+-- Name: protect_agent_mods_delete; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER protect_agent_mods_delete
+    BEFORE DELETE ON agent_modifications
+    FOR EACH ROW
+    EXECUTE FUNCTION protect_agent_deletes();
+
+--
+-- Name: protect_agent_mods_insert; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER protect_agent_mods_insert
+    BEFORE INSERT ON agent_modifications
+    FOR EACH ROW
+    EXECUTE FUNCTION protect_agent_writes();
+
+--
+-- Name: protect_agent_mods_update; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER protect_agent_mods_update
+    BEFORE UPDATE ON agent_modifications
+    FOR EACH ROW
+    EXECUTE FUNCTION protect_agent_writes();
+
+--
+-- Name: protect_agent_spawns_delete; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER protect_agent_spawns_delete
+    BEFORE DELETE ON agent_spawns
+    FOR EACH ROW
+    EXECUTE FUNCTION protect_agent_deletes();
+
+--
+-- Name: protect_agent_spawns_insert; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER protect_agent_spawns_insert
+    BEFORE INSERT ON agent_spawns
+    FOR EACH ROW
+    EXECUTE FUNCTION protect_agent_writes();
+
+--
+-- Name: protect_agent_spawns_update; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER protect_agent_spawns_update
+    BEFORE UPDATE ON agent_spawns
+    FOR EACH ROW
+    EXECUTE FUNCTION protect_agent_writes();
+
+--
+-- Name: protect_agents_delete; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER protect_agents_delete
+    BEFORE DELETE ON agents
+    FOR EACH ROW
+    EXECUTE FUNCTION protect_agent_deletes();
+
+--
+-- Name: protect_agents_insert; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER protect_agents_insert
+    BEFORE INSERT ON agents
+    FOR EACH ROW
+    EXECUTE FUNCTION protect_agent_writes();
+
+--
+-- Name: protect_agents_update; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER protect_agents_update
+    BEFORE UPDATE ON agents
+    FOR EACH ROW
+    EXECUTE FUNCTION protect_agent_writes();
+
+--
+-- Name: protect_bootstrap_context; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER protect_bootstrap_context
+    BEFORE INSERT OR UPDATE OR DELETE ON agent_bootstrap_context
+    FOR EACH ROW
+    EXECUTE FUNCTION protect_bootstrap_context_writes();
+
+--
+-- Name: protect_library_authors; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER protect_library_authors
+    BEFORE INSERT OR UPDATE OR DELETE ON library_authors
+    FOR EACH ROW
+    EXECUTE FUNCTION protect_library_writes();
+
+--
+-- Name: protect_library_tags; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER protect_library_tags
+    BEFORE INSERT OR UPDATE OR DELETE ON library_tags
+    FOR EACH ROW
+    EXECUTE FUNCTION protect_library_writes();
+
+--
+-- Name: protect_library_work_authors; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER protect_library_work_authors
+    BEFORE INSERT OR UPDATE OR DELETE ON library_work_authors
+    FOR EACH ROW
+    EXECUTE FUNCTION protect_library_writes();
+
+--
+-- Name: protect_library_work_relationships; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER protect_library_work_relationships
+    BEFORE INSERT OR UPDATE OR DELETE ON library_work_relationships
+    FOR EACH ROW
+    EXECUTE FUNCTION protect_library_writes();
+
+--
+-- Name: protect_library_work_tags; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER protect_library_work_tags
+    BEFORE INSERT OR UPDATE OR DELETE ON library_work_tags
+    FOR EACH ROW
+    EXECUTE FUNCTION protect_library_writes();
+
+--
+-- Name: protect_library_works; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER protect_library_works
+    BEFORE INSERT OR UPDATE OR DELETE ON library_works
+    FOR EACH ROW
+    EXECUTE FUNCTION protect_library_writes();
 
 --
 -- Name: protect_research_citations; Type: TRIGGER; Schema: -; Owner: -
@@ -2645,6 +5657,24 @@ CREATE OR REPLACE TRIGGER protect_turn_context
     EXECUTE FUNCTION protect_bootstrap_context_writes();
 
 --
+-- Name: publication_status_update; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER publication_status_update
+    AFTER INSERT ON publications
+    FOR EACH ROW
+    EXECUTE FUNCTION update_work_status_on_publication();
+
+--
+-- Name: system_config_changed; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER system_config_changed
+    AFTER INSERT OR UPDATE OR DELETE ON agent_system_config
+    FOR EACH ROW
+    EXECUTE FUNCTION notify_system_config_changed();
+
+--
 -- Name: trg_agent_turn_context_updated_at; Type: TRIGGER; Schema: -; Owner: -
 --
 
@@ -2652,6 +5682,60 @@ CREATE OR REPLACE TRIGGER trg_agent_turn_context_updated_at
     BEFORE UPDATE ON agent_turn_context
     FOR EACH ROW
     EXECUTE FUNCTION update_agent_turn_context_timestamp();
+
+--
+-- Name: trg_agents_changed; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER trg_agents_changed
+    AFTER INSERT OR UPDATE OR DELETE ON agents
+    FOR EACH ROW
+    EXECUTE FUNCTION notify_agents_changed();
+
+--
+-- Name: trg_embed_chat_message; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER trg_embed_chat_message
+    AFTER INSERT ON agent_chat
+    FOR EACH ROW
+    EXECUTE FUNCTION embed_chat_message();
+
+--
+-- Name: trg_enforce_agent_chat_function_use; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER trg_enforce_agent_chat_function_use
+    BEFORE INSERT ON agent_chat
+    FOR EACH ROW
+    EXECUTE FUNCTION enforce_agent_chat_function_use();
+
+--
+-- Name: trg_enforce_function_use; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER trg_enforce_function_use
+    BEFORE INSERT ON agent_chat
+    FOR EACH ROW
+    EXECUTE FUNCTION enforce_agent_chat_function_use();
+
+--
+-- Name: trg_library_works_search; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER trg_library_works_search
+    BEFORE INSERT OR UPDATE ON library_works
+    FOR EACH ROW
+    EXECUTE FUNCTION library_works_search_trigger();
+
+--
+-- Name: trg_notify_agent_chat; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER trg_notify_agent_chat
+    AFTER INSERT ON agent_chat
+    FOR EACH ROW
+    EXECUTE FUNCTION notify_agent_chat();
 
 --
 -- Name: trg_research_conclusions_search; Type: TRIGGER; Schema: -; Owner: -
@@ -2679,6 +5763,51 @@ CREATE OR REPLACE TRIGGER trg_research_tasks_search
     BEFORE INSERT OR UPDATE ON research_tasks
     FOR EACH ROW
     EXECUTE FUNCTION research_tasks_search_trigger();
+
+--
+-- Name: workflow_step_change_trigger; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER workflow_step_change_trigger
+    AFTER UPDATE ON workflow_steps
+    FOR EACH ROW
+    EXECUTE FUNCTION notify_workflow_step_change();
+
+--
+-- Name: workflow_steps_delegation_notify; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER workflow_steps_delegation_notify
+    AFTER INSERT OR UPDATE OR DELETE ON workflow_steps
+    FOR EACH ROW
+    EXECUTE FUNCTION notify_delegation_change();
+
+--
+-- Name: workflows_delegation_notify; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER workflows_delegation_notify
+    AFTER INSERT OR UPDATE OR DELETE ON workflows
+    FOR EACH ROW
+    EXECUTE FUNCTION notify_delegation_change();
+
+--
+-- Name: works_calculate_counts; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER works_calculate_counts
+    BEFORE INSERT OR UPDATE ON works
+    FOR EACH ROW
+    EXECUTE FUNCTION calculate_word_count();
+
+--
+-- Name: works_updated_at; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER works_updated_at
+    BEFORE UPDATE ON works
+    FOR EACH ROW
+    EXECUTE FUNCTION update_works_timestamp();
 
 --
 -- Name: delegation_knowledge; Type: VIEW; Schema: -; Owner: -
@@ -3096,16 +6225,616 @@ CREATE OR REPLACE VIEW workflow_steps_detail AS
   ORDER BY w.name, ws.step_order;
 
 --
+-- Name: agent_actions; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE agent_actions FROM newhart;
+
+--
+-- Name: agent_actions; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE agent_actions FROM newhart;
+
+--
+-- Name: agent_aliases; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE agent_aliases FROM newhart;
+
+--
+-- Name: agent_aliases; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE agent_aliases FROM newhart;
+
+--
+-- Name: agent_bootstrap_context; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE agent_bootstrap_context FROM newhart;
+
+--
+-- Name: agent_bootstrap_context; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE agent_bootstrap_context FROM newhart;
+
+--
+-- Name: agent_chat; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE agent_chat FROM newhart;
+
+--
+-- Name: agent_chat; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE agent_chat FROM newhart;
+
+--
+-- Name: agent_chat_processed; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE agent_chat_processed FROM newhart;
+
+--
+-- Name: agent_chat_processed; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE agent_chat_processed FROM newhart;
+
+--
+-- Name: agent_domains; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE agent_domains FROM newhart;
+
+--
+-- Name: agent_domains; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE agent_domains FROM newhart;
+
+--
+-- Name: agent_jobs; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE agent_jobs FROM newhart;
+
+--
+-- Name: agent_jobs; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE agent_jobs FROM newhart;
+
+--
+-- Name: agent_modifications; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE agent_modifications FROM newhart;
+
+--
+-- Name: agent_modifications; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE agent_modifications FROM newhart;
+
+--
+-- Name: agent_spawns; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE agent_spawns FROM newhart;
+
+--
+-- Name: agent_spawns; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE agent_spawns FROM newhart;
+
+--
+-- Name: agent_system_config; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE agent_system_config FROM newhart;
+
+--
+-- Name: agent_system_config; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE agent_system_config FROM newhart;
+
+--
 -- Name: agent_turn_context; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
 REVOKE SELECT ON TABLE agent_turn_context FROM newhart;
 
 --
+-- Name: agent_turn_context; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE agent_turn_context FROM newhart;
+
+--
+-- Name: agents; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE agents FROM newhart;
+
+--
+-- Name: agents; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE agents FROM newhart;
+
+--
+-- Name: ai_models; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE ai_models FROM newhart;
+
+--
+-- Name: ai_models; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE ai_models FROM newhart;
+
+--
+-- Name: artwork; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE artwork FROM iris;
+
+--
+-- Name: artwork; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE artwork FROM iris;
+
+--
+-- Name: asset_classes; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE asset_classes FROM ticker;
+
+--
+-- Name: asset_classes; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE asset_classes FROM ticker;
+
+--
+-- Name: bootstrap_context_config; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE bootstrap_context_config FROM newhart;
+
+--
+-- Name: bootstrap_context_config; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE bootstrap_context_config FROM newhart;
+
+--
+-- Name: certificates; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE certificates FROM nova;
+
+--
+-- Name: channel_activity; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE channel_activity FROM nova;
+
+--
+-- Name: conversations; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE conversations FROM nova;
+
+--
+-- Name: entities; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE entities FROM nova;
+
+--
+-- Name: entity_fact_conflicts; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE entity_fact_conflicts FROM nova;
+
+--
+-- Name: entity_facts; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE entity_facts FROM nova;
+
+--
+-- Name: entity_facts_archive; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE entity_facts_archive FROM nova;
+
+--
+-- Name: entity_relationships; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE entity_relationships FROM nova;
+
+--
+-- Name: event_entities; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE event_entities FROM nova;
+
+--
+-- Name: event_places; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE event_places FROM nova;
+
+--
+-- Name: event_projects; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE event_projects FROM nova;
+
+--
+-- Name: events; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE events FROM nova;
+
+--
+-- Name: events_archive; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE events_archive FROM nova;
+
+--
+-- Name: extraction_metrics; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE extraction_metrics FROM nova;
+
+--
+-- Name: fact_change_log; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE fact_change_log FROM nova;
+
+--
+-- Name: gambling_entries; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE gambling_entries FROM nova;
+
+--
+-- Name: gambling_logs; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE gambling_logs FROM nova;
+
+--
+-- Name: git_issue_queue; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE git_issue_queue FROM coder;
+
+--
+-- Name: git_issue_queue; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE git_issue_queue FROM coder;
+
+--
+-- Name: job_messages; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE job_messages FROM nova;
+
+--
+-- Name: lessons; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE lessons FROM nova;
+
+--
+-- Name: lessons_archive; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE lessons_archive FROM nova;
+
+--
+-- Name: library_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE library_authors FROM athena;
+
+--
+-- Name: library_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE library_authors FROM athena;
+
+--
+-- Name: library_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE library_tags FROM athena;
+
+--
+-- Name: library_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE library_tags FROM athena;
+
+--
+-- Name: library_work_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE library_work_authors FROM athena;
+
+--
+-- Name: library_work_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE library_work_authors FROM athena;
+
+--
+-- Name: library_work_relationships; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE library_work_relationships FROM athena;
+
+--
+-- Name: library_work_relationships; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE library_work_relationships FROM athena;
+
+--
+-- Name: library_work_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE library_work_tags FROM athena;
+
+--
+-- Name: library_work_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE library_work_tags FROM athena;
+
+--
+-- Name: library_works; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE library_works FROM athena;
+
+--
+-- Name: library_works; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE library_works FROM athena;
+
+--
+-- Name: media_consumed; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE media_consumed FROM nova;
+
+--
+-- Name: media_queue; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE media_queue FROM nova;
+
+--
+-- Name: media_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE media_tags FROM nova;
+
+--
+-- Name: memory_embeddings; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE memory_embeddings FROM nova;
+
+--
+-- Name: memory_embeddings_archive; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE memory_embeddings_archive FROM nova;
+
+--
+-- Name: memory_type_priorities; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE memory_type_priorities FROM nova;
+
+--
+-- Name: motivation_d100; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE motivation_d100 FROM nova;
+
+--
+-- Name: music_analysis; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE music_analysis FROM iris;
+
+--
+-- Name: music_analysis; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE music_analysis FROM iris;
+
+--
+-- Name: music_library; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE music_library FROM iris;
+
+--
+-- Name: music_library; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE music_library FROM iris;
+
+--
+-- Name: place_properties; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE place_properties FROM nova;
+
+--
+-- Name: places; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE places FROM nova;
+
+--
+-- Name: pm_domain_portfolio_snapshots; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE pm_domain_portfolio_snapshots FROM ticker;
+
+--
+-- Name: pm_domain_portfolio_snapshots; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE pm_domain_portfolio_snapshots FROM ticker;
+
+--
+-- Name: portfolio_history; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE portfolio_history FROM ticker;
+
+--
+-- Name: portfolio_history; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE portfolio_history FROM ticker;
+
+--
+-- Name: portfolio_metrics; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE portfolio_metrics FROM ticker;
+
+--
+-- Name: portfolio_metrics; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE portfolio_metrics FROM ticker;
+
+--
+-- Name: portfolio_positions; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE portfolio_positions FROM ticker;
+
+--
+-- Name: portfolio_positions; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE portfolio_positions FROM ticker;
+
+--
+-- Name: portfolio_snapshots; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE portfolio_snapshots FROM ticker;
+
+--
+-- Name: portfolio_snapshots; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE portfolio_snapshots FROM ticker;
+
+--
+-- Name: portfolio_updates; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE portfolio_updates FROM ticker;
+
+--
+-- Name: portfolio_updates; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE portfolio_updates FROM ticker;
+
+--
+-- Name: positions; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE positions FROM ticker;
+
+--
+-- Name: positions; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE positions FROM ticker;
+
+--
+-- Name: preferences; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE preferences FROM nova;
+
+--
+-- Name: price_cache_v2; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE price_cache_v2 FROM ticker;
+
+--
+-- Name: price_cache_v2; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE price_cache_v2 FROM ticker;
+
+--
+-- Name: project_entities; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE project_entities FROM nova;
+
+--
+-- Name: project_tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE project_tasks FROM nova;
+
+--
+-- Name: projects; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE projects FROM nova;
+
+--
+-- Name: publications; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE publications FROM nova;
+
+--
+-- Name: ralph_sessions; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE ralph_sessions FROM nova;
+
+--
 -- Name: research_citations; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE research_citations FROM newhart;
+REVOKE SELECT ON TABLE research_citations FROM scout;
 
 --
 -- Name: research_citations; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -3117,7 +6846,7 @@ REVOKE SELECT ON TABLE research_citations FROM scout;
 -- Name: research_conclusions; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE research_conclusions FROM newhart;
+REVOKE SELECT ON TABLE research_conclusions FROM scout;
 
 --
 -- Name: research_conclusions; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -3129,7 +6858,7 @@ REVOKE SELECT ON TABLE research_conclusions FROM scout;
 -- Name: research_findings; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE research_findings FROM newhart;
+REVOKE SELECT ON TABLE research_findings FROM scout;
 
 --
 -- Name: research_findings; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -3141,7 +6870,7 @@ REVOKE SELECT ON TABLE research_findings FROM scout;
 -- Name: research_projects; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE research_projects FROM newhart;
+REVOKE SELECT ON TABLE research_projects FROM scout;
 
 --
 -- Name: research_projects; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -3153,7 +6882,7 @@ REVOKE SELECT ON TABLE research_projects FROM scout;
 -- Name: research_provenance; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE research_provenance FROM newhart;
+REVOKE SELECT ON TABLE research_provenance FROM scout;
 
 --
 -- Name: research_provenance; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -3165,7 +6894,7 @@ REVOKE SELECT ON TABLE research_provenance FROM scout;
 -- Name: research_taggings; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE research_taggings FROM newhart;
+REVOKE SELECT ON TABLE research_taggings FROM scout;
 
 --
 -- Name: research_taggings; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -3177,7 +6906,7 @@ REVOKE SELECT ON TABLE research_taggings FROM scout;
 -- Name: research_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE research_tags FROM newhart;
+REVOKE SELECT ON TABLE research_tags FROM scout;
 
 --
 -- Name: research_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -3189,13 +6918,127 @@ REVOKE SELECT ON TABLE research_tags FROM scout;
 -- Name: research_tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE research_tasks FROM newhart;
+REVOKE SELECT ON TABLE research_tasks FROM scout;
 
 --
 -- Name: research_tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
 REVOKE SELECT ON TABLE research_tasks FROM scout;
+
+--
+-- Name: shopping_history; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE shopping_history FROM nova;
+
+--
+-- Name: shopping_history; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE shopping_history FROM "nova-staging";
+
+--
+-- Name: shopping_preferences; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE shopping_preferences FROM nova;
+
+--
+-- Name: shopping_preferences; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE shopping_preferences FROM "nova-staging";
+
+--
+-- Name: shopping_wishlist; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE shopping_wishlist FROM nova;
+
+--
+-- Name: shopping_wishlist; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE shopping_wishlist FROM "nova-staging";
+
+--
+-- Name: skills; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE skills FROM nova;
+
+--
+-- Name: tags; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE tags FROM nova;
+
+--
+-- Name: tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE tasks FROM nova;
+
+--
+-- Name: ticker_portfolio; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE ticker_portfolio FROM ticker;
+
+--
+-- Name: ticker_portfolio; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE ticker_portfolio FROM ticker;
+
+--
+-- Name: tools; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE tools FROM nova;
+
+--
+-- Name: unsolved_problems; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE unsolved_problems FROM nova;
+
+--
+-- Name: vehicles; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE vehicles FROM nova;
+
+--
+-- Name: vocabulary; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE vocabulary FROM nova;
+
+--
+-- Name: work_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE work_tags FROM nova;
+
+--
+-- Name: workflow_steps; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE workflow_steps FROM nova;
+
+--
+-- Name: workflows; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE workflows FROM nova;
+
+--
+-- Name: works; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE works FROM nova;
 
 --
 -- Name: agent_actions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -3322,6 +7165,12 @@ GRANT SELECT, USAGE ON SEQUENCE ai_models_id_seq TO scout;
 --
 
 GRANT SELECT, USAGE ON SEQUENCE artwork_id_seq TO athena;
+
+--
+-- Name: artwork_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE artwork_id_seq TO nova;
 
 --
 -- Name: artwork_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -3657,6 +7506,12 @@ GRANT SELECT, USAGE ON SEQUENCE portfolio_history_id_seq TO athena;
 -- Name: portfolio_history_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE portfolio_history_id_seq TO nova;
+
+--
+-- Name: portfolio_history_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT SELECT, USAGE ON SEQUENCE portfolio_history_id_seq TO scout;
 
 --
@@ -3664,6 +7519,12 @@ GRANT SELECT, USAGE ON SEQUENCE portfolio_history_id_seq TO scout;
 --
 
 GRANT SELECT, USAGE ON SEQUENCE portfolio_metrics_id_seq TO athena;
+
+--
+-- Name: portfolio_metrics_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE portfolio_metrics_id_seq TO nova;
 
 --
 -- Name: portfolio_metrics_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -3681,6 +7542,12 @@ GRANT SELECT, USAGE ON SEQUENCE portfolio_positions_id_seq TO athena;
 -- Name: portfolio_positions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE portfolio_positions_id_seq TO nova;
+
+--
+-- Name: portfolio_positions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT SELECT, USAGE ON SEQUENCE portfolio_positions_id_seq TO scout;
 
 --
@@ -3688,6 +7555,12 @@ GRANT SELECT, USAGE ON SEQUENCE portfolio_positions_id_seq TO scout;
 --
 
 GRANT SELECT, USAGE ON SEQUENCE portfolio_snapshots_id_seq TO athena;
+
+--
+-- Name: portfolio_snapshots_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE portfolio_snapshots_id_seq TO nova;
 
 --
 -- Name: portfolio_snapshots_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -3705,6 +7578,12 @@ GRANT SELECT, USAGE ON SEQUENCE portfolio_updates_id_seq TO athena;
 -- Name: portfolio_updates_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE portfolio_updates_id_seq TO nova;
+
+--
+-- Name: portfolio_updates_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT SELECT, USAGE ON SEQUENCE portfolio_updates_id_seq TO scout;
 
 --
@@ -3712,6 +7591,12 @@ GRANT SELECT, USAGE ON SEQUENCE portfolio_updates_id_seq TO scout;
 --
 
 GRANT SELECT, USAGE ON SEQUENCE positions_id_seq TO athena;
+
+--
+-- Name: positions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE positions_id_seq TO nova;
 
 --
 -- Name: positions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -3984,2428 +7869,16 @@ GRANT SELECT, USAGE ON SEQUENCE works_id_seq TO athena;
 GRANT SELECT, USAGE ON SEQUENCE works_id_seq TO scout;
 
 --
--- Name: agent_actions; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_actions TO athena;
-
---
--- Name: agent_actions; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_actions TO coder;
-
---
--- Name: agent_actions; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_actions TO erato;
-
---
--- Name: agent_actions; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_actions TO gem;
-
---
--- Name: agent_actions; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_actions TO gidget;
-
---
--- Name: agent_actions; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_actions TO graybeard;
-
---
--- Name: agent_actions; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_actions TO iris;
-
---
--- Name: agent_actions; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_actions TO "nova-staging";
-
---
--- Name: agent_actions; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_actions TO openproject_user;
-
---
--- Name: agent_actions; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_actions TO scout;
-
---
--- Name: agent_actions; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_actions TO ticker;
-
---
--- Name: agent_aliases; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_aliases TO athena;
-
---
--- Name: agent_aliases; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_aliases TO coder;
-
---
--- Name: agent_aliases; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_aliases TO erato;
-
---
--- Name: agent_aliases; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_aliases TO gem;
-
---
--- Name: agent_aliases; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_aliases TO gidget;
-
---
--- Name: agent_aliases; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_aliases TO graybeard;
-
---
--- Name: agent_aliases; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_aliases TO iris;
-
---
--- Name: agent_aliases; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_aliases TO "nova-staging";
-
---
--- Name: agent_aliases; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_aliases TO openproject_user;
-
---
--- Name: agent_aliases; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_aliases TO scout;
-
---
--- Name: agent_aliases; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_aliases TO ticker;
-
---
--- Name: agent_bootstrap_context; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_bootstrap_context TO athena;
-
---
--- Name: agent_bootstrap_context; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_bootstrap_context TO coder;
-
---
--- Name: agent_bootstrap_context; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_bootstrap_context TO erato;
-
---
--- Name: agent_bootstrap_context; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_bootstrap_context TO gem;
-
---
--- Name: agent_bootstrap_context; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_bootstrap_context TO gidget;
-
---
--- Name: agent_bootstrap_context; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_bootstrap_context TO graybeard;
-
---
--- Name: agent_bootstrap_context; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_bootstrap_context TO iris;
-
---
--- Name: agent_bootstrap_context; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_bootstrap_context TO "nova-staging";
-
---
--- Name: agent_bootstrap_context; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_bootstrap_context TO openproject_user;
-
---
--- Name: agent_bootstrap_context; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_bootstrap_context TO scout;
-
---
--- Name: agent_bootstrap_context; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_bootstrap_context TO ticker;
-
---
--- Name: agent_chat; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_chat TO athena;
-
---
--- Name: agent_chat; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_chat TO coder;
-
---
--- Name: agent_chat; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_chat TO erato;
-
---
--- Name: agent_chat; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_chat TO gem;
-
---
--- Name: agent_chat; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_chat TO gidget;
-
---
--- Name: agent_chat; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_chat TO graybeard;
-
---
--- Name: agent_chat; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_chat TO iris;
-
---
--- Name: agent_chat; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_chat TO "nova-staging";
-
---
--- Name: agent_chat; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_chat TO openproject_user;
-
---
--- Name: agent_chat; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_chat TO scout;
-
---
--- Name: agent_chat; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_chat TO ticker;
-
---
--- Name: agent_chat_processed; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_chat_processed TO athena;
-
---
--- Name: agent_chat_processed; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_chat_processed TO coder;
-
---
--- Name: agent_chat_processed; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_chat_processed TO erato;
-
---
--- Name: agent_chat_processed; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_chat_processed TO gem;
-
---
--- Name: agent_chat_processed; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_chat_processed TO gidget;
-
---
--- Name: agent_chat_processed; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_chat_processed TO graybeard;
-
---
--- Name: agent_chat_processed; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_chat_processed TO iris;
-
---
--- Name: agent_chat_processed; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_chat_processed TO "nova-staging";
-
---
--- Name: agent_chat_processed; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_chat_processed TO openproject_user;
-
---
--- Name: agent_chat_processed; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_chat_processed TO scout;
-
---
--- Name: agent_chat_processed; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_chat_processed TO ticker;
-
---
--- Name: agent_domains; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_domains TO athena;
-
---
--- Name: agent_domains; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_domains TO coder;
-
---
--- Name: agent_domains; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_domains TO erato;
-
---
--- Name: agent_domains; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_domains TO gem;
-
---
--- Name: agent_domains; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_domains TO gidget;
-
---
--- Name: agent_domains; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_domains TO graybeard;
-
---
--- Name: agent_domains; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_domains TO iris;
-
---
--- Name: agent_domains; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_domains TO "nova-staging";
-
---
--- Name: agent_domains; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_domains TO openproject_user;
-
---
--- Name: agent_domains; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_domains TO scout;
-
---
--- Name: agent_domains; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_domains TO ticker;
-
---
--- Name: agent_jobs; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_jobs TO athena;
-
---
--- Name: agent_jobs; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_jobs TO coder;
-
---
--- Name: agent_jobs; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_jobs TO erato;
-
---
--- Name: agent_jobs; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_jobs TO gem;
-
---
--- Name: agent_jobs; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_jobs TO gidget;
-
---
--- Name: agent_jobs; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_jobs TO graybeard;
-
---
--- Name: agent_jobs; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_jobs TO iris;
-
---
--- Name: agent_jobs; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_jobs TO "nova-staging";
-
---
--- Name: agent_jobs; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_jobs TO openproject_user;
-
---
--- Name: agent_jobs; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_jobs TO scout;
-
---
--- Name: agent_jobs; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_jobs TO ticker;
-
---
--- Name: agent_modifications; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_modifications TO athena;
-
---
--- Name: agent_modifications; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_modifications TO coder;
-
---
--- Name: agent_modifications; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_modifications TO erato;
-
---
--- Name: agent_modifications; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_modifications TO gem;
-
---
--- Name: agent_modifications; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_modifications TO gidget;
-
---
--- Name: agent_modifications; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_modifications TO graybeard;
-
---
--- Name: agent_modifications; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_modifications TO iris;
-
---
--- Name: agent_modifications; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_modifications TO "nova-staging";
-
---
--- Name: agent_modifications; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_modifications TO openproject_user;
-
---
--- Name: agent_modifications; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_modifications TO scout;
-
---
--- Name: agent_modifications; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_modifications TO ticker;
-
---
--- Name: agent_spawns; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_spawns TO athena;
-
---
--- Name: agent_spawns; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_spawns TO coder;
-
---
--- Name: agent_spawns; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_spawns TO erato;
-
---
--- Name: agent_spawns; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_spawns TO gem;
-
---
--- Name: agent_spawns; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_spawns TO gidget;
-
---
--- Name: agent_spawns; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_spawns TO graybeard;
-
---
--- Name: agent_spawns; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_spawns TO iris;
-
---
--- Name: agent_spawns; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_spawns TO "nova-staging";
-
---
--- Name: agent_spawns; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_spawns TO openproject_user;
-
---
--- Name: agent_spawns; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_spawns TO scout;
-
---
--- Name: agent_spawns; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_spawns TO ticker;
-
---
--- Name: agent_system_config; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_system_config TO athena;
-
---
--- Name: agent_system_config; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_system_config TO coder;
-
---
--- Name: agent_system_config; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_system_config TO erato;
-
---
--- Name: agent_system_config; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_system_config TO gem;
-
---
--- Name: agent_system_config; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_system_config TO gidget;
-
---
--- Name: agent_system_config; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_system_config TO graybeard;
-
---
--- Name: agent_system_config; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_system_config TO iris;
-
---
--- Name: agent_system_config; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_system_config TO "nova-staging";
-
---
--- Name: agent_system_config; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_system_config TO openproject_user;
-
---
--- Name: agent_system_config; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_system_config TO scout;
-
---
--- Name: agent_system_config; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_system_config TO ticker;
-
---
--- Name: agent_turn_context; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agent_turn_context TO nova;
-
---
--- Name: agents; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agents TO athena;
-
---
--- Name: agents; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agents TO coder;
-
---
--- Name: agents; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agents TO erato;
-
---
--- Name: agents; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agents TO gem;
-
---
--- Name: agents; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agents TO gidget;
-
---
--- Name: agents; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agents TO graybeard;
-
---
--- Name: agents; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agents TO iris;
-
---
--- Name: agents; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agents TO "nova-staging";
-
---
--- Name: agents; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agents TO openproject_user;
-
---
--- Name: agents; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agents TO scout;
-
---
--- Name: agents; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE agents TO ticker;
-
---
--- Name: ai_models; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE ai_models TO athena;
-
---
--- Name: ai_models; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE ai_models TO coder;
-
---
--- Name: ai_models; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE ai_models TO erato;
-
---
--- Name: ai_models; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE ai_models TO gem;
-
---
--- Name: ai_models; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE ai_models TO gidget;
-
---
--- Name: ai_models; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE ai_models TO graybeard;
-
---
--- Name: ai_models; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE ai_models TO iris;
-
---
--- Name: ai_models; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE ai_models TO "nova-staging";
-
---
--- Name: ai_models; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE ai_models TO openproject_user;
-
---
--- Name: ai_models; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE ai_models TO scout;
-
---
--- Name: ai_models; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE ai_models TO ticker;
-
---
 -- Name: artwork; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-GRANT SELECT ON TABLE artwork TO athena;
-
---
--- Name: artwork; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE artwork TO coder;
-
---
--- Name: artwork; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE artwork TO erato;
-
---
--- Name: artwork; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE artwork TO gem;
-
---
--- Name: artwork; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE artwork TO gidget;
-
---
--- Name: artwork; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE artwork TO graybeard;
-
---
--- Name: artwork; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE artwork TO iris;
-
---
--- Name: artwork; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE artwork TO "nova-staging";
-
---
--- Name: artwork; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE artwork TO openproject_user;
-
---
--- Name: artwork; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE artwork TO scout;
-
---
--- Name: artwork; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE artwork TO ticker;
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE artwork TO nova;
 
 --
 -- Name: asset_classes; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-GRANT SELECT ON TABLE asset_classes TO athena;
-
---
--- Name: asset_classes; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE asset_classes TO coder;
-
---
--- Name: asset_classes; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE asset_classes TO erato;
-
---
--- Name: asset_classes; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE asset_classes TO gem;
-
---
--- Name: asset_classes; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE asset_classes TO gidget;
-
---
--- Name: asset_classes; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE asset_classes TO graybeard;
-
---
--- Name: asset_classes; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE asset_classes TO iris;
-
---
--- Name: asset_classes; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE asset_classes TO "nova-staging";
-
---
--- Name: asset_classes; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE asset_classes TO openproject_user;
-
---
--- Name: asset_classes; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE asset_classes TO scout;
-
---
--- Name: asset_classes; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE asset_classes TO ticker;
-
---
--- Name: bootstrap_context_config; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE bootstrap_context_config TO athena;
-
---
--- Name: bootstrap_context_config; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE bootstrap_context_config TO coder;
-
---
--- Name: bootstrap_context_config; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE bootstrap_context_config TO erato;
-
---
--- Name: bootstrap_context_config; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE bootstrap_context_config TO gem;
-
---
--- Name: bootstrap_context_config; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE bootstrap_context_config TO gidget;
-
---
--- Name: bootstrap_context_config; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE bootstrap_context_config TO graybeard;
-
---
--- Name: bootstrap_context_config; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE bootstrap_context_config TO iris;
-
---
--- Name: bootstrap_context_config; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE bootstrap_context_config TO "nova-staging";
-
---
--- Name: bootstrap_context_config; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE bootstrap_context_config TO openproject_user;
-
---
--- Name: bootstrap_context_config; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE bootstrap_context_config TO scout;
-
---
--- Name: bootstrap_context_config; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE bootstrap_context_config TO ticker;
-
---
--- Name: certificates; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE certificates TO athena;
-
---
--- Name: certificates; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE certificates TO coder;
-
---
--- Name: certificates; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE certificates TO erato;
-
---
--- Name: certificates; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE certificates TO gem;
-
---
--- Name: certificates; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE certificates TO gidget;
-
---
--- Name: certificates; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE certificates TO graybeard;
-
---
--- Name: certificates; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE certificates TO iris;
-
---
--- Name: certificates; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE certificates TO "nova-staging";
-
---
--- Name: certificates; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE certificates TO openproject_user;
-
---
--- Name: certificates; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE certificates TO scout;
-
---
--- Name: certificates; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE certificates TO ticker;
-
---
--- Name: channel_activity; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE channel_activity TO athena;
-
---
--- Name: channel_activity; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE channel_activity TO coder;
-
---
--- Name: channel_activity; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE channel_activity TO erato;
-
---
--- Name: channel_activity; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE channel_activity TO gem;
-
---
--- Name: channel_activity; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE channel_activity TO gidget;
-
---
--- Name: channel_activity; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE channel_activity TO graybeard;
-
---
--- Name: channel_activity; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE channel_activity TO iris;
-
---
--- Name: channel_activity; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE channel_activity TO "nova-staging";
-
---
--- Name: channel_activity; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE channel_activity TO openproject_user;
-
---
--- Name: channel_activity; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE channel_activity TO scout;
-
---
--- Name: channel_activity; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE channel_activity TO ticker;
-
---
--- Name: conversations; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE conversations TO athena;
-
---
--- Name: conversations; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE conversations TO coder;
-
---
--- Name: conversations; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE conversations TO erato;
-
---
--- Name: conversations; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE conversations TO gem;
-
---
--- Name: conversations; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE conversations TO gidget;
-
---
--- Name: conversations; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE conversations TO graybeard;
-
---
--- Name: conversations; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE conversations TO iris;
-
---
--- Name: conversations; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE conversations TO "nova-staging";
-
---
--- Name: conversations; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE conversations TO openproject_user;
-
---
--- Name: conversations; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE conversations TO scout;
-
---
--- Name: conversations; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE conversations TO ticker;
-
---
--- Name: entities; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE entities TO athena;
-
---
--- Name: entities; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE entities TO coder;
-
---
--- Name: entities; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE entities TO erato;
-
---
--- Name: entities; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE entities TO gem;
-
---
--- Name: entities; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE entities TO gidget;
-
---
--- Name: entities; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE entities TO graybeard;
-
---
--- Name: entities; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE entities TO iris;
-
---
--- Name: entities; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE entities TO "nova-staging";
-
---
--- Name: entities; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE entities TO openproject_user;
-
---
--- Name: entities; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE entities TO scout;
-
---
--- Name: entities; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE entities TO ticker;
-
---
--- Name: entity_fact_conflicts; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE entity_fact_conflicts TO athena;
-
---
--- Name: entity_fact_conflicts; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE entity_fact_conflicts TO coder;
-
---
--- Name: entity_fact_conflicts; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE entity_fact_conflicts TO erato;
-
---
--- Name: entity_fact_conflicts; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE entity_fact_conflicts TO gem;
-
---
--- Name: entity_fact_conflicts; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE entity_fact_conflicts TO gidget;
-
---
--- Name: entity_fact_conflicts; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE entity_fact_conflicts TO graybeard;
-
---
--- Name: entity_fact_conflicts; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE entity_fact_conflicts TO iris;
-
---
--- Name: entity_fact_conflicts; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE entity_fact_conflicts TO "nova-staging";
-
---
--- Name: entity_fact_conflicts; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE entity_fact_conflicts TO openproject_user;
-
---
--- Name: entity_fact_conflicts; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE entity_fact_conflicts TO scout;
-
---
--- Name: entity_fact_conflicts; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE entity_fact_conflicts TO ticker;
-
---
--- Name: entity_facts; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE entity_facts TO athena;
-
---
--- Name: entity_facts; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE entity_facts TO coder;
-
---
--- Name: entity_facts; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE entity_facts TO erato;
-
---
--- Name: entity_facts; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE entity_facts TO gem;
-
---
--- Name: entity_facts; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE entity_facts TO gidget;
-
---
--- Name: entity_facts; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE entity_facts TO graybeard;
-
---
--- Name: entity_facts; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE entity_facts TO iris;
-
---
--- Name: entity_facts; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE entity_facts TO "nova-staging";
-
---
--- Name: entity_facts; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE entity_facts TO openproject_user;
-
---
--- Name: entity_facts; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE entity_facts TO scout;
-
---
--- Name: entity_facts; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE entity_facts TO ticker;
-
---
--- Name: entity_facts_archive; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE entity_facts_archive TO athena;
-
---
--- Name: entity_facts_archive; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE entity_facts_archive TO coder;
-
---
--- Name: entity_facts_archive; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE entity_facts_archive TO erato;
-
---
--- Name: entity_facts_archive; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE entity_facts_archive TO gem;
-
---
--- Name: entity_facts_archive; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE entity_facts_archive TO gidget;
-
---
--- Name: entity_facts_archive; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE entity_facts_archive TO graybeard;
-
---
--- Name: entity_facts_archive; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE entity_facts_archive TO iris;
-
---
--- Name: entity_facts_archive; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE entity_facts_archive TO "nova-staging";
-
---
--- Name: entity_facts_archive; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE entity_facts_archive TO openproject_user;
-
---
--- Name: entity_facts_archive; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE entity_facts_archive TO scout;
-
---
--- Name: entity_facts_archive; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE entity_facts_archive TO ticker;
-
---
--- Name: entity_relationships; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE entity_relationships TO athena;
-
---
--- Name: entity_relationships; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE entity_relationships TO coder;
-
---
--- Name: entity_relationships; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE entity_relationships TO erato;
-
---
--- Name: entity_relationships; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE entity_relationships TO gem;
-
---
--- Name: entity_relationships; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE entity_relationships TO gidget;
-
---
--- Name: entity_relationships; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE entity_relationships TO graybeard;
-
---
--- Name: entity_relationships; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE entity_relationships TO iris;
-
---
--- Name: entity_relationships; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE entity_relationships TO "nova-staging";
-
---
--- Name: entity_relationships; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE entity_relationships TO openproject_user;
-
---
--- Name: entity_relationships; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE entity_relationships TO scout;
-
---
--- Name: entity_relationships; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE entity_relationships TO ticker;
-
---
--- Name: event_entities; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE event_entities TO athena;
-
---
--- Name: event_entities; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE event_entities TO coder;
-
---
--- Name: event_entities; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE event_entities TO erato;
-
---
--- Name: event_entities; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE event_entities TO gem;
-
---
--- Name: event_entities; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE event_entities TO gidget;
-
---
--- Name: event_entities; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE event_entities TO graybeard;
-
---
--- Name: event_entities; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE event_entities TO iris;
-
---
--- Name: event_entities; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE event_entities TO "nova-staging";
-
---
--- Name: event_entities; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE event_entities TO openproject_user;
-
---
--- Name: event_entities; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE event_entities TO scout;
-
---
--- Name: event_entities; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE event_entities TO ticker;
-
---
--- Name: event_places; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE event_places TO athena;
-
---
--- Name: event_places; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE event_places TO coder;
-
---
--- Name: event_places; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE event_places TO erato;
-
---
--- Name: event_places; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE event_places TO gem;
-
---
--- Name: event_places; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE event_places TO gidget;
-
---
--- Name: event_places; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE event_places TO graybeard;
-
---
--- Name: event_places; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE event_places TO iris;
-
---
--- Name: event_places; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE event_places TO "nova-staging";
-
---
--- Name: event_places; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE event_places TO openproject_user;
-
---
--- Name: event_places; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE event_places TO scout;
-
---
--- Name: event_places; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE event_places TO ticker;
-
---
--- Name: event_projects; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE event_projects TO athena;
-
---
--- Name: event_projects; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE event_projects TO coder;
-
---
--- Name: event_projects; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE event_projects TO erato;
-
---
--- Name: event_projects; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE event_projects TO gem;
-
---
--- Name: event_projects; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE event_projects TO gidget;
-
---
--- Name: event_projects; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE event_projects TO graybeard;
-
---
--- Name: event_projects; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE event_projects TO iris;
-
---
--- Name: event_projects; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE event_projects TO "nova-staging";
-
---
--- Name: event_projects; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE event_projects TO openproject_user;
-
---
--- Name: event_projects; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE event_projects TO scout;
-
---
--- Name: event_projects; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE event_projects TO ticker;
-
---
--- Name: events; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE events TO athena;
-
---
--- Name: events; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE events TO coder;
-
---
--- Name: events; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE events TO erato;
-
---
--- Name: events; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE events TO gem;
-
---
--- Name: events; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE events TO gidget;
-
---
--- Name: events; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE events TO graybeard;
-
---
--- Name: events; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE events TO iris;
-
---
--- Name: events; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE events TO "nova-staging";
-
---
--- Name: events; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE events TO openproject_user;
-
---
--- Name: events; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE events TO scout;
-
---
--- Name: events; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE events TO ticker;
-
---
--- Name: events_archive; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE events_archive TO athena;
-
---
--- Name: events_archive; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE events_archive TO coder;
-
---
--- Name: events_archive; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE events_archive TO erato;
-
---
--- Name: events_archive; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE events_archive TO gem;
-
---
--- Name: events_archive; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE events_archive TO gidget;
-
---
--- Name: events_archive; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE events_archive TO graybeard;
-
---
--- Name: events_archive; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE events_archive TO iris;
-
---
--- Name: events_archive; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE events_archive TO "nova-staging";
-
---
--- Name: events_archive; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE events_archive TO openproject_user;
-
---
--- Name: events_archive; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE events_archive TO scout;
-
---
--- Name: events_archive; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE events_archive TO ticker;
-
---
--- Name: extraction_metrics; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE extraction_metrics TO athena;
-
---
--- Name: extraction_metrics; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE extraction_metrics TO coder;
-
---
--- Name: extraction_metrics; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE extraction_metrics TO erato;
-
---
--- Name: extraction_metrics; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE extraction_metrics TO gem;
-
---
--- Name: extraction_metrics; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE extraction_metrics TO gidget;
-
---
--- Name: extraction_metrics; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE extraction_metrics TO graybeard;
-
---
--- Name: extraction_metrics; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE extraction_metrics TO iris;
-
---
--- Name: extraction_metrics; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE extraction_metrics TO "nova-staging";
-
---
--- Name: extraction_metrics; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE extraction_metrics TO openproject_user;
-
---
--- Name: extraction_metrics; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE extraction_metrics TO scout;
-
---
--- Name: extraction_metrics; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE extraction_metrics TO ticker;
-
---
--- Name: fact_change_log; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE fact_change_log TO athena;
-
---
--- Name: fact_change_log; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE fact_change_log TO coder;
-
---
--- Name: fact_change_log; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE fact_change_log TO erato;
-
---
--- Name: fact_change_log; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE fact_change_log TO gem;
-
---
--- Name: fact_change_log; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE fact_change_log TO gidget;
-
---
--- Name: fact_change_log; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE fact_change_log TO graybeard;
-
---
--- Name: fact_change_log; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE fact_change_log TO iris;
-
---
--- Name: fact_change_log; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE fact_change_log TO "nova-staging";
-
---
--- Name: fact_change_log; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE fact_change_log TO openproject_user;
-
---
--- Name: fact_change_log; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE fact_change_log TO scout;
-
---
--- Name: fact_change_log; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE fact_change_log TO ticker;
-
---
--- Name: gambling_entries; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE gambling_entries TO athena;
-
---
--- Name: gambling_entries; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE gambling_entries TO coder;
-
---
--- Name: gambling_entries; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE gambling_entries TO erato;
-
---
--- Name: gambling_entries; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE gambling_entries TO gem;
-
---
--- Name: gambling_entries; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE gambling_entries TO gidget;
-
---
--- Name: gambling_entries; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE gambling_entries TO graybeard;
-
---
--- Name: gambling_entries; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE gambling_entries TO iris;
-
---
--- Name: gambling_entries; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE gambling_entries TO "nova-staging";
-
---
--- Name: gambling_entries; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE gambling_entries TO openproject_user;
-
---
--- Name: gambling_entries; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE gambling_entries TO scout;
-
---
--- Name: gambling_entries; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE gambling_entries TO ticker;
-
---
--- Name: gambling_logs; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE gambling_logs TO athena;
-
---
--- Name: gambling_logs; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE gambling_logs TO coder;
-
---
--- Name: gambling_logs; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE gambling_logs TO erato;
-
---
--- Name: gambling_logs; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE gambling_logs TO gem;
-
---
--- Name: gambling_logs; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE gambling_logs TO gidget;
-
---
--- Name: gambling_logs; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE gambling_logs TO graybeard;
-
---
--- Name: gambling_logs; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE gambling_logs TO iris;
-
---
--- Name: gambling_logs; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE gambling_logs TO "nova-staging";
-
---
--- Name: gambling_logs; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE gambling_logs TO openproject_user;
-
---
--- Name: gambling_logs; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE gambling_logs TO scout;
-
---
--- Name: gambling_logs; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE gambling_logs TO ticker;
-
---
--- Name: git_issue_queue; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE git_issue_queue TO athena;
-
---
--- Name: git_issue_queue; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE git_issue_queue TO coder;
-
---
--- Name: git_issue_queue; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE git_issue_queue TO erato;
-
---
--- Name: git_issue_queue; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE git_issue_queue TO gem;
-
---
--- Name: git_issue_queue; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE git_issue_queue TO gidget;
-
---
--- Name: git_issue_queue; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE git_issue_queue TO graybeard;
-
---
--- Name: git_issue_queue; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE git_issue_queue TO iris;
-
---
--- Name: git_issue_queue; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE git_issue_queue TO "nova-staging";
-
---
--- Name: git_issue_queue; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE git_issue_queue TO openproject_user;
-
---
--- Name: git_issue_queue; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE git_issue_queue TO scout;
-
---
--- Name: git_issue_queue; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE git_issue_queue TO ticker;
-
---
--- Name: job_messages; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE job_messages TO athena;
-
---
--- Name: job_messages; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE job_messages TO coder;
-
---
--- Name: job_messages; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE job_messages TO erato;
-
---
--- Name: job_messages; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE job_messages TO gem;
-
---
--- Name: job_messages; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE job_messages TO gidget;
-
---
--- Name: job_messages; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE job_messages TO graybeard;
-
---
--- Name: job_messages; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE job_messages TO iris;
-
---
--- Name: job_messages; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE job_messages TO "nova-staging";
-
---
--- Name: job_messages; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE job_messages TO openproject_user;
-
---
--- Name: job_messages; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE job_messages TO scout;
-
---
--- Name: job_messages; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE job_messages TO ticker;
-
---
--- Name: lessons; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE lessons TO athena;
-
---
--- Name: lessons; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE lessons TO coder;
-
---
--- Name: lessons; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE lessons TO erato;
-
---
--- Name: lessons; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE lessons TO gem;
-
---
--- Name: lessons; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE lessons TO gidget;
-
---
--- Name: lessons; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE lessons TO graybeard;
-
---
--- Name: lessons; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE lessons TO iris;
-
---
--- Name: lessons; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE lessons TO "nova-staging";
-
---
--- Name: lessons; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE lessons TO openproject_user;
-
---
--- Name: lessons; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE lessons TO scout;
-
---
--- Name: lessons; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE lessons TO ticker;
-
---
--- Name: lessons_archive; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE lessons_archive TO athena;
-
---
--- Name: lessons_archive; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE lessons_archive TO coder;
-
---
--- Name: lessons_archive; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE lessons_archive TO erato;
-
---
--- Name: lessons_archive; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE lessons_archive TO gem;
-
---
--- Name: lessons_archive; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE lessons_archive TO gidget;
-
---
--- Name: lessons_archive; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE lessons_archive TO graybeard;
-
---
--- Name: lessons_archive; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE lessons_archive TO iris;
-
---
--- Name: lessons_archive; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE lessons_archive TO "nova-staging";
-
---
--- Name: lessons_archive; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE lessons_archive TO openproject_user;
-
---
--- Name: lessons_archive; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE lessons_archive TO scout;
-
---
--- Name: lessons_archive; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE lessons_archive TO ticker;
-
---
--- Name: library_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE library_authors TO coder;
-
---
--- Name: library_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE library_authors TO erato;
-
---
--- Name: library_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE library_authors TO gem;
-
---
--- Name: library_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE library_authors TO gidget;
-
---
--- Name: library_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE library_authors TO graybeard;
-
---
--- Name: library_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE library_authors TO iris;
-
---
--- Name: library_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE library_authors TO "nova-staging";
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE asset_classes TO nova;
 
 --
 -- Name: library_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -6414,130 +7887,10 @@ GRANT SELECT ON TABLE library_authors TO "nova-staging";
 GRANT SELECT ON TABLE library_authors TO openproject;
 
 --
--- Name: library_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE library_authors TO openproject_user;
-
---
--- Name: library_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE library_authors TO scout;
-
---
--- Name: library_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE library_authors TO ticker;
-
---
--- Name: library_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE library_tags TO coder;
-
---
--- Name: library_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE library_tags TO erato;
-
---
--- Name: library_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE library_tags TO gem;
-
---
--- Name: library_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE library_tags TO gidget;
-
---
--- Name: library_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE library_tags TO graybeard;
-
---
--- Name: library_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE library_tags TO iris;
-
---
--- Name: library_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE library_tags TO "nova-staging";
-
---
 -- Name: library_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
 GRANT SELECT ON TABLE library_tags TO openproject;
-
---
--- Name: library_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE library_tags TO openproject_user;
-
---
--- Name: library_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE library_tags TO scout;
-
---
--- Name: library_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE library_tags TO ticker;
-
---
--- Name: library_work_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE library_work_authors TO coder;
-
---
--- Name: library_work_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE library_work_authors TO erato;
-
---
--- Name: library_work_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE library_work_authors TO gem;
-
---
--- Name: library_work_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE library_work_authors TO gidget;
-
---
--- Name: library_work_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE library_work_authors TO graybeard;
-
---
--- Name: library_work_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE library_work_authors TO iris;
-
---
--- Name: library_work_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE library_work_authors TO "nova-staging";
 
 --
 -- Name: library_work_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -6546,130 +7899,10 @@ GRANT SELECT ON TABLE library_work_authors TO "nova-staging";
 GRANT SELECT ON TABLE library_work_authors TO openproject;
 
 --
--- Name: library_work_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE library_work_authors TO openproject_user;
-
---
--- Name: library_work_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE library_work_authors TO scout;
-
---
--- Name: library_work_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE library_work_authors TO ticker;
-
---
--- Name: library_work_relationships; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE library_work_relationships TO coder;
-
---
--- Name: library_work_relationships; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE library_work_relationships TO erato;
-
---
--- Name: library_work_relationships; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE library_work_relationships TO gem;
-
---
--- Name: library_work_relationships; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE library_work_relationships TO gidget;
-
---
--- Name: library_work_relationships; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE library_work_relationships TO graybeard;
-
---
--- Name: library_work_relationships; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE library_work_relationships TO iris;
-
---
--- Name: library_work_relationships; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE library_work_relationships TO "nova-staging";
-
---
 -- Name: library_work_relationships; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
 GRANT SELECT ON TABLE library_work_relationships TO openproject;
-
---
--- Name: library_work_relationships; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE library_work_relationships TO openproject_user;
-
---
--- Name: library_work_relationships; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE library_work_relationships TO scout;
-
---
--- Name: library_work_relationships; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE library_work_relationships TO ticker;
-
---
--- Name: library_work_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE library_work_tags TO coder;
-
---
--- Name: library_work_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE library_work_tags TO erato;
-
---
--- Name: library_work_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE library_work_tags TO gem;
-
---
--- Name: library_work_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE library_work_tags TO gidget;
-
---
--- Name: library_work_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE library_work_tags TO graybeard;
-
---
--- Name: library_work_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE library_work_tags TO iris;
-
---
--- Name: library_work_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE library_work_tags TO "nova-staging";
 
 --
 -- Name: library_work_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -6678,1720 +7911,58 @@ GRANT SELECT ON TABLE library_work_tags TO "nova-staging";
 GRANT SELECT ON TABLE library_work_tags TO openproject;
 
 --
--- Name: library_work_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE library_work_tags TO openproject_user;
-
---
--- Name: library_work_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE library_work_tags TO scout;
-
---
--- Name: library_work_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE library_work_tags TO ticker;
-
---
--- Name: library_works; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE library_works TO coder;
-
---
--- Name: library_works; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE library_works TO erato;
-
---
--- Name: library_works; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE library_works TO gem;
-
---
--- Name: library_works; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE library_works TO gidget;
-
---
--- Name: library_works; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE library_works TO graybeard;
-
---
--- Name: library_works; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE library_works TO iris;
-
---
--- Name: library_works; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE library_works TO "nova-staging";
-
---
 -- Name: library_works; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
 GRANT SELECT ON TABLE library_works TO openproject;
 
 --
--- Name: library_works; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE library_works TO openproject_user;
-
---
--- Name: library_works; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE library_works TO scout;
-
---
--- Name: library_works; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE library_works TO ticker;
-
---
--- Name: media_consumed; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE media_consumed TO athena;
-
---
--- Name: media_consumed; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE media_consumed TO coder;
-
---
--- Name: media_consumed; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE media_consumed TO erato;
-
---
--- Name: media_consumed; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE media_consumed TO gem;
-
---
--- Name: media_consumed; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE media_consumed TO gidget;
-
---
--- Name: media_consumed; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE media_consumed TO graybeard;
-
---
--- Name: media_consumed; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE media_consumed TO iris;
-
---
--- Name: media_consumed; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE media_consumed TO "nova-staging";
-
---
--- Name: media_consumed; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE media_consumed TO openproject_user;
-
---
--- Name: media_consumed; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE media_consumed TO scout;
-
---
--- Name: media_consumed; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE media_consumed TO ticker;
-
---
--- Name: media_queue; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE media_queue TO athena;
-
---
--- Name: media_queue; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE media_queue TO coder;
-
---
--- Name: media_queue; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE media_queue TO erato;
-
---
--- Name: media_queue; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE media_queue TO gem;
-
---
--- Name: media_queue; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE media_queue TO gidget;
-
---
--- Name: media_queue; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE media_queue TO graybeard;
-
---
--- Name: media_queue; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE media_queue TO iris;
-
---
--- Name: media_queue; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE media_queue TO "nova-staging";
-
---
--- Name: media_queue; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE media_queue TO openproject_user;
-
---
--- Name: media_queue; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE media_queue TO scout;
-
---
--- Name: media_queue; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE media_queue TO ticker;
-
---
--- Name: media_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE media_tags TO athena;
-
---
--- Name: media_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE media_tags TO coder;
-
---
--- Name: media_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE media_tags TO erato;
-
---
--- Name: media_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE media_tags TO gem;
-
---
--- Name: media_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE media_tags TO gidget;
-
---
--- Name: media_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE media_tags TO graybeard;
-
---
--- Name: media_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE media_tags TO iris;
-
---
--- Name: media_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE media_tags TO "nova-staging";
-
---
--- Name: media_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE media_tags TO openproject_user;
-
---
--- Name: media_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE media_tags TO scout;
-
---
--- Name: media_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE media_tags TO ticker;
-
---
--- Name: memory_embeddings; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE memory_embeddings TO athena;
-
---
--- Name: memory_embeddings; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE memory_embeddings TO coder;
-
---
--- Name: memory_embeddings; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE memory_embeddings TO erato;
-
---
--- Name: memory_embeddings; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE memory_embeddings TO gem;
-
---
--- Name: memory_embeddings; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE memory_embeddings TO gidget;
-
---
--- Name: memory_embeddings; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE memory_embeddings TO graybeard;
-
---
--- Name: memory_embeddings; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE memory_embeddings TO iris;
-
---
--- Name: memory_embeddings; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE memory_embeddings TO "nova-staging";
-
---
--- Name: memory_embeddings; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE memory_embeddings TO openproject_user;
-
---
--- Name: memory_embeddings; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE memory_embeddings TO scout;
-
---
--- Name: memory_embeddings; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE memory_embeddings TO ticker;
-
---
--- Name: memory_embeddings_archive; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE memory_embeddings_archive TO athena;
-
---
--- Name: memory_embeddings_archive; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE memory_embeddings_archive TO coder;
-
---
--- Name: memory_embeddings_archive; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE memory_embeddings_archive TO erato;
-
---
--- Name: memory_embeddings_archive; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE memory_embeddings_archive TO gem;
-
---
--- Name: memory_embeddings_archive; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE memory_embeddings_archive TO gidget;
-
---
--- Name: memory_embeddings_archive; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE memory_embeddings_archive TO graybeard;
-
---
--- Name: memory_embeddings_archive; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE memory_embeddings_archive TO iris;
-
---
--- Name: memory_embeddings_archive; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE memory_embeddings_archive TO "nova-staging";
-
---
--- Name: memory_embeddings_archive; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE memory_embeddings_archive TO openproject_user;
-
---
--- Name: memory_embeddings_archive; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE memory_embeddings_archive TO scout;
-
---
--- Name: memory_embeddings_archive; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE memory_embeddings_archive TO ticker;
-
---
--- Name: memory_type_priorities; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE memory_type_priorities TO athena;
-
---
--- Name: memory_type_priorities; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE memory_type_priorities TO coder;
-
---
--- Name: memory_type_priorities; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE memory_type_priorities TO erato;
-
---
--- Name: memory_type_priorities; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE memory_type_priorities TO gem;
-
---
--- Name: memory_type_priorities; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE memory_type_priorities TO gidget;
-
---
--- Name: memory_type_priorities; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE memory_type_priorities TO graybeard;
-
---
--- Name: memory_type_priorities; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE memory_type_priorities TO iris;
-
---
--- Name: memory_type_priorities; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE memory_type_priorities TO "nova-staging";
-
---
--- Name: memory_type_priorities; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE memory_type_priorities TO openproject_user;
-
---
--- Name: memory_type_priorities; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE memory_type_priorities TO scout;
-
---
--- Name: memory_type_priorities; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE memory_type_priorities TO ticker;
-
---
--- Name: motivation_d100; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE motivation_d100 TO athena;
-
---
--- Name: motivation_d100; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE motivation_d100 TO coder;
-
---
--- Name: motivation_d100; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE motivation_d100 TO erato;
-
---
--- Name: motivation_d100; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE motivation_d100 TO gem;
-
---
--- Name: motivation_d100; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE motivation_d100 TO gidget;
-
---
--- Name: motivation_d100; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE motivation_d100 TO graybeard;
-
---
--- Name: motivation_d100; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE motivation_d100 TO iris;
-
---
--- Name: motivation_d100; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE motivation_d100 TO "nova-staging";
-
---
--- Name: motivation_d100; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE motivation_d100 TO openproject_user;
-
---
--- Name: motivation_d100; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE motivation_d100 TO scout;
-
---
--- Name: motivation_d100; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE motivation_d100 TO ticker;
-
---
--- Name: music_analysis; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE music_analysis TO athena;
-
---
--- Name: music_analysis; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE music_analysis TO coder;
-
---
--- Name: music_analysis; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE music_analysis TO erato;
-
---
--- Name: music_analysis; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE music_analysis TO gem;
-
---
--- Name: music_analysis; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE music_analysis TO gidget;
-
---
--- Name: music_analysis; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE music_analysis TO graybeard;
-
---
--- Name: music_analysis; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE music_analysis TO iris;
-
---
--- Name: music_analysis; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE music_analysis TO "nova-staging";
-
---
--- Name: music_analysis; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE music_analysis TO openproject_user;
-
---
--- Name: music_analysis; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE music_analysis TO scout;
-
---
--- Name: music_analysis; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE music_analysis TO ticker;
-
---
--- Name: music_library; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE music_library TO athena;
-
---
--- Name: music_library; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE music_library TO coder;
-
---
--- Name: music_library; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE music_library TO erato;
-
---
--- Name: music_library; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE music_library TO gem;
-
---
--- Name: music_library; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE music_library TO gidget;
-
---
--- Name: music_library; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE music_library TO graybeard;
-
---
--- Name: music_library; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE music_library TO iris;
-
---
--- Name: music_library; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE music_library TO "nova-staging";
-
---
--- Name: music_library; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE music_library TO openproject_user;
-
---
--- Name: music_library; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE music_library TO scout;
-
---
--- Name: music_library; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE music_library TO ticker;
-
---
--- Name: place_properties; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE place_properties TO athena;
-
---
--- Name: place_properties; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE place_properties TO coder;
-
---
--- Name: place_properties; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE place_properties TO erato;
-
---
--- Name: place_properties; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE place_properties TO gem;
-
---
--- Name: place_properties; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE place_properties TO gidget;
-
---
--- Name: place_properties; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE place_properties TO graybeard;
-
---
--- Name: place_properties; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE place_properties TO iris;
-
---
--- Name: place_properties; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE place_properties TO "nova-staging";
-
---
--- Name: place_properties; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE place_properties TO openproject_user;
-
---
--- Name: place_properties; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE place_properties TO scout;
-
---
--- Name: place_properties; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE place_properties TO ticker;
-
---
--- Name: places; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE places TO athena;
-
---
--- Name: places; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE places TO coder;
-
---
--- Name: places; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE places TO erato;
-
---
--- Name: places; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE places TO gem;
-
---
--- Name: places; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE places TO gidget;
-
---
--- Name: places; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE places TO graybeard;
-
---
--- Name: places; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE places TO iris;
-
---
--- Name: places; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE places TO "nova-staging";
-
---
--- Name: places; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE places TO openproject_user;
-
---
--- Name: places; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE places TO scout;
-
---
--- Name: places; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE places TO ticker;
-
---
 -- Name: pm_domain_portfolio_snapshots; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-GRANT SELECT ON TABLE pm_domain_portfolio_snapshots TO athena;
-
---
--- Name: pm_domain_portfolio_snapshots; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE pm_domain_portfolio_snapshots TO coder;
-
---
--- Name: pm_domain_portfolio_snapshots; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE pm_domain_portfolio_snapshots TO erato;
-
---
--- Name: pm_domain_portfolio_snapshots; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE pm_domain_portfolio_snapshots TO gem;
-
---
--- Name: pm_domain_portfolio_snapshots; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE pm_domain_portfolio_snapshots TO gidget;
-
---
--- Name: pm_domain_portfolio_snapshots; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE pm_domain_portfolio_snapshots TO graybeard;
-
---
--- Name: pm_domain_portfolio_snapshots; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE pm_domain_portfolio_snapshots TO iris;
-
---
--- Name: pm_domain_portfolio_snapshots; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE pm_domain_portfolio_snapshots TO "nova-staging";
-
---
--- Name: pm_domain_portfolio_snapshots; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE pm_domain_portfolio_snapshots TO openproject_user;
-
---
--- Name: pm_domain_portfolio_snapshots; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE pm_domain_portfolio_snapshots TO scout;
-
---
--- Name: pm_domain_portfolio_snapshots; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE pm_domain_portfolio_snapshots TO ticker;
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE pm_domain_portfolio_snapshots TO nova;
 
 --
 -- Name: portfolio_history; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-GRANT SELECT ON TABLE portfolio_history TO athena;
-
---
--- Name: portfolio_history; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE portfolio_history TO coder;
-
---
--- Name: portfolio_history; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE portfolio_history TO erato;
-
---
--- Name: portfolio_history; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE portfolio_history TO gem;
-
---
--- Name: portfolio_history; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE portfolio_history TO gidget;
-
---
--- Name: portfolio_history; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE portfolio_history TO graybeard;
-
---
--- Name: portfolio_history; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE portfolio_history TO iris;
-
---
--- Name: portfolio_history; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE portfolio_history TO "nova-staging";
-
---
--- Name: portfolio_history; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE portfolio_history TO openproject_user;
-
---
--- Name: portfolio_history; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE portfolio_history TO scout;
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE portfolio_history TO nova;
 
 --
 -- Name: portfolio_metrics; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-GRANT SELECT ON TABLE portfolio_metrics TO athena;
-
---
--- Name: portfolio_metrics; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE portfolio_metrics TO coder;
-
---
--- Name: portfolio_metrics; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE portfolio_metrics TO erato;
-
---
--- Name: portfolio_metrics; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE portfolio_metrics TO gem;
-
---
--- Name: portfolio_metrics; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE portfolio_metrics TO gidget;
-
---
--- Name: portfolio_metrics; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE portfolio_metrics TO graybeard;
-
---
--- Name: portfolio_metrics; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE portfolio_metrics TO iris;
-
---
--- Name: portfolio_metrics; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE portfolio_metrics TO "nova-staging";
-
---
--- Name: portfolio_metrics; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE portfolio_metrics TO openproject_user;
-
---
--- Name: portfolio_metrics; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE portfolio_metrics TO scout;
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE portfolio_metrics TO nova;
 
 --
 -- Name: portfolio_positions; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-GRANT SELECT ON TABLE portfolio_positions TO athena;
-
---
--- Name: portfolio_positions; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE portfolio_positions TO coder;
-
---
--- Name: portfolio_positions; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE portfolio_positions TO erato;
-
---
--- Name: portfolio_positions; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE portfolio_positions TO gem;
-
---
--- Name: portfolio_positions; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE portfolio_positions TO gidget;
-
---
--- Name: portfolio_positions; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE portfolio_positions TO graybeard;
-
---
--- Name: portfolio_positions; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE portfolio_positions TO iris;
-
---
--- Name: portfolio_positions; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE portfolio_positions TO "nova-staging";
-
---
--- Name: portfolio_positions; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE portfolio_positions TO openproject_user;
-
---
--- Name: portfolio_positions; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE portfolio_positions TO scout;
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE portfolio_positions TO nova;
 
 --
 -- Name: portfolio_snapshots; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-GRANT SELECT ON TABLE portfolio_snapshots TO athena;
-
---
--- Name: portfolio_snapshots; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE portfolio_snapshots TO coder;
-
---
--- Name: portfolio_snapshots; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE portfolio_snapshots TO erato;
-
---
--- Name: portfolio_snapshots; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE portfolio_snapshots TO gem;
-
---
--- Name: portfolio_snapshots; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE portfolio_snapshots TO gidget;
-
---
--- Name: portfolio_snapshots; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE portfolio_snapshots TO graybeard;
-
---
--- Name: portfolio_snapshots; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE portfolio_snapshots TO iris;
-
---
--- Name: portfolio_snapshots; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE portfolio_snapshots TO "nova-staging";
-
---
--- Name: portfolio_snapshots; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE portfolio_snapshots TO openproject_user;
-
---
--- Name: portfolio_snapshots; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE portfolio_snapshots TO scout;
-
---
--- Name: portfolio_snapshots; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE portfolio_snapshots TO ticker;
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE portfolio_snapshots TO nova;
 
 --
 -- Name: portfolio_updates; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-GRANT SELECT ON TABLE portfolio_updates TO athena;
-
---
--- Name: portfolio_updates; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE portfolio_updates TO coder;
-
---
--- Name: portfolio_updates; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE portfolio_updates TO erato;
-
---
--- Name: portfolio_updates; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE portfolio_updates TO gem;
-
---
--- Name: portfolio_updates; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE portfolio_updates TO gidget;
-
---
--- Name: portfolio_updates; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE portfolio_updates TO graybeard;
-
---
--- Name: portfolio_updates; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE portfolio_updates TO iris;
-
---
--- Name: portfolio_updates; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE portfolio_updates TO "nova-staging";
-
---
--- Name: portfolio_updates; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE portfolio_updates TO openproject_user;
-
---
--- Name: portfolio_updates; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE portfolio_updates TO scout;
-
---
--- Name: portfolio_updates; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE portfolio_updates TO ticker;
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE portfolio_updates TO nova;
 
 --
 -- Name: positions; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-GRANT SELECT ON TABLE positions TO athena;
-
---
--- Name: positions; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE positions TO coder;
-
---
--- Name: positions; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE positions TO erato;
-
---
--- Name: positions; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE positions TO gem;
-
---
--- Name: positions; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE positions TO gidget;
-
---
--- Name: positions; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE positions TO graybeard;
-
---
--- Name: positions; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE positions TO iris;
-
---
--- Name: positions; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE positions TO "nova-staging";
-
---
--- Name: positions; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE positions TO openproject_user;
-
---
--- Name: positions; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE positions TO scout;
-
---
--- Name: positions; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE positions TO ticker;
-
---
--- Name: preferences; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE preferences TO athena;
-
---
--- Name: preferences; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE preferences TO coder;
-
---
--- Name: preferences; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE preferences TO erato;
-
---
--- Name: preferences; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE preferences TO gem;
-
---
--- Name: preferences; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE preferences TO gidget;
-
---
--- Name: preferences; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE preferences TO graybeard;
-
---
--- Name: preferences; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE preferences TO iris;
-
---
--- Name: preferences; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE preferences TO "nova-staging";
-
---
--- Name: preferences; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE preferences TO openproject_user;
-
---
--- Name: preferences; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE preferences TO scout;
-
---
--- Name: preferences; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE preferences TO ticker;
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE positions TO nova;
 
 --
 -- Name: price_cache_v2; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-GRANT SELECT ON TABLE price_cache_v2 TO athena;
-
---
--- Name: price_cache_v2; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE price_cache_v2 TO coder;
-
---
--- Name: price_cache_v2; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE price_cache_v2 TO erato;
-
---
--- Name: price_cache_v2; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE price_cache_v2 TO gem;
-
---
--- Name: price_cache_v2; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE price_cache_v2 TO gidget;
-
---
--- Name: price_cache_v2; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE price_cache_v2 TO graybeard;
-
---
--- Name: price_cache_v2; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE price_cache_v2 TO iris;
-
---
--- Name: price_cache_v2; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE price_cache_v2 TO "nova-staging";
-
---
--- Name: price_cache_v2; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE price_cache_v2 TO openproject_user;
-
---
--- Name: price_cache_v2; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE price_cache_v2 TO scout;
-
---
--- Name: price_cache_v2; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE price_cache_v2 TO ticker;
-
---
--- Name: project_entities; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE project_entities TO athena;
-
---
--- Name: project_entities; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE project_entities TO coder;
-
---
--- Name: project_entities; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE project_entities TO erato;
-
---
--- Name: project_entities; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE project_entities TO gem;
-
---
--- Name: project_entities; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE project_entities TO gidget;
-
---
--- Name: project_entities; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE project_entities TO graybeard;
-
---
--- Name: project_entities; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE project_entities TO iris;
-
---
--- Name: project_entities; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE project_entities TO "nova-staging";
-
---
--- Name: project_entities; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE project_entities TO openproject_user;
-
---
--- Name: project_entities; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE project_entities TO scout;
-
---
--- Name: project_entities; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE project_entities TO ticker;
-
---
--- Name: project_tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE project_tasks TO athena;
-
---
--- Name: project_tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE project_tasks TO coder;
-
---
--- Name: project_tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE project_tasks TO erato;
-
---
--- Name: project_tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE project_tasks TO gem;
-
---
--- Name: project_tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE project_tasks TO gidget;
-
---
--- Name: project_tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE project_tasks TO graybeard;
-
---
--- Name: project_tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE project_tasks TO iris;
-
---
--- Name: project_tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE project_tasks TO "nova-staging";
-
---
--- Name: project_tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE project_tasks TO openproject_user;
-
---
--- Name: project_tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE project_tasks TO scout;
-
---
--- Name: project_tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE project_tasks TO ticker;
-
---
--- Name: projects; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE projects TO athena;
-
---
--- Name: projects; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE projects TO coder;
-
---
--- Name: projects; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE projects TO erato;
-
---
--- Name: projects; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE projects TO gem;
-
---
--- Name: projects; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE projects TO gidget;
-
---
--- Name: projects; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE projects TO graybeard;
-
---
--- Name: projects; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE projects TO iris;
-
---
--- Name: projects; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE projects TO "nova-staging";
-
---
--- Name: projects; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE projects TO openproject_user;
-
---
--- Name: projects; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE projects TO scout;
-
---
--- Name: projects; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE projects TO ticker;
-
---
--- Name: publications; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE publications TO athena;
-
---
--- Name: publications; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE publications TO coder;
-
---
--- Name: publications; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE publications TO gem;
-
---
--- Name: publications; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE publications TO gidget;
-
---
--- Name: publications; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE publications TO graybeard;
-
---
--- Name: publications; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE publications TO iris;
-
---
--- Name: publications; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE publications TO "nova-staging";
-
---
--- Name: publications; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE publications TO openproject_user;
-
---
--- Name: publications; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE publications TO scout;
-
---
--- Name: publications; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE publications TO ticker;
-
---
--- Name: ralph_sessions; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE ralph_sessions TO athena;
-
---
--- Name: ralph_sessions; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE ralph_sessions TO coder;
-
---
--- Name: ralph_sessions; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE ralph_sessions TO erato;
-
---
--- Name: ralph_sessions; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE ralph_sessions TO gem;
-
---
--- Name: ralph_sessions; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE ralph_sessions TO gidget;
-
---
--- Name: ralph_sessions; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE ralph_sessions TO graybeard;
-
---
--- Name: ralph_sessions; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE ralph_sessions TO iris;
-
---
--- Name: ralph_sessions; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE ralph_sessions TO "nova-staging";
-
---
--- Name: ralph_sessions; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE ralph_sessions TO openproject_user;
-
---
--- Name: ralph_sessions; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE ralph_sessions TO scout;
-
---
--- Name: ralph_sessions; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE ralph_sessions TO ticker;
-
---
--- Name: research_citations; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE research_citations TO nova;
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE price_cache_v2 TO nova;
 
 --
 -- Name: research_citations; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -8403,19 +7974,7 @@ GRANT SELECT ON TABLE research_citations TO openproject;
 -- Name: research_conclusions; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-GRANT SELECT ON TABLE research_conclusions TO nova;
-
---
--- Name: research_conclusions; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
 GRANT SELECT ON TABLE research_conclusions TO openproject;
-
---
--- Name: research_findings; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE research_findings TO nova;
 
 --
 -- Name: research_findings; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -8427,19 +7986,7 @@ GRANT SELECT ON TABLE research_findings TO openproject;
 -- Name: research_projects; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-GRANT SELECT ON TABLE research_projects TO nova;
-
---
--- Name: research_projects; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
 GRANT SELECT ON TABLE research_projects TO openproject;
-
---
--- Name: research_provenance; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE research_provenance TO nova;
 
 --
 -- Name: research_provenance; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -8451,19 +7998,7 @@ GRANT SELECT ON TABLE research_provenance TO openproject;
 -- Name: research_taggings; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-GRANT SELECT ON TABLE research_taggings TO nova;
-
---
--- Name: research_taggings; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
 GRANT SELECT ON TABLE research_taggings TO openproject;
-
---
--- Name: research_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE research_tags TO nova;
 
 --
 -- Name: research_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -8475,967 +8010,13 @@ GRANT SELECT ON TABLE research_tags TO openproject;
 -- Name: research_tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-GRANT SELECT ON TABLE research_tasks TO nova;
-
---
--- Name: research_tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
 GRANT SELECT ON TABLE research_tasks TO openproject;
 
 --
--- Name: shopping_history; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE shopping_history TO athena;
-
---
--- Name: shopping_history; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE shopping_history TO coder;
-
---
--- Name: shopping_history; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE shopping_history TO erato;
-
---
--- Name: shopping_history; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE shopping_history TO gem;
-
---
--- Name: shopping_history; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE shopping_history TO gidget;
-
---
--- Name: shopping_history; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE shopping_history TO graybeard;
-
---
--- Name: shopping_history; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE shopping_history TO iris;
-
---
--- Name: shopping_history; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE shopping_history TO openproject_user;
-
---
--- Name: shopping_history; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE shopping_history TO scout;
-
---
--- Name: shopping_history; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE shopping_history TO ticker;
-
---
--- Name: shopping_preferences; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE shopping_preferences TO athena;
-
---
--- Name: shopping_preferences; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE shopping_preferences TO coder;
-
---
--- Name: shopping_preferences; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE shopping_preferences TO erato;
-
---
--- Name: shopping_preferences; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE shopping_preferences TO gem;
-
---
--- Name: shopping_preferences; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE shopping_preferences TO gidget;
-
---
--- Name: shopping_preferences; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE shopping_preferences TO graybeard;
-
---
--- Name: shopping_preferences; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE shopping_preferences TO iris;
-
---
--- Name: shopping_preferences; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE shopping_preferences TO openproject_user;
-
---
--- Name: shopping_preferences; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE shopping_preferences TO scout;
-
---
--- Name: shopping_preferences; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE shopping_preferences TO ticker;
-
---
--- Name: shopping_wishlist; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE shopping_wishlist TO athena;
-
---
--- Name: shopping_wishlist; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE shopping_wishlist TO coder;
-
---
--- Name: shopping_wishlist; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE shopping_wishlist TO erato;
-
---
--- Name: shopping_wishlist; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE shopping_wishlist TO gem;
-
---
--- Name: shopping_wishlist; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE shopping_wishlist TO gidget;
-
---
--- Name: shopping_wishlist; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE shopping_wishlist TO graybeard;
-
---
--- Name: shopping_wishlist; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE shopping_wishlist TO iris;
-
---
--- Name: shopping_wishlist; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE shopping_wishlist TO openproject_user;
-
---
--- Name: shopping_wishlist; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE shopping_wishlist TO scout;
-
---
--- Name: shopping_wishlist; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE shopping_wishlist TO ticker;
-
---
--- Name: skills; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE skills TO athena;
-
---
--- Name: skills; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE skills TO coder;
-
---
--- Name: skills; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE skills TO erato;
-
---
--- Name: skills; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE skills TO gem;
-
---
--- Name: skills; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE skills TO gidget;
-
---
--- Name: skills; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE skills TO graybeard;
-
---
--- Name: skills; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE skills TO iris;
-
---
--- Name: skills; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE skills TO "nova-staging";
-
---
--- Name: skills; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE skills TO openproject_user;
-
---
--- Name: skills; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE skills TO scout;
-
---
--- Name: skills; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE skills TO ticker;
-
---
--- Name: tags; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE tags TO athena;
-
---
--- Name: tags; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE tags TO coder;
-
---
--- Name: tags; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE tags TO gem;
-
---
--- Name: tags; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE tags TO gidget;
-
---
--- Name: tags; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE tags TO graybeard;
-
---
--- Name: tags; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE tags TO iris;
-
---
--- Name: tags; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE tags TO "nova-staging";
-
---
--- Name: tags; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE tags TO openproject_user;
-
---
--- Name: tags; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE tags TO scout;
-
---
--- Name: tags; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE tags TO ticker;
-
---
--- Name: tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE tasks TO athena;
-
---
--- Name: tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE tasks TO coder;
-
---
--- Name: tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE tasks TO erato;
-
---
--- Name: tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE tasks TO gem;
-
---
--- Name: tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE tasks TO gidget;
-
---
--- Name: tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE tasks TO graybeard;
-
---
--- Name: tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE tasks TO iris;
-
---
--- Name: tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE tasks TO "nova-staging";
-
---
--- Name: tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE tasks TO openproject_user;
-
---
--- Name: tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE tasks TO scout;
-
---
--- Name: tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE tasks TO ticker;
-
---
 -- Name: ticker_portfolio; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-GRANT SELECT ON TABLE ticker_portfolio TO athena;
-
---
--- Name: ticker_portfolio; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE ticker_portfolio TO coder;
-
---
--- Name: ticker_portfolio; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE ticker_portfolio TO erato;
-
---
--- Name: ticker_portfolio; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE ticker_portfolio TO gem;
-
---
--- Name: ticker_portfolio; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE ticker_portfolio TO gidget;
-
---
--- Name: ticker_portfolio; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE ticker_portfolio TO graybeard;
-
---
--- Name: ticker_portfolio; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE ticker_portfolio TO iris;
-
---
--- Name: ticker_portfolio; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE ticker_portfolio TO "nova-staging";
-
---
--- Name: ticker_portfolio; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE ticker_portfolio TO openproject_user;
-
---
--- Name: ticker_portfolio; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE ticker_portfolio TO scout;
-
---
--- Name: ticker_portfolio; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE ticker_portfolio TO ticker;
-
---
--- Name: tools; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE tools TO athena;
-
---
--- Name: tools; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE tools TO coder;
-
---
--- Name: tools; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE tools TO erato;
-
---
--- Name: tools; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE tools TO gem;
-
---
--- Name: tools; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE tools TO gidget;
-
---
--- Name: tools; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE tools TO graybeard;
-
---
--- Name: tools; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE tools TO iris;
-
---
--- Name: tools; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE tools TO "nova-staging";
-
---
--- Name: tools; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE tools TO openproject_user;
-
---
--- Name: tools; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE tools TO scout;
-
---
--- Name: tools; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE tools TO ticker;
-
---
--- Name: unsolved_problems; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE unsolved_problems TO athena;
-
---
--- Name: unsolved_problems; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE unsolved_problems TO coder;
-
---
--- Name: unsolved_problems; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE unsolved_problems TO erato;
-
---
--- Name: unsolved_problems; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE unsolved_problems TO gem;
-
---
--- Name: unsolved_problems; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE unsolved_problems TO gidget;
-
---
--- Name: unsolved_problems; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE unsolved_problems TO graybeard;
-
---
--- Name: unsolved_problems; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE unsolved_problems TO iris;
-
---
--- Name: unsolved_problems; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE unsolved_problems TO "nova-staging";
-
---
--- Name: unsolved_problems; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE unsolved_problems TO openproject_user;
-
---
--- Name: unsolved_problems; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE unsolved_problems TO scout;
-
---
--- Name: unsolved_problems; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE unsolved_problems TO ticker;
-
---
--- Name: vehicles; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE vehicles TO athena;
-
---
--- Name: vehicles; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE vehicles TO coder;
-
---
--- Name: vehicles; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE vehicles TO erato;
-
---
--- Name: vehicles; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE vehicles TO gem;
-
---
--- Name: vehicles; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE vehicles TO gidget;
-
---
--- Name: vehicles; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE vehicles TO graybeard;
-
---
--- Name: vehicles; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE vehicles TO iris;
-
---
--- Name: vehicles; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE vehicles TO "nova-staging";
-
---
--- Name: vehicles; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE vehicles TO openproject_user;
-
---
--- Name: vehicles; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE vehicles TO scout;
-
---
--- Name: vehicles; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE vehicles TO ticker;
-
---
--- Name: vocabulary; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE vocabulary TO athena;
-
---
--- Name: vocabulary; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE vocabulary TO coder;
-
---
--- Name: vocabulary; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE vocabulary TO erato;
-
---
--- Name: vocabulary; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE vocabulary TO gem;
-
---
--- Name: vocabulary; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE vocabulary TO gidget;
-
---
--- Name: vocabulary; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE vocabulary TO graybeard;
-
---
--- Name: vocabulary; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE vocabulary TO iris;
-
---
--- Name: vocabulary; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE vocabulary TO "nova-staging";
-
---
--- Name: vocabulary; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE vocabulary TO openproject_user;
-
---
--- Name: vocabulary; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE vocabulary TO scout;
-
---
--- Name: vocabulary; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE vocabulary TO ticker;
-
---
--- Name: work_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE work_tags TO athena;
-
---
--- Name: work_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE work_tags TO coder;
-
---
--- Name: work_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE work_tags TO gem;
-
---
--- Name: work_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE work_tags TO gidget;
-
---
--- Name: work_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE work_tags TO graybeard;
-
---
--- Name: work_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE work_tags TO iris;
-
---
--- Name: work_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE work_tags TO "nova-staging";
-
---
--- Name: work_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE work_tags TO openproject_user;
-
---
--- Name: work_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE work_tags TO scout;
-
---
--- Name: work_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE work_tags TO ticker;
-
---
--- Name: workflow_steps; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE workflow_steps TO athena;
-
---
--- Name: workflow_steps; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE workflow_steps TO coder;
-
---
--- Name: workflow_steps; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE workflow_steps TO erato;
-
---
--- Name: workflow_steps; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE workflow_steps TO gem;
-
---
--- Name: workflow_steps; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE workflow_steps TO gidget;
-
---
--- Name: workflow_steps; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE workflow_steps TO graybeard;
-
---
--- Name: workflow_steps; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE workflow_steps TO iris;
-
---
--- Name: workflow_steps; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE workflow_steps TO "nova-staging";
-
---
--- Name: workflow_steps; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE workflow_steps TO openproject_user;
-
---
--- Name: workflow_steps; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE workflow_steps TO scout;
-
---
--- Name: workflow_steps; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE workflow_steps TO ticker;
-
---
--- Name: workflows; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE workflows TO athena;
-
---
--- Name: workflows; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE workflows TO coder;
-
---
--- Name: workflows; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE workflows TO erato;
-
---
--- Name: workflows; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE workflows TO gem;
-
---
--- Name: workflows; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE workflows TO gidget;
-
---
--- Name: workflows; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE workflows TO graybeard;
-
---
--- Name: workflows; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE workflows TO iris;
-
---
--- Name: workflows; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE workflows TO "nova-staging";
-
---
--- Name: workflows; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE workflows TO openproject_user;
-
---
--- Name: workflows; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE workflows TO scout;
-
---
--- Name: workflows; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE workflows TO ticker;
-
---
--- Name: works; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE works TO athena;
-
---
--- Name: works; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE works TO coder;
-
---
--- Name: works; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE works TO gem;
-
---
--- Name: works; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE works TO gidget;
-
---
--- Name: works; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE works TO graybeard;
-
---
--- Name: works; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE works TO iris;
-
---
--- Name: works; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE works TO "nova-staging";
-
---
--- Name: works; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE works TO openproject_user;
-
---
--- Name: works; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE works TO scout;
-
---
--- Name: works; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE works TO ticker;
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE ticker_portfolio TO nova;
 
 --
 -- Name: delegation_knowledge; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10801,11 +9382,6 @@ GRANT SELECT ON TABLE workflow_steps_detail TO scout;
 
 --
 -- Name: workflow_steps_detail; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT ON TABLE workflow_steps_detail TO ticker;
-
-- Name: workflow_steps_detail; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
 GRANT SELECT ON TABLE workflow_steps_detail TO ticker;

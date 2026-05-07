@@ -1,6 +1,6 @@
 # Database Schema Reference
 
-*Auto-generated: 2026-04-17T20:00:56.440282*
+*Auto-generated: 2026-05-07T06:32:11.165236*
 
 ## Tables
 
@@ -94,8 +94,9 @@
 | vehicles | Vehicle tracking and management. Cars, bikes, boats, planes owned or used. | 13 |
 | vocabulary | Custom vocabulary for speech recognition. Add names, terms, jargon as encountered. | 8 |
 | work_tags | - | 3 |
+| workflow_runs | Execution history for workflows. Each row = one workflow run. FK to workflows(id) pending DBA action. | 13 |
 | workflow_steps | Ordered steps in a workflow with agent assignments and deliverable specifications | 14 |
-| workflows | Defines multi-agent workflows with ordered steps and deliverable handoffs | 10 |
+| workflows | Defines multi-agent workflows with ordered steps and deliverable handoffs | 13 |
 | works | - | 14 |
 
 ## Quick Reference

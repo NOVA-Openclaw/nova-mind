@@ -4,7 +4,7 @@
 
 import pg from "pg";
 import * as os from "os";
-import type { Entity, EntityFacts, EntityIdentifiers, DbEntity, DbEntityFact } from "./types.ts";
+import type { Entity, EntityFacts, EntityIdentifiers, DbEntity, DbEntityFact, ResolveResult } from "./types.ts";
 import { join } from "path";
 
 const { Pool } = pg;
@@ -55,8 +55,20 @@ export async function closeDbPool(): Promise<void> {
 }
 
 /**
- * Resolve an entity by various identifiers
- * @param identifiers - Object containing phone, uuid, certCN, or email
+ * Mapping from camelCase identifier keys to snake_case entity_facts.key values
+ */
+const IDENTIFIER_TO_DB_KEY: Record<string, string> = {
+  discordId: 'discord_id',
+  telegramId: 'telegram_id',
+  slackMemberId: 'slack_member_id',
+  signalUuid: 'signal_uuid',
+  signalUsername: 'signal_username',
+};
+
+/**
+ * Resolve an entity by various identifiers (original single-entity return).
+ * Preserves backward compatibility — returns the first matched entity or null.
+ * @param identifiers - Object containing phone, uuid, certCN, email, or platform IDs
  * @returns Entity if found, null otherwise
  */
 export async function resolveEntity(identifiers: EntityIdentifiers): Promise<Entity | null> {
@@ -68,6 +80,7 @@ export async function resolveEntity(identifiers: EntityIdentifiers): Promise<Ent
     const values: string[] = [];
     let paramIndex = 1;
     
+    // Legacy identifier paths
     if (identifiers.phone) {
       conditions.push(`(ef.key = 'phone' AND ef.value = $${paramIndex})`);
       values.push(identifiers.phone);
@@ -90,6 +103,16 @@ export async function resolveEntity(identifiers: EntityIdentifiers): Promise<Ent
       conditions.push(`(ef.key = 'email' AND ef.value = $${paramIndex})`);
       values.push(identifiers.email);
       paramIndex++;
+    }
+
+    // Platform-specific identifier paths
+    for (const [camelKey, dbKey] of Object.entries(IDENTIFIER_TO_DB_KEY)) {
+      const val = identifiers[camelKey as keyof EntityIdentifiers];
+      if (val) {
+        conditions.push(`(ef.key = '${dbKey}' AND ef.value = $${paramIndex})`);
+        values.push(val);
+        paramIndex++;
+      }
     }
     
     if (conditions.length === 0) {
@@ -119,6 +142,107 @@ export async function resolveEntity(identifiers: EntityIdentifiers): Promise<Ent
     return null;
   } catch (err) {
     console.error("[entity-resolver] Resolution error:", err instanceof Error ? err.message : String(err));
+    return null;
+  }
+}
+
+/**
+ * Resolve an entity by identifiers with conflict detection.
+ * If multiple identifiers resolve to different entities, returns a conflict result
+ * instead of silently picking a winner.
+ *
+ * @param identifiers - Object containing any combination of identifier fields
+ * @returns ResolveResult if at least one entity matched, null if none matched
+ */
+export async function resolveEntityByIdentifiers(
+  identifiers: EntityIdentifiers,
+): Promise<ResolveResult | null> {
+  try {
+    const pool = getDbPool();
+
+    // Build query conditions — same logic as resolveEntity but without LIMIT 1
+    const conditions: string[] = [];
+    const values: string[] = [];
+    let paramIndex = 1;
+
+    // Legacy identifier paths
+    const legacyMap: Array<[keyof EntityIdentifiers, string]> = [
+      ['phone', 'phone'],
+      ['uuid', 'signal_uuid'],
+      ['certCN', 'cert_cn'],
+      ['email', 'email'],
+    ];
+
+    for (const [field, dbKey] of legacyMap) {
+      const val = identifiers[field];
+      if (val) {
+        conditions.push(`(ef.key = '${dbKey}' AND ef.value = $${paramIndex})`);
+        values.push(val);
+        paramIndex++;
+      }
+    }
+
+    // Platform-specific identifier paths
+    for (const [camelKey, dbKey] of Object.entries(IDENTIFIER_TO_DB_KEY)) {
+      const val = identifiers[camelKey as keyof EntityIdentifiers];
+      if (val) {
+        conditions.push(`(ef.key = '${dbKey}' AND ef.value = $${paramIndex})`);
+        values.push(val);
+        paramIndex++;
+      }
+    }
+
+    if (conditions.length === 0) {
+      return null;
+    }
+
+    // Fetch ALL matching entities (no LIMIT) plus their matched facts
+    const query = `
+      SELECT DISTINCT e.id, e.name, e.full_name, e.type, ef.key AS fact_key, ef.value AS fact_value
+      FROM entities e
+      JOIN entity_facts ef ON e.id = ef.entity_id
+      WHERE ${conditions.join(' OR ')}
+    `;
+
+    const result = await pool.query<DbEntity & { fact_key: string; fact_value: string }>(query, values);
+
+    if (result.rows.length === 0) {
+      return null;
+    }
+
+    // Group by entity id
+    const entitiesById = new Map<number, { entity: Entity; facts: DbEntityFact[] }>();
+    for (const row of result.rows) {
+      if (!entitiesById.has(row.id)) {
+        entitiesById.set(row.id, {
+          entity: {
+            id: row.id,
+            name: row.name,
+            fullName: row.full_name || undefined,
+            type: row.type || 'unknown',
+          },
+          facts: [],
+        });
+      }
+      entitiesById.get(row.id)!.facts.push({ key: row.fact_key, value: row.fact_value });
+    }
+
+    if (entitiesById.size === 1) {
+      const [entry] = entitiesById.values();
+      return { ok: true, entity: entry.entity, facts: entry.facts };
+    }
+
+    // Multiple distinct entities — data integrity conflict
+    const allEntities = [...entitiesById.values()].map((e) => e.entity);
+    const names = allEntities.map((e) => `${e.name} (id=${e.id})`).join(', ');
+    return {
+      ok: false,
+      conflict: true,
+      entities: allEntities,
+      message: `Multiple entities matched the supplied identifiers: ${names}. This indicates a data integrity issue — identifiers should resolve to a single entity.`,
+    };
+  } catch (err) {
+    console.error('[entity-resolver] resolveEntityByIdentifiers error:', err instanceof Error ? err.message : String(err));
     return null;
   }
 }

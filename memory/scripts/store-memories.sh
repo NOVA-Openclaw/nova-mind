@@ -71,8 +71,8 @@ reinforce_fact() {
     local source_update=""
     if [ -n "$src_session_id" ] && [ -n "$src_timestamp" ]; then
         source_update=",
-            source_session_id = CASE WHEN source_timestamp IS NULL OR source_timestamp < TIMESTAMP '$(sql_escape "$src_timestamp")' THEN '$(sql_escape "$src_session_id")' ELSE source_session_id END,
-            source_timestamp = CASE WHEN source_timestamp IS NULL OR source_timestamp < TIMESTAMP '$(sql_escape "$src_timestamp")' THEN TIMESTAMP '$(sql_escape "$src_timestamp")' ELSE source_timestamp END"
+            source_session_id = CASE WHEN source_timestamp IS NULL OR source_timestamp < '$(sql_escape "$src_timestamp")'::timestamptz THEN '$(sql_escape "$src_session_id")' ELSE source_session_id END,
+            source_timestamp = CASE WHEN source_timestamp IS NULL OR source_timestamp < '$(sql_escape "$src_timestamp")'::timestamptz THEN '$(sql_escape "$src_timestamp")'::timestamptz ELSE source_timestamp END"
     fi
     
     psql -t -A -c "
@@ -236,7 +236,7 @@ echo "$JSON_DATA" | jq -c '.facts[]? // empty' | while read -r fact; do
     [ -n "$source_entity_id" ] && cols="$cols, source_entity_id" && vals="$vals, $source_entity_id"
     [ -n "$visibility_reason" ] && cols="$cols, visibility_reason" && vals="$vals, '$(sql_escape "$visibility_reason")'"
     [ -n "$src_session_id" ] && cols="$cols, source_session_id" && vals="$vals, '$(sql_escape "$src_session_id")'"
-    [ -n "$src_timestamp" ] && cols="$cols, source_timestamp" && vals="$vals, TIMESTAMP '$(sql_escape "$src_timestamp")'"
+    [ -n "$src_timestamp" ] && cols="$cols, source_timestamp" && vals="$vals, '$(sql_escape "$src_timestamp")'::timestamptz"
     
     echo "INSERT INTO entity_facts ($cols) SELECT $vals
           FROM entities WHERE name = '$(sql_escape "$actual_subject")'
@@ -274,7 +274,7 @@ echo "$JSON_DATA" | jq -c '.opinions[]? // empty' | while read -r opinion; do
     [ -n "$source_entity_id" ] && cols="$cols, source_entity_id" && vals="$vals, $source_entity_id"
     [ -n "$visibility_reason" ] && cols="$cols, visibility_reason" && vals="$vals, '$(sql_escape "$visibility_reason")'"
     [ -n "$src_session_id" ] && cols="$cols, source_session_id" && vals="$vals, '$(sql_escape "$src_session_id")'"
-    [ -n "$src_timestamp" ] && cols="$cols, source_timestamp" && vals="$vals, TIMESTAMP '$(sql_escape "$src_timestamp")'"
+    [ -n "$src_timestamp" ] && cols="$cols, source_timestamp" && vals="$vals, '$(sql_escape "$src_timestamp")'::timestamptz"
     
     echo "INSERT INTO entity_facts ($cols) SELECT $vals
           FROM entities WHERE name = '$(sql_escape "$actual_holder")'
@@ -312,7 +312,7 @@ echo "$JSON_DATA" | jq -c '.preferences[]? // empty' | while read -r pref; do
     [ -n "$source_entity_id" ] && cols="$cols, source_entity_id" && vals="$vals, $source_entity_id"
     [ -n "$visibility_reason" ] && cols="$cols, visibility_reason" && vals="$vals, '$(sql_escape "$visibility_reason")'"
     [ -n "$src_session_id" ] && cols="$cols, source_session_id" && vals="$vals, '$(sql_escape "$src_session_id")'"
-    [ -n "$src_timestamp" ] && cols="$cols, source_timestamp" && vals="$vals, TIMESTAMP '$(sql_escape "$src_timestamp")'"
+    [ -n "$src_timestamp" ] && cols="$cols, source_timestamp" && vals="$vals, '$(sql_escape "$src_timestamp")'::timestamptz"
     
     echo "INSERT INTO entity_facts ($cols) SELECT $vals
           FROM entities WHERE name = '$(sql_escape "$actual_person")'

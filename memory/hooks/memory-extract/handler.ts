@@ -116,8 +116,9 @@ const handler = async (event) => {
   // OLD: const scriptPath = join(__dirname, '../../scripts/process-input-with-grammar.sh');
   const scriptPath = join(__dirname, '../../scripts/process-input.sh');
 
-  // Extract session UUID from sessionKey (e.g. "agent:nova:signal:group:abc/xyz" → "xyz")
-  const sessionId = event.sessionKey?.split(':').pop()?.split('/').pop() ?? '';
+  // Store the full sessionKey as the source identifier — it's the canonical session reference
+  // When chat logs move to DB (#170), this maps directly to the session record
+  const sessionId = event.sessionKey ?? '';
   const messageTimestamp = new Date().toISOString();  // Current time as extraction timestamp
   
   const child = spawn(scriptPath, [], {

@@ -11,16 +11,35 @@ const pgEnvPath = join(os.homedir(), ".openclaw", "lib", "pg-env.ts");
 const { loadPgEnv } = await import(pgEnvPath);
 loadPgEnv();
 
-import {
+// Dynamic import of entity-resolver from installed location ($HOME/.openclaw/lib/)
+// This path works both from the repo AND from the installed hook location.
+const entityResolverPath = join(os.homedir(), ".openclaw", "lib", "entity-resolver", "index.ts");
+const {
   resolveEntity,
   resolveEntityByIdentifiers,
   getEntityProfile,
   getCachedEntity,
   setCachedEntity,
-  type Entity,
-  type EntityFacts,
-  type EntityIdentifiers,
-} from "../../../relationships/lib/entity-resolver/index.ts";
+} = await import(entityResolverPath);
+
+// Types derived from resolver return types (can't use static type imports
+// from a path that only exists at install time)
+type Entity = Exclude<Awaited<ReturnType<typeof resolveEntity>>, null>;
+type EntityFacts = Awaited<ReturnType<typeof getEntityProfile>>;
+
+// EntityIdentifiers: mirrors relationships/lib/entity-resolver/types.ts
+// Defined inline because the source path is not available at install time.
+interface EntityIdentifiers {
+  phone?: string;
+  uuid?: string;
+  certCN?: string;
+  email?: string;
+  discordId?: string;
+  telegramId?: string;
+  slackMemberId?: string;
+  signalUuid?: string;
+  signalUsername?: string;
+}
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);

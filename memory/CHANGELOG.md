@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Changed
+- **Semantic-recall handler: channel-aware entity routing** (#8, #159, #164) — The `extractIdentifiers()` function maps provider-specific sender IDs (`discord`, `telegram`, `slack`, `signal`) to the correct `EntityIdentifiers` fields. Uses `resolveEntityByIdentifiers()` for conflict detection — logs a data integrity warning and skips entity injection if identifiers match different entities.
+- **Semantic-recall handler: fixed field paths** (#8, #159, #164) — Message text now reads from `event.context.content` (was `event.context.message`). Sender metadata reads from `event.context.metadata.senderId`/`.senderName`/`.provider`/`.senderE164` (was `event.context.senderId`). Legacy paths retained as fallbacks.
+- **Semantic-recall handler: dynamic import for entity-resolver** (#8, #159, #164) — Uses `await import()` from `~/.openclaw/lib/entity-resolver/` instead of repo-relative static imports. Loads `pg-env.ts` before the entity-resolver module so `PGPASSWORD` is set before `pg.Pool` creation. Defines `EntityIdentifiers` interface inline since the source type path isn't available at install time.
+
 ### Added (renames.json mechanism — #107)
 
 - **`memory/database/renames.json`** ([#107](https://github.com/nova-openclaw/nova-memory/issues/107)) — New declarative rename manifest. Declares column and table renames that must be applied before `pgschema plan/apply` can converge. Format:

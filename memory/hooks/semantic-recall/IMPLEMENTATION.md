@@ -8,10 +8,10 @@ Successfully enhanced the `semantic-recall` hook to load entity context alongsid
 
 ## Changes Made
 
-### 1. Shared Entity Resolver Library (NEW)
-Created reusable library at `$OPENCLAW_WORKSPACE/lib/entity-resolver/`:
-- **`types.ts`**: TypeScript interfaces for Entity, EntityFacts, EntityIdentifiers
-- **`resolver.ts`**: Core resolution logic with database connection pooling
+### 1. Shared Entity Resolver Library
+Reusable library at `relationships/lib/entity-resolver/`, installed to `~/.openclaw/lib/entity-resolver/`:
+- **`types.ts`**: TypeScript interfaces for Entity, EntityFacts, EntityIdentifiers, ResolveResult, DbEntityFact
+- **`resolver.ts`**: Core resolution logic with database connection pooling, conflict detection, and `IDENTIFIER_TO_DB_KEY` mapping
 - **`cache.ts`**: Session-aware caching with configurable TTL (30 min default)
 - **`index.ts`**: Main exports for easy importing
 - **`README.md`**: Complete API documentation and usage examples
@@ -19,7 +19,8 @@ Created reusable library at `$OPENCLAW_WORKSPACE/lib/entity-resolver/`:
 - **`test.ts`**: Comprehensive test suite
 
 **Library Features:**
-- Multi-identifier resolution (phone, UUID, certCN, email)
+- Multi-identifier resolution (phone, UUID, certCN, email, discordId, telegramId, slackMemberId, signalUuid, signalUsername)
+- **Conflict detection** via `resolveEntityByIdentifiers()` — flags when identifiers resolve to different entities
 - Session-aware caching to reduce database queries
 - Connection pooling (max 5 connections)
 - Graceful error handling (no exceptions thrown)
@@ -27,14 +28,18 @@ Created reusable library at `$OPENCLAW_WORKSPACE/lib/entity-resolver/`:
 
 ### 2. Refactored Handler (`handler.ts`)
 
-**Updated to use shared library:**
-- Imports `resolveEntity`, `getEntityProfile`, `getCachedEntity`, `setCachedEntity` from library
-- Removed inline database code (now in shared library)
-- Added session-aware caching for entity lookups
-- Improved identifier handling (supports multiple identifier types)
-- Cleaner, more maintainable code
+**Uses shared library via dynamic imports from `~/.openclaw/lib/entity-resolver/`:**
+- Imports `resolveEntity`, `resolveEntityByIdentifiers`, `getEntityProfile`, `getCachedEntity`, `setCachedEntity` from library
+- Loads `pg-env.ts` BEFORE importing entity-resolver (which creates a `pg.Pool` at module scope)
+- Defines `EntityIdentifiers` interface inline (mirrors the library type, since the source path isn't available at install time)
+- Uses `extractIdentifiers()` for **channel-aware routing** of provider-specific sender IDs
+- Uses `resolveEntityByIdentifiers()` for **conflict detection** — never silently picks a winner
+- Reads message from `event.context.content` (with `event.context.message` fallback for legacy callers)
+- Reads sender metadata from `event.context.metadata` (with `event.context.*` fallback for legacy callers)
 
 **Key Features:**
+- **Channel-aware routing**: Maps Discord/Telegram/Slack/Signal providers to correct identifier fields
+- **Conflict detection**: Logs data integrity issues, skips entity injection if identifiers conflict
 - Non-blocking: Entity resolution runs in parallel with semantic recall
 - Timeout protection: 2s for entity resolution, 1s for profile loading
 - Graceful degradation: Failures don't block message processing
@@ -67,10 +72,14 @@ Created reusable library at `$OPENCLAW_WORKSPACE/lib/entity-resolver/`:
 **Identifier Keys for Resolution:**
 - `phone`
 - `signal_uuid`
+- `discord_id`
+- `telegram_id`
+- `slack_member_id`
+- `signal_username`
 
 ## Configuration
 
-Database connection is configured via `~/.openclaw/postgres.json` (loaded by `~/.openclaw/lib/pg-env.sh`). Standard `PG*` environment variables override the config file:
+Database connection is configured via `~/.openclaw/postgres.json` (loaded by `~/.openclaw/lib/pg-env.ts` at module scope, before any database connection is created). Standard `PG*` environment variables override the config file:
 ```bash
 PGHOST=localhost                    # default
 PGDATABASE=${USER//-/_}_memory     # dynamic: e.g., nova_memory, argus_memory
@@ -158,24 +167,32 @@ The hook integrates seamlessly with existing message flow:
 ## Architecture
 
 ```
-$OPENCLAW_WORKSPACE/   (default: ~/.openclaw/workspace)
+~/.openclaw/
 ├── lib/
-│   └── entity-resolver/          # Shared library
-│       ├── index.ts              # Main exports
-│       ├── resolver.ts           # Core resolution + DB pool
-│       ├── cache.ts              # Session-aware caching
-│       ├── types.ts              # TypeScript interfaces
-│       ├── package.json          # Dependencies (pg)
-│       ├── README.md             # API documentation
-│       └── test.ts               # Test suite
+│   ├── pg-env.ts                     # PG credential loader (loaded first)
+│   └── entity-resolver/              # Shared library (installed by agent-install.sh)
+│       ├── index.ts                  # Main exports (incl. resolveEntityByIdentifiers)
+│       ├── resolver.ts               # Core resolution + DB pool + conflict detection
+│       ├── cache.ts                  # Session-aware caching
+│       ├── types.ts                  # TypeScript interfaces (Entity, ResolveResult, etc.)
+│       ├── package.json              # Dependencies (pg)
+│       ├── README.md                 # API documentation
+│       └── test.ts                   # Test suite
 │
 └── hooks/
     └── semantic-recall/
-        ├── handler.ts            # Uses entity-resolver library
-        ├── HOOK.md               # Hook documentation
-        ├── IMPLEMENTATION.md     # This file
+        ├── handler.ts                # Channel-aware entity resolution + semantic recall
+        ├── HOOK.md                   # Hook documentation
+        ├── IMPLEMENTATION.md         # This file
         ├── test-entity-resolution.js  # Legacy test
-        └── verify-refactor.ts    # Integration test
+        └── verify-refactor.ts        # Integration test
+```
+
+**Source repo layout** (nova-mind):
+```
+nova-mind/
+├── relationships/lib/entity-resolver/  # Library source
+└── memory/hooks/semantic-recall/       # Handler source
 ```
 
 ## Benefits of Refactoring
@@ -191,6 +208,8 @@ $OPENCLAW_WORKSPACE/   (default: ~/.openclaw/workspace)
 
 Potential future enhancements:
 - ✅ ~~Cache entity lookups to reduce database queries~~ (DONE via library)
+- ✅ ~~Channel-aware routing for Discord, Telegram, Slack, Signal~~ (DONE — #8/#159/#164)
+- ✅ ~~Conflict detection when identifiers match different entities~~ (DONE — #8/#159/#164)
 - Add more fact types (interests, projects, relationships)
 - Support group chat entity resolution for all participants
 - Add entity relationship context (e.g., "talking with your friend Dustin")

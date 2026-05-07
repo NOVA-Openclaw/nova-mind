@@ -6,10 +6,11 @@ The Entity Resolver library is a core component of the NOVA Relationships ecosys
 
 ### Purpose
 
-- **Identity Resolution**: Converts various identifiers (phone, email, UUID, certificate CN) into unified entity records
+- **Identity Resolution**: Converts various identifiers (phone, email, UUID, certificate CN, Discord ID, Telegram ID, Slack member ID, Signal UUID/username) into unified entity records
+- **Conflict Detection**: Detects when multiple identifiers resolve to different entities, flagging data integrity issues instead of silently picking a winner
 - **Profile Management**: Loads entity facts like timezone, communication style, expertise, and preferences
 - **Session Awareness**: Maintains per-session entity caches to reduce database load and improve response times
-- **Cross-Platform Integration**: Works seamlessly across Signal, email, web interfaces, and other channels
+- **Cross-Platform Integration**: Works seamlessly across Discord, Telegram, Slack, Signal, email, web interfaces, and other channels
 
 ### Why It Exists
 
@@ -26,15 +27,20 @@ In a multi-channel AI system like NOVA, users can interact through various means
 
 #### `resolveEntity(identifiers: EntityIdentifiers): Promise<Entity | null>`
 
-Resolves an entity using one or more identifiers.
+Resolves an entity using one or more identifiers (backward-compatible, returns first match).
 
 **Parameters:**
 ```typescript
 interface EntityIdentifiers {
-  phone?: string;      // E.g., "+1234567890"
-  uuid?: string;       // Signal UUID or other platform UUID
-  certCN?: string;     // Certificate common name for mTLS auth
-  email?: string;      // Email address
+  phone?: string;          // E.g., "+1234567890"
+  uuid?: string;           // Signal UUID or other platform UUID
+  certCN?: string;         // Certificate common name for mTLS auth
+  email?: string;          // Email address
+  discordId?: string;      // Discord user ID
+  telegramId?: string;     // Telegram user ID
+  slackMemberId?: string;  // Slack member ID
+  signalUuid?: string;     // Signal UUID (dedicated field)
+  signalUsername?: string;  // Signal username
 }
 ```
 
@@ -59,6 +65,9 @@ const entity = await resolveEntity({
   uuid: 'signal-uuid-here',
   email: 'user@example.com'
 });
+
+// Resolve by platform-specific identifier
+const discordUser = await resolveEntity({ discordId: '123456789012345' });
 
 if (entity) {
   console.log(`Found: ${entity.name} (ID: ${entity.id})`);
@@ -98,6 +107,38 @@ console.log(`Style: ${profile.communication_style}`);
 // Load specific facts only
 const timezoneFacts = await getEntityProfile(entityId, ['timezone', 'current_timezone']);
 ```
+
+#### `resolveEntityByIdentifiers(identifiers: EntityIdentifiers): Promise<ResolveResult | null>`
+
+Resolves an entity by identifiers **with conflict detection**. Unlike `resolveEntity()`, this function fetches ALL matching entities and checks whether they agree. Returns `null` if no entity matched.
+
+**Returns:**
+```typescript
+type ResolveResult =
+  | { ok: true; entity: Entity; facts: DbEntityFact[] }
+  | { ok: false; conflict: true; entities: Entity[]; message: string };
+```
+
+**Example:**
+```typescript
+const result = await resolveEntityByIdentifiers({
+  discordId: '123456789',
+  phone: '+1234567890'
+});
+
+if (result === null) {
+  // No entity matched any identifier
+} else if (result.ok) {
+  // All identifiers resolved to the same entity
+  console.log(result.entity.name, result.facts);
+} else {
+  // Conflict: identifiers matched different entities
+  console.error(result.message);
+  // result.entities contains all matched entities
+}
+```
+
+**When to use:** Prefer `resolveEntityByIdentifiers()` when incorrect entity resolution would be harmful (e.g., injecting the wrong person's context into an agent response). The semantic-recall hook uses this function for safety.
 
 #### `getAllEntityFacts(entityId: number): Promise<EntityFacts>`
 
@@ -185,19 +226,37 @@ The library connects to the NOVA memory database (PostgreSQL) using connection p
 - **Connection timeout**: 5 seconds
 - **Database**: Dynamically derived from OS username as `{username}_memory` (hyphens replaced with underscores)
   - Examples: `nova` → `nova_memory`, `nova-staging` → `nova_staging_memory`
-  - Override with `POSTGRES_DB` environment variable if needed
-- **Host**: `localhost` (configurable via `POSTGRES_HOST`)
+  - Override with `PGDATABASE` environment variable
+- **Host**: `localhost` (configurable via `PGHOST`)
+
+**Identifier to DB Key Mapping:**
+
+The resolver maps camelCase identifier fields to snake_case `entity_facts.key` values via the `IDENTIFIER_TO_DB_KEY` constant:
+
+| Identifier Field | DB Fact Key |
+|-----------------|-------------|
+| `discordId` | `discord_id` |
+| `telegramId` | `telegram_id` |
+| `slackMemberId` | `slack_member_id` |
+| `signalUuid` | `signal_uuid` |
+| `signalUsername` | `signal_username` |
+
+Legacy identifiers (`phone`, `uuid`, `certCN`, `email`) are mapped inline to `phone`, `signal_uuid`, `cert_cn`, and `email`.
 
 **Query Strategy:**
 ```sql
--- Entity resolution query (simplified)
+-- resolveEntity() query (simplified) — returns first match
 SELECT DISTINCT e.id, e.name, e.full_name, e.type 
 FROM entities e 
 JOIN entity_facts ef ON e.id = ef.entity_id 
-WHERE (ef.key = 'phone' AND ef.value = ?) 
+WHERE (ef.key = 'phone' AND ef.value = ?)
    OR (ef.key = 'signal_uuid' AND ef.value = ?)
-   OR (ef.key = 'email' AND ef.value = ?)
+   OR (ef.key = 'discord_id' AND ef.value = ?)
+   OR ...  -- all provided identifiers
 LIMIT 1
+
+-- resolveEntityByIdentifiers() query — returns ALL matches for conflict detection
+-- Same WHERE clause but NO LIMIT, groups results by entity, and checks for conflicts
 ```
 
 ### Caching Layer
@@ -379,14 +438,15 @@ export async function syncEntityData() {
 ### Environment Variables
 
 ```bash
-# Database connection (required)
-POSTGRES_HOST=localhost          # Database host
+# Database connection — loaded from ~/.openclaw/postgres.json by pg-env.ts
+# Standard PG* variables override the config file:
+PGHOST=localhost                 # Database host
 # Database name automatically derived from OS username: {username}_memory
 # Examples: nova → nova_memory, nova-staging → nova_staging_memory  
 # Hyphens in usernames are replaced with underscores
-# Override with POSTGRES_DB if needed (e.g., POSTGRES_DB=custom_memory)
-POSTGRES_USER=nova               # Database user (defaults to OS username)
-POSTGRES_PASSWORD=secret         # Database password
+# Override with PGDATABASE if needed (e.g., PGDATABASE=custom_memory)
+PGUSER=nova                      # Database user (defaults to OS username)
+PGPASSWORD=secret                # Database password
 
 # Optional tuning
 ENTITY_CACHE_TTL_MS=1800000      # Cache TTL (30 minutes)

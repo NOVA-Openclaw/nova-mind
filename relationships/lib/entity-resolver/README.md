@@ -4,19 +4,25 @@ A reusable TypeScript library for resolving and caching entity information from 
 
 ## Features
 
-- **Multi-identifier resolution**: Resolve entities by phone, UUID, certificate CN, or email
+- **Multi-identifier resolution**: Resolve entities by phone, UUID, certificate CN, email, or platform-specific IDs (Discord, Telegram, Slack, Signal)
+- **Conflict detection**: Detect when identifiers resolve to different entities (data integrity issues)
 - **Session-aware caching**: Cache entity lookups per session with configurable TTL
 - **Profile loading**: Load entity facts (timezone, preferences, etc.)
 - **Connection pooling**: Efficient database connection management
+- **Dynamic import support**: Installable to `~/.openclaw/lib/` for use by hooks at runtime
 
 ## Installation
 
-This library is part of the clawd monorepo. Import directly:
+The library is installed to `~/.openclaw/lib/entity-resolver/` by the `agent-install.sh` installer. Hooks and other runtime consumers use dynamic imports from this installed location:
+
+```typescript
+import { resolveEntity, resolveEntityByIdentifiers, getEntityProfile } from '~/.openclaw/lib/entity-resolver';
+```
+
+Within the repo, import directly:
 
 ```typescript
 import { resolveEntity, getEntityProfile } from '../../lib/entity-resolver';
-// or from within lib/
-import { resolveEntity, getEntityProfile } from '../entity-resolver';
 ```
 
 ## Testing
@@ -55,6 +61,41 @@ if (entity) {
 - `uuid` - Signal UUID or other UUID identifier
 - `certCN` - Certificate common name
 - `email` - Email address
+- `discordId` - Discord user ID
+- `telegramId` - Telegram user ID
+- `slackMemberId` - Slack member ID
+- `signalUuid` - Signal UUID (dedicated field, maps to `signal_uuid` in DB)
+- `signalUsername` - Signal username (maps to `signal_username` in DB)
+
+#### `resolveEntityByIdentifiers(identifiers: EntityIdentifiers): Promise<ResolveResult | null>`
+
+Resolve an entity by identifiers **with conflict detection**. If multiple identifiers resolve to different entities, returns a conflict result instead of silently picking a winner. Returns `null` if no entity matched.
+
+```typescript
+const result = await resolveEntityByIdentifiers({
+  discordId: '123456789',
+  phone: '+1234567890'
+});
+
+if (result === null) {
+  console.log('No entity found');
+} else if (result.ok) {
+  console.log(result.entity.name, result.facts);
+} else {
+  // result.ok === false — conflict detected
+  console.error(result.message);
+  console.log('Conflicting entities:', result.entities);
+}
+```
+
+**`ResolveResult` type:**
+```typescript
+type ResolveResult =
+  | { ok: true; entity: Entity; facts: DbEntityFact[] }
+  | { ok: false; conflict: true; entities: Entity[]; message: string };
+```
+
+This function is preferred over `resolveEntity()` when conflict detection matters (e.g., the semantic-recall hook uses it to avoid injecting the wrong entity context).
 
 #### `getEntityProfile(entityId: number, factKeys?: string[]): Promise<EntityFacts>`
 
@@ -149,18 +190,52 @@ interface EntityIdentifiers {
   uuid?: string;
   certCN?: string;
   email?: string;
+  discordId?: string;
+  telegramId?: string;
+  slackMemberId?: string;
+  signalUuid?: string;
+  signalUsername?: string;
+}
+
+/**
+ * Result of entity resolution with conflict detection.
+ * ok: true  → all identifiers resolved to the same entity
+ * ok: false → identifiers resolved to different entities (data integrity conflict)
+ */
+type ResolveResult =
+  | { ok: true; entity: Entity; facts: DbEntityFact[] }
+  | { ok: false; conflict: true; entities: Entity[]; message: string };
+
+interface DbEntityFact {
+  key: string;
+  value: string;
 }
 ```
 
 ## Database
 
-Connects to PostgreSQL database:
+Connects to PostgreSQL database using credentials from `~/.openclaw/postgres.json` (loaded by `~/.openclaw/lib/pg-env.ts` at module scope). Standard `PG*` environment variables override the config file:
+
 - **Database:** Automatically derived from OS username as `{username}_memory` (hyphens → underscores)
   - Examples: `nova` → `nova_memory`, `nova-staging` → `nova_staging_memory`
-  - Override with `POSTGRES_DB` environment variable if needed
-- **Host:** `localhost` (configurable via `POSTGRES_HOST`)
-- **User:** OS username (configurable via `POSTGRES_USER`)
-- **Password:** Set via `POSTGRES_PASSWORD` env var
+  - Override with `PGDATABASE` environment variable
+- **Host:** `localhost` (configurable via `PGHOST`)
+- **User:** OS username (configurable via `PGUSER`)
+- **Password:** Set via `PGPASSWORD` env var
+
+### Identifier to DB Key Mapping
+
+The resolver maps camelCase identifier fields to snake_case `entity_facts.key` values:
+
+| Identifier Field | DB Fact Key |
+|-----------------|-------------|
+| `discordId` | `discord_id` |
+| `telegramId` | `telegram_id` |
+| `slackMemberId` | `slack_member_id` |
+| `signalUuid` | `signal_uuid` |
+| `signalUsername` | `signal_username` |
+
+Legacy identifiers (`phone`, `uuid`, `certCN`, `email`) map to `phone`, `signal_uuid`, `cert_cn`, and `email` respectively.
 
 ## Usage Example
 

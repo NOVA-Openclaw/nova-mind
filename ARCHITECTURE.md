@@ -8,6 +8,36 @@ NOVA's unified agent mind stack combining memory, cognition, and relationships i
 >
 > — **Erato**
 
+## Recommended Reading Order
+
+To understand nova-mind from the ground up:
+
+1. **`ARCHITECTURE.md`** (this file) — System overview, data flows, and design decisions
+2. **`SOUL.md` / `IDENTITY.md` / `USER.md` / `AGENTS.md`** — Behavioral root and operational manual
+   - For a single-user assistant, `SOUL.md` + `USER.md` are the true behavioral root; `AGENTS.md` is the operational manual
+3. **`memory/ARCHITECTURE.md`** — Memory tiers, extraction pipeline, and PostgreSQL schema
+4. **`relationships/ARCHITECTURE-entity-resolver.md`** — Entity resolution and caching
+5. **`database/schema-reference.md`** — Complete table reference and access control documentation
+
+## Getting Started: Minimum Viable Setup
+
+Most value for least complexity:
+
+1. **`entity_facts` table** — Simple key-value pairs with confidence, source, and visibility tracking. Foundation of all entity knowledge.
+2. **`SOUL.md` + bootstrap identity pattern** — The `agent_bootstrap_context` table seeds agent personality and SOPs at session start with minimal overhead.
+
+These two give you persistent, queryable knowledge about entities plus behavioral consistency across agent sessions. Add the extraction pipeline and embeddings when you need automatic learning from conversation.
+
+## Maintenance Hotspots
+
+The most maintenance-heavy component is the **embeddings pipeline**:
+- Migration between embedding models (e.g., OpenAI 1536-dim → Ollama 1024-dim) requires full re-embedding
+- Orphaned vector cleanup (`memory_embeddings` containing stale entries from deleted source records)
+- Cron job failures (Ollama service down, API timeouts)
+- IVFFlat index retraining as dataset grows
+
+Other subsystems (`entity_facts`, `agent_bootstrap_context`, `agent_chat`) require little-to-no routine maintenance.
+
 ## System Overview
 
 nova-mind is a unified repository consolidating three previously separate subsystems:
@@ -317,6 +347,9 @@ The installer enforces this order automatically.
 - **Embedding Batch Processing:** Embedding scripts run incrementally via cron to avoid overwhelming Ollama.
 - **Connection Pooling:** All PostgreSQL clients use connection pools (default size 5).
 - **Vector Indexes:** `memory_embeddings` uses PostgreSQL `pgvector` indexes for fast similarity search.
+- **Semantic Recall Context Budget:** The `semantic-recall` hook budgets ~1000 tokens for context injection. High-confidence results (>0.7 threshold) get full content injected; lower-confidence results get a summary only. Configurable via `SEMANTIC_RECALL_TOKEN_BUDGET` and `SEMANTIC_RECALL_HIGH_CONFIDENCE` environment variables.
+- **Semantic Recall Priority Weighting:** Results are scored as `vector_similarity × priority_weight` from the `memory_type_priorities` table. Workflows (1.50) and lessons (1.30) surface before entity_facts (1.00) and daily_logs (0.90).
+- **Ghost Embeddings (⚠️ Known Failure Mode):** Orphaned vectors in `memory_embeddings` from deleted source records surface stale information with high confidence. Detection requires manual LEFT JOIN queries. No automatic cleanup exists yet — this is the most dangerous class of memory corruption.
 
 ## Security Model
 
@@ -324,6 +357,22 @@ The installer enforces this order automatically.
 - **Certificate‑Based Authentication:** mTLS for agent‑to‑agent communication.
 - **Privacy‑Filtered Context:** `session‑init` hook strips sensitive data before injecting context into shared sessions.
 - **1Password Integration:** Credentials and access policies stored in 1Password with periodic policy scans.
+
+### ⚠️ Privacy Gap: Entity Facts Visibility Not Enforced at Retrieval
+
+The `entity_facts` table includes `visibility` (public/trusted/private) and `privacy_scope` (entity ID allowlist) columns in the schema, and indexes exist for both. **However, these are NOT filtered at retrieval time** — no hook, resolver, or query currently enforces visibility. All facts are returned regardless of their visibility setting.
+
+**What exists:**
+- Schema columns: `visibility`, `privacy_scope`, `source_entity_id`
+- Indexes: `idx_entity_facts_visibility`, `idx_entity_facts_privacy_scope` (GIN)
+
+**What is missing:**
+- Enforcement in `semantic-recall` hook queries
+- Enforcement in `entity-resolver` library `getEntityProfile()` / `getAllEntityFacts()`
+- Enforcement in `session-init` hook
+- Enforcement in any ad-hoc agent queries
+
+**Impact:** Privacy scoping is declared in the schema but not operational. All agents reading entity facts see everything regardless of privacy level.
 
 ## Extension Points
 

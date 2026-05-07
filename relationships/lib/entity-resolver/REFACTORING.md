@@ -28,11 +28,14 @@ Successfully extracted entity resolution logic from `~/.openclaw/hooks/semantic-
 ### 2. Implemented Core Features
 
 **Resolver (`resolver.ts`):**
-- `resolveEntity()` - Multi-identifier resolution (phone, UUID, certCN, email)
+- `resolveEntity()` - Multi-identifier resolution (phone, UUID, certCN, email, discordId, telegramId, slackMemberId, signalUuid, signalUsername)
+- `resolveEntityByIdentifiers()` - Conflict-detecting resolution that flags when identifiers match different entities
 - `getEntityProfile()` - Load specific fact types
 - `getAllEntityFacts()` - Load all facts for an entity
 - `closeDbPool()` - Cleanup function
+- `IDENTIFIER_TO_DB_KEY` mapping from camelCase to snake_case fact keys
 - Database connection pooling (max 5, 30s idle timeout)
+- PG credentials loaded from `~/.openclaw/postgres.json` via `pg-env.ts`
 - Graceful error handling (no exceptions thrown)
 
 **Cache (`cache.ts`):**
@@ -46,8 +49,10 @@ Successfully extracted entity resolution logic from `~/.openclaw/hooks/semantic-
 **Types (`types.ts`):**
 - `Entity` - Unified entity interface
 - `EntityFacts` - Key-value facts object
-- `EntityIdentifiers` - Supported identifier types
-- Internal DB types for type safety
+- `EntityIdentifiers` - Supported identifier types (9 fields: phone, uuid, certCN, email, discordId, telegramId, slackMemberId, signalUuid, signalUsername)
+- `ResolveResult` - Discriminated union for conflict-aware resolution results
+- `DbEntityFact` - Internal DB fact representation
+- `DbEntity` - Internal DB entity representation
 
 ### 3. Refactored Semantic Recall Hook
 
@@ -206,15 +211,15 @@ if (entity) {
 
 ## Database Configuration
 
-The library uses the same database configuration as the hook:
+The library loads PG credentials from `~/.openclaw/postgres.json` via `~/.openclaw/lib/pg-env.ts` at module scope. Standard `PG*` environment variables override the config file:
 
 ```bash
-POSTGRES_HOST=localhost      # default
+PGHOST=localhost             # default
 # Database name auto-derived from OS username: {username}_memory
 # Examples: nova → nova_memory, nova-staging → nova_staging_memory
-# Override with POSTGRES_DB if needed (e.g., POSTGRES_DB=custom_memory)
-POSTGRES_USER=nova           # default (uses OS username)
-POSTGRES_PASSWORD=           # optional
+# Override with PGDATABASE if needed
+PGUSER=nova                  # default (uses OS username)
+PGPASSWORD=                  # optional
 ```
 
 ## Performance Characteristics

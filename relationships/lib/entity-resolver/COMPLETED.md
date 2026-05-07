@@ -40,6 +40,7 @@ Successfully extracted entity resolution logic from the semantic-recall hook int
 ```typescript
 // Resolver functions
 export async function resolveEntity(identifiers: EntityIdentifiers): Promise<Entity | null>
+export async function resolveEntityByIdentifiers(identifiers: EntityIdentifiers): Promise<ResolveResult | null>
 export async function getEntityProfile(entityId: number, factKeys?: string[]): Promise<EntityFacts>
 export async function getAllEntityFacts(entityId: number): Promise<EntityFacts>
 export async function closeDbPool(): Promise<void>
@@ -53,18 +54,27 @@ export function getCacheStats(): { size: number; sessions: string[] }
 // Types
 export interface Entity { id: number; name: string; fullName?: string; type: string; }
 export interface EntityFacts { [key: string]: string; }
-export interface EntityIdentifiers { phone?: string; uuid?: string; certCN?: string; email?: string; }
+export interface EntityIdentifiers {
+  phone?: string; uuid?: string; certCN?: string; email?: string;
+  discordId?: string; telegramId?: string; slackMemberId?: string;
+  signalUuid?: string; signalUsername?: string;
+}
+export type ResolveResult =
+  | { ok: true; entity: Entity; facts: DbEntityFact[] }
+  | { ok: false; conflict: true; entities: Entity[]; message: string };
 ```
 
 ## Key Features Implemented
 
-1. **Multi-identifier resolution** - Phone, UUID, certificate CN, email
-2. **Session-aware caching** - 30-minute TTL, reduces DB queries
-3. **Connection pooling** - Shared pool, max 5 connections
-4. **Type safety** - Full TypeScript support
-5. **Error handling** - Graceful failures, no exceptions
-6. **Testing** - Comprehensive test suite
-7. **Documentation** - Complete API docs + usage examples
+1. **Multi-identifier resolution** - Phone, UUID, certificate CN, email, Discord ID, Telegram ID, Slack member ID, Signal UUID/username
+2. **Conflict detection** - `resolveEntityByIdentifiers()` detects when identifiers match different entities
+3. **Session-aware caching** - 30-minute TTL, reduces DB queries
+4. **Connection pooling** - Shared pool, max 5 connections
+5. **Type safety** - Full TypeScript support
+6. **Error handling** - Graceful failures, no exceptions
+7. **Testing** - Comprehensive test suite
+8. **Documentation** - Complete API docs + usage examples
+9. **Installable** - Copied to `~/.openclaw/lib/entity-resolver/` by `agent-install.sh`
 
 ## Test Results
 

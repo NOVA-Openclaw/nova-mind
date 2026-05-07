@@ -1,6 +1,6 @@
 # Database Schema Reference
 
-*Auto-generated: 2026-05-07T06:32:11.165236*
+*Auto-generated: 2026-05-07T09:32:37.433518*
 
 ## Tables
 
@@ -33,7 +33,7 @@
 | event_entities | Links events to entities (people, orgs, AIs). Many-to-many relationship table. | 3 |
 | event_places | Links events to places/locations. Many-to-many relationship table. | 2 |
 | event_projects | Links events to projects. Many-to-many relationship table for project milestones and activities. | 2 |
-| events | Historical events, milestones, activities. Log significant occurrences. | 9 |
+| events | Historical events, milestones, activities. Log significant occurrences. | 10 |
 | events_archive | Archived historical events. Long-term storage for events moved out of active events table. | 11 |
 | extraction_metrics | Performance metrics for data extraction processes. Tracks accuracy and efficiency of knowledge extraction. | 6 |
 | fact_change_log | Audit trail for entity fact modifications. Tracks who changed what and when for accountability. | 7 |

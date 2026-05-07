@@ -59,18 +59,28 @@ fact_exists() {
     [ "$count" -gt 0 ]
 }
 
-# Function to reinforce existing fact (increment vote_count, update last_confirmed)
+# Function to reinforce existing fact (increment vote_count, update last_confirmed, update source pointer if newer)
 reinforce_fact() {
     local entity_name="$1"
     local key="$2"
     local value="$3"
+    local src_session_id="${SOURCE_SESSION_ID:-}"
+    local src_timestamp="${SOURCE_TIMESTAMP:-}"
+    
+    # Build source pointer update clause (only overwrite if new timestamp is newer)
+    local source_update=""
+    if [ -n "$src_session_id" ] && [ -n "$src_timestamp" ]; then
+        source_update=",
+            source_session_id = CASE WHEN source_timestamp IS NULL OR source_timestamp < TIMESTAMP '$(sql_escape "$src_timestamp")' THEN '$(sql_escape "$src_session_id")' ELSE source_session_id END,
+            source_timestamp = CASE WHEN source_timestamp IS NULL OR source_timestamp < TIMESTAMP '$(sql_escape "$src_timestamp")' THEN TIMESTAMP '$(sql_escape "$src_timestamp")' ELSE source_timestamp END"
+    fi
     
     psql -t -A -c "
         UPDATE entity_facts ef
         SET vote_count = vote_count + 1,
             last_confirmed = NOW(),
             confirmation_count = COALESCE(confirmation_count, 0) + 1,
-            updated_at = NOW()
+            updated_at = NOW()${source_update}
         FROM entities e
         WHERE ef.entity_id = e.id
           AND (LOWER(e.name) = LOWER('$(sql_escape "$entity_name")')
@@ -207,6 +217,8 @@ echo "$JSON_DATA" | jq -c '.facts[]? // empty' | while read -r fact; do
     visibility=$(echo "$fact" | jq -r '.visibility // "public"')
     visibility_reason=$(echo "$fact" | jq -r '.visibility_reason // empty')
     source_entity_id=$(resolve_source_entity_id "$source_person")
+    src_session_id="${SOURCE_SESSION_ID:-}"
+    src_timestamp="${SOURCE_TIMESTAMP:-}"
     
     actual_subject=$(find_entity "$subject")
     [ -z "$actual_subject" ] && actual_subject="$subject"
@@ -223,6 +235,8 @@ echo "$JSON_DATA" | jq -c '.facts[]? // empty' | while read -r fact; do
     
     [ -n "$source_entity_id" ] && cols="$cols, source_entity_id" && vals="$vals, $source_entity_id"
     [ -n "$visibility_reason" ] && cols="$cols, visibility_reason" && vals="$vals, '$(sql_escape "$visibility_reason")'"
+    [ -n "$src_session_id" ] && cols="$cols, source_session_id" && vals="$vals, '$(sql_escape "$src_session_id")'"
+    [ -n "$src_timestamp" ] && cols="$cols, source_timestamp" && vals="$vals, TIMESTAMP '$(sql_escape "$src_timestamp")'"
     
     echo "INSERT INTO entity_facts ($cols) SELECT $vals
           FROM entities WHERE name = '$(sql_escape "$actual_subject")'
@@ -239,6 +253,8 @@ echo "$JSON_DATA" | jq -c '.opinions[]? // empty' | while read -r opinion; do
     visibility=$(echo "$opinion" | jq -r '.visibility // "public"')
     visibility_reason=$(echo "$opinion" | jq -r '.visibility_reason // empty')
     source_entity_id=$(resolve_source_entity_id "$source_person")
+    src_session_id="${SOURCE_SESSION_ID:-}"
+    src_timestamp="${SOURCE_TIMESTAMP:-}"
     
     actual_holder=$(find_entity "$holder")
     [ -z "$actual_holder" ] && actual_holder="$holder"
@@ -257,6 +273,8 @@ echo "$JSON_DATA" | jq -c '.opinions[]? // empty' | while read -r opinion; do
     
     [ -n "$source_entity_id" ] && cols="$cols, source_entity_id" && vals="$vals, $source_entity_id"
     [ -n "$visibility_reason" ] && cols="$cols, visibility_reason" && vals="$vals, '$(sql_escape "$visibility_reason")'"
+    [ -n "$src_session_id" ] && cols="$cols, source_session_id" && vals="$vals, '$(sql_escape "$src_session_id")'"
+    [ -n "$src_timestamp" ] && cols="$cols, source_timestamp" && vals="$vals, TIMESTAMP '$(sql_escape "$src_timestamp")'"
     
     echo "INSERT INTO entity_facts ($cols) SELECT $vals
           FROM entities WHERE name = '$(sql_escape "$actual_holder")'
@@ -273,6 +291,8 @@ echo "$JSON_DATA" | jq -c '.preferences[]? // empty' | while read -r pref; do
     visibility=$(echo "$pref" | jq -r '.visibility // "public"')
     visibility_reason=$(echo "$pref" | jq -r '.visibility_reason // empty')
     source_entity_id=$(resolve_source_entity_id "$source_person")
+    src_session_id="${SOURCE_SESSION_ID:-}"
+    src_timestamp="${SOURCE_TIMESTAMP:-}"
     
     actual_person=$(find_entity "$person")
     [ -z "$actual_person" ] && actual_person="$person"
@@ -291,6 +311,8 @@ echo "$JSON_DATA" | jq -c '.preferences[]? // empty' | while read -r pref; do
     
     [ -n "$source_entity_id" ] && cols="$cols, source_entity_id" && vals="$vals, $source_entity_id"
     [ -n "$visibility_reason" ] && cols="$cols, visibility_reason" && vals="$vals, '$(sql_escape "$visibility_reason")'"
+    [ -n "$src_session_id" ] && cols="$cols, source_session_id" && vals="$vals, '$(sql_escape "$src_session_id")'"
+    [ -n "$src_timestamp" ] && cols="$cols, source_timestamp" && vals="$vals, TIMESTAMP '$(sql_escape "$src_timestamp")'"
     
     echo "INSERT INTO entity_facts ($cols) SELECT $vals
           FROM entities WHERE name = '$(sql_escape "$actual_person")'
@@ -304,9 +326,16 @@ echo "$JSON_DATA" | jq -c '.vocabulary[]? // empty' | while read -r vocab; do
     category=$(echo "$vocab" | jq -r '.category // "custom"')
     misheard_raw=$(echo "$vocab" | jq -r '.misheard_as // [] | @json')
     
-    # Check for duplicate
+    # Check for duplicate — reinforce if exists
     if vocab_exists "$word"; then
-        echo "  ~ Vocabulary (duplicate, skipped): $word"
+        # Reinforce existing vocabulary
+        psql -t -A -c "
+            UPDATE vocabulary
+            SET vote_count = vote_count + 1,
+                last_confirmed = NOW()
+            WHERE LOWER(word) = LOWER('$(sql_escape "$word")');
+        " 2>/dev/null >/dev/null
+        echo "  ✓ Vocabulary reinforced: $word (vote_count++)"
         continue
     fi
     

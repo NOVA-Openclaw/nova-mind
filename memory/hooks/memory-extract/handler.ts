@@ -112,8 +112,13 @@ const handler = async (event) => {
   // Run extraction via stdin pipe — never pass untrusted message text as shell args (#155)
   const __filename = fileURLToPath(import.meta.url);
   const __dirname = dirname(__filename);
-  // Use grammar-enhanced extraction (issue #22)
-  const scriptPath = join(__dirname, '../../scripts/process-input-with-grammar.sh');
+  // Bypass grammar parser (90% failure rate) — LLM extracts every message directly (#165)
+  // OLD: const scriptPath = join(__dirname, '../../scripts/process-input-with-grammar.sh');
+  const scriptPath = join(__dirname, '../../scripts/process-input.sh');
+
+  // Extract session UUID from sessionKey (e.g. "agent:nova:signal:group:abc/xyz" → "xyz")
+  const sessionId = event.sessionKey?.split(':').pop()?.split('/').pop() ?? '';
+  const messageTimestamp = new Date().toISOString();  // Current time as extraction timestamp
   
   const child = spawn(scriptPath, [], {
     stdio: ['pipe', 'pipe', 'pipe'],
@@ -121,7 +126,9 @@ const handler = async (event) => {
       ...process.env,
       SENDER_NAME: senderName,
       SENDER_ID: senderId,
-      IS_GROUP: String(isGroup)
+      IS_GROUP: String(isGroup),
+      SOURCE_SESSION_ID: sessionId,
+      SOURCE_TIMESTAMP: messageTimestamp
     }
   });
 

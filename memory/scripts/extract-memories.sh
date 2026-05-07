@@ -17,9 +17,12 @@ SENDER="${SENDER_NAME:-unknown}"
 SENDER_ID="${SENDER_ID:-}"
 IS_GROUP="${IS_GROUP:-false}"
 
+# Model configuration: env var override or default to Gemini 2.5 Flash
+MEMORY_EXTRACTION_MODEL="${MEMORY_EXTRACTION_MODEL:-google/gemini-2.5-flash-preview-05-20}"
+
 # API key must be set in environment (inherited from OpenClaw)
-if [ -z "$ANTHROPIC_API_KEY" ]; then
-    echo "ERROR: ANTHROPIC_API_KEY not set in environment" >&2
+if [ -z "$OPENROUTER_API_KEY" ]; then
+    echo "ERROR: OPENROUTER_API_KEY not set in environment" >&2
     echo "This script should be run from OpenClaw hooks which inherit the API key" >&2
     exit 1
 fi
@@ -39,19 +42,6 @@ if [ -n "$SENDER_ID" ]; then
     " 2>/dev/null || echo "public")
     [ -z "$DEFAULT_VIS" ] && DEFAULT_VIS="public"
 fi
-
-# Get existing facts for deduplication check
-EXISTING_FACTS=$(psql -t -A -c "
-    SELECT DISTINCT CONCAT(e.name, '.', ef.key, '=', LEFT(ef.value, 100)) 
-    FROM entity_facts ef 
-    JOIN entities e ON e.id = ef.entity_id 
-    ORDER BY 1 
-    LIMIT 200;
-" 2>/dev/null | tr '\n' '; ' | head -c 2000)
-
-EXISTING_VOCAB=$(psql -t -A -c "
-    SELECT word FROM vocabulary ORDER BY word LIMIT 200;
-" 2>/dev/null | tr '\n' ', ' | head -c 1000)
 
 # Build prompt with sender attribution and context awareness
 PROMPT="Extract memory data as JSON from a CONVERSATION with context.
@@ -73,12 +63,6 @@ IMPORTANT INSTRUCTIONS:
    - source_person: \"${SENDER}\" (who said this)
    - visibility: privacy level (see below)
    - visibility_reason: ONLY if visibility differs from user default
-
-4. DEDUPLICATION - DO NOT EXTRACT if we already have this info:
-   Existing facts (sample): ${EXISTING_FACTS:-none}
-   Existing vocabulary: ${EXISTING_VOCAB:-none}
-   
-   Skip any fact that duplicates existing data. Only extract NEW information.
 
 PRIVACY DETECTION:
 The user's default visibility is \"${DEFAULT_VIS}\". 
@@ -119,15 +103,14 @@ If the current message contains NO extractable new information (just casual chat
 
 Return ONLY valid JSON, no markdown fences."
 
-# Build JSON payload
-PAYLOAD=$(jq -n --arg prompt "$PROMPT" '{
-  model: "claude-sonnet-4-20250514",
+# Build JSON payload (OpenAI-compatible format for OpenRouter)
+PAYLOAD=$(jq -n --arg prompt "$PROMPT" --arg model "$MEMORY_EXTRACTION_MODEL" '{
+  model: $model,
   max_tokens: 2048,
   messages: [{role: "user", content: $prompt}]
 }')
 
-curl -s https://api.anthropic.com/v1/messages \
-  -H "x-api-key: $ANTHROPIC_API_KEY" \
-  -H "anthropic-version: 2023-06-01" \
+curl -s https://openrouter.ai/api/v1/chat/completions \
+  -H "Authorization: Bearer $OPENROUTER_API_KEY" \
   -H "content-type: application/json" \
-  -d "$PAYLOAD" | jq -r '.content[0].text // empty'
+  -d "$PAYLOAD" | jq -r '.choices[0].message.content // empty'

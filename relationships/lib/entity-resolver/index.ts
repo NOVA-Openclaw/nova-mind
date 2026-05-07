@@ -31,6 +31,7 @@
 // Export resolver functions
 export {
   resolveEntity,
+  resolveEntityByIdentifiers,
   getEntityProfile,
   getAllEntityFacts,
   closeDbPool,
@@ -49,4 +50,5 @@ export type {
   Entity,
   EntityFacts,
   EntityIdentifiers,
+  ResolveResult,
 } from "./types.ts";

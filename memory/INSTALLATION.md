@@ -294,6 +294,17 @@ The installer and hooks use these environment variables:
 - `SEMANTIC_RECALL_TOKEN_BUDGET` - Max tokens for recall (default: 1000)
 - `SEMANTIC_RECALL_HIGH_CONFIDENCE` - Confidence threshold (default: 0.7)
 
+### Semantic Recall Context Budget Architecture
+
+The `semantic-recall` hook uses a two-tier injection strategy to stay within context window limits:
+
+1. **Query:** All relevant `source_type`s are queried with vector similarity search, then scored as `vector_similarity × priority_weight` from `memory_type_priorities`.
+2. **Threshold gating:** Results above `SEMANTIC_RECALL_HIGH_CONFIDENCE` (default 0.7) get full content injected. Results below the threshold get a summary (just the source_type and a snippet).
+3. **Token budget:** Total injected content is limited to `SEMANTIC_RECALL_TOKEN_BUDGET` (default ~1000 tokens). Results are included in priority order until the budget is exhausted.
+4. **Priority weighting:** Higher-priority source_types (e.g., workflows at 1.50, lessons at 1.30) surface before lower-priority ones (e.g., daily_logs at 0.90). See `memory_type_priorities` table.
+
+This architecture ensures that high-value context (lessons, critical facts) is always injected in full, while lower-value or voluminous data (chat logs, routine agent messages) consumes minimal context budget.
+
 ## Post-Installation
 
 After running `shell-install.sh` or `agent-install.sh`, **the hooks are automatically enabled**. Just restart the gateway:
@@ -472,6 +483,43 @@ Check logs:
 tail -f ~/.openclaw/workspace/logs/memory-extract-hook.log
 tail -f ~/.openclaw/workspace/logs/openclaw-hooks.log
 ```
+
+### Ghost Embeddings (Stale Semantic Recall Results)
+
+**Symptoms:** The agent mentions facts or events that seem outdated, contradictory, or reference entities that no longer exist. Semantic recall returns results that don't match current database state.
+
+**Cause:** Deleted or archived source records (entity_facts, lessons, events) leave orphaned vector entries in `memory_embeddings`. The vector is still valid — it surfaces in similarity searches — but the data it references is gone or replaced.
+
+**Detection:**
+```sql
+-- Find orphaned entity_fact embeddings
+SELECT me.id, me.source_type, me.source_id
+FROM memory_embeddings me
+LEFT JOIN entity_facts ef ON me.source_type = 'entity_fact' AND me.source_id = ef.id
+WHERE me.source_type = 'entity_fact' AND ef.id IS NULL;
+
+-- Check total orphans across all source types
+SELECT me.source_type, COUNT(*) as orphan_count
+FROM memory_embeddings me
+LEFT JOIN entity_facts ef ON me.source_type = 'entity_fact' AND me.source_id = ef.id
+LEFT JOIN lessons l ON me.source_type = 'lesson' AND me.source_id = l.id
+LEFT JOIN events e ON me.source_type = 'event' AND me.source_id = e.id
+WHERE (me.source_type = 'entity_fact' AND ef.id IS NULL)
+   OR (me.source_type = 'lesson' AND l.id IS NULL)
+   OR (me.source_type = 'event' AND e.id IS NULL)
+GROUP BY me.source_type;
+```
+
+**Fix:** Delete orphaned embedding rows:
+```sql
+DELETE FROM memory_embeddings me
+USING memory_embeddings me2
+LEFT JOIN entity_facts ef ON me2.source_type = 'entity_fact' AND me2.source_id = ef.id
+WHERE me.id = me2.id
+  AND me2.source_type = 'entity_fact' AND ef.id IS NULL;
+```
+
+**Prevention:** The `memory-maintenance.py` script handles some cleanup but does not yet detect ghost embeddings automatically. Adding a cascading trigger that deletes embeddings when source records are deleted would prevent this entirely.
 
 ## Performance Optimization
 

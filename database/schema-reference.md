@@ -1,6 +1,6 @@
 # Database Schema Reference
 
-*Auto-generated: 2026-04-17T20:00:56.440282*
+*Auto-generated: 2026-05-07T09:32:37.433518*
 
 ## Tables
 
@@ -33,7 +33,7 @@
 | event_entities | Links events to entities (people, orgs, AIs). Many-to-many relationship table. | 3 |
 | event_places | Links events to places/locations. Many-to-many relationship table. | 2 |
 | event_projects | Links events to projects. Many-to-many relationship table for project milestones and activities. | 2 |
-| events | Historical events, milestones, activities. Log significant occurrences. | 9 |
+| events | Historical events, milestones, activities. Log significant occurrences. | 10 |
 | events_archive | Archived historical events. Long-term storage for events moved out of active events table. | 11 |
 | extraction_metrics | Performance metrics for data extraction processes. Tracks accuracy and efficiency of knowledge extraction. | 6 |
 | fact_change_log | Audit trail for entity fact modifications. Tracks who changed what and when for accountability. | 7 |
@@ -94,8 +94,9 @@
 | vehicles | Vehicle tracking and management. Cars, bikes, boats, planes owned or used. | 13 |
 | vocabulary | Custom vocabulary for speech recognition. Add names, terms, jargon as encountered. | 8 |
 | work_tags | - | 3 |
+| workflow_runs | Execution history for workflows. Each row = one workflow run. FK to workflows(id) pending DBA action. | 13 |
 | workflow_steps | Ordered steps in a workflow with agent assignments and deliverable specifications | 14 |
-| workflows | Defines multi-agent workflows with ordered steps and deliverable handoffs | 10 |
+| workflows | Defines multi-agent workflows with ordered steps and deliverable handoffs | 13 |
 | works | - | 14 |
 
 ## Quick Reference

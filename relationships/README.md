@@ -25,10 +25,12 @@ The NOVA Relationships System is a unified platform that merged the original Ent
 ### Key Components
 
 1. **Entity Resolver Library** (`lib/entity-resolver/`)
-   - Identity resolution across multiple identifiers (phone, email, UUID, certificates)
+   - Identity resolution across multiple identifiers (phone, email, UUID, certificates, Discord ID, Telegram ID, Slack member ID, Signal UUID/username)
+   - Conflict detection via `resolveEntityByIdentifiers()` — flags when identifiers match different entities
    - Session-aware caching for performance
    - Profile management and fact storage
-   - Cross-platform integration (Signal, email, web, certificates)
+   - Cross-platform integration (Discord, Telegram, Slack, Signal, email, web, certificates)
+   - Installed to `~/.openclaw/lib/entity-resolver/` by `agent-install.sh` for runtime use by hooks
 
 2. **Certificate Authority** (`nova-ca/`)
    - Private CA for mTLS authentication
@@ -67,7 +69,7 @@ The system follows a layered architecture designed for scalability and modularit
 
 ### Perception Layer
 **"What do I notice?"**
-- Multi-channel identity detection (phone, email, UUID, certificate CN)
+- Multi-channel identity detection (phone, email, UUID, certificate CN, Discord ID, Telegram ID, Slack member ID, Signal UUID/username)
 - Cross-platform user tracking and consolidation
 - Behavioral pattern recognition and trait extraction
 - Context clue identification and correlation

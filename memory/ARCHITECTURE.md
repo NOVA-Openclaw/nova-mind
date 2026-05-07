@@ -50,17 +50,33 @@ This is the source of truth for persistent information.
 | Table | Purpose |
 |-------|---------|
 | `entities` | People, AIs, organizations — things with agency |
-| `entity_facts` | Key-value facts about entities |
+| `entity_facts` | Key-value facts about entities (includes `visibility`, `privacy_scope`, `data_type` for access control — see note below) |
 | `entity_relationships` | Connections between entities |
 | `places` | Locations, networks, venues |
 | `projects` | Active efforts with goals |
 | `tasks` | Actionable items linked to projects |
-| `events` | Timeline of what happened |
+| `events` | Timeline of what happened (`event_date` column) |
 | `lessons` | Things learned from experience — confidence decays unless reinforced |
-| `sops` | Standard Operating Procedures |
+| `workflows` / `workflow_steps` | Structured multi-step procedures with domain routing, discussion triggers, and authorization gates (replaced the old SOPs concept — looked up on demand, not injected into bootstrap context) |
 | `vocabulary` | Words for STT correction |
 | `preferences` | User and system preferences |
 | `agent_turn_context` | Per-turn context injected before every agent response (UNIVERSAL → GLOBAL → DOMAIN → AGENT priority) |
+| `memory_type_priorities` | Priority weights for semantic recall by source_type |
+
+#### Entity Facts Access Control Columns
+
+The `entity_facts` table includes privacy and provenance columns that exist in the schema but **are not yet enforced at retrieval time**:
+
+| Column | Type | Purpose |
+|--------|------|---------|
+| `visibility` | varchar(20) | `public`, `trusted`, `private` — intended audience level |
+| `privacy_scope` | integer[] | Array of entity IDs explicitly allowed to see this fact |
+| `data_type` | varchar(20) | One of `permanent`, `identity`, `preference`, `temporal`, `observation` |
+| `source_entity_id` | int | FK to entity who provided the information (privacy ownership) |
+| `vote_count` | int | Reinforcement count — incremented each time re-confirmed |
+| `last_confirmed` | timestamptz | Most recent confirmation/reinforcement timestamp |
+
+**⚠️ Privacy enforcement is schema-ready but NOT yet implemented in retrieval code** (semantic-recall hook, entity-resolver library). The `visibility` and `privacy_scope` columns exist, indexes are present (`idx_entity_facts_visibility`, `idx_entity_facts_privacy_scope`), but filtering by visibility at query time is not done. All facts are returned regardless of their visibility setting.
 
 #### Turn Context Injection (`agent_turn_context`)
 
@@ -140,6 +156,46 @@ See `REMINDERS.md` in this repo for the template.
 **Purpose:** Powers the `memory_search` tool.
 
 OpenClaw automatically indexes workspace markdown files and stores embeddings for semantic search. This is separate from the PostgreSQL long-term memory.
+
+## Semantic Recall Priority Weighting
+
+The `memory_type_priorities` table controls which memory types surface first during semantic recall. Higher priority = more likely to appear in results:
+
+| Source Type | Priority | Notes |
+|-------------|----------|-------|
+| workflows | 1.50 | Highest — structural guidance |
+| lessons | 1.30 | Correction learning, high value |
+| tasks | 1.20 | Active work items |
+| entity_fact | 1.00 | Baseline — entity knowledge |
+| daily_log | 0.90 | Recent session history |
+| agent_chat | 0.70 | Inter-agent messages (often verbose) |
+
+Semantic search results are scored as `vector_similarity × priority_weight`. Adjust priorities via:
+```sql
+UPDATE memory_type_priorities SET priority = N WHERE source_type = 'lesson';
+```
+
+## Ghost Embeddings (Known Failure Mode)
+
+**Ghost embeddings** are orphaned vector records in `memory_embeddings` where the source record (entity_fact, lesson, event, etc.) has been deleted or archived but the embedding row remains. These are the **worst failure mode** for semantic recall because they surface stale, outdated information with high confidence — the vector is still valid, but the data it points to is gone or replaced.
+
+**Causes:**
+- Deleting source records without cleaning up `memory_embeddings`
+- Schema migration that drops/recreates tables
+- Application-level deletes that bypass the embedding maintenance pipeline
+
+**Detection:**
+```sql
+-- Find potentially orphaned embeddings
+SELECT me.id, me.source_type, me.source_id
+FROM memory_embeddings me
+LEFT JOIN entity_facts ef ON me.source_type = 'entity_fact' AND me.source_id = ef.id
+LEFT JOIN lessons l ON me.source_type = 'lesson' AND me.source_id = l.id
+-- ... repeat for each source_type
+WHERE me.source_type = 'entity_fact' AND ef.id IS NULL;
+```
+
+**Prevention:** Add cascading cleanup hooks that remove embeddings when source records are deleted. The `memory-maintenance.py` script handles some cleanup but does not yet detect ghost embeddings automatically.
 
 ## Memory Extraction Pipeline
 

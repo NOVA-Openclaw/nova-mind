@@ -11,14 +11,35 @@ const pgEnvPath = join(os.homedir(), ".openclaw", "lib", "pg-env.ts");
 const { loadPgEnv } = await import(pgEnvPath);
 loadPgEnv();
 
-import {
+// Dynamic import of entity-resolver from installed location ($HOME/.openclaw/lib/)
+// This path works both from the repo AND from the installed hook location.
+const entityResolverPath = join(os.homedir(), ".openclaw", "lib", "entity-resolver", "index.ts");
+const {
   resolveEntity,
+  resolveEntityByIdentifiers,
   getEntityProfile,
   getCachedEntity,
   setCachedEntity,
-  type Entity,
-  type EntityFacts,
-} from "../../../nova-relationships/lib/entity-resolver/index.ts";
+} = await import(entityResolverPath);
+
+// Types derived from resolver return types (can't use static type imports
+// from a path that only exists at install time)
+type Entity = Exclude<Awaited<ReturnType<typeof resolveEntity>>, null>;
+type EntityFacts = Awaited<ReturnType<typeof getEntityProfile>>;
+
+// EntityIdentifiers: mirrors relationships/lib/entity-resolver/types.ts
+// Defined inline because the source path is not available at install time.
+interface EntityIdentifiers {
+  phone?: string;
+  uuid?: string;
+  certCN?: string;
+  email?: string;
+  discordId?: string;
+  telegramId?: string;
+  slackMemberId?: string;
+  signalUuid?: string;
+  signalUsername?: string;
+}
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -38,6 +59,37 @@ const PYTHON_VENV = existsSync(STANDARD_VENV) ? STANDARD_VENV : WORKSPACE_VENV;
 const TOKEN_BUDGET = parseInt(process.env.SEMANTIC_RECALL_TOKEN_BUDGET || "1000", 10);
 const HIGH_CONFIDENCE_THRESHOLD = parseFloat(process.env.SEMANTIC_RECALL_HIGH_CONFIDENCE || "0.7");
 
+/**
+ * Extract channel-aware identifiers from event metadata.
+ * Maps provider-specific sender IDs to the correct EntityIdentifiers fields.
+ */
+function extractIdentifiers(
+  provider: string | undefined,
+  senderId: string | undefined,
+  senderE164?: string | undefined,
+): EntityIdentifiers {
+  if (!senderId) return {};
+
+  switch (provider) {
+    case 'discord':
+      return { discordId: senderId };
+    case 'telegram':
+      return { telegramId: senderId };
+    case 'slack':
+      return { slackMemberId: senderId };
+    case 'signal': {
+      const ids: EntityIdentifiers = { signalUuid: senderId };
+      if (senderE164) {
+        ids.phone = senderE164;
+      }
+      return ids;
+    }
+    default:
+      // Unknown provider — graceful skip, fall back to legacy uuid/phone path
+      return {};
+  }
+}
+
 function formatEntityContext(entity: Entity, facts: EntityFacts): string {
   const displayName = entity.fullName || entity.name;
   let context = `👤 **Talking with:** ${displayName}`;
@@ -54,13 +106,15 @@ function formatEntityContext(entity: Entity, facts: EntityFacts): string {
   return context;
 }
 
-const handler = async (event) => {
+const handler = async (event: any) => {
   // Only handle message:received events
   if (event.type !== "message" || event.action !== "received") {
     return;
   }
 
-  const message = (event.context as { message?: string })?.message;
+  // Use correct field path: event.context.content (not .message)
+  const message: string | undefined = (event.context as any)?.content
+    ?? (event.context as any)?.message;  // fallback for legacy callers
   if (!message || message.length < 10) {
     // Skip very short messages (commands, reactions, etc.)
     return;
@@ -71,10 +125,18 @@ const handler = async (event) => {
     return;
   }
 
-  // Extract sender identifier from event context
-  const senderId = (event.context as { senderId?: string })?.senderId;
-  const senderName = (event.context as { senderName?: string })?.senderName;
-  const sessionId = (event.context as { sessionId?: string })?.sessionId || `session:${senderId || 'unknown'}`;
+  // Extract sender info from event.context.metadata (correct path)
+  const metadata = (event.context as any)?.metadata;
+  const senderId: string | undefined = metadata?.senderId
+    ?? (event.context as any)?.senderId;  // fallback for legacy callers
+  const senderName: string | undefined = metadata?.senderName
+    ?? (event.context as any)?.senderName;
+  const provider: string | undefined = metadata?.provider;
+  const senderE164: string | undefined = metadata?.senderE164;
+  const sessionId: string = (event.context as any)?.sessionId || `session:${senderId || 'unknown'}`;
+
+  // Build channel-aware identifiers
+  const platformIdentifiers = extractIdentifiers(provider, senderId, senderE164);
 
   // Try to resolve entity context (with caching)
   let entity: Entity | null = null;
@@ -83,12 +145,30 @@ const handler = async (event) => {
     entity = getCachedEntity(sessionId);
     
     if (!entity) {
-      // Resolve from database
+      // Resolve from database using platform-aware identifiers
       try {
-        entity = await Promise.race([
-          resolveEntity({ uuid: senderId, phone: senderId }),
-          new Promise<null>((resolve) => setTimeout(() => resolve(null), 2000))
+        // Merge platform identifiers with legacy fallback (uuid/phone)
+        const identifiers: EntityIdentifiers = Object.keys(platformIdentifiers).length > 0
+          ? platformIdentifiers
+          : { uuid: senderId, phone: senderId };
+
+        // Use resolveEntityByIdentifiers for conflict detection
+        const resolveResult = await Promise.race([
+          resolveEntityByIdentifiers(identifiers),
+          new Promise<null>((resolve) => setTimeout(() => resolve(null), 2000)),
         ]);
+
+        if (resolveResult) {
+          if (resolveResult.ok) {
+            entity = resolveResult.entity;
+          } else {
+            // Conflict: multiple entities matched — log as data integrity issue, do NOT pick a winner
+            console.error(
+              `[semantic-recall] CONFLICT: ${resolveResult.message}`,
+            );
+            // Don't resolve entity — safer to inject no entity context than the wrong one
+          }
+        }
         
         // Cache the result if found
         if (entity) {

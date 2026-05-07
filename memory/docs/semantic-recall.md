@@ -88,7 +88,15 @@ This efficiently distributes the token budget — fewer results get more detail.
 
 ### 4. Entity Resolution
 
-Integrates with entity-resolver to identify message senders and inject their profile:
+Integrates with the entity-resolver library for **channel-aware** sender identification:
+
+- **Discord** → resolves by `discordId`
+- **Telegram** → resolves by `telegramId`
+- **Slack** → resolves by `slackMemberId`
+- **Signal** → resolves by `signalUuid` (+ `phone` if E.164 number available)
+- **Unknown providers** → falls back to legacy `uuid`/`phone` path
+
+Uses `resolveEntityByIdentifiers()` with **conflict detection** — if identifiers match different entities, entity injection is skipped to avoid incorrect context.
 
 ```
 👤 **Talking with:** I)ruid

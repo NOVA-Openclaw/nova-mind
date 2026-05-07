@@ -669,6 +669,47 @@ else
     echo -e "  ${WARNING} entity-resolver directory not found at $ENTITY_RESOLVER_DIR (skipping)"
 fi
 
+# --- Install entity-resolver to ~/.openclaw/lib/entity-resolver/ ---
+# The semantic-recall hook dynamically imports entity-resolver from this location
+# at runtime, since hooks are copied to ~/.openclaw/hooks/ where repo-relative
+# paths don't exist.
+echo ""
+echo "Installing entity-resolver to ~/.openclaw/lib/entity-resolver/..."
+
+ENTITY_RESOLVER_SRC="$SCRIPT_DIR/relationships/lib/entity-resolver"
+ENTITY_RESOLVER_DST="$HOME/.openclaw/lib/entity-resolver"
+
+if [ -d "$ENTITY_RESOLVER_SRC" ]; then
+    mkdir -p "$ENTITY_RESOLVER_DST"
+
+    # Copy source files (excluding node_modules and dist)
+    copy_excluding "$ENTITY_RESOLVER_SRC" "$ENTITY_RESOLVER_DST"
+    echo -e "  ${CHECK_MARK} entity-resolver source files copied"
+
+    # Install npm dependencies in the target location
+    if [ -f "$ENTITY_RESOLVER_DST/package.json" ]; then
+        cd "$ENTITY_RESOLVER_DST"
+        if [ -d "node_modules" ] && [ "$FORCE_INSTALL" -eq 0 ]; then
+            echo -e "  ${CHECK_MARK} Dependencies already installed at target (use --force to reinstall)"
+        else
+            echo "  Running npm install in target location..."
+            NPM_LOG=$(mktemp /tmp/npm-install-entity-resolver-dst-XXXXXX.log)
+            TMPFILES+=("$NPM_LOG")
+            if npm install >"$NPM_LOG" 2>&1; then
+                echo -e "  ${CHECK_MARK} npm install completed at $ENTITY_RESOLVER_DST"
+            else
+                echo -e "  ${CROSS_MARK} npm install failed at target"
+                tail -20 "$NPM_LOG"
+            fi
+        fi
+        cd "$SCRIPT_DIR"
+    fi
+
+    echo -e "  ${CHECK_MARK} entity-resolver installed to $ENTITY_RESOLVER_DST"
+else
+    echo -e "  ${WARNING} entity-resolver source not found at $ENTITY_RESOLVER_SRC (skipping)"
+fi
+
 # --- Sync relationship hooks ---
 echo ""
 echo "Relationship hooks..."

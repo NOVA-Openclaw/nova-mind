@@ -21,7 +21,21 @@ export interface EntityIdentifiers {
   uuid?: string;
   certCN?: string;
   email?: string;
+  discordId?: string;
+  telegramId?: string;
+  slackMemberId?: string;
+  signalUuid?: string;
+  signalUsername?: string;
 }
+
+/**
+ * Result of entity resolution when identifiers may match multiple entities.
+ * - ok: true  → all identifiers resolved to the same entity
+ * - ok: false → identifiers resolved to different entities (data integrity conflict)
+ */
+export type ResolveResult =
+  | { ok: true; entity: Entity; facts: DbEntityFact[] }
+  | { ok: false; conflict: true; entities: Entity[]; message: string };
 
 /**
  * Internal database entity representation

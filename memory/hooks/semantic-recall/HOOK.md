@@ -24,11 +24,18 @@ The hook uses `spawnSync()` with the `input` option to pass message text via std
 
 ## Entity Resolution
 
-The hook attempts to resolve the message sender to an entity by:
-- Extracting sender ID from `event.context.senderId`
-- Querying PostgreSQL `entities` and `entity_facts` tables
-- Matching against `phone` or `signal_uuid` facts
-- Loading key profile facts: timezone, communication_style, expertise, preferences
+The hook resolves the message sender to an entity using **channel-aware routing**:
+
+1. Extracts sender info from `event.context.metadata` (with fallback to `event.context.senderId` for legacy callers)
+2. The `extractIdentifiers()` function maps the provider to the correct identifier field:
+   - `discord` → `discordId`
+   - `telegram` → `telegramId`
+   - `slack` → `slackMemberId`
+   - `signal` → `signalUuid` (+ `phone` if `senderE164` is available)
+   - Unknown providers → graceful skip, falls back to legacy `uuid`/`phone` path
+3. Uses `resolveEntityByIdentifiers()` for **conflict detection** — if identifiers resolve to different entities, the hook logs a data integrity warning and does NOT inject entity context (safer than guessing)
+4. Loads key profile facts: timezone, communication_style, expertise, preferences
+5. Caches resolved entities per session to reduce database queries
 
 ## Requirements
 
@@ -38,6 +45,14 @@ The hook attempts to resolve the message sender to an entity by:
 - `proactive-recall.py` script installed to `~/.openclaw/scripts/` by `agent-install.sh`
 - pgvector extension in PostgreSQL
 - Entity Relations System (entities and entity_facts tables)
+- Entity-resolver library installed to `~/.openclaw/lib/entity-resolver/` (by `agent-install.sh`)
+
+### Dynamic Import Pattern
+
+The handler uses dynamic imports (`await import(...)`) rather than static imports for the entity-resolver library. This is necessary because:
+- Hooks are copied to `~/.openclaw/hooks/` at install time, where repo-relative paths don't exist
+- The entity-resolver library lives at `~/.openclaw/lib/entity-resolver/`
+- `pg-env.ts` must be loaded before the entity-resolver (which creates a `pg.Pool` at module scope) so that `PGPASSWORD` is set correctly
 
 ## Configuration
 
@@ -75,6 +90,15 @@ Content length adjusts based on result count — fewer results get more content 
 
 This ensures context window is used efficiently regardless of how many memories match.
 
+## Field Paths
+
+The handler reads from the following event structure:
+- **Message text:** `event.context.content` (fallback: `event.context.message` for legacy callers)
+- **Sender ID:** `event.context.metadata.senderId` (fallback: `event.context.senderId`)
+- **Sender name:** `event.context.metadata.senderName`
+- **Provider:** `event.context.metadata.provider` (e.g., `discord`, `telegram`, `slack`, `signal`)
+- **E.164 phone:** `event.context.metadata.senderE164` (Signal only)
+
 ## Error Handling
 
 The hook fails gracefully:
@@ -82,3 +106,4 @@ The hook fails gracefully:
 - Database connection failures are logged but don't throw
 - Timeouts: 2s for entity resolution, 1s for facts loading, 5s for semantic recall
 - Missing entities result in semantic recall only (no entity context injection)
+- **Conflict detection:** If identifiers resolve to multiple different entities, the hook logs `[semantic-recall] CONFLICT: ...` and skips entity injection entirely — it never silently picks a winner

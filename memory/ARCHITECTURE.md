@@ -57,7 +57,7 @@ This is the source of truth for persistent information.
 | `tasks` | Actionable items linked to projects |
 | `events` | Timeline of what happened (`event_date` column) |
 | `lessons` | Things learned from experience — confidence decays unless reinforced |
-| `agent_bootstrap_context` | Standard Operating Procedures and bootstrapping context (not a standalone `sops` table) |
+| `workflows` / `workflow_steps` | Structured multi-step procedures with domain routing, discussion triggers, and authorization gates (replaced the old SOPs concept — looked up on demand, not injected into bootstrap context) |
 | `vocabulary` | Words for STT correction |
 | `preferences` | User and system preferences |
 | `agent_turn_context` | Per-turn context injected before every agent response (UNIVERSAL → GLOBAL → DOMAIN → AGENT priority) |

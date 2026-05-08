@@ -17,7 +17,27 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OPENCLAW_DIR="$HOME/.openclaw"
 HOOK_DIR="$OPENCLAW_DIR/hooks/db-bootstrap-context"
 FALLBACK_DIR="$OPENCLAW_DIR/bootstrap-fallback"
-DB_NAME="${DB_NAME:-nova_memory}"
+
+# Load centralized PG config (ENV → ~/.openclaw/postgres.json → defaults).
+# Matches the pattern used in nova-mind/memory/agent-install.sh.
+if [ -f "$OPENCLAW_DIR/lib/pg-env.sh" ]; then
+    # shellcheck disable=SC1091
+    source "$OPENCLAW_DIR/lib/pg-env.sh"
+    load_pg_env
+elif [ -f "$OPENCLAW_DIR/postgres.json" ] && command -v jq &>/dev/null; then
+    # Fallback: inline jq parse (only if pg-env.sh missing)
+    [ -z "${PGHOST:-}" ]     && export PGHOST="$(jq -r '.host // empty' "$OPENCLAW_DIR/postgres.json")"
+    [ -z "${PGPORT:-}" ]     && export PGPORT="$(jq -r '.port // empty' "$OPENCLAW_DIR/postgres.json")"
+    [ -z "${PGDATABASE:-}" ] && export PGDATABASE="$(jq -r '.database // empty' "$OPENCLAW_DIR/postgres.json")"
+    [ -z "${PGUSER:-}" ]     && export PGUSER="$(jq -r '.user // empty' "$OPENCLAW_DIR/postgres.json")"
+    if [ -z "${PGPASSWORD+set}" ]; then
+        export PGPASSWORD="$(jq -r '.password // empty' "$OPENCLAW_DIR/postgres.json")"
+    fi
+fi
+export PGHOST="${PGHOST:-localhost}"
+export PGPORT="${PGPORT:-5432}"
+export PGUSER="${PGUSER:-$(whoami)}"
+DB_NAME="${DB_NAME:-${PGDATABASE:-${PGUSER//-/_}_memory}}"
 
 # Color codes (match agent-install.sh conventions)
 GREEN='\033[0;32m'

@@ -84,6 +84,45 @@ echo ""
 # ----------------------------------------------------------------------------
 # SQL: management functions + audit triggers (idempotent CREATE OR REPLACE)
 # ----------------------------------------------------------------------------
+
+# Pre-flight: refuse to apply management-functions.sql if it carries known
+# broken references that would regress the live function. Specifically check
+# for the dropped columns workflow_steps.agent_id and workflows.orchestrator_agent_id
+# (see nova-mind#171 / 5b20b40 — these were replaced with domain-based matching).
+echo "Pre-flight check on management-functions.sql..."
+MGMT_SQL="$SCRIPT_DIR/sql/management-functions.sql"
+if [ ! -f "$MGMT_SQL" ]; then
+    echo -e "  ${CROSS} management-functions.sql not found at $MGMT_SQL"
+    exit 1
+fi
+
+# Extract just the get_agent_bootstrap function body to avoid false-positive
+# matches from neighboring helper functions (e.g. list_agent_context which
+# legitimately has different column references in this file).
+GAB_BODY=$(awk '/^CREATE OR REPLACE FUNCTION (public\.)?get_agent_bootstrap/,/^\$\$;$|^\$function\$;$/' "$MGMT_SQL")
+if [ -z "$GAB_BODY" ]; then
+    echo -e "  ${WARN} get_agent_bootstrap function not found in $MGMT_SQL"
+else
+    BROKEN_REFS=""
+    if echo "$GAB_BODY" | grep -qE 'ws\.agent_id|orchestrator_agent_id'; then
+        BROKEN_REFS=$(echo "$GAB_BODY" | grep -nE 'ws\.agent_id|orchestrator_agent_id' | head -3)
+    fi
+    if [ -n "$BROKEN_REFS" ]; then
+        echo -e "  ${CROSS} REFUSING to apply: management-functions.sql has stale references to dropped columns:"
+        echo "$BROKEN_REFS" | sed 's/^/      /'
+        echo ""
+        echo "      The columns workflow_steps.agent_id and workflows.orchestrator_agent_id"
+        echo "      were dropped in favor of domain-based matching (orchestrator_domain plus"
+        echo "      workflow_steps.domain / domains[]). Applying this SQL would regress the"
+        echo "      live function. See nova-mind#171 / commit 5b20b40 for the canonical fix."
+        echo ""
+        echo "      Re-sync this file from database/schema.sql before re-running install."
+        exit 1
+    fi
+    echo -e "  ${CHECK} No stale column references detected"
+fi
+echo ""
+
 echo "Installing management functions..."
 psql -d "$DB_NAME" -f "$SCRIPT_DIR/sql/management-functions.sql" > /dev/null
 echo -e "  ${CHECK} Functions installed"
@@ -162,6 +201,36 @@ if psql -d "$DB_NAME" -tA -c "SELECT proname FROM pg_proc WHERE proname = 'get_a
     echo -e "  ${CHECK} get_agent_bootstrap() present"
 else
     echo -e "  ${WARN} get_agent_bootstrap() not found — hook will fall through to disk"
+fi
+
+# Smoke test: actually invoke the function for the local agent. If the SQL
+# we just applied carried a runtime error (e.g. references a column that no
+# longer exists), this catches it now instead of at next-session boot.
+# Try the agent matching $PGUSER first, fall back to 'nova' for shared-DB
+# deployments where the local user differs from the canonical agent name.
+SMOKE_AGENT="${PGUSER:-$(whoami)}"
+SMOKE_OUT=$(psql -d "$DB_NAME" -tA -c "SELECT count(*) FROM get_agent_bootstrap('$SMOKE_AGENT');" 2>&1)
+SMOKE_EXIT=$?
+if [ $SMOKE_EXIT -ne 0 ] || ! echo "$SMOKE_OUT" | grep -qE '^[0-9]+$'; then
+    # Try 'nova' as a fallback (shared-DB peer setup)
+    SMOKE_OUT2=$(psql -d "$DB_NAME" -tA -c "SELECT count(*) FROM get_agent_bootstrap('nova');" 2>&1)
+    SMOKE_EXIT2=$?
+    if [ $SMOKE_EXIT2 -ne 0 ] || ! echo "$SMOKE_OUT2" | grep -qE '^[0-9]+$'; then
+        echo -e "  ${CROSS} get_agent_bootstrap() smoke test FAILED:"
+        echo "$SMOKE_OUT"  | head -3 | sed 's/^/      /'
+        echo "      "
+        echo "      The SQL just applied left the function in a non-runnable state."
+        echo "      Inspect the function definition with:"
+        echo "      psql -d $DB_NAME -c \"\\df+ get_agent_bootstrap\""
+        echo "      "
+        echo "      The hook will silently fall through to disk-based bootstrap until"
+        echo "      this is fixed. See nova-mind#171 for the canonical function shape."
+        exit 1
+    else
+        echo -e "  ${CHECK} get_agent_bootstrap() smoke test passed for 'nova' (returned $SMOKE_OUT2 rows)"
+    fi
+else
+    echo -e "  ${CHECK} get_agent_bootstrap() smoke test passed for '$SMOKE_AGENT' (returned $SMOKE_OUT rows)"
 fi
 
 if [ -f "$HOOK_DIR/handler.ts" ] && [ -f "$HOOK_DIR/HOOK.md" ]; then

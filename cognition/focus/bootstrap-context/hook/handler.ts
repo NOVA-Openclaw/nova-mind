@@ -1,30 +1,35 @@
 /**
  * Database Bootstrap Context Hook
- * 
- * Intercepts agent:bootstrap event to load context from database
- * instead of (or in addition to) filesystem files.
- * 
- * Falls back to static files if database unavailable.
+ *
+ * Replaces the standard bootstrap pipeline with database-sourced agent context.
+ *
+ * Behavior:
+ *   1. On agent:bootstrap event, query `get_agent_bootstrap(agent_name)` in nova_memory.
+ *   2. If the function returns rows, REPLACE event.context.bootstrapFiles entirely
+ *      with WorkspaceBootstrapFile objects built from those rows. The disk-based
+ *      bootstrap files loaded by core hooks (boot-md / loadWorkspaceBootstrapFiles)
+ *      are intentionally discarded — DB context is authoritative when available.
+ *   3. If the function fails (DB down, schema error) or returns zero rows, do
+ *      NOTHING. Leave event.context.bootstrapFiles as-is so the normal disk flow
+ *      remains the bootstrap source. The on-disk files contain the fallback
+ *      warnings about degraded state, so we don't need to inject them ourselves.
+ *
+ * Output shape: { name, path, content, missing } per WorkspaceBootstrapFile contract.
  */
 
-import { readFile } from 'fs/promises';
 import pg from 'pg';
 import { join } from 'path';
 import { homedir } from 'os';
 
-// Load PG env vars from postgres.json before creating Pool
-// See: https://github.com/NOVA-Openclaw/nova-memory/issues/136
+// Load PG env vars from postgres.json before creating Pool.
+// Must succeed — if it fails, hook can't connect anyway. See nova-memory#136.
 const pgEnvPath = join(homedir(), '.openclaw', 'lib', 'pg-env.ts');
-try {
-  const { loadPgEnv } = await import(pgEnvPath);
-  loadPgEnv();
-} catch (e) {
-  console.warn('[bootstrap-context] Could not load pg-env.ts:', (e as Error).message);
-}
+const { loadPgEnv } = await import(pgEnvPath);
+loadPgEnv();
 
 const { Pool } = pg;
 
-// Create connection pool (reused across invocations)
+// Connection pool — reused across hook invocations
 const pool = new Pool({
   host: process.env.PGHOST || 'localhost',
   port: parseInt(process.env.PGPORT || '5432'),
@@ -36,148 +41,107 @@ const pool = new Pool({
   connectionTimeoutMillis: 5000,
 });
 
-interface BootstrapFile {
-  path: string;
-  content: string;
+/**
+ * Map a DB filename + source to the synthetic file path used in
+ * WorkspaceBootstrapFile.path. The downstream pipeline only uses `path` for
+ * logging/identification; it doesn't read from disk when content is provided.
+ */
+function buildSyntheticPath(filename: string, source: string): string {
+  // e.g. "db:agent/IDENTITY.md", "db:domain:NOVA Operations/OPERATIONS_PRINCIPLES.md"
+  return `db:${source}/${filename}`;
 }
 
-const FALLBACK_DIR = join(homedir(), '.openclaw', 'bootstrap-fallback');
-
 /**
- * Query database for agent bootstrap context
+ * Query database for agent bootstrap context.
+ * Returns an array of rows on success, or null on any error.
  */
-async function loadFromDatabase(agentName: string): Promise<BootstrapFile[]> {
+async function loadFromDatabase(
+  agentName: string,
+): Promise<Array<{ filename: string; content: string; source: string }> | null> {
   let client;
   try {
     client = await pool.connect();
-    const result = await client.query(
-      'SELECT * FROM get_agent_bootstrap($1)',
-      [agentName]
+    const result = await client.query<{ filename: string; content: string; source: string }>(
+      'SELECT filename, content, source FROM get_agent_bootstrap($1)',
+      [agentName],
     );
-    
-    return result.rows.map((row: any) => ({
-      path: `db:${row.source}/${row.filename}`,
-      content: row.content
-    }));
+    return result.rows;
   } catch (error) {
-    // Gracefully handle database unavailability
-    if ((error as any).code === 'ECONNREFUSED') {
-      console.warn('[bootstrap-context] Database connection refused - falling back to static files');
-    } else if ((error as any).code === '42883') {
-      console.warn('[bootstrap-context] Function get_agent_bootstrap not found - database schema may need updating');
+    const code = (error as any)?.code;
+    if (code === 'ECONNREFUSED') {
+      console.warn('[db-bootstrap-context] DB connection refused — falling through to disk bootstrap');
+    } else if (code === '42883') {
+      console.warn('[db-bootstrap-context] get_agent_bootstrap() not found — falling through to disk bootstrap');
     } else {
-      console.error('[bootstrap-context] Database query failed:', error);
+      console.error('[db-bootstrap-context] DB query failed:', error);
     }
-    return [];
+    return null;
   } finally {
-    if (client) {
-      client.release();
-    }
+    if (client) client.release();
   }
 }
 
 /**
- * Load fallback files from ~/.openclaw/bootstrap-fallback/
- */
-async function loadFallbackFiles(agentName: string): Promise<BootstrapFile[]> {
-  const fallbackFiles = [
-    'UNIVERSAL_SEED.md',
-    'AGENTS.md',
-    'SOUL.md',
-    'TOOLS.md',
-    'IDENTITY.md',
-    'USER.md',
-    'HEARTBEAT.md'
-  ];
-  
-  const files: BootstrapFile[] = [];
-  
-  for (const filename of fallbackFiles) {
-    try {
-      const content = await readFile(join(FALLBACK_DIR, filename), 'utf-8');
-      files.push({
-        path: `fallback:${filename}`,
-        content
-      });
-    } catch (error) {
-      // File doesn't exist or can't be read, skip it
-      console.warn(`[bootstrap-context] Fallback file not found: ${filename}`);
-    }
-  }
-  
-  return files;
-}
-
-/**
- * Emergency minimal context if everything else fails
- */
-function getEmergencyContext(): BootstrapFile[] {
-  return [{
-    path: 'emergency:RECOVERY.md',
-    content: `# EMERGENCY BOOTSTRAP CONTEXT
-
-⚠️ **System Status: Degraded**
-
-Your bootstrap context system is not functioning properly.
-
-## What Happened
-
-- Database bootstrap query failed
-- Fallback files not available
-- Loading minimal emergency context
-
-## Recovery Steps
-
-1. Check database connection
-2. Verify agent_bootstrap_context table exists:
-   \`\`\`sql
-   SELECT * FROM get_agent_bootstrap('your_agent_name');
-   \`\`\`
-3. Check fallback directory: ~/.openclaw/bootstrap-fallback/
-4. Contact Newhart (NHR Agent) for assistance
-
-## Temporary Context
-
-You are an AI agent in the NOVA system. Your full context could not be loaded.
-Operate in safe mode until context is restored.
-
-**Database:** nova_memory
-**Table:** agent_bootstrap_context
-**Hook:** ~/.openclaw/hooks/db-bootstrap-context/
-`
-  }];
-}
-
-/**
- * Main hook handler
- * 
- * Receives an InternalHookEvent from OpenClaw with shape:
- *   { type, action, sessionKey, context: { agentId, bootstrapFiles, ... } }
+ * Main hook handler.
+ *
+ * Receives an agent:bootstrap event. Replaces event.context.bootstrapFiles
+ * with database content on success; leaves it unchanged on failure (so the
+ * normal disk-based bootstrap flow remains in effect).
  */
 export default async function handler(event: Record<string, any>) {
-  const agentName = (event as any).context?.agentId;
-  if (!agentName) {
-    console.error('[bootstrap-context] No agentId in event.context — cannot look up bootstrap context');
+  // Only act on agent:bootstrap events. Any other event = no-op.
+  if (event?.type !== 'agent' || event?.action !== 'bootstrap') {
     return;
   }
-  
-  console.log(`[bootstrap-context] Loading context for agent: ${agentName}`);
-  
-  // Try database first
-  let files = await loadFromDatabase(agentName);
-  
-  if (files.length === 0) {
-    console.warn('[bootstrap-context] No database context, trying fallback files...');
-    files = await loadFallbackFiles(agentName);
+
+  const ctx = event.context;
+  if (!ctx || !Array.isArray(ctx.bootstrapFiles)) {
+    // Malformed event — let the normal pipeline handle it.
+    return;
   }
-  
-  if (files.length === 0) {
-    console.error('[bootstrap-context] No fallback files, using emergency context');
-    files = getEmergencyContext();
+
+  const agentName: string | undefined = ctx.agentId;
+  if (!agentName) {
+    console.warn('[db-bootstrap-context] No agentId in event.context — falling through to disk bootstrap');
+    return;
   }
-  
-  // Replace the default bootstrapFiles with our database/fallback content
-  event.context.bootstrapFiles = files;
-  
-  console.log(`[bootstrap-context] Loaded ${files.length} context files for ${agentName}`);
+
+  console.log(`[db-bootstrap-context] Loading DB context for agent: ${agentName}`);
+
+  const rows = await loadFromDatabase(agentName);
+
+  // DB unavailable or returned an error — do NOT touch bootstrapFiles.
+  // The disk-based files (which include their own fallback warnings) remain.
+  if (rows === null) {
+    console.warn(`[db-bootstrap-context] DB query failed for ${agentName} — disk bootstrap remains in effect`);
+    return;
+  }
+
+  // DB returned zero rows — also fall through to disk. (Indicates the agent
+  // has no bootstrap context configured; disk fallback is the safer default.)
+  if (rows.length === 0) {
+    console.warn(`[db-bootstrap-context] DB returned 0 rows for ${agentName} — disk bootstrap remains in effect`);
+    return;
+  }
+
+  // Success path: REPLACE bootstrapFiles entirely with DB-sourced content.
+  // Each row becomes a WorkspaceBootstrapFile with the proper shape.
+  const files = rows.map((row) => ({
+    // The downstream context-engine accepts any string here; the canonical
+    // bootstrap-name enum is only enforced for files loaded from disk via
+    // loadExtraBootstrapFiles. Workflow/domain files use names outside the
+    // enum — that's fine, they pass through as data.
+    name: row.filename,
+    path: buildSyntheticPath(row.filename, row.source),
+    content: row.content,
+    missing: false,
+  }));
+
+  ctx.bootstrapFiles = files;
+
+  console.log(
+    `[db-bootstrap-context] Replaced bootstrap with ${files.length} DB rows for ${agentName} (sources: ${
+      Array.from(new Set(rows.map((r) => r.source.split(':')[0]))).sort().join(', ')
+    })`,
+  );
 }

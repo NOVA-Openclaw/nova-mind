@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Added
+- **Structured chat transcript storage** (#165, #138, #170) — New `channel_sessions` and `channel_transcripts` tables replace the deprecated `conversations` table and JSONL file storage. Migration 067 creates both tables, adds `source_channel_transcript_id` and `source_channel_session_id` FK columns to `entity_facts`, and drops the legacy `conversations` table.
+- **JSONL → DB ingest in `memory-catchup.sh`** (#165, #138, #170) — The catchup script now ingests JSONL session transcripts from `~/.openclaw/agents/*/sessions/*.jsonl` into `channel_sessions` + `channel_transcripts` during each run. Source files are deleted after successful DB commit. Extraction failures no longer block transcript ingestion.
+- **Real-time channel transcript upsert in `memory-extract` hook** (#170) — `handler.ts` now does a lightweight upsert of `channel_sessions`/`channel_transcripts` during message processing, then passes the FK IDs (`SOURCE_CHANNEL_TRANSCRIPT_ID`, `SOURCE_CHANNEL_SESSION_ID`) as env vars to the extraction pipeline.
+- **`store-memories.sh`: FK source pointers on `entity_facts`** (#170) — During fact insertion and reinforcement, `source_channel_transcript_id` and `source_channel_session_id` are populated on `entity_facts` rows. SQL injection fix in `fact_exists()` (ILIKE → exact LOWER equality).
+
 ### Changed
 - **Semantic-recall handler: channel-aware entity routing** (#8, #159, #164) — The `extractIdentifiers()` function maps provider-specific sender IDs (`discord`, `telegram`, `slack`, `signal`) to the correct `EntityIdentifiers` fields. Uses `resolveEntityByIdentifiers()` for conflict detection — logs a data integrity warning and skips entity injection if identifiers match different entities.
 - **Semantic-recall handler: fixed field paths** (#8, #159, #164) — Message text now reads from `event.context.content` (was `event.context.message`). Sender metadata reads from `event.context.metadata.senderId`/`.senderName`/`.provider`/`.senderE164` (was `event.context.senderId`). Legacy paths retained as fallbacks.

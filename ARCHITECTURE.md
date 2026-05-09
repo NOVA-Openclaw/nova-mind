@@ -219,6 +219,8 @@ Return entity + profile for personalization
 | `agent_turn_context` | Memory/Cognition | Per‑turn critical context injection | `context_type`, `domain_name`, `content` (≤500 chars) |
 | `agent_bootstrap_context` | Cognition | Session‑level initialization context | `context_type`, `domain_name`, `file_key`, `content` |
 | `memory_embeddings` | Memory | Vector embeddings for semantic search | `source_type`, `source_id`, `embedding` (vector(1024)) |
+| `channel_sessions` | Memory | Structured chat session records (replaces deprecated `conversations` table) | `provider`, `external_chat_id`, `chat_type`, `message_count`, `last_message_at` |
+| `channel_transcripts` | Memory | Individual message transcripts with FK source pointers to `entity_facts` | `session_id`, `external_message_id`, `sender_entity_id`, `content` |
 | `certificates` | Relationships | Client certificates for agent auth | `common_name`, `certificate`, `issued_at`, `expires_at` |
 
 **Note:** The complete schema (`database/schema.sql`) contains ~100 tables; the above highlights the core inter‑subsystem tables.
@@ -231,7 +233,7 @@ nova‑mind integrates with OpenClaw via hooks that run on gateway events:
 
 | Hook | Event | Purpose |
 |------|-------|---------|
-| `memory‑extract` | `message:received` | Extract structured memories from natural language using Claude |
+| `memory‑extract` | `message:received` | Extract structured memories from natural language using Claude. Real-time upserts `channel_sessions`/`channel_transcripts` rows and passes FK IDs as env vars to the extraction pipeline for source attribution. |
 | `semantic‑recall` | `message:received` | Search vector embeddings for relevant memories; inject into context |
 | `session‑init` | `session:init` | Generate privacy‑filtered context when sessions start |
 | `agent‑turn‑context` | `message:received` | Inject high‑priority context from `agent_turn_context` table (cached 5‑min) |

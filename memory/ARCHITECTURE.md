@@ -50,7 +50,7 @@ This is the source of truth for persistent information.
 | Table | Purpose |
 |-------|---------|
 | `entities` | People, AIs, organizations — things with agency |
-| `entity_facts` | Key-value facts about entities (includes `visibility`, `privacy_scope`, `data_type` for access control — see note below) |
+| `entity_facts` | Key-value facts about entities (includes `visibility`, `privacy_scope`, `data_type` for access control — see note below). Now includes `source_channel_transcript_id` and `source_channel_session_id` FK columns linking facts back to their source chat messages. |
 | `entity_relationships` | Connections between entities |
 | `places` | Locations, networks, venues |
 | `projects` | Active efforts with goals |
@@ -62,6 +62,8 @@ This is the source of truth for persistent information.
 | `preferences` | User and system preferences |
 | `agent_turn_context` | Per-turn context injected before every agent response (UNIVERSAL → GLOBAL → DOMAIN → AGENT priority) |
 | `memory_type_priorities` | Priority weights for semantic recall by source_type |
+| `channel_sessions` | Structured chat session records — one row per provider+chat+thread. Replaces legacy JSONL file storage and the deprecated `conversations` table. |
+| `channel_transcripts` | Individual message transcripts linked to `channel_sessions`. FK source for `entity_facts.source_channel_transcript_id`. |
 
 #### Entity Facts Access Control Columns
 
@@ -199,14 +201,21 @@ WHERE me.source_type = 'entity_fact' AND ef.id IS NULL;
 
 ## Memory Extraction Pipeline
 
-A cron job runs every minute to extract memories from chat:
+A cron job runs every minute to extract memories from chat. The pipeline now also ingests session transcripts into structured database tables:
 
 ```
-Chat transcript → memory-catchup.sh (every 1 min)
-               → extract-memories.sh (Claude extracts 8 categories)
-               → store-memories.sh (inserts to PostgreSQL)
+Session JSONL files → memory-catchup.sh (every 1 min)
+                    → channel_sessions + channel_transcripts (DB ingest)
+                    → delete source JSONL files
+                    
+and separately:
+
+Chat transcript → extract-memories.sh (Claude extracts 8 categories)
+               → store-memories.sh (inserts to PostgreSQL, sets source FK pointers)
                → New vocabulary? → STT service restarts
 ```
+
+**Transcript ingestion:** JSONL files from `~/.openclaw/agents/*/sessions/*.jsonl` are parsed, upserted into `channel_sessions` and `channel_transcripts`, then the source files are deleted. Rich metadata (sender names, IDs, group info, providers) is extracted from the JSONL structure. The `memory-extract` hook also does real-time upserts during message processing, passing FK IDs (`SOURCE_CHANNEL_TRANSCRIPT_ID`, `SOURCE_CHANNEL_SESSION_ID`) to `store-memories.sh` so `entity_facts` rows link back to their source transcripts.
 
 ### Extraction Categories
 

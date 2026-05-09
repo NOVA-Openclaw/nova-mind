@@ -165,7 +165,7 @@ This system allows an AI to:
 The schema (`schema/schema.sql`) includes tables for:
 
 - **entities** - People, AIs, organizations, pets, stuffed animals
-- **entity_facts** - Key-value facts about entities
+- **entity_facts** - Key-value facts about entities. Includes FK source pointers (`source_channel_transcript_id`, `source_channel_session_id`) linking facts back to their source chat transcript (#170).
 - **entity_relationships** - Connections between entities
 - **places** - Locations, restaurants, venues, networks
 - **projects** - Active projects with tasks, status, and Git configuration
@@ -174,6 +174,8 @@ The schema (`schema/schema.sql`) includes tables for:
 - **preferences** - User/system preferences
 - **agents** - Registry of AI agent instances for delegation
 - **agent_turn_context** - Per-turn context records injected into every agent message (UNIVERSAL, GLOBAL, DOMAIN, AGENT scopes; 500-char per record / 2000-char total budget)
+- **channel_sessions** - Structured chat session records (one per provider+chat+thread), replaces legacy `conversations` table and JSONL file storage
+- **channel_transcripts** - Individual message transcripts linked to `channel_sessions`, FK source for `entity_facts`
 
 ### Access Control Architecture
 
@@ -1051,6 +1053,9 @@ The catch-up script:
 - Tracks last processed timestamp to avoid duplicates
 - Rate-limits to 3 messages per run
 - Runs extraction asynchronously
+- **Ingests JSONL session files** into `channel_sessions` + `channel_transcripts` tables with provider detection (Discord, Signal, generic) and rich metadata parsing
+- **Ingests daily memory `*.md` files** into `entity_facts` on the NOVA entity
+- **Deletes source files** after successful DB commit (both JSONL and `.md` files)
 
 State is stored in `~/.openclaw/memory-catchup-state.json`.
 

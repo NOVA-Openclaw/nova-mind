@@ -66,7 +66,9 @@ reinforce_fact() {
     local value="$3"
     local src_session_id="${SOURCE_SESSION_ID:-}"
     local src_timestamp="${SOURCE_TIMESTAMP:-}"
-    
+    local src_channel_transcript_id="${SOURCE_CHANNEL_TRANSCRIPT_ID:-}"
+    local src_channel_session_id="${SOURCE_CHANNEL_SESSION_ID:-}"
+
     # Build source pointer update clause (only overwrite if new timestamp is newer)
     local source_update=""
     if [ -n "$src_session_id" ] && [ -n "$src_timestamp" ]; then
@@ -74,7 +76,13 @@ reinforce_fact() {
             source_session_id = CASE WHEN source_timestamp IS NULL OR source_timestamp < '$(sql_escape "$src_timestamp")'::timestamptz THEN '$(sql_escape "$src_session_id")' ELSE source_session_id END,
             source_timestamp = CASE WHEN source_timestamp IS NULL OR source_timestamp < '$(sql_escape "$src_timestamp")'::timestamptz THEN '$(sql_escape "$src_timestamp")'::timestamptz ELSE source_timestamp END"
     fi
-    
+    # Update channel FK pointers if provided (only upgrade from NULL, never downgrade to NULL)
+    if [ -n "$src_channel_transcript_id" ] && [[ "$src_channel_transcript_id" =~ ^[0-9]+$ ]]; then
+        source_update="$source_update,
+            source_channel_transcript_id = COALESCE(source_channel_transcript_id, $src_channel_transcript_id),
+            source_channel_session_id    = COALESCE(source_channel_session_id,    $([ -n "$src_channel_session_id" ] && echo "$src_channel_session_id" || echo 'NULL'))"
+    fi
+
     psql -t -A -c "
         UPDATE entity_facts ef
         SET vote_count = vote_count + 1,
@@ -219,25 +227,33 @@ echo "$JSON_DATA" | jq -c '.facts[]? // empty' | while read -r fact; do
     source_entity_id=$(resolve_source_entity_id "$source_person")
     src_session_id="${SOURCE_SESSION_ID:-}"
     src_timestamp="${SOURCE_TIMESTAMP:-}"
-    
+    src_channel_transcript_id="${SOURCE_CHANNEL_TRANSCRIPT_ID:-}"
+    src_channel_session_id="${SOURCE_CHANNEL_SESSION_ID:-}"
+
     actual_subject=$(find_entity "$subject")
     [ -z "$actual_subject" ] && actual_subject="$subject"
-    
+
     # Check for duplicate and reinforce if exists
     if fact_exists "$actual_subject" "$predicate" "$value"; then
         reinforce_fact "$actual_subject" "$predicate" "$value"
         echo "  ✓ Fact reinforced: $actual_subject.$predicate = $value (vote_count++)"
         continue
     fi
-    
+
     cols="entity_id, key, value, source, visibility"
     vals="id, '$(sql_escape "$predicate")', '$(sql_escape "$value")', '$(sql_escape "$source_person")', '$(sql_escape "$visibility")'"
-    
+
     [ -n "$source_entity_id" ] && cols="$cols, source_entity_id" && vals="$vals, $source_entity_id"
     [ -n "$visibility_reason" ] && cols="$cols, visibility_reason" && vals="$vals, '$(sql_escape "$visibility_reason")'"
     [ -n "$src_session_id" ] && cols="$cols, source_session_id" && vals="$vals, '$(sql_escape "$src_session_id")'"
     [ -n "$src_timestamp" ] && cols="$cols, source_timestamp" && vals="$vals, '$(sql_escape "$src_timestamp")'::timestamptz"
-    
+    if [ -n "$src_channel_transcript_id" ] && [[ "$src_channel_transcript_id" =~ ^[0-9]+$ ]]; then
+        cols="$cols, source_channel_transcript_id" && vals="$vals, $src_channel_transcript_id"
+    fi
+    if [ -n "$src_channel_session_id" ] && [[ "$src_channel_session_id" =~ ^[0-9]+$ ]]; then
+        cols="$cols, source_channel_session_id" && vals="$vals, $src_channel_session_id"
+    fi
+
     echo "INSERT INTO entity_facts ($cols) SELECT $vals
           FROM entities WHERE name = '$(sql_escape "$actual_subject")'
           ON CONFLICT DO NOTHING;" | psql -q 2>/dev/null || true
@@ -255,27 +271,35 @@ echo "$JSON_DATA" | jq -c '.opinions[]? // empty' | while read -r opinion; do
     source_entity_id=$(resolve_source_entity_id "$source_person")
     src_session_id="${SOURCE_SESSION_ID:-}"
     src_timestamp="${SOURCE_TIMESTAMP:-}"
-    
+    src_channel_transcript_id="${SOURCE_CHANNEL_TRANSCRIPT_ID:-}"
+    src_channel_session_id="${SOURCE_CHANNEL_SESSION_ID:-}"
+
     actual_holder=$(find_entity "$holder")
     [ -z "$actual_holder" ] && actual_holder="$holder"
-    
+
     key="opinion_$subject"
-    
+
     # Check for duplicate and reinforce if exists
     if fact_exists "$actual_holder" "$key" "$opinion_text"; then
         reinforce_fact "$actual_holder" "$key" "$opinion_text"
         echo "  ✓ Opinion reinforced: $actual_holder on $subject (vote_count++)"
         continue
     fi
-    
+
     cols="entity_id, key, value, source, visibility"
     vals="id, '$(sql_escape "$key")', '$(sql_escape "$opinion_text")', '$(sql_escape "$source_person")', '$(sql_escape "$visibility")'"
-    
+
     [ -n "$source_entity_id" ] && cols="$cols, source_entity_id" && vals="$vals, $source_entity_id"
     [ -n "$visibility_reason" ] && cols="$cols, visibility_reason" && vals="$vals, '$(sql_escape "$visibility_reason")'"
     [ -n "$src_session_id" ] && cols="$cols, source_session_id" && vals="$vals, '$(sql_escape "$src_session_id")'"
     [ -n "$src_timestamp" ] && cols="$cols, source_timestamp" && vals="$vals, '$(sql_escape "$src_timestamp")'::timestamptz"
-    
+    if [ -n "$src_channel_transcript_id" ] && [[ "$src_channel_transcript_id" =~ ^[0-9]+$ ]]; then
+        cols="$cols, source_channel_transcript_id" && vals="$vals, $src_channel_transcript_id"
+    fi
+    if [ -n "$src_channel_session_id" ] && [[ "$src_channel_session_id" =~ ^[0-9]+$ ]]; then
+        cols="$cols, source_channel_session_id" && vals="$vals, $src_channel_session_id"
+    fi
+
     echo "INSERT INTO entity_facts ($cols) SELECT $vals
           FROM entities WHERE name = '$(sql_escape "$actual_holder")'
           ON CONFLICT DO NOTHING;" | psql -q 2>/dev/null || true
@@ -293,27 +317,35 @@ echo "$JSON_DATA" | jq -c '.preferences[]? // empty' | while read -r pref; do
     source_entity_id=$(resolve_source_entity_id "$source_person")
     src_session_id="${SOURCE_SESSION_ID:-}"
     src_timestamp="${SOURCE_TIMESTAMP:-}"
-    
+    src_channel_transcript_id="${SOURCE_CHANNEL_TRANSCRIPT_ID:-}"
+    src_channel_session_id="${SOURCE_CHANNEL_SESSION_ID:-}"
+
     actual_person=$(find_entity "$person")
     [ -z "$actual_person" ] && actual_person="$person"
-    
+
     key="preference_$category"
-    
+
     # Check for duplicate and reinforce if exists
     if fact_exists "$actual_person" "$key" "$preference"; then
         reinforce_fact "$actual_person" "$key" "$preference"
         echo "  ✓ Preference reinforced: $actual_person prefers $preference (vote_count++)"
         continue
     fi
-    
+
     cols="entity_id, key, value, source, visibility"
     vals="id, '$(sql_escape "$key")', '$(sql_escape "$preference")', '$(sql_escape "$source_person")', '$(sql_escape "$visibility")'"
-    
+
     [ -n "$source_entity_id" ] && cols="$cols, source_entity_id" && vals="$vals, $source_entity_id"
     [ -n "$visibility_reason" ] && cols="$cols, visibility_reason" && vals="$vals, '$(sql_escape "$visibility_reason")'"
     [ -n "$src_session_id" ] && cols="$cols, source_session_id" && vals="$vals, '$(sql_escape "$src_session_id")'"
     [ -n "$src_timestamp" ] && cols="$cols, source_timestamp" && vals="$vals, '$(sql_escape "$src_timestamp")'::timestamptz"
-    
+    if [ -n "$src_channel_transcript_id" ] && [[ "$src_channel_transcript_id" =~ ^[0-9]+$ ]]; then
+        cols="$cols, source_channel_transcript_id" && vals="$vals, $src_channel_transcript_id"
+    fi
+    if [ -n "$src_channel_session_id" ] && [[ "$src_channel_session_id" =~ ^[0-9]+$ ]]; then
+        cols="$cols, source_channel_session_id" && vals="$vals, $src_channel_session_id"
+    fi
+
     echo "INSERT INTO entity_facts ($cols) SELECT $vals
           FROM entities WHERE name = '$(sql_escape "$actual_person")'
           ON CONFLICT DO NOTHING;" | psql -q 2>/dev/null || true

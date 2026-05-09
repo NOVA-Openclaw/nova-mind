@@ -120,7 +120,13 @@ const handler = async (event) => {
   // When chat logs move to DB (#170), this maps directly to the session record
   const sessionId = event.sessionKey ?? '';
   const messageTimestamp = new Date().toISOString();  // Current time as extraction timestamp
-  
+
+  // Pass DB-level channel transcript / session FK ids when available (#170)
+  // These are populated by the transcript ingest pipeline (migration 067) and allow
+  // entity_facts rows to carry proper FK pointers back to the source message.
+  const channelTranscriptId = String(ctx.channelTranscriptId ?? ctx.channel_transcript_id ?? '');
+  const channelSessionId = String(ctx.channelSessionId ?? ctx.channel_session_id ?? '');
+
   const child = spawn(scriptPath, [], {
     stdio: ['pipe', 'pipe', 'pipe'],
     env: {
@@ -129,7 +135,10 @@ const handler = async (event) => {
       SENDER_ID: senderId,
       IS_GROUP: String(isGroup),
       SOURCE_SESSION_ID: sessionId,
-      SOURCE_TIMESTAMP: messageTimestamp
+      SOURCE_TIMESTAMP: messageTimestamp,
+      // DB-level source pointers for entity_facts FK columns (may be empty string when not yet ingested)
+      SOURCE_CHANNEL_TRANSCRIPT_ID: channelTranscriptId,
+      SOURCE_CHANNEL_SESSION_ID: channelSessionId
     }
   });
 

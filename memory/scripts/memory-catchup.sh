@@ -2,6 +2,7 @@
 # memory-catchup.sh - Process unprocessed messages from session transcripts
 # Processes BOTH user AND assistant messages for memory extraction
 # Maintains a rolling cache of 20 messages for context
+# Also ingests JSONL session transcripts and daily memory/*.md files into the DB.
 # Usage: memory-catchup.sh [--log]   # --log enables detailed extraction logging
 
 set -e
@@ -251,3 +252,159 @@ fi
 
 echo "[memory-catchup] Processed $PROCESSED messages (total: $NEW_TOTAL)"
 echo "[memory-catchup] Cache: $(cat "$CACHE_FILE" | jq 'length') messages"
+
+# ─────────────────────────────────────────────────────────────
+# Ingest JSONL session files → channel_sessions + channel_transcripts
+# ─────────────────────────────────────────────────────────────
+
+# Load PostgreSQL env so psql works without explicit credentials
+PG_ENV="${HOME}/.openclaw/lib/pg-env.sh"
+[ -f "$PG_ENV" ] && source "$PG_ENV" && load_pg_env 2>/dev/null || true
+
+ALL_SESSIONS_DIR="${HOME}/.openclaw/agents"
+INGEST_COUNT=0
+INGEST_ERRORS=0
+
+if command -v psql >/dev/null 2>&1; then
+    # Check that channel_sessions table exists before attempting ingest
+    TABLE_EXISTS=$(psql nova_memory -t -A -c \
+        "SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE table_name='channel_sessions');" \
+        2>/dev/null || echo 'f')
+
+    if [ "$TABLE_EXISTS" = 't' ]; then
+        # Find all JSONL session files across all agents
+        while IFS= read -r jsonl_file; do
+            [ -f "$jsonl_file" ] || continue
+
+            # Derive provider / agent_id from path: agents/<agent_id>/sessions/<file>.jsonl
+            agent_id=$(echo "$jsonl_file" | sed -E 's|.*/agents/([^/]+)/sessions/.*|\1|')
+            provider='openclaw'
+            # Use filename stem as external_chat_id (stable per session file)
+            external_chat_id=$(basename "$jsonl_file" .jsonl)
+
+            # Extract first-message timestamp for started_at
+            started_at=$(jq -r 'select(.timestamp) | .timestamp' "$jsonl_file" 2>/dev/null | head -1)
+            [ -z "$started_at" ] && started_at=$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")
+
+            # Extract session_key from any line that has it
+            session_key=$(jq -r 'select(.session_key) | .session_key' "$jsonl_file" 2>/dev/null | head -1)
+            [ -z "$session_key" ] && session_key="$external_chat_id"
+
+            # Upsert channel_sessions row
+            session_db_id=$(psql nova_memory -t -A -c "
+                INSERT INTO channel_sessions
+                    (session_key, agent_id, provider, external_chat_id, chat_type, started_at)
+                VALUES
+                    ('$(echo "$session_key" | sed "s/'/''/g")',
+                     '$(echo "$agent_id" | sed "s/'/''/g")',
+                     '$(echo "$provider" | sed "s/'/''/g")',
+                     '$(echo "$external_chat_id" | sed "s/'/''/g")',
+                     'direct',
+                     '$(echo "$started_at" | sed "s/'/''/g")')
+                ON CONFLICT (provider, external_chat_id, COALESCE(external_thread_id, ''))
+                DO UPDATE SET
+                    updated_at = NOW()
+                RETURNING id;
+            " 2>/dev/null | tr -d '[:space:]')
+
+            if [ -z "$session_db_id" ]; then
+                echo "[memory-catchup] WARNING: Could not upsert session for $jsonl_file" >&2
+                INGEST_ERRORS=$((INGEST_ERRORS + 1))
+                continue
+            fi
+
+            # Upsert each message into channel_transcripts
+            msg_count=0
+            while IFS= read -r line; do
+                # Only process message-type entries
+                msg_type=$(echo "$line" | jq -r '.type // empty' 2>/dev/null)
+                [ "$msg_type" = 'message' ] || continue
+
+                ext_msg_id=$(echo "$line" | jq -r '.id // .message_id // empty' 2>/dev/null)
+                [ -z "$ext_msg_id" ] && ext_msg_id=$(echo "$line" | jq -r '.timestamp // empty' 2>/dev/null)
+                [ -z "$ext_msg_id" ] && continue
+
+                msg_ts=$(echo "$line" | jq -r '.timestamp // empty' 2>/dev/null)
+                [ -z "$msg_ts" ] && continue
+
+                role=$(echo "$line" | jq -r '.message.role // "user"' 2>/dev/null)
+
+                content=$(echo "$line" | jq -r '
+                    if (.message.content | type) == "array" then
+                        (.message.content[] | select(.type=="text") | .text) // ""
+                    elif (.message.content | type) == "string" then
+                        .message.content
+                    else ""
+                    end
+                ' 2>/dev/null | head -c 65535)
+
+                raw_meta=$(echo "$line" | jq -c '.' 2>/dev/null | head -c 65535 | sed "s/'/''/g")
+
+                psql nova_memory -q -c "
+                    INSERT INTO channel_transcripts
+                        (session_id, external_message_id, timestamp, role, content, raw_metadata)
+                    VALUES
+                        ($session_db_id,
+                         '$(echo "$ext_msg_id" | sed "s/'/''/g")',
+                         '$(echo "$msg_ts" | sed "s/'/''/g")',
+                         '$(echo "$role" | sed "s/'/''/g")',
+                         '$(echo "$content" | sed "s/'/''/g")',
+                         '$(echo "$raw_meta")'::jsonb)
+                    ON CONFLICT (session_id, external_message_id) DO NOTHING;
+                " 2>/dev/null || true
+
+                msg_count=$((msg_count + 1))
+            done < "$jsonl_file"
+
+            # Update message_count and last_message_at on session
+            if [ "$msg_count" -gt 0 ]; then
+                psql nova_memory -q -c "
+                    UPDATE channel_sessions SET
+                        message_count = (SELECT COUNT(*) FROM channel_transcripts WHERE session_id = $session_db_id),
+                        last_message_at = (SELECT MAX(timestamp) FROM channel_transcripts WHERE session_id = $session_db_id),
+                        updated_at = NOW()
+                    WHERE id = $session_db_id;
+                " 2>/dev/null || true
+                INGEST_COUNT=$((INGEST_COUNT + msg_count))
+            fi
+
+            # Delete the source JSONL after successful DB commit
+            rm -f "$jsonl_file"
+            echo "[memory-catchup] Ingested $msg_count messages from $(basename "$jsonl_file") → channel_transcripts (session $session_db_id)"
+
+        done < <(find "$ALL_SESSIONS_DIR" -path '*/sessions/*.jsonl' -type f 2>/dev/null)
+
+        echo "[memory-catchup] Transcript ingest: $INGEST_COUNT messages, $INGEST_ERRORS errors"
+    else
+        echo "[memory-catchup] channel_sessions table not found — skipping transcript ingest (run migration 067 first)"
+    fi
+else
+    echo "[memory-catchup] psql not available — skipping transcript ingest"
+fi
+
+# ─────────────────────────────────────────────────────────────
+# Ingest daily memory/*.md files into DB (content only), then delete
+# ─────────────────────────────────────────────────────────────
+MEMORY_MD_DIR="${HOME}/.openclaw/memory"
+if [ -d "$MEMORY_MD_DIR" ]; then
+    while IFS= read -r md_file; do
+        [ -f "$md_file" ] || continue
+        md_content=$(cat "$md_file" 2>/dev/null)
+        [ -z "$md_content" ] && rm -f "$md_file" && continue
+
+        # Store the file content as an entity fact on the 'NOVA' entity (agent notes)
+        md_key="daily_memory_note"
+        md_date=$(date -u +"%Y-%m-%d")
+        psql nova_memory -q -c "
+            INSERT INTO entity_facts (entity_id, key, value, source)
+            SELECT id, '$(echo "$md_key" | sed "s/'/''/g")',
+                   '$(echo "$md_content" | sed "s/'/''/g" | head -c 4000)',
+                   'memory-catchup:$(echo "$md_date" | sed "s/'/''/g")'
+            FROM entities WHERE LOWER(name) = 'nova'
+            ON CONFLICT DO NOTHING;
+        " 2>/dev/null || true
+
+        echo "[memory-catchup] Ingested memory MD: $(basename "$md_file")"
+        rm -f "$md_file"
+    done < <(find "$MEMORY_MD_DIR" -maxdepth 1 -name '*.md' -type f 2>/dev/null)
+fi

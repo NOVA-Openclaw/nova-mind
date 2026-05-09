@@ -1,7 +1,6 @@
 import { spawn } from "child_process";
 import { existsSync, statSync } from "fs";
-import { fileURLToPath } from "url";
-import { dirname, join } from "path";
+import { join } from "path";
 import * as os from "os";
 
 const WORKSPACE = process.env.OPENCLAW_WORKSPACE || join(process.env.HOME || os.homedir(), '.openclaw');
@@ -51,9 +50,7 @@ const handler = async (event) => {
   currentParticipantHash = participantHash;
   
   // Generate new context (async to not block message processing)
-  const __filename = fileURLToPath(import.meta.url);
-  const __dirname = dirname(__filename);
-  const scriptPath = join(__dirname, '../../scripts/generate-session-context.sh');
+  const scriptPath = join(os.homedir(), '.openclaw', 'scripts', 'generate-session-context.sh');
   
   const child = spawn(scriptPath, [CONTEXT_FILE, ...participants], {
     stdio: 'ignore'  // we don't need output

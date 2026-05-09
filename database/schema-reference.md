@@ -1,6 +1,6 @@
 # Database Schema Reference
 
-*Auto-generated: 2026-05-09T11:03:00.000000*
+*Auto-generated: 2026-05-09T19:43:53.808681*
 
 ## Tables
 
@@ -24,11 +24,11 @@
 | bootstrap_context_config | Configuration for bootstrap system behavior | 4 |
 | certificates | Client certificates issued by NOVA CA. Security-sensitive. Verify before modifications. | 12 |
 | channel_activity | Tracks last message per channel for idle detection. Read/write: NOVA, Newhart. | 3 |
-| channel_sessions | Structured chat session records. Replaces legacy conversations table. One row per provider+chat+thread. | 15 |
-| channel_transcripts | Individual message transcripts linked to channel_sessions. FK source for entity_facts. | 15 |
+| channel_sessions | - | 16 |
+| channel_transcripts | - | 14 |
 | entities | People, AIs, organizations. NOVA has full access. Use entity_facts for attributes. | 20 |
 | entity_fact_conflicts | Conflicts between entity facts requiring resolution. Part of the truth reconciliation system. | 13 |
-| entity_facts | Key-value facts about entities. Check current_timezone for I)ruid before time-based actions. | 19 |
+| entity_facts | Key-value facts about entities. Check current_timezone for I)ruid before time-based actions. | 21 |
 | entity_facts_archive | Archived entity facts from decay/cleanup processes. Historical record of previously stored knowledge. | 22 |
 | entity_relationships | Relationships between entities (family, work, friendship, etc). | 8 |
 | event_entities | Links events to entities (people, orgs, AIs). Many-to-many relationship table. | 3 |

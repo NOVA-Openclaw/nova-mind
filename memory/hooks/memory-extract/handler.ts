@@ -1,7 +1,7 @@
 import { spawn, execFile } from "child_process";
-import { fileURLToPath } from "url";
-import { dirname, join } from "path";
+import { join } from "path";
 import { promisify } from "util";
+import * as os from "os";
 
 const execFileAsync = promisify(execFile);
 
@@ -75,7 +75,7 @@ const handler = async (event) => {
   // Track activity for cost/hour calculations
   if (event.type === "message") {
     const ctx = event.context ?? {};
-    const rawBody = ctx.rawBody ?? ctx.message ?? "";
+    const rawBody = ctx.content ?? ctx.rawBody ?? ctx.RawBody ?? ctx.message ?? ctx.Body ?? "";
     const isHeartbeat = rawBody.includes("HEARTBEAT") || rawBody.includes("DASHBOARD UPDATE") || rawBody.startsWith("System: [");
     logActivity(!isHeartbeat);
   }
@@ -86,7 +86,7 @@ const handler = async (event) => {
   }
   
   const ctx = event.context ?? {};
-  const rawBody = ctx.rawBody ?? ctx.message ?? "";
+  const rawBody = ctx.content ?? ctx.rawBody ?? ctx.RawBody ?? ctx.message ?? ctx.Body ?? "";
   
   if (!rawBody || rawBody.trim().length < 10) {
     console.debug('[memory-extract] Skipping short or empty message');
@@ -113,11 +113,8 @@ const handler = async (event) => {
   });
   
   // Run extraction via stdin pipe — never pass untrusted message text as shell args (#155)
-  const __filename = fileURLToPath(import.meta.url);
-  const __dirname = dirname(__filename);
-  // Bypass grammar parser (90% failure rate) — LLM extracts every message directly (#165)
-  // OLD: const scriptPath = join(__dirname, '../../scripts/process-input-with-grammar.sh');
-  const scriptPath = join(__dirname, '../../scripts/process-input.sh');
+  // LLM extracts every message directly via process-input.sh (#165)
+  const scriptPath = join(os.homedir(), '.openclaw', 'scripts', 'process-input.sh');
 
   // Store the full sessionKey as the source identifier — it's the canonical session reference
   // When chat logs move to DB (#170), this maps directly to the session record
@@ -134,17 +131,20 @@ const handler = async (event) => {
   if (!channelTranscriptId || channelTranscriptId === '0') {
     try {
       // Derive provider from chat_id format
-      const chatId = String(ctx.chatId ?? ctx.chat_id ?? '');
-      let provider = 'openclaw';
-      if (chatId.startsWith('channel:')) provider = 'discord';
-      else if (chatId.startsWith('group:') || chatId.startsWith('+')) provider = 'signal';
+      const chatId = String(ctx.conversationId ?? ctx.chatId ?? ctx.chat_id ?? '');
+      let provider = String(ctx.provider ?? ctx.channelId ?? 'openclaw');
+      if (provider === 'openclaw') {
+        // Derive provider from chat_id format when ctx.provider is not set
+        if (chatId.startsWith('channel:')) provider = 'discord';
+        else if (chatId.startsWith('group:') || chatId.startsWith('+')) provider = 'signal';
+      }
 
       const externalChatId = chatId || sessionId || 'unknown';
       const externalMessageId = String(ctx.messageId ?? ctx.message_id ?? '');
       const isGroupBool = Boolean(ctx.isGroup ?? false);
       const chatType = isGroupBool ? 'group' : 'direct';
-      const groupSubject = String(ctx.groupSubject ?? ctx.group_subject ?? '');
-      const groupSpace = String(ctx.groupSpace ?? ctx.group_space ?? '');
+      const groupSubject = String(ctx.channelName ?? ctx.groupSubject ?? ctx.group_subject ?? '');
+      const groupSpace = String(ctx.guildId ?? ctx.groupSpace ?? ctx.group_space ?? '');
       const senderTag = String(ctx.senderTag ?? ctx.sender_tag ?? '');
 
       // Only attempt upsert when psql is available and we have minimal identifying info

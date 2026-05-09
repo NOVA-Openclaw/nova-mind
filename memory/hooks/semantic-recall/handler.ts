@@ -1,6 +1,5 @@
 import { spawnSync } from "child_process";
-import { fileURLToPath } from "url";
-import { dirname, join } from "path";
+import { join } from "path";
 import * as os from "os";
 
 // Load PG env vars from postgres.json BEFORE importing entity-resolver,
@@ -41,9 +40,7 @@ interface EntityIdentifiers {
   signalUsername?: string;
 }
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-const RECALL_SCRIPT = join(__dirname, '../../scripts/proactive-recall.py');
+const RECALL_SCRIPT = join(os.homedir(), '.openclaw', 'scripts', 'proactive-recall.py');
 const WORKSPACE = process.env.OPENCLAW_WORKSPACE || join(process.env.HOME || os.homedir(), '.openclaw');
 
 // Standard venv location (installed by nova-memory installer)
@@ -189,13 +186,23 @@ const handler = async (event: any) => {
     token_budget?: number;
   } | null = null;
   try {
-    const truncatedMessage = message.substring(0, 500);
+    const stdinPayload = JSON.stringify({
+      content: message.substring(0, 2000),
+      senderId: (event.context as any)?.senderId ?? '',
+      senderName: (event.context as any)?.senderName ?? '',
+      provider: (event.context as any)?.provider ?? (event.context as any)?.channelId ?? '',
+      conversationId: (event.context as any)?.conversationId ?? '',
+      isGroup: (event.context as any)?.isGroup ?? false,
+      channelName: (event.context as any)?.channelName ?? '',
+      guildId: (event.context as any)?.guildId ?? '',
+      messageId: (event.context as any)?.messageId ?? '',
+    });
     const result = spawnSync(PYTHON_VENV, [
       RECALL_SCRIPT, '--stdin',
       '--max-tokens', String(TOKEN_BUDGET),
       '--high-confidence', String(HIGH_CONFIDENCE_THRESHOLD)
     ], {
-      input: truncatedMessage,
+      input: stdinPayload,
       encoding: 'utf-8',
       timeout: 5000,  // 5 second timeout
       env: { ...process.env }

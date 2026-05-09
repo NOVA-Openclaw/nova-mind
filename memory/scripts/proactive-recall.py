@@ -236,7 +236,14 @@ def main():
     args = parser.parse_args()
     
     if args.stdin:
-        message_text = sys.stdin.read().strip()
+        raw_stdin = sys.stdin.read().strip()
+        # Try to parse as JSON first (structured input from semantic-recall hook)
+        # Fall back to treating stdin as plain text for backward compatibility
+        try:
+            parsed = json.loads(raw_stdin)
+            message_text = parsed.get("content", "").strip()
+        except (json.JSONDecodeError, AttributeError):
+            message_text = raw_stdin
     elif args.message:
         message_text = " ".join(args.message)
     else:

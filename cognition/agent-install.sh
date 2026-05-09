@@ -119,7 +119,7 @@ if [ ${#MISSING_FILES[@]} -gt 0 ]; then
         echo "  - $f" >&2
     done
     echo "  These are installed by nova-memory. Some features may not work." >&2
-    echo "  Install nova-memory: cd ~/.openclaw/workspace/nova-memory && bash agent-install.sh" >&2
+    echo "  Install nova-memory: cd ~/.openclaw/workspace/nova-mind && bash memory/agent-install.sh" >&2
 fi
 
 # Color codes for output

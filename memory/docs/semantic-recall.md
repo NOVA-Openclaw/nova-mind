@@ -11,7 +11,7 @@ The semantic recall system searches embedded memories when messages arrive and i
 ```
 ┌─────────────────┐     ┌──────────────────┐     ┌─────────────────┐
 │ Incoming        │────▶│ Embed Query      │────▶│ Vector Search   │
-│ Message         │     │ (OpenAI)         │     │ (pgvector)      │
+│ Message         │     │ (Ollama)         │     │ (pgvector)      │
 └─────────────────┘     └──────────────────┘     └─────────────────┘
                                                           │
 ┌─────────────────┐     ┌──────────────────┐              │
@@ -114,7 +114,7 @@ CREATE TABLE memory_embeddings (
     source_type VARCHAR(50) NOT NULL,
     source_id TEXT,
     content TEXT NOT NULL,
-    embedding vector(1536),
+    embedding vector(1024),
     created_at TIMESTAMPTZ DEFAULT now()
 );
 
@@ -132,7 +132,7 @@ To use in an OpenClaw installation:
 1. Copy `scripts/proactive-recall.py` to your scripts directory
 2. Copy `hooks/semantic-recall/` to your hooks directory
 3. Ensure pgvector extension and memory_embeddings table exist
-4. Set OPENAI_API_KEY environment variable
+4. Ensure Ollama is running with `mxbai-embed-large` model loaded
 
 ## OpenClaw Session Memory Indexing (2026.2.6+)
 
@@ -178,15 +178,17 @@ Stored in per-agent SQLite index
 memory_search queries both memory + sessions
 ```
 
+**Note:** In addition to OpenClaw's native JSONL indexing, the NOVA Memory pipeline also ingests JSONL transcripts into the database (`channel_sessions` / `channel_transcripts` tables) via `memory-catchup.sh`, where they serve as structured source references for extracted entity facts. See [memory-extraction-pipeline.md](memory-extraction-pipeline.md) for details.
+
 ### Relationship to NOVA Memory
 
 This OpenClaw feature is **complementary** to the NOVA Memory database:
 
 | Feature | NOVA Memory DB | OpenClaw Session Index |
 |---------|---------------|----------------------|
-| Storage | PostgreSQL + pgvector | SQLite + embeddings |
-| Content | Curated facts, entities, events | Raw session transcripts |
-| Extraction | Explicit (memory-extract hook) | Automatic (all turns) |
+| Storage | PostgreSQL + pgvector (including `channel_sessions`/`channel_transcripts` for structured transcripts) | SQLite + embeddings |
+| Content | Curated facts, entities, events, structured transcripts | Raw session transcripts |
+| Extraction | Explicit (memory-extract hook, batch ingest via memory-catchup.sh) | Automatic (all turns) |
 | Query | `proactive-recall.py`, direct SQL | `memory_search` tool |
 
 **Best practice**: Use both. NOVA Memory for structured, curated knowledge. OpenClaw session indexing for conversational context and recall.

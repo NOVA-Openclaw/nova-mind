@@ -1,6 +1,6 @@
 # Database Schema Reference
 
-*Auto-generated: 2026-05-07T09:32:37.433518*
+*Auto-generated: 2026-05-09T11:03:00.000000*
 
 ## Tables
 
@@ -24,7 +24,8 @@
 | bootstrap_context_config | Configuration for bootstrap system behavior | 4 |
 | certificates | Client certificates issued by NOVA CA. Security-sensitive. Verify before modifications. | 12 |
 | channel_activity | Tracks last message per channel for idle detection. Read/write: NOVA, Newhart. | 3 |
-| conversations | Conversation session tracking. Logs chat sessions with metadata for analysis and continuity. | 6 |
+| channel_sessions | Structured chat session records. Replaces legacy conversations table. One row per provider+chat+thread. | 15 |
+| channel_transcripts | Individual message transcripts linked to channel_sessions. FK source for entity_facts. | 15 |
 | entities | People, AIs, organizations. NOVA has full access. Use entity_facts for attributes. | 20 |
 | entity_fact_conflicts | Conflicts between entity facts requiring resolution. Part of the truth reconciliation system. | 13 |
 | entity_facts | Key-value facts about entities. Check current_timezone for I)ruid before time-based actions. | 19 |
@@ -41,7 +42,7 @@
 | gambling_logs | High-level gambling session summaries. Groups multiple gambling_entries by session. | 8 |
 | git_issue_queue | Issue queue for git-based workflows. NOTIFY triggers dispatch work automatically. | 16 |
 | job_messages | Message log per job for conversation threading | 5 |
-| lessons | Lessons and insights learned. Update when learning something worth remembering. | 11 |
+| lessons | Lessons and insights learned. Update when learning something worth remembering. | 12 |
 | lessons_archive | Archived lessons and insights. Historical record of previously stored learnings. | 13 |
 | library_authors | Library domain: normalized author records. Managed by Athena (librarian agent). | 4 |
 | library_tags | Library domain: subject/genre/topic tags for works. Managed by Athena. | 3 |

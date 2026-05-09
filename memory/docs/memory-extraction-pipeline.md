@@ -5,11 +5,17 @@ The memory extraction pipeline automatically transforms natural language convers
 ## Overview
 
 ```
-Chat Message → memory-catchup.sh → extract-memories.sh → store-memories.sh → PostgreSQL
-     ↓               ↓                    ↓                    ↓
-Every message   Every minute      Claude API           Structured data
-received        (cron job)        extraction           with deduplication
+Session JSONL → memory-catchup.sh ──→ channel_sessions/transcripts (DB)
+     ↓                                    ↓
+  extract-memories.sh ──→ store-memories.sh ──→ PostgreSQL (entity_facts + FK source pointers)
+     ↓                        ↓
+  Claude API             Structured data
+  extraction             with deduplication
 ```
+
+The pipeline now has two parallel paths:
+1. **Transcript ingestion:** JSONL session files are parsed and upserted into `channel_sessions`/`channel_transcripts` tables, then source files are deleted
+2. **Memory extraction:** Messages are sent to Claude for structured data extraction, and results are stored with FK pointers back to the source `channel_transcripts` row
 
 **Key Features:**
 - 20-message rolling context window for reference resolution
@@ -17,6 +23,7 @@ received        (cron job)        extraction           with deduplication
 - Real-time deduplication to prevent data corruption
 - Automatic vocabulary extraction for STT improvement
 - Rate limiting and error recovery
+- JSONL → DB ingest with provider detection (Discord, Signal, Telegram, generic)
 
 ## Components
 
@@ -31,6 +38,9 @@ received        (cron job)        extraction           with deduplication
 2. Tracks last processed timestamp in `~/.openclaw/memory-catchup-state.json`
 3. Rate-limits to 3 messages per run to avoid API overload
 4. Builds 20-message context window for each extraction
+5. **Ingests JSONL files into DB:** Parses session files from `~/.openclaw/agents/*/sessions/*.jsonl` and upserts into `channel_sessions` + `channel_transcripts` with provider detection, rich metadata parsing (sender names, IDs, group info), and deduplication via composite unique indexes
+6. **Deletes source files:** After successful DB commit, source JSONL files are removed. Extraction failures do NOT block transcript ingestion.
+7. **Ingests daily memory `*.md` files:** Content is stored as `entity_facts` on the NOVA entity, then source files are deleted
 
 **State file structure:**
 ```json
@@ -40,6 +50,12 @@ received        (cron job)        extraction           with deduplication
   "last_session": "2026-02-08.jsonl"
 }
 ```
+
+**Transcript ingest fields parsed from JSONL:**
+- `chat_id` → `provider` detection (channel: → discord, group: → signal)
+- `is_group_chat`, `group_subject`, `group_space` → session metadata
+- `sender_id`, `sender`, `sender_username`, `sender_tag` → transcript sender fields
+- `session_key` → channel_sessions.session_key
 
 **Troubleshooting:**
 
@@ -107,12 +123,17 @@ Context: [Last 20 messages for reference resolution]
 - **Layer 1 (Prompt):** Existing facts queried and shown to Claude
 - **Layer 2 (Storage):** Database checks before every insert
 
+**Source FK pointer wiring:** When `SOURCE_CHANNEL_TRANSCRIPT_ID` and `SOURCE_CHANNEL_SESSION_ID` env vars are set (passed by `memory-catchup.sh` or the `memory-extract` hook), they populate `entity_facts.source_channel_transcript_id` and `.source_channel_session_id` on both new inserts and reinforced facts. The `reinforce_fact()` function uses `COALESCE` to only upgrade from NULL (never downgrade).
+
+**SQL injection fix:** `fact_exists()` uses exact LOWER equality matching instead of `ILIKE` interpolation, preventing SQL injection via fact values.
+
 **Storage flow:**
 1. Parse and validate JSON
 2. For each category, check existing records
-3. Skip duplicates, insert new records
-4. Update vocabulary table for STT
-5. Log insertion results
+3. Skip duplicates (reinforce with vote_count++), insert new records
+4. Set FK source pointers from env vars on facts/opinions/preferences
+5. Update vocabulary table for STT
+6. Log insertion results
 
 **Troubleshooting:**
 

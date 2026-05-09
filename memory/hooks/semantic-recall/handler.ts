@@ -198,7 +198,7 @@ const handler = async (event: any) => {
       messageId: (event.context as any)?.messageId ?? '',
     });
     const result = spawnSync(PYTHON_VENV, [
-      RECALL_SCRIPT, '--stdin',
+      RECALL_SCRIPT,
       '--max-tokens', String(TOKEN_BUDGET),
       '--high-confidence', String(HIGH_CONFIDENCE_THRESHOLD)
     ], {

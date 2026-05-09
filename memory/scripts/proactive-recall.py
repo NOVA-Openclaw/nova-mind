@@ -2,14 +2,15 @@
 """
 Proactive Recall: Get relevant memories before processing a message.
 
-Usage (as a standalone):
-    python proactive-recall.py "user's message here"
-    python proactive-recall.py "message" --max-tokens 500
-    python proactive-recall.py "message" --inject
-    
-Output: JSON with relevant memories to inject into context.
+Usage:
+    echo '{"content": "user message here"}' | python proactive-recall.py
+    echo '{"content": "message", "senderId": "123"}' | python proactive-recall.py --max-tokens 500
+    echo "plain text query" | python proactive-recall.py --inject
 
-For Clawdbot integration, call this from a hook or message preprocessor.
+Reads structured JSON from stdin (extracts "content" field for query).
+Falls back to plain text stdin for backward compatibility.
+
+Output: JSON with relevant memories to inject into context.
 """
 
 import os
@@ -222,8 +223,6 @@ def format_for_injection(recall_result):
 
 def main():
     parser = argparse.ArgumentParser(description="Proactive memory recall with semantic search")
-    parser.add_argument("message", nargs="*", help="Message to search for")
-    parser.add_argument("--stdin", action="store_true", help="Read message from stdin instead of positional arg")
     parser.add_argument("--max-tokens", type=int, default=DEFAULT_TOKEN_BUDGET,
                         help=f"Maximum tokens to return (default: {DEFAULT_TOKEN_BUDGET})")
     parser.add_argument("--threshold", type=float, default=DEFAULT_THRESHOLD,
@@ -235,20 +234,18 @@ def main():
     
     args = parser.parse_args()
     
-    if args.stdin:
-        raw_stdin = sys.stdin.read().strip()
-        # Try to parse as JSON first (structured input from semantic-recall hook)
-        # Fall back to treating stdin as plain text for backward compatibility
-        try:
-            parsed = json.loads(raw_stdin)
-            message_text = parsed.get("content", "").strip()
-        except (json.JSONDecodeError, AttributeError):
-            message_text = raw_stdin
-    elif args.message:
-        message_text = " ".join(args.message)
-    else:
+    # Read from stdin — the default and only input method
+    raw_stdin = sys.stdin.read().strip()
+    if not raw_stdin:
         parser.print_help()
         sys.exit(1)
+    # Try to parse as JSON first (structured input from semantic-recall hook)
+    # Fall back to treating stdin as plain text for backward compatibility
+    try:
+        parsed = json.loads(raw_stdin)
+        message_text = parsed.get("content", "").strip()
+    except (json.JSONDecodeError, AttributeError):
+        message_text = raw_stdin
     
     if not message_text:
         parser.print_help()

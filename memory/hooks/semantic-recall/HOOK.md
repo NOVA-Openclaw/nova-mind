@@ -20,7 +20,7 @@ from the database and loads entity profile information before the agent processe
 
 ## Security
 
-The hook uses `spawnSync()` with the `input` option to pass message text via stdin, preventing shell injection vulnerabilities. The `proactive-recall.py` script supports the `--stdin` flag for stdin input. Arguments like `--max-tokens` and `--high-confidence` are passed as an array, not shell-interpolated.
+The hook uses `spawnSync()` with the `input` option to pass message text via stdin, preventing shell injection vulnerabilities. The `proactive-recall.py` script reads from stdin by default — no `--stdin` flag is needed or accepted. Arguments like `--max-tokens` and `--high-confidence` are passed as an array, not shell-interpolated.
 
 ## Entity Resolution
 

@@ -37,13 +37,13 @@ sql_escape() {
     echo "$1" | sed "s/'/''/g"
 }
 
-# Function to check if a fact already exists (fuzzy match)
+# Function to check if a fact already exists (exact match to prevent SQL injection)
 fact_exists() {
     local entity_name="$1"
     local key="$2"
     local value="$3"
     
-    # Check for exact or similar match
+    # Use exact equality matching — avoids ILIKE interpolation injection risk
     local count=$(psql -t -A -c "
         SELECT COUNT(*) FROM entity_facts ef
         JOIN entities e ON e.id = ef.entity_id
@@ -51,9 +51,7 @@ fact_exists() {
                OR LOWER(e.full_name) = LOWER('$(sql_escape "$entity_name")')
                OR LOWER('$(sql_escape "$entity_name")') = ANY(SELECT LOWER(unnest(e.nicknames))))
           AND LOWER(ef.key) = LOWER('$(sql_escape "$key")')
-          AND (LOWER(ef.value) = LOWER('$(sql_escape "$value")')
-               OR ef.value ILIKE '%$(sql_escape "$value")%'
-               OR '$(sql_escape "$value")' ILIKE '%' || ef.value || '%');
+          AND LOWER(ef.value) = LOWER('$(sql_escape "$value")');
     " 2>/dev/null || echo "0")
     
     [ "$count" -gt 0 ]
@@ -95,9 +93,7 @@ reinforce_fact() {
                OR LOWER(e.full_name) = LOWER('$(sql_escape "$entity_name")')
                OR LOWER('$(sql_escape "$entity_name")') = ANY(SELECT LOWER(unnest(e.nicknames))))
           AND LOWER(ef.key) = LOWER('$(sql_escape "$key")')
-          AND (LOWER(ef.value) = LOWER('$(sql_escape "$value")')
-               OR ef.value ILIKE '%$(sql_escape "$value")%'
-               OR '$(sql_escape "$value")' ILIKE '%' || ef.value || '%');
+          AND LOWER(ef.value) = LOWER('$(sql_escape "$value")');
     " 2>/dev/null >/dev/null
 }
 

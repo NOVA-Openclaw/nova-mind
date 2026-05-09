@@ -320,14 +320,32 @@ if command -v psql >/dev/null 2>&1; then
                 msg_type=$(echo "$line" | jq -r '.type // empty' 2>/dev/null)
                 [ "$msg_type" = 'message' ] || continue
 
+                # Validate JSON line
+                if ! echo "$line" | jq -e '.' >/dev/null 2>&1; then
+                    echo "[memory-catchup] WARNING: Malformed JSON in $(basename "$jsonl_file"), skipping line" >&2
+                    continue
+                fi
+
                 ext_msg_id=$(echo "$line" | jq -r '.id // .message_id // empty' 2>/dev/null)
-                [ -z "$ext_msg_id" ] && ext_msg_id=$(echo "$line" | jq -r '.timestamp // empty' 2>/dev/null)
+                # Timestamp fallback with counter suffix to prevent collisions
+                if [ -z "$ext_msg_id" ]; then
+                    raw_ts=$(echo "$line" | jq -r '.timestamp // empty' 2>/dev/null)
+                    [ -n "$raw_ts" ] && ext_msg_id="${raw_ts}_${msg_count}"
+                fi
                 [ -z "$ext_msg_id" ] && continue
 
                 msg_ts=$(echo "$line" | jq -r '.timestamp // empty' 2>/dev/null)
                 [ -z "$msg_ts" ] && continue
 
                 role=$(echo "$line" | jq -r '.message.role // "user"' 2>/dev/null)
+
+                # Parse rich metadata fields from JSONL content
+                chat_id=$(echo "$line" | jq -r '.chat_id // empty' 2>/dev/null)
+                sender_id=$(echo "$line" | jq -r '.sender_id // empty' 2>/dev/null)
+                sender_name=$(echo "$line" | jq -r '.sender // empty' 2>/dev/null)
+                sender_username=$(echo "$line" | jq -r '.sender_username // empty' 2>/dev/null)
+                is_group=$(echo "$line" | jq -r '.is_group_chat // false' 2>/dev/null)
+                group_subject=$(echo "$line" | jq -r '.group_subject // empty' 2>/dev/null)
 
                 content=$(echo "$line" | jq -r '
                     if (.message.content | type) == "array" then
@@ -340,37 +358,47 @@ if command -v psql >/dev/null 2>&1; then
 
                 raw_meta=$(echo "$line" | jq -c '.' 2>/dev/null | head -c 65535 | sed "s/'/''/g")
 
-                psql nova_memory -q -c "
-                    INSERT INTO channel_transcripts
-                        (session_id, external_message_id, timestamp, role, content, raw_metadata)
-                    VALUES
-                        ($session_db_id,
-                         '$(echo "$ext_msg_id" | sed "s/'/''/g")',
-                         '$(echo "$msg_ts" | sed "s/'/''/g")',
-                         '$(echo "$role" | sed "s/'/''/g")',
-                         '$(echo "$content" | sed "s/'/''/g")',
-                         '$(echo "$raw_meta")'::jsonb)
-                    ON CONFLICT (session_id, external_message_id) DO NOTHING;
-                " 2>/dev/null || true
+                # Build dynamic column list for rich metadata
+                ct_cols="session_id, external_message_id, timestamp, role, content, raw_metadata"
+                ct_vals="$session_db_id, '$(echo "$ext_msg_id" | sed "s/'/''/g")', '$(echo "$msg_ts" | sed "s/'/''/g")', '$(echo "$role" | sed "s/'/''/g")', '$(echo "$content" | sed "s/'/''/g")', '$(echo "$raw_meta")'::jsonb"
+                [ -n "$sender_id" ] && ct_cols="$ct_cols, sender_id" && ct_vals="$ct_vals, '$(echo "$sender_id" | sed "s/'/''/g")'"
+                [ -n "$sender_name" ] && ct_cols="$ct_cols, sender_name" && ct_vals="$ct_vals, '$(echo "$sender_name" | sed "s/'/''/g")'"
+                [ -n "$sender_username" ] && ct_cols="$ct_cols, sender_username" && ct_vals="$ct_vals, '$(echo "$sender_username" | sed "s/'/''/g")'"
+
+                transcript_db_id=$(psql nova_memory -t -A -c "
+                    INSERT INTO channel_transcripts ($ct_cols)
+                    VALUES ($ct_vals)
+                    ON CONFLICT (session_id, external_message_id) DO NOTHING
+                    RETURNING id;
+                " 2>/dev/null | tr -d '[:space:]')
 
                 msg_count=$((msg_count + 1))
+
+                # Pass transcript/session FK ids to extraction pipeline
+                if [ -n "$transcript_db_id" ]; then
+                    export SOURCE_CHANNEL_TRANSCRIPT_ID="$transcript_db_id"
+                    export SOURCE_CHANNEL_SESSION_ID="$session_db_id"
+                fi
             done < "$jsonl_file"
 
-            # Update message_count and last_message_at on session
-            if [ "$msg_count" -gt 0 ]; then
-                psql nova_memory -q -c "
-                    UPDATE channel_sessions SET
-                        message_count = (SELECT COUNT(*) FROM channel_transcripts WHERE session_id = $session_db_id),
-                        last_message_at = (SELECT MAX(timestamp) FROM channel_transcripts WHERE session_id = $session_db_id),
-                        updated_at = NOW()
-                    WHERE id = $session_db_id;
-                " 2>/dev/null || true
-                INGEST_COUNT=$((INGEST_COUNT + msg_count))
-            fi
+            # Always recompute message_count and last_message_at from actual DB state
+            psql nova_memory -q -c "
+                UPDATE channel_sessions SET
+                    message_count = (SELECT COUNT(*) FROM channel_transcripts WHERE session_id = $session_db_id),
+                    last_message_at = (SELECT MAX(timestamp) FROM channel_transcripts WHERE session_id = $session_db_id),
+                    updated_at = NOW()
+                WHERE id = $session_db_id;
+            " 2>/dev/null || true
 
-            # Delete the source JSONL after successful DB commit
-            rm -f "$jsonl_file"
-            echo "[memory-catchup] Ingested $msg_count messages from $(basename "$jsonl_file") → channel_transcripts (session $session_db_id)"
+            INGEST_COUNT=$((INGEST_COUNT + msg_count))
+
+            # Only delete source JSONL if psql session upsert succeeded (session_db_id is set)
+            if [ -n "$session_db_id" ]; then
+                rm -f "$jsonl_file"
+                echo "[memory-catchup] Ingested $msg_count messages from $(basename "$jsonl_file") → channel_transcripts (session $session_db_id)"
+            else
+                echo "[memory-catchup] WARNING: Skipped deletion of $(basename "$jsonl_file") — session upsert failed" >&2
+            fi
 
         done < <(find "$ALL_SESSIONS_DIR" -path '*/sessions/*.jsonl' -type f 2>/dev/null)
 
@@ -395,16 +423,25 @@ if [ -d "$MEMORY_MD_DIR" ]; then
         # Store the file content as an entity fact on the 'NOVA' entity (agent notes)
         md_key="daily_memory_note"
         md_date=$(date -u +"%Y-%m-%d")
-        psql nova_memory -q -c "
+
+        # Warn if content is being truncated
+        md_len=${#md_content}
+        if [ "$md_len" -gt 4000 ]; then
+            echo "[memory-catchup] WARNING: $(basename "$md_file") is $md_len chars, truncating to 4000" >&2
+        fi
+
+        if psql nova_memory -q -c "
             INSERT INTO entity_facts (entity_id, key, value, source)
             SELECT id, '$(echo "$md_key" | sed "s/'/''/g")',
                    '$(echo "$md_content" | sed "s/'/''/g" | head -c 4000)',
                    'memory-catchup:$(echo "$md_date" | sed "s/'/''/g")'
             FROM entities WHERE LOWER(name) = 'nova'
             ON CONFLICT DO NOTHING;
-        " 2>/dev/null || true
-
-        echo "[memory-catchup] Ingested memory MD: $(basename "$md_file")"
-        rm -f "$md_file"
+        " 2>/dev/null; then
+            echo "[memory-catchup] Ingested memory MD: $(basename "$md_file")"
+            rm -f "$md_file"
+        else
+            echo "[memory-catchup] WARNING: Failed to ingest $(basename "$md_file"), keeping file" >&2
+        fi
     done < <(find "$MEMORY_MD_DIR" -maxdepth 1 -name '*.md' -type f 2>/dev/null)
 fi

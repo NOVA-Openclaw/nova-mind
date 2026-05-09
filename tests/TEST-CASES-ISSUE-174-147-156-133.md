@@ -102,38 +102,65 @@ grep -rn '\.\./' memory/hooks/ --include='*.ts' | grep -v node_modules | grep -v
   "channelName": "#software-engineering"
 }
 ```
-and passes it via `spawnSync` `input` parameter (stdin).
+and passes it via `spawnSync` `input` parameter (stdin). No `--stdin` flag in the args array.
 **Expected:** No CLI argument injection possible. The recall script receives parseable JSON on stdin.
 
-### TC-017: proactive-recall.py handles JSON stdin
-**Verification:** The recall script can parse the JSON blob and extract the message content for query. Falls back gracefully if plain text is received (backward compat).
+### TC-017: proactive-recall.py reads stdin by default — no --stdin flag
+**Verification:**
+```bash
+grep -n '\-\-stdin' memory/scripts/proactive-recall.py
+grep -n '\-\-stdin' memory/hooks/semantic-recall/handler.ts
+```
+**Expected:** Zero matches in both files. The `--stdin` flag does not exist. Reading from stdin is the default and only input method.
 
-### TC-018: Shell metacharacters in message content
+### TC-018: proactive-recall.py has no positional message argument
+**Verification:**
+```bash
+grep -n 'add_argument.*message\|nargs' memory/scripts/proactive-recall.py
+```
+**Expected:** No positional `message` argument in argparse. The script cannot receive message data on the command line at all. Only config flags remain (`--max-tokens`, `--threshold`, `--high-confidence`, `--inject`).
+
+### TC-019: proactive-recall.py JSON stdin parsing with plaintext fallback
+**Verification:** The script reads stdin, tries `json.loads()` to extract the `content` field. If stdin is plain text (not valid JSON), uses it directly as the query.
+**Expected:** Both JSON and plain text inputs work correctly.
+
+### TC-020: Shell metacharacters in message content
 **Input:** Message containing backticks, `$(command)`, single quotes, double quotes, semicolons, pipes.
 **Expected:** All characters pass safely through stdin JSON. No shell interpretation. No crash.
+
+### TC-021: Stale skill copy deleted
+**Verification:** `ls memory/skills/semantic-memory/scripts/proactive-recall.py`
+**Expected:** "No such file or directory". Only the canonical copy at `memory/scripts/proactive-recall.py` exists.
+
+### TC-022: All callers updated — no positional arg invocations remain
+**Verification:**
+```bash
+grep -rn 'proactive-recall.py.*"' memory/scripts/ --include='*.sh' | grep -v '#' | grep -v 'echo.*stdin'
+```
+**Expected:** No shell scripts invoke `proactive-recall.py` with positional message arguments. All callers pipe via stdin.
 
 ---
 
 ## #133 — Remove ~/clawd hardcoded paths
 
-### TC-019: No ~/clawd references in any hook
+### TC-023: No ~/clawd references in any hook
 **Verification:**
 ```bash
 grep -rn 'clawd' memory/hooks/ --include='*.ts' | grep -v node_modules
 ```
 **Expected:** Zero matches.
 
-### TC-020: No ~/clawd references in any script
+### TC-024: No ~/clawd references in any script
 **Verification:**
 ```bash
 grep -rn 'clawd' memory/scripts/ --include='*.sh' --include='*.py'
 ```
 **Expected:** Zero matches.
 
-### TC-021: Correct venv path in semantic-recall
+### TC-025: Correct venv path in semantic-recall
 **Verification:** `PYTHON_VENV` resolves to `~/.local/share/nova/venv/bin/python` (standard location) or falls back to workspace venv. Never references `~/clawd/`.
 
-### TC-022: Cron path audit (tracked for ops follow-up)
+### TC-026: Cron path audit (tracked for ops follow-up)
 **Verification:** `crontab -l | grep clawd`
 **Expected:** Document any stale entries. Create ops task for cleanup. Not a code fix in this PR.
 
@@ -141,23 +168,23 @@ grep -rn 'clawd' memory/scripts/ --include='*.sh' --include='*.py'
 
 ## Grammar Parser Removal
 
-### TC-023: grammar_parser directory deleted
+### TC-027: grammar_parser directory deleted
 **Verification:** `ls memory/grammar_parser/` returns "No such file or directory"
 
-### TC-024: process-input-with-grammar.sh deleted
+### TC-028: process-input-with-grammar.sh deleted
 **Verification:** `ls memory/scripts/process-input-with-grammar.sh` returns "No such file or directory"
 
-### TC-025: test_grammar_integration.sh deleted
+### TC-029: test_grammar_integration.sh deleted
 **Verification:** `ls memory/tests/test_grammar_integration.sh` returns "No such file or directory"
 
-### TC-026: No remaining grammar parser references
+### TC-030: No remaining grammar parser references
 **Verification:**
 ```bash
 grep -rn 'grammar' memory/ --include='*.ts' --include='*.sh' --include='*.py' | grep -v node_modules | grep -v __pycache__ | grep -v TEST-CASES
 ```
 **Expected:** Zero matches in active codepaths. Only acceptable in CHANGELOG or historical docs.
 
-### TC-027: Installer does not reference grammar parser
+### TC-031: Installer does not reference grammar parser
 **Verification:** `grep -n 'grammar' agent-install.sh`
 **Expected:** Zero matches.
 
@@ -165,17 +192,17 @@ grep -rn 'grammar' memory/ --include='*.ts' --include='*.sh' --include='*.py' | 
 
 ## Cross-cutting
 
-### TC-028: All hooks use canonical event gating
+### TC-032: All hooks use canonical event gating
 **Verification:** Each hook checks `event.type === "message" && event.action === "received"` before processing.
 
-### TC-029: No remaining references to old context key names
+### TC-033: No remaining references to old context key names
 **Verification:**
 ```bash
 grep -n 'ctx\.rawBody\|ctx\.RawBody\|ctx\.Body\|ctx\.message[^I]' memory/hooks/memory-extract/handler.ts
 ```
 **Expected:** Only as fallbacks after `ctx.content`, never as primary.
 
-### TC-030: Gateway restart and hook registration
+### TC-034: Gateway restart and hook registration
 **Verification:** After deploying fixes, restart gateway and confirm all three hooks register:
 ```
 Registered hook: memory-extract -> message:received

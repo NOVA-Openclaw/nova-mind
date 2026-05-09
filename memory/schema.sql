@@ -5056,7 +5056,7 @@ COMMENT ON COLUMN public.projects.locked IS 'When TRUE, project is repo-backed. 
 -- Name: COLUMN projects.skills; Type: COMMENT; Schema: public; Owner: nova
 --
 
-COMMENT ON COLUMN public.projects.skills IS 'Array of skill names (from ~/clawd/skills/) relevant to this project';
+COMMENT ON COLUMN public.projects.skills IS 'Array of skill names (from ~/.openclaw/skills/) relevant to this project';
 
 
 --

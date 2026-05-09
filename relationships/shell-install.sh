@@ -100,7 +100,7 @@ if [ ! -f "$PG_ENV" ]; then
     echo "   Expected: $PG_ENV" >&2
     echo "" >&2
     echo "pg-env.sh not found — is nova-memory installed?" >&2
-    echo "Run nova-memory/shell-install.sh first to install shared library files." >&2
+    echo "Run memory/shell-install.sh from nova-mind repo first to install shared library files." >&2
     exit 1
 fi
 

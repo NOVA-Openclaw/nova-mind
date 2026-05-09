@@ -2273,7 +2273,7 @@ COMMENT ON COLUMN projects.repo_url IS 'GitHub repo URL. When set with locked=TR
 COMMENT ON COLUMN projects.locked IS 'When TRUE, project is repo-backed. Use GitHub (repo_url) for docs/updates, not this table. Prevents accidental writes to notes field.';
 
 
-COMMENT ON COLUMN projects.skills IS 'Array of skill names (from ~/clawd/skills/) relevant to this project';
+COMMENT ON COLUMN projects.skills IS 'Array of skill names (from ~/.openclaw/skills/) relevant to this project';
 
 --
 -- Name: idx_projects_status; Type: INDEX; Schema: -; Owner: -

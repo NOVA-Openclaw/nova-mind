@@ -119,12 +119,18 @@ resolve_source_entity_id() {
     
     # First try matching by sender_id (phone number) in entity_facts
     if [ -n "$sender_id" ] && [ "$sender_id" != "unknown" ]; then
-        local id_match=$(psql -t -A -c "
-            SELECT DISTINCT entity_id FROM entity_facts 
-            WHERE (key IN ('phone', 'has_phone_number', 'signal', 'signal_id') 
-                   AND REPLACE(REPLACE(value, '-', ''), ' ', '') LIKE '%$(echo "$sender_id" | tr -d '+-  ')%')
-            LIMIT 1;
-        " 2>/dev/null | head -1)
+        # Normalise to digits only for comparison — avoids LIKE injection via sender_id (C4)
+        local sender_digits
+        sender_digits=$(echo "$sender_id" | tr -dc '0-9')
+        local id_match
+        if [ -n "$sender_digits" ]; then
+            id_match=$(psql -t -A -c "
+                SELECT DISTINCT entity_id FROM entity_facts
+                WHERE key IN ('phone', 'has_phone_number', 'signal', 'signal_id')
+                  AND REGEXP_REPLACE(value, '[^0-9]', '', 'g') = '$(sql_escape "$sender_digits")'
+                LIMIT 1;
+            " 2>/dev/null | head -1)
+        fi
         
         if [ -n "$id_match" ]; then
             echo "$id_match"

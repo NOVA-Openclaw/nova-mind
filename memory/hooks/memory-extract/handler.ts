@@ -1,6 +1,9 @@
-import { spawn } from "child_process";
+import { spawn, execFile } from "child_process";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
+import { promisify } from "util";
+
+const execFileAsync = promisify(execFile);
 
 interface ActivityState {
   activeMinutesToday: number;
@@ -121,11 +124,89 @@ const handler = async (event) => {
   const sessionId = event.sessionKey ?? '';
   const messageTimestamp = new Date().toISOString();  // Current time as extraction timestamp
 
-  // Pass DB-level channel transcript / session FK ids when available (#170)
-  // These are populated by the transcript ingest pipeline (migration 067) and allow
-  // entity_facts rows to carry proper FK pointers back to the source message.
-  const channelTranscriptId = String(ctx.channelTranscriptId ?? ctx.channel_transcript_id ?? '');
-  const channelSessionId = String(ctx.channelSessionId ?? ctx.channel_session_id ?? '');
+  // Resolve DB-level channel transcript / session FK ids (C1 fix — #170).
+  // OpenClaw may populate these in ctx when the channel plugin has already persisted
+  // the message. When they are absent (real-time path before batch ingest), we do a
+  // lightweight upsert here so entity_facts always has valid FK pointers.
+  let channelTranscriptId = String(ctx.channelTranscriptId ?? ctx.channel_transcript_id ?? '');
+  let channelSessionId = String(ctx.channelSessionId ?? ctx.channel_session_id ?? '');
+
+  if (!channelTranscriptId || channelTranscriptId === '0') {
+    try {
+      // Derive provider from chat_id format
+      const chatId = String(ctx.chatId ?? ctx.chat_id ?? '');
+      let provider = 'openclaw';
+      if (chatId.startsWith('channel:')) provider = 'discord';
+      else if (chatId.startsWith('group:') || chatId.startsWith('+')) provider = 'signal';
+
+      const externalChatId = chatId || sessionId || 'unknown';
+      const externalMessageId = String(ctx.messageId ?? ctx.message_id ?? '');
+      const isGroupBool = Boolean(ctx.isGroup ?? false);
+      const chatType = isGroupBool ? 'group' : 'direct';
+      const groupSubject = String(ctx.groupSubject ?? ctx.group_subject ?? '');
+      const groupSpace = String(ctx.groupSpace ?? ctx.group_space ?? '');
+      const senderTag = String(ctx.senderTag ?? ctx.sender_tag ?? '');
+
+      // Only attempt upsert when psql is available and we have minimal identifying info
+      if (externalMessageId || rawBody.length > 0) {
+        // Upsert session row
+        const sessArgs = [
+          'nova_memory', '-t', '-A', '-c',
+          `INSERT INTO channel_sessions (session_key, agent_id, provider, external_chat_id, chat_type` +
+          (groupSubject ? ', group_subject, title' : '') +
+          (groupSpace ? ', group_space_id' : '') +
+          `) VALUES (` +
+          `'${sessionId.replace(/'/g, "''")}', 'main', ` +
+          `'${provider.replace(/'/g, "''")}', ` +
+          `'${externalChatId.replace(/'/g, "''")}', ` +
+          `'${chatType}'` +
+          (groupSubject ? `, '${groupSubject.replace(/'/g, "''")}', '${groupSubject.replace(/'/g, "''")}' ` : '') +
+          (groupSpace ? `, '${groupSpace.replace(/'/g, "''")}' ` : '') +
+          `) ON CONFLICT (provider, external_chat_id, COALESCE(external_thread_id, '')) DO UPDATE SET updated_at = NOW() RETURNING id;`
+        ];
+
+        const { stdout: sessOut } = await execFileAsync('psql', sessArgs).catch(() => ({ stdout: '' }));
+        const resolvedSessionId = sessOut.trim();
+        if (resolvedSessionId && /^\d+$/.test(resolvedSessionId)) {
+          channelSessionId = resolvedSessionId;
+        }
+
+        // Upsert transcript row when we have a session and a message id or can derive one
+        if (channelSessionId) {
+          const msgId = externalMessageId || `${messageTimestamp}_rt`;
+          const contentSnippet = rawBody.substring(0, 65535).replace(/'/g, "''");
+          const senderNameEsc = senderName.replace(/'/g, "''");
+          const senderIdEsc = senderId.replace(/'/g, "''");
+          const senderTagEsc = senderTag.replace(/'/g, "''");
+
+          const txArgs = [
+            'nova_memory', '-t', '-A', '-c',
+            `INSERT INTO channel_transcripts (session_id, external_message_id, timestamp, role, content` +
+            (senderId ? ', sender_id' : '') +
+            (senderName && senderName !== 'unknown' ? ', sender_name' : '') +
+            (senderTag ? ', sender_tag' : '') +
+            `) VALUES (` +
+            `${channelSessionId}, '${msgId.replace(/'/g, "''")}', ` +
+            `'${messageTimestamp}', 'user', '${contentSnippet}'` +
+            (senderId ? `, '${senderIdEsc}'` : '') +
+            (senderName && senderName !== 'unknown' ? `, '${senderNameEsc}'` : '') +
+            (senderTag ? `, '${senderTagEsc}'` : '') +
+            `) ON CONFLICT (session_id, external_message_id) DO NOTHING RETURNING id;`
+          ];
+
+          const { stdout: txOut } = await execFileAsync('psql', txArgs).catch(() => ({ stdout: '' }));
+          const resolvedTranscriptId = txOut.trim();
+          if (resolvedTranscriptId && /^\d+$/.test(resolvedTranscriptId)) {
+            channelTranscriptId = resolvedTranscriptId;
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('[memory-extract] Could not upsert channel_transcripts for FK wiring', {
+        error: (err as Error).message
+      });
+    }
+  }
 
   const child = spawn(scriptPath, [], {
     stdio: ['pipe', 'pipe', 'pipe'],

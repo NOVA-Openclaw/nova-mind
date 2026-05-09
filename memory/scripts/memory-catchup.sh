@@ -276,11 +276,8 @@ if command -v psql >/dev/null 2>&1; then
         while IFS= read -r jsonl_file; do
             [ -f "$jsonl_file" ] || continue
 
-            # Derive provider / agent_id from path: agents/<agent_id>/sessions/<file>.jsonl
+            # Derive agent_id from path: agents/<agent_id>/sessions/<file>.jsonl
             agent_id=$(echo "$jsonl_file" | sed -E 's|.*/agents/([^/]+)/sessions/.*|\1|')
-            provider='openclaw'
-            # Use filename stem as external_chat_id (stable per session file)
-            external_chat_id=$(basename "$jsonl_file" .jsonl)
 
             # Extract first-message timestamp for started_at
             started_at=$(jq -r 'select(.timestamp) | .timestamp' "$jsonl_file" 2>/dev/null | head -1)
@@ -288,19 +285,69 @@ if command -v psql >/dev/null 2>&1; then
 
             # Extract session_key from any line that has it
             session_key=$(jq -r 'select(.session_key) | .session_key' "$jsonl_file" 2>/dev/null | head -1)
+
+            # Parse rich metadata from the first message line that has a chat_id
+            # This drives provider detection and proper session fields (M1)
+            first_meta_line=$(jq -c 'select(.chat_id) | .' "$jsonl_file" 2>/dev/null | head -1)
+            file_stem=$(basename "$jsonl_file" .jsonl)
+
+            if [ -n "$first_meta_line" ]; then
+                raw_chat_id=$(echo "$first_meta_line" | jq -r '.chat_id // empty' 2>/dev/null)
+                raw_is_group=$(echo "$first_meta_line" | jq -r '.is_group_chat // false' 2>/dev/null)
+                raw_group_subject=$(echo "$first_meta_line" | jq -r '.group_subject // empty' 2>/dev/null)
+                raw_group_space=$(echo "$first_meta_line" | jq -r '.group_space // empty' 2>/dev/null)
+
+                # Detect provider from chat_id format
+                if [[ "$raw_chat_id" == channel:* ]]; then
+                    provider='discord'
+                elif [[ "$raw_chat_id" == group:* ]] || [[ "$raw_chat_id" == +* ]]; then
+                    provider='signal'
+                elif [ -n "$raw_chat_id" ]; then
+                    provider='openclaw'
+                else
+                    provider='openclaw'
+                fi
+
+                external_chat_id="${raw_chat_id:-$file_stem}"
+                [ "$raw_is_group" = 'true' ] && chat_type='group' || chat_type='direct'
+                group_subject_val="$raw_group_subject"
+                group_space_val="$raw_group_space"
+                title_val="${raw_group_subject:-$file_stem}"
+            else
+                # Fallback: use filename stem as external_chat_id with openclaw provider
+                provider='openclaw'
+                external_chat_id="$file_stem"
+                chat_type='direct'
+                group_subject_val=''
+                group_space_val=''
+                title_val=''
+            fi
+
             [ -z "$session_key" ] && session_key="$external_chat_id"
 
-            # Upsert channel_sessions row
+            # Build optional session columns
+            sess_extra_cols=''
+            sess_extra_vals=''
+            if [ -n "$group_subject_val" ]; then
+                sess_extra_cols=", group_subject, title"
+                sess_extra_vals=", '$(echo "$group_subject_val" | sed "s/'/''/g")', '$(echo "$title_val" | sed "s/'/''/g")'"
+            fi
+            if [ -n "$group_space_val" ]; then
+                sess_extra_cols="$sess_extra_cols, group_space_id"
+                sess_extra_vals="$sess_extra_vals, '$(echo "$group_space_val" | sed "s/'/''/g")'"
+            fi
+
+            # Upsert channel_sessions row with rich metadata
             session_db_id=$(psql nova_memory -t -A -c "
                 INSERT INTO channel_sessions
-                    (session_key, agent_id, provider, external_chat_id, chat_type, started_at)
+                    (session_key, agent_id, provider, external_chat_id, chat_type, started_at${sess_extra_cols})
                 VALUES
                     ('$(echo "$session_key" | sed "s/'/''/g")',
                      '$(echo "$agent_id" | sed "s/'/''/g")',
                      '$(echo "$provider" | sed "s/'/''/g")',
                      '$(echo "$external_chat_id" | sed "s/'/''/g")',
-                     'direct',
-                     '$(echo "$started_at" | sed "s/'/''/g")')
+                     '$(echo "$chat_type" | sed "s/'/''/g")',
+                     '$(echo "$started_at" | sed "s/'/''/g")'${sess_extra_vals})
                 ON CONFLICT (provider, external_chat_id, COALESCE(external_thread_id, ''))
                 DO UPDATE SET
                     updated_at = NOW()
@@ -339,13 +386,11 @@ if command -v psql >/dev/null 2>&1; then
 
                 role=$(echo "$line" | jq -r '.message.role // "user"' 2>/dev/null)
 
-                # Parse rich metadata fields from JSONL content
-                chat_id=$(echo "$line" | jq -r '.chat_id // empty' 2>/dev/null)
+                # Parse rich metadata fields from JSONL content (M1)
                 sender_id=$(echo "$line" | jq -r '.sender_id // empty' 2>/dev/null)
                 sender_name=$(echo "$line" | jq -r '.sender // empty' 2>/dev/null)
                 sender_username=$(echo "$line" | jq -r '.sender_username // empty' 2>/dev/null)
-                is_group=$(echo "$line" | jq -r '.is_group_chat // false' 2>/dev/null)
-                group_subject=$(echo "$line" | jq -r '.group_subject // empty' 2>/dev/null)
+                sender_tag=$(echo "$line" | jq -r '.sender_tag // empty' 2>/dev/null)
 
                 content=$(echo "$line" | jq -r '
                     if (.message.content | type) == "array" then
@@ -358,12 +403,13 @@ if command -v psql >/dev/null 2>&1; then
 
                 raw_meta=$(echo "$line" | jq -c '.' 2>/dev/null | head -c 65535 | sed "s/'/''/g")
 
-                # Build dynamic column list for rich metadata
+                # Build dynamic column list for rich metadata (M1)
                 ct_cols="session_id, external_message_id, timestamp, role, content, raw_metadata"
                 ct_vals="$session_db_id, '$(echo "$ext_msg_id" | sed "s/'/''/g")', '$(echo "$msg_ts" | sed "s/'/''/g")', '$(echo "$role" | sed "s/'/''/g")', '$(echo "$content" | sed "s/'/''/g")', '$(echo "$raw_meta")'::jsonb"
                 [ -n "$sender_id" ] && ct_cols="$ct_cols, sender_id" && ct_vals="$ct_vals, '$(echo "$sender_id" | sed "s/'/''/g")'"
                 [ -n "$sender_name" ] && ct_cols="$ct_cols, sender_name" && ct_vals="$ct_vals, '$(echo "$sender_name" | sed "s/'/''/g")'"
                 [ -n "$sender_username" ] && ct_cols="$ct_cols, sender_username" && ct_vals="$ct_vals, '$(echo "$sender_username" | sed "s/'/''/g")'"
+                [ -n "$sender_tag" ] && ct_cols="$ct_cols, sender_tag" && ct_vals="$ct_vals, '$(echo "$sender_tag" | sed "s/'/''/g")'"
 
                 transcript_db_id=$(psql nova_memory -t -A -c "
                     INSERT INTO channel_transcripts ($ct_cols)

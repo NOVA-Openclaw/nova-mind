@@ -49,7 +49,6 @@ This is the actual installer. It:
 - Applies schema declaratively via `pgschema` (plan → hazard-check → apply)
 - Installs hooks to OpenClaw hooks directory
 - Copies scripts to `~/.openclaw/scripts/` and workspace `scripts/`
-- Installs grammar parser to `~/.local/share/$USER/grammar_parser/`
 - Installs skills to `~/.openclaw/skills/`
 - Sets up a Python virtual environment with required dependencies
 - Patches OpenClaw config to auto-enable hooks (if `enable-hooks.sh` is present)

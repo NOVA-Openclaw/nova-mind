@@ -1,6 +1,6 @@
-# Test Cases for nova-memory#80: Grammar Parser Installation
+# Test Cases for nova-memory#80: Grammar Parser Installation — DEPRECATED
 
-These test cases verify the correct installation and updating of the `grammar_parser` Python package by the installer.
+> **⚠️ DEPRECATED (as of #174):** The `grammar_parser` package has been removed from the codebase. The extraction pipeline now uses Claude (via `extract-memories.sh`) directly instead of the grammar-based parser. These test cases are retained for historical reference only.
 
 ## 1. Fresh Install
 

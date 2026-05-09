@@ -100,7 +100,7 @@ if [ ${#MISSING_FILES[@]} -gt 0 ]; then
     done
     echo "" >&2
     echo "These files are installed by nova-memory. Please install nova-memory first:" >&2
-    echo "  cd ~/clawd/nova-memory && bash agent-install.sh" >&2
+    echo "  cd <nova-mind-repo> && bash agent-install.sh" >&2
     exit 1
 fi
 
@@ -158,7 +158,7 @@ verify_schema() {
     if ! psql -U "$DB_USER" -lqt | cut -d \| -f 1 | grep -qw "$DB_NAME"; then
         echo -e "  ${CROSS_MARK} Database '$DB_NAME' does not exist"
         echo "      nova-relationships requires nova-memory to be installed first"
-        echo "      Run: cd ~/clawd/nova-memory && ./agent-install.sh"
+        echo "      Run: cd <nova-mind-repo> && ./agent-install.sh"
         VERIFICATION_ERRORS=$((VERIFICATION_ERRORS + 1))
         return 1
     fi
@@ -184,7 +184,7 @@ verify_schema() {
         for table in "${missing_tables[@]}"; do
             echo "      • $table"
         done
-        echo "      Install nova-memory first: cd ~/clawd/nova-memory && ./agent-install.sh"
+        echo "      Install nova-memory first: cd <nova-mind-repo> && ./agent-install.sh"
         VERIFICATION_ERRORS=$((VERIFICATION_ERRORS + ${#missing_tables[@]}))
         return 1
     fi
@@ -369,7 +369,7 @@ if ! psql -U "$DB_USER" -lqt | cut -d \| -f 1 | grep -qw "$DB_NAME"; then
     echo "nova-relationships requires nova-memory to be installed first."
     echo ""
     echo "Please run:"
-    echo "  cd ~/clawd/nova-memory"
+    echo "  cd <nova-mind-repo>"
     echo "  ./agent-install.sh"
     echo ""
     exit 1

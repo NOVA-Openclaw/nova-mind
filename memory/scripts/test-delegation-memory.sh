@@ -63,7 +63,7 @@ if [ -f "$HOME/.openclaw/workspace/nova-memory/scripts/proactive-recall.py" ]; t
     else
         export OPENAI_API_KEY
         echo "   Query: 'help me debug this Python code'"
-        RESULT=$(python3 "$HOME/.openclaw/workspace/nova-memory/scripts/proactive-recall.py" "help me debug this Python code" --max-tokens 300 2>/dev/null || echo "failed")
+        RESULT=$(echo '{"content": "help me debug this Python code"}' | python3 "$HOME/.openclaw/scripts/proactive-recall.py" --max-tokens 300 2>/dev/null || echo "failed")
         if [ "$RESULT" = "failed" ]; then
             echo "   ⚠️  Semantic search failed"
         else

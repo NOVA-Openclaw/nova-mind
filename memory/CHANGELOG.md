@@ -3,6 +3,16 @@
 ## Unreleased
 
 ### Added
+- **Hook context fixes and grammar parser removal** (#174, #147, #156, #133) — Multiple hook reliability improvements and removal of deprecated grammar parser:
+  - **memory-extract hook** now reads `ctx.content` (canonical OpenClaw context key) with fallback chain `ctx.content → ctx.rawBody → ctx.RawBody → ctx.message → ctx.Body`. Previously only checked `ctx.rawBody` then `ctx.message`.
+  - **All three hooks** (memory-extract, semantic-recall, session-init) converted from `../../scripts/` relative paths (via `__dirname`) to absolute paths via `join(os.homedir(), '.openclaw', 'scripts/')`. This ensures hooks work correctly regardless of where they're installed from.
+  - **semantic-recall hook** now passes structured JSON over stdin (content + metadata including senderId, senderName, provider, conversationId, isGroup, channelName, guildId, messageId) to `proactive-recall.py` instead of sending plain truncated message text. This enables channel-aware semantic recall with full context.
+  - **proactive-recall.py** updated with JSON stdin parsing with backward-compatible plaintext fallback. Uses `json.loads()` to parse structured input and extracts the `content` field, falling back to treating stdin as plain text for legacy callers.
+  - **Grammar parser removed** (#174) — Deleted the entire `memory/grammar_parser/` directory (14 files, ~3.5K lines), `memory/scripts/process-input-with-grammar.sh`, and associated test files (`test_anaphora.py`, `test_authority_facts.sh`, `test_duplicate_reinforcement.sh`, `test_grammar_integration.sh`, `test_issue44_simple.sh`, `memory/tests/TEST-CASES-ISSUE-80.md` marked deprecated). The Claude-based extraction pipeline (`extract-memories.sh` + `store-memories.sh`) is now the sole extraction path.
+  - **No more ~/clawd references** in any hooks or scripts — all paths resolve via `os.homedir()/.openclaw/`.
+  - **memory-extract handler**: Updated context field resolution — uses `ctx.conversationId` (primary), `ctx.provider` for direct provider detection, `ctx.channelName` for group subject, `ctx.guildId` for Discord guild IDs.
+
+### Added
 - **Structured chat transcript storage** (#165, #138, #170) — New `channel_sessions` and `channel_transcripts` tables replace the deprecated `conversations` table and JSONL file storage. Migration 067 creates both tables, adds `source_channel_transcript_id` and `source_channel_session_id` FK columns to `entity_facts`, and drops the legacy `conversations` table.
 - **JSONL → DB ingest in `memory-catchup.sh`** (#165, #138, #170) — The catchup script now ingests JSONL session transcripts from `~/.openclaw/agents/*/sessions/*.jsonl` into `channel_sessions` + `channel_transcripts` during each run. Source files are deleted after successful DB commit. Extraction failures no longer block transcript ingestion.
 - **Real-time channel transcript upsert in `memory-extract` hook** (#170) — `handler.ts` now does a lightweight upsert of `channel_sessions`/`channel_transcripts` during message processing, then passes the FK IDs (`SOURCE_CHANNEL_TRANSCRIPT_ID`, `SOURCE_CHANNEL_SESSION_ID`) as env vars to the extraction pipeline.

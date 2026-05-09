@@ -609,17 +609,26 @@ nova-mind/memory/
 └── agent-turn-context/     # → Queries agent_turn_context table directly via DB
 ```
 
-All hooks use **relative paths** to find scripts in `../../scripts/` from their location.
+All hooks now use **absolute paths** via `os.homedir()/.openclaw/` to locate scripts (#174), replacing the previous `../../scripts/` relative path scheme. This resolves issues when hooks are installed to `~/.openclaw/hooks/` where relative paths from legacy locations break.
 
-This makes the installation **self-contained** - the workspace has everything it needs without external dependencies.
+### Hook Script Path Resolution
+
+Each hook resolves its script path using `join(os.homedir(), '.openclaw', 'scripts', '<script-name>')`:
+
+| Hook | Script | Path Resolution |
+|------|--------|----------------|
+| `memory-extract` | `process-input.sh` | `os.homedir() + /.openclaw/scripts/process-input.sh` |
+| `semantic-recall` | `proactive-recall.py` | `os.homedir() + /.openclaw/scripts/proactive-recall.py` |
+| `session-init` | `generate-session-context.sh` | `os.homedir() + /.openclaw/scripts/generate-session-context.sh` |
+| `agent-turn-context` | (queries DB directly) | N/A |
 
 ## Portability
 
-The system is now fully portable:
-- No hardcoded paths to `~/.openclaw/workspace/`
-- Hooks use relative paths to find scripts
-- Installer detects workspace automatically
-- Database connection via environment variables
+The system is designed to be portable:
+- No hardcoded user-specific paths (uses `os.homedir()` at runtime)
+- All hooks resolve scripts via `os.homedir()/.openclaw/scripts/`
+- Hooks no longer rely on `__dirname`-relative paths that break after installation
+- Database connection via environment variables with `~/.openclaw/lib/` loaders
 
 You can clone nova-mind anywhere and install it:
 

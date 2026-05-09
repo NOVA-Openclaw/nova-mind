@@ -748,39 +748,46 @@ CREATE TABLE IF NOT EXISTS channel_activity (
 COMMENT ON TABLE channel_activity IS 'Tracks last message per channel for idle detection. Read/write: NOVA, Newhart.';
 
 --
--- Name: conversations; Type: TABLE; Schema: -; Owner: -
+-- Name: channel_sessions; Type: TABLE; Schema: -; Owner: -
 --
 
-CREATE TABLE IF NOT EXISTS conversations (
-    id SERIAL,
-    session_key varchar(255),
-    channel varchar(50),
-    started_at timestamp DEFAULT CURRENT_TIMESTAMP,
-    summary text,
-    notes text,
-    CONSTRAINT conversations_pkey PRIMARY KEY (id)
+CREATE TABLE IF NOT EXISTS channel_sessions (
+    id BIGSERIAL,
+    session_key text,
+    agent_id text DEFAULT 'main' NOT NULL,
+    provider text NOT NULL,
+    external_chat_id text NOT NULL,
+    external_thread_id text,
+    chat_type text NOT NULL,
+    title text,
+    group_subject text,
+    group_space_id text,
+    started_at timestamptz DEFAULT now() NOT NULL,
+    last_message_at timestamptz,
+    message_count integer DEFAULT 0,
+    raw_metadata jsonb,
+    created_at timestamptz DEFAULT now() NOT NULL,
+    updated_at timestamptz DEFAULT now() NOT NULL,
+    CONSTRAINT channel_sessions_pkey PRIMARY KEY (id)
 );
 
+--
+-- Name: idx_channel_sessions_last_msg; Type: INDEX; Schema: -; Owner: -
+--
 
-COMMENT ON TABLE conversations IS 'Conversation session tracking. Logs chat sessions with metadata for analysis and continuity.';
+CREATE INDEX IF NOT EXISTS idx_channel_sessions_last_msg ON channel_sessions (last_message_at DESC);
 
+--
+-- Name: idx_channel_sessions_provider_chat; Type: INDEX; Schema: -; Owner: -
+--
 
-COMMENT ON COLUMN conversations.id IS 'Unique conversation identifier';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_channel_sessions_provider_chat ON channel_sessions (provider, external_chat_id, COALESCE(external_thread_id, ''::text));
 
+--
+-- Name: idx_channel_sessions_session_key; Type: INDEX; Schema: -; Owner: -
+--
 
-COMMENT ON COLUMN conversations.session_key IS 'Session identifier for grouping related messages';
-
-
-COMMENT ON COLUMN conversations.channel IS 'Communication channel (signal, discord, etc.)';
-
-
-COMMENT ON COLUMN conversations.started_at IS 'Conversation start timestamp';
-
-
-COMMENT ON COLUMN conversations.summary IS 'Conversation summary or key points';
-
-
-COMMENT ON COLUMN conversations.notes IS 'Additional notes about the conversation';
+CREATE INDEX IF NOT EXISTS idx_channel_sessions_session_key ON channel_sessions (session_key);
 
 --
 -- Name: entities; Type: TABLE; Schema: -; Owner: -
@@ -983,8 +990,11 @@ CREATE TABLE IF NOT EXISTS entity_facts (
     last_confirmed_at timestamptz DEFAULT now(),
     confirmation_count integer DEFAULT 1,
     decay_rate real,
+    source_channel_transcript_id bigint,
+    source_channel_session_id bigint,
     CONSTRAINT entity_facts_pkey PRIMARY KEY (id),
     CONSTRAINT entity_facts_entity_id_fkey FOREIGN KEY (entity_id) REFERENCES entities (id) ON DELETE CASCADE,
+    CONSTRAINT entity_facts_source_channel_session_id_fkey FOREIGN KEY (source_channel_session_id) REFERENCES channel_sessions (id),
     CONSTRAINT entity_facts_source_entity_id_fkey FOREIGN KEY (source_entity_id) REFERENCES entities (id),
     CONSTRAINT chk_confidence CHECK (confidence >= 0::double precision AND confidence <= 1::double precision),
     CONSTRAINT chk_data_type CHECK (data_type::text IN ('permanent'::character varying, 'identity'::character varying, 'preference'::character varying, 'temporal'::character varying, 'observation'::character varying))
@@ -1010,6 +1020,24 @@ COMMENT ON COLUMN entity_facts.vote_count IS 'Reinforcement count - incremented 
 
 
 COMMENT ON COLUMN entity_facts.last_confirmed IS 'Timestamp of most recent confirmation/reinforcement';
+
+
+COMMENT ON COLUMN entity_facts.source_channel_transcript_id IS 'FK to channel_transcripts row that triggered this fact extraction (#170)';
+
+
+COMMENT ON COLUMN entity_facts.source_channel_session_id IS 'FK to channel_sessions row (denormalised for fast session-level queries)';
+
+--
+-- Name: idx_entity_facts_channel_session; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_entity_facts_channel_session ON entity_facts (source_channel_session_id) WHERE (source_channel_session_id IS NOT NULL);
+
+--
+-- Name: idx_entity_facts_channel_transcript; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_entity_facts_channel_transcript ON entity_facts (source_channel_transcript_id) WHERE (source_channel_transcript_id IS NOT NULL);
 
 --
 -- Name: idx_entity_facts_confidence; Type: INDEX; Schema: -; Owner: -
@@ -4533,25 +4561,6 @@ END;
 $$;
 
 --
--- Name: notify_agents_changed(); Type: FUNCTION; Schema: -; Owner: -
---
-
-CREATE OR REPLACE FUNCTION notify_agents_changed()
-RETURNS trigger
-LANGUAGE plpgsql
-VOLATILE
-AS $$
-BEGIN
-    PERFORM pg_notify('agent_config_changed', json_build_object(
-        'op', TG_OP,
-        'agent', COALESCE(NEW.name, OLD.name),
-        'ts', NOW()
-    )::text);
-    RETURN COALESCE(NEW, OLD);
-END;
-$$;
-
---
 -- Name: notify_coder_queue_change(); Type: FUNCTION; Schema: -; Owner: -
 --
 
@@ -5575,19 +5584,17 @@ END;
 $$;
 
 --
+-- Name: entity_facts_source_channel_transcript_id_fkey; Type: CONSTRAINT; Schema: -; Owner: -
+--
+
+ALTER TABLE entity_facts
+ADD CONSTRAINT entity_facts_source_channel_transcript_id_fkey FOREIGN KEY (source_channel_transcript_id) REFERENCES channel_transcripts (id);
+
+--
 -- Name: agent_config_changed; Type: TRIGGER; Schema: -; Owner: -
 --
 
 CREATE OR REPLACE TRIGGER agent_config_changed
-    AFTER INSERT OR UPDATE OR DELETE ON agents
-    FOR EACH ROW
-    EXECUTE FUNCTION notify_agent_config_changed();
-
---
--- Name: agents_config_changed; Type: TRIGGER; Schema: -; Owner: -
---
-
-CREATE OR REPLACE TRIGGER agents_config_changed
     AFTER INSERT OR UPDATE OR DELETE ON agents
     FOR EACH ROW
     EXECUTE FUNCTION notify_agent_config_changed();
@@ -5996,15 +6003,6 @@ CREATE OR REPLACE TRIGGER trg_agent_turn_context_updated_at
     BEFORE UPDATE ON agent_turn_context
     FOR EACH ROW
     EXECUTE FUNCTION update_agent_turn_context_timestamp();
-
---
--- Name: trg_agents_changed; Type: TRIGGER; Schema: -; Owner: -
---
-
-CREATE OR REPLACE TRIGGER trg_agents_changed
-    AFTER INSERT OR UPDATE OR DELETE ON agents
-    FOR EACH ROW
-    EXECUTE FUNCTION notify_agents_changed();
 
 --
 -- Name: trg_embed_chat_message; Type: TRIGGER; Schema: -; Owner: -
@@ -6560,13 +6558,13 @@ CREATE OR REPLACE VIEW workflow_steps_detail AS
 -- Name: agent_actions; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE agent_actions FROM newhart;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_actions FROM newhart;
 
 --
 -- Name: agent_actions; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_actions FROM newhart;
+REVOKE SELECT ON TABLE agent_actions FROM newhart;
 
 --
 -- Name: agent_aliases; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -6764,13 +6762,13 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE agent_domains FROM iris;
 -- Name: agent_domains; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_domains FROM newhart;
+REVOKE SELECT ON TABLE agent_domains FROM newhart;
 
 --
 -- Name: agent_domains; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE agent_domains FROM newhart;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_domains FROM newhart;
 
 --
 -- Name: agent_domains; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -6872,13 +6870,13 @@ REVOKE DELETE ON TABLE agent_modifications FROM ticker;
 -- Name: agent_spawns; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_spawns FROM newhart;
+REVOKE SELECT ON TABLE agent_spawns FROM newhart;
 
 --
 -- Name: agent_spawns; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE agent_spawns FROM newhart;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_spawns FROM newhart;
 
 --
 -- Name: agent_system_config; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -6920,13 +6918,13 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE agent_system_config FROM iris;
 -- Name: agent_system_config; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE agent_system_config FROM newhart;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_system_config FROM newhart;
 
 --
 -- Name: agent_system_config; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_system_config FROM newhart;
+REVOKE SELECT ON TABLE agent_system_config FROM newhart;
 
 --
 -- Name: agent_system_config; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -6950,13 +6948,13 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE agent_system_config FROM ticker;
 -- Name: agent_turn_context; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_turn_context FROM newhart;
+REVOKE SELECT ON TABLE agent_turn_context FROM newhart;
 
 --
 -- Name: agent_turn_context; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE agent_turn_context FROM newhart;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_turn_context FROM newhart;
 
 --
 -- Name: agents; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -6998,13 +6996,13 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE agents FROM iris;
 -- Name: agents; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE agents FROM newhart;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agents FROM newhart;
 
 --
 -- Name: agents; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agents FROM newhart;
+REVOKE SELECT ON TABLE agents FROM newhart;
 
 --
 -- Name: agents; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -7064,13 +7062,13 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE ai_models FROM iris;
 -- Name: ai_models; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE ai_models FROM newhart;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE ai_models FROM newhart;
 
 --
 -- Name: ai_models; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE ai_models FROM newhart;
+REVOKE SELECT ON TABLE ai_models FROM newhart;
 
 --
 -- Name: ai_models; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -7094,13 +7092,13 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE ai_models FROM ticker;
 -- Name: artwork; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE artwork FROM iris;
+REVOKE SELECT ON TABLE artwork FROM iris;
 
 --
 -- Name: artwork; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE artwork FROM iris;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE artwork FROM iris;
 
 --
 -- Name: asset_classes; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -7193,10 +7191,64 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE certificates FROM nova;
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE channel_activity FROM nova;
 
 --
--- Name: conversations; Type: PRIVILEGE; Schema: privileges; Owner: -
+-- Name: channel_sessions; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE conversations FROM nova;
+REVOKE DELETE, INSERT, UPDATE ON TABLE channel_sessions FROM athena;
+
+--
+-- Name: channel_sessions; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, UPDATE ON TABLE channel_sessions FROM coder;
+
+--
+-- Name: channel_sessions; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, UPDATE ON TABLE channel_sessions FROM erato;
+
+--
+-- Name: channel_sessions; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, UPDATE ON TABLE channel_sessions FROM gem;
+
+--
+-- Name: channel_sessions; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, UPDATE ON TABLE channel_sessions FROM gidget;
+
+--
+-- Name: channel_sessions; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, UPDATE ON TABLE channel_sessions FROM iris;
+
+--
+-- Name: channel_sessions; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, UPDATE ON TABLE channel_sessions FROM newhart;
+
+--
+-- Name: channel_sessions; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE channel_sessions FROM nova;
+
+--
+-- Name: channel_sessions; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, UPDATE ON TABLE channel_sessions FROM scout;
+
+--
+-- Name: channel_sessions; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, UPDATE ON TABLE channel_sessions FROM ticker;
 
 --
 -- Name: entities; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -7286,13 +7338,13 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE gambling_logs FROM nova;
 -- Name: git_issue_queue; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE git_issue_queue FROM coder;
+REVOKE SELECT ON TABLE git_issue_queue FROM coder;
 
 --
 -- Name: git_issue_queue; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE git_issue_queue FROM coder;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE git_issue_queue FROM coder;
 
 --
 -- Name: job_messages; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -7316,13 +7368,13 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE lessons_archive FROM nova;
 -- Name: library_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE library_authors FROM athena;
+REVOKE SELECT ON TABLE library_authors FROM athena;
 
 --
 -- Name: library_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE library_authors FROM athena;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE library_authors FROM athena;
 
 --
 -- Name: library_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -7382,13 +7434,13 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE library_authors FROM ticker;
 -- Name: library_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE library_tags FROM athena;
+REVOKE SELECT ON TABLE library_tags FROM athena;
 
 --
 -- Name: library_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE library_tags FROM athena;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE library_tags FROM athena;
 
 --
 -- Name: library_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -7448,13 +7500,13 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE library_tags FROM ticker;
 -- Name: library_work_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE library_work_authors FROM athena;
+REVOKE SELECT ON TABLE library_work_authors FROM athena;
 
 --
 -- Name: library_work_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE library_work_authors FROM athena;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE library_work_authors FROM athena;
 
 --
 -- Name: library_work_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -7580,13 +7632,13 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE library_work_relationships FROM ticker;
 -- Name: library_work_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE library_work_tags FROM athena;
+REVOKE SELECT ON TABLE library_work_tags FROM athena;
 
 --
 -- Name: library_work_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE library_work_tags FROM athena;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE library_work_tags FROM athena;
 
 --
 -- Name: library_work_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -7802,25 +7854,25 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE pm_domain_portfolio_snapshots FRO
 -- Name: portfolio_history; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE portfolio_history FROM ticker;
+REVOKE SELECT ON TABLE portfolio_history FROM ticker;
 
 --
 -- Name: portfolio_history; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE portfolio_history FROM ticker;
-
---
--- Name: portfolio_metrics; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE portfolio_metrics FROM ticker;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE portfolio_history FROM ticker;
 
 --
 -- Name: portfolio_metrics; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
 REVOKE SELECT ON TABLE portfolio_metrics FROM ticker;
+
+--
+-- Name: portfolio_metrics; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE portfolio_metrics FROM ticker;
 
 --
 -- Name: portfolio_positions; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -7862,13 +7914,13 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE portfolio_updates FROM ticker;
 -- Name: positions; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE positions FROM ticker;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE positions FROM ticker;
 
 --
 -- Name: positions; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE positions FROM ticker;
+REVOKE SELECT ON TABLE positions FROM ticker;
 
 --
 -- Name: preferences; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -7880,13 +7932,13 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE preferences FROM nova;
 -- Name: price_cache_v2; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE price_cache_v2 FROM ticker;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE price_cache_v2 FROM ticker;
 
 --
 -- Name: price_cache_v2; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE price_cache_v2 FROM ticker;
+REVOKE SELECT ON TABLE price_cache_v2 FROM ticker;
 
 --
 -- Name: project_entities; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -8036,13 +8088,13 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE research_conclusions FROM nova;
 -- Name: research_conclusions; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE research_conclusions FROM scout;
+REVOKE SELECT ON TABLE research_conclusions FROM scout;
 
 --
 -- Name: research_conclusions; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE research_conclusions FROM scout;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE research_conclusions FROM scout;
 
 --
 -- Name: research_conclusions; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -8102,13 +8154,13 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE research_findings FROM nova;
 -- Name: research_findings; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE research_findings FROM scout;
+REVOKE SELECT ON TABLE research_findings FROM scout;
 
 --
 -- Name: research_findings; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE research_findings FROM scout;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE research_findings FROM scout;
 
 --
 -- Name: research_findings; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -8366,13 +8418,13 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE research_tags FROM nova;
 -- Name: research_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE research_tags FROM scout;
+REVOKE SELECT ON TABLE research_tags FROM scout;
 
 --
 -- Name: research_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE research_tags FROM scout;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE research_tags FROM scout;
 
 --
 -- Name: research_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -8504,13 +8556,13 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE tasks FROM nova;
 -- Name: ticker_portfolio; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE ticker_portfolio FROM ticker;
+REVOKE SELECT ON TABLE ticker_portfolio FROM ticker;
 
 --
 -- Name: ticker_portfolio; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE ticker_portfolio FROM ticker;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE ticker_portfolio FROM ticker;
 
 --
 -- Name: tools; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -8570,13 +8622,13 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE workflow_runs FROM erato;
 -- Name: workflow_runs; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE workflow_runs FROM gem;
+REVOKE SELECT ON TABLE workflow_runs FROM gem;
 
 --
 -- Name: workflow_runs; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE workflow_runs FROM gem;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE workflow_runs FROM gem;
 
 --
 -- Name: workflow_runs; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -8600,13 +8652,13 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE workflow_runs FROM iris;
 -- Name: workflow_runs; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE workflow_runs FROM newhart;
+REVOKE SELECT ON TABLE workflow_runs FROM newhart;
 
 --
 -- Name: workflow_runs; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE workflow_runs FROM newhart;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE workflow_runs FROM newhart;
 
 --
 -- Name: workflow_runs; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -8636,13 +8688,13 @@ REVOKE DELETE ON TABLE workflow_runs FROM scout;
 -- Name: workflow_runs; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE workflow_runs FROM ticker;
+REVOKE SELECT ON TABLE workflow_runs FROM ticker;
 
 --
 -- Name: workflow_runs; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE workflow_runs FROM ticker;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE workflow_runs FROM ticker;
 
 --
 -- Name: workflow_steps; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9345,66 +9397,6 @@ GRANT SELECT, USAGE ON SEQUENCE certificates_id_seq TO scout;
 --
 
 GRANT USAGE ON SEQUENCE certificates_id_seq TO ticker;
-
---
--- Name: conversations_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT, USAGE ON SEQUENCE conversations_id_seq TO athena;
-
---
--- Name: conversations_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT USAGE ON SEQUENCE conversations_id_seq TO coder;
-
---
--- Name: conversations_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT USAGE ON SEQUENCE conversations_id_seq TO erato;
-
---
--- Name: conversations_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT USAGE ON SEQUENCE conversations_id_seq TO gem;
-
---
--- Name: conversations_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT USAGE ON SEQUENCE conversations_id_seq TO gidget;
-
---
--- Name: conversations_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT USAGE ON SEQUENCE conversations_id_seq TO graybeard;
-
---
--- Name: conversations_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT USAGE ON SEQUENCE conversations_id_seq TO iris;
-
---
--- Name: conversations_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT USAGE ON SEQUENCE conversations_id_seq TO newhart;
-
---
--- Name: conversations_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT, USAGE ON SEQUENCE conversations_id_seq TO scout;
-
---
--- Name: conversations_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT USAGE ON SEQUENCE conversations_id_seq TO ticker;
 
 --
 -- Name: entities_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -12911,10 +12903,76 @@ GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE certificates TO graybeard;
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE channel_activity TO graybeard;
 
 --
--- Name: conversations; Type: PRIVILEGE; Schema: privileges; Owner: -
+-- Name: channel_transcripts; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE conversations TO graybeard;
+GRANT SELECT ON TABLE channel_transcripts TO athena;
+
+--
+-- Name: channel_transcripts; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE channel_transcripts TO coder;
+
+--
+-- Name: channel_transcripts; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE channel_transcripts TO erato;
+
+--
+-- Name: channel_transcripts; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE channel_transcripts TO gem;
+
+--
+-- Name: channel_transcripts; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE channel_transcripts TO gidget;
+
+--
+-- Name: channel_transcripts; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE channel_transcripts TO graybeard;
+
+--
+-- Name: channel_transcripts; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE channel_transcripts TO iris;
+
+--
+-- Name: channel_transcripts; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE channel_transcripts TO newhart;
+
+--
+-- Name: channel_transcripts; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE channel_transcripts TO "nova-staging";
+
+--
+-- Name: channel_transcripts; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE channel_transcripts TO openproject_user;
+
+--
+-- Name: channel_transcripts; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE channel_transcripts TO scout;
+
+--
+-- Name: channel_transcripts; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE channel_transcripts TO ticker;
 
 --
 -- Name: entities; Type: PRIVILEGE; Schema: privileges; Owner: -

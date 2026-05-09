@@ -204,9 +204,9 @@ while IFS= read -r line; do
     
     # Run extraction (API key must be in environment, inherited from OpenClaw)
     if [ -z "$ANTHROPIC_API_KEY" ]; then
-        echo "ERROR: ANTHROPIC_API_KEY not set in environment" >&2
-        echo "This script should be run from OpenClaw hooks which inherit the API key" >&2
-        exit 1
+        echo "[memory-catchup] WARNING: ANTHROPIC_API_KEY not set — skipping LLM extraction (transcript ingest will still run)" >&2
+        rm -f "$MESSAGES_TO_PROCESS" "$ALL_MESSAGES"
+        break
     fi
     
     if [ "$VERBOSE_LOG" = true ]; then
@@ -216,7 +216,7 @@ while IFS= read -r line; do
         echo "$CONTEXT" | head -60 >> "$EXTRACT_LOG"
         echo "..." >> "$EXTRACT_LOG"
         
-        RESULT=$("$EXTRACT_SCRIPT" "$CONTEXT" 2>&1)
+        RESULT=$("$EXTRACT_SCRIPT" "$CONTEXT" 2>&1) || true
         echo "$RESULT" | tail -25 >> "$EXTRACT_LOG"
         echo "" >> "$EXTRACT_LOG"
     else

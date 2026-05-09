@@ -1,8 +1,10 @@
-# Source Authority (Issue #43)
+# Source Authority
 
 ## Overview
 
 The source authority feature ensures that facts from designated authority entities (e.g., I)ruid) are treated as permanent, authoritative, and immune to being overridden by non-authority sources.
+
+> **Note:** The original grammar parser (`grammar_parser/`) that implemented this feature has been removed (#174). Authority detection and conflict resolution now follow the patterns described below, implemented in `store-memories.sh`, `confidence_helper.py`, and `memory-maintenance.py`.
 
 ## Key Concepts
 
@@ -24,101 +26,74 @@ The source authority feature ensures that facts from designated authority entiti
 
 ## Implementation
 
-### Modified Files
+### Current Architecture
 
-#### `grammar_parser/store_relations.py`
+Source authority is a cross-cutting concern implemented across multiple components:
 
-Enhanced with authority detection and conflict resolution:
+#### `confidence_helper.py`
 
-```python
-def is_authority_entity(entity_id: Optional[int], authority_entity_id: int) -> bool:
-    """Check if an entity is the authority entity."""
-    return entity_id is not None and entity_id == authority_entity_id
-```
+Calculates confidence scores based on source authority:
 
-**Key Changes**:
-- Added `find_entity_id()` to lookup entity ID by name/nickname
-- Added `get_existing_fact()` to retrieve existing fact details for conflict resolution
-- Modified `store_relation()` to:
-  - Detect authority source
-  - Set `data_type='permanent'` for authority facts
-  - Implement conflict resolution logic
-  - Log authority overrides to `fact_change_log` table
+- Authority sources get confidence = 1.0
+- Non-authority sources get confidence scaled by entity trust level and source type
+- Used by `store-memories.sh` to set initial confidence on new facts
+
+#### `memory-maintenance.py`
+
+Enforces authority rules during maintenance operations:
+
+- Permanent facts (`data_type = 'permanent'`) are excluded from confidence decay
+- Authority facts are never archived or cleaned up
+- Non-authority facts with conflicting values are evaluated against existing authority facts
+
+#### `store-memories.sh`
+
+Handles conflict resolution at insertion time:
+
+- Checks if the source is an authority entity via `SENDER_NAME` or entity ID lookup
+- Sets `data_type='permanent'` for authority-sourced facts
+- Rejects non-authority insertions that conflict with existing authority facts
+- Increments `vote_count` when authority confirms an existing fact
 
 ### Database Schema
 
-**Existing Schema Support**:
-- `entity_facts.source_entity_id` - Tracks which entity provided the fact
-- `entity_facts.data_type` - Supports 'permanent', 'identity', 'preference', 'temporal', 'observation'
-- `entity_facts.confidence` - Authority facts set to 1.0
-- `entity_facts.vote_count` - Incremented when fact is confirmed
-- `entity_facts.last_confirmed` - Updated when fact is re-stated
+The following columns support authority enforcement:
 
-**New Table**:
-```sql
-CREATE TABLE fact_change_log (
-    id SERIAL PRIMARY KEY,
-    fact_id INTEGER NOT NULL,
-    old_value TEXT,
-    new_value TEXT,
-    changed_by_entity_id INTEGER,
-    reason VARCHAR(100),
-    changed_at TIMESTAMPTZ DEFAULT NOW()
-);
+- `entity_facts.source_entity_id` — Tracks which entity provided the fact
+- `entity_facts.data_type` — Supports 'permanent', 'identity', 'preference', 'temporal', 'observation'
+- `entity_facts.confidence` — Authority facts set to 1.0
+- `entity_facts.vote_count` — Incremented when fact is confirmed
+- `entity_facts.last_confirmed` — Updated when fact is re-stated
+
+### Authority Detection Flow
+
+```
+Message received
+    ↓
+memory-extract hook → ctx.content → extract-memories.sh (Claude extraction)
+    ↓
+store-memories.sh
+    ├── Lookup entity by SENDER_NAME → get entity_id
+    ├── Compare entity_id to AUTHORITY_ENTITY_ID
+    ├── If authority match:
+    │   ├── Set data_type = 'permanent'
+    │   ├── Set confidence = 1.0
+    │   └── Override existing conflicting facts
+    └── If non-authority:
+        ├── Check if existing fact is permanent (authority-sourced)
+        ├── If authority fact exists → reject update
+        └── If no authority fact → insert normally
 ```
 
 ## Usage
 
 ### Basic Usage
 
-Authority is automatically detected based on `SENDER_NAME` environment variable:
+Authority is automatically detected in `store-memories.sh` based on `SENDER_NAME` environment variable:
 
 ```bash
-# I)ruid states a fact (automatically becomes permanent)
-export SENDER_NAME="I)ruid"
-echo '[{
-    "relation_type": "attribute",
-    "subject": "Nova",
-    "object": "AI agent",
-    "predicate": "type",
-    "confidence": 0.9
-}]' | ./grammar_parser/run_store.sh
-```
-
-Output:
-```
-[AUTHORITY] Source is authority entity (id=2), setting permanent
-+ Fact: Nova.type = AI agent (confidence: 1.00, data_type: permanent) [PERMANENT]
-```
-
-### Conflict Resolution Examples
-
-#### Case 1: Authority Confirms Existing Fact
-```bash
-# I)ruid states the same fact again
-# Result: vote_count++, last_confirmed updated
-✓ Fact confirmed: Nova.type = AI agent (vote_count++)
-```
-
-#### Case 2: Authority Updates Own Fact
-```bash
-# I)ruid changes the fact
-# Result: Value updated, vote_count reset
-⚡ AUTHORITY UPDATE: Nova.type: 'AI agent' → 'AI assistant' (authority override)
-```
-
-#### Case 3: Non-Authority Tries to Override
-```bash
-# Someone else tries to change an authority fact
-export SENDER_NAME="RandomUser"
-# Result: Rejected
-✗ Conflict rejected: Nova.type - existing authority fact prevents update
-```
-
-#### Case 4: Non-Authority Conflict (No Authority Involved)
-```bash
-# Higher confidence wins
-↻ Fact updated: Nova.type: 'bot' → 'AI agent' (higher confidence: 0.95 > 0.75)
+# I)ruid states a fact (automatically becomes permanent via Claude extraction → store)
+SENDER_NAME="I)ruid" ./scripts/process-input.sh "My preferred name is I)ruid"
 ```
 
 ### Configurable Authority Entity
@@ -129,7 +104,7 @@ Override the default authority entity:
 # Use entity_id=5 as authority instead of 2
 export AUTHORITY_ENTITY_ID=5
 export SENDER_NAME="CustomAuthority"
-./grammar_parser/run_store.sh < input.json
+./scripts/process-input.sh "A fact from this authority"
 ```
 
 ## Testing
@@ -137,7 +112,7 @@ export SENDER_NAME="CustomAuthority"
 Run the test suite:
 
 ```bash
-cd ~/.openclaw/workspace/nova-memory
+cd ~/.openclaw/workspace/nova-mind
 ./tests/test_authority_facts.sh
 ```
 
@@ -146,19 +121,17 @@ cd ~/.openclaw/workspace/nova-memory
 2. Authority fact confirmation (same value)
 3. Authority fact override (conflicting value)
 4. Non-authority cannot override authority fact
-5. Change log verification
-6. Configurable authority entity
+5. Configurable authority entity
 
 ## Logging and Debugging
 
 ### Console Output Markers
 
-- `[AUTHORITY]` - Authority source detected
-- `[PERMANENT]` - Fact marked as permanent
-- `⚡ AUTHORITY UPDATE` - Authority fact overriding existing fact
-- `✓ Fact confirmed` - Fact re-stated (vote_count++)
-- `✗ Conflict rejected` - Non-authority attempted override
-- `↻ Fact updated` - Normal update (higher confidence)
+- `[AUTHORITY]` — Authority source detected
+- `[PERMANENT]` — Fact marked as permanent
+- `⚡ AUTHORITY UPDATE` — Authority fact overriding existing fact
+- `✓ Fact confirmed` — Fact re-stated (vote_count++)
+- `✗ Conflict rejected` — Non-authority attempted override
 
 ### Database Queries
 
@@ -171,7 +144,7 @@ WHERE ef.data_type = 'permanent'
 ORDER BY ef.updated_at DESC;
 ```
 
-**View change log**:
+**View change log** (if `fact_change_log` table exists):
 ```sql
 SELECT 
     fcl.*, 
@@ -226,8 +199,8 @@ Potential improvements for future issues:
 
 ## Related Issues
 
-- **#22**: Grammar parser integration (provides extraction pipeline)
-- **#44**: Agent questioning logic (will use authority rules)
+- **#43**: Source authority (this feature, original implementation via grammar_parser)
+- **#44**: Agent questioning logic (uses authority rules)
 - **#45**: Decay exemptions (permanent facts don't decay)
 
 ## Configuration Reference
@@ -237,8 +210,8 @@ Potential improvements for future issues:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `AUTHORITY_ENTITY_ID` | `2` | Entity ID of authority (I)ruid) |
-| `SENDER_NAME` | `grammar-parser` | Name of message sender (used to lookup entity) |
-| `SENDER_ID` | - | Unique sender ID (phone number, UUID) |
+| `SENDER_NAME` | (auto-detected) | Name of message sender (used to lookup entity) |
+| `SENDER_ID` | — | Unique sender ID (phone number, UUID) |
 
 ### Data Types
 
@@ -264,18 +237,18 @@ Potential improvements for future issues:
 **Check**:
 1. Is authority detection working? Look for `[AUTHORITY]` in logs
 2. Is `AUTHORITY_ENTITY_ID` set correctly?
-3. Run test suite: `./tests/test_authority_facts.sh`
+3. Run: `psql -d nova_memory -c "SELECT id, name FROM entities LIMIT 10;"`
 
 ### Non-Authority Override Succeeded
 
 **Check**:
 1. Was the existing fact from authority? Check `source_entity_id`
 2. Was confidence higher? Check `confidence` values
-3. Review `fact_change_log` for reason
+3. Review the memory maintenance logs
 
 ## Support
 
 For issues or questions:
-- GitHub: https://github.com/NOVA-Openclaw/nova-memory/issues/43
-- Logs: Check stderr output from `run_store.sh`
-- Database: Query `entity_facts` and `fact_change_log` tables
+- GitHub: https://github.com/NOVA-Openclaw/nova-mind/issues/43
+- Logs: Check gateway logs for extract/store output
+- Database: Query `entity_facts` table

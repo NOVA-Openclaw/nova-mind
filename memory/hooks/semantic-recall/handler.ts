@@ -186,16 +186,19 @@ const handler = async (event: any) => {
     token_budget?: number;
   } | null = null;
   try {
+    const ctx = event.context as any;
+    const meta = (ctx?.metadata ?? {}) as Record<string, any>;
+
     const stdinPayload = JSON.stringify({
       content: message.substring(0, 2000),
-      senderId: (event.context as any)?.senderId ?? '',
-      senderName: (event.context as any)?.senderName ?? '',
-      provider: (event.context as any)?.provider ?? (event.context as any)?.channelId ?? '',
-      conversationId: (event.context as any)?.conversationId ?? '',
-      isGroup: (event.context as any)?.isGroup ?? false,
-      channelName: (event.context as any)?.channelName ?? '',
-      guildId: (event.context as any)?.guildId ?? '',
-      messageId: (event.context as any)?.messageId ?? '',
+      senderId: meta.senderId ?? ctx?.senderId ?? '',
+      senderName: meta.senderName ?? ctx?.senderName ?? '',
+      provider: meta.provider ?? ctx?.provider ?? ctx?.channelId ?? '',
+      conversationId: ctx?.conversationId ?? meta.conversationId ?? '',
+      isGroup: meta.isGroup ?? ctx?.isGroup ?? false,
+      channelName: meta.channelName ?? ctx?.channelName ?? '',
+      guildId: meta.guildId ?? ctx?.guildId ?? '',
+      messageId: ctx?.messageId ?? meta.messageId ?? '',
     });
     const result = spawnSync(PYTHON_VENV, [
       RECALL_SCRIPT,

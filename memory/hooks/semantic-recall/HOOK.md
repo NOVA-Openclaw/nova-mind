@@ -92,12 +92,15 @@ This ensures context window is used efficiently regardless of how many memories 
 
 ## Field Paths
 
-The handler reads from the following event structure:
-- **Message text:** `event.context.content` (fallback: `event.context.message` for legacy callers)
-- **Sender ID:** `event.context.metadata.senderId` (fallback: `event.context.senderId`)
-- **Sender name:** `event.context.metadata.senderName`
-- **Provider:** `event.context.metadata.provider` (e.g., `discord`, `telegram`, `slack`, `signal`)
-- **E.164 phone:** `event.context.metadata.senderE164` (Signal only)
+The handler reads from the following event structure. All fields use `event.context.metadata.*` as the primary location with `event.context.*` fallbacks (the canonical two-step pipeline from nova-openclaw #41 places sender fields at both levels):
+
+| Field | Resolution Order |
+|-------|-----------------|
+| **Message text** | `event.context.content` (fallback: `event.context.message` for legacy callers) |
+| **Sender ID** | `event.context.metadata.senderId` (fallback: `event.context.senderId`) |
+| **Sender name** | `event.context.metadata.senderName` (fallback: `event.context.senderName`) |
+| **Provider** | `event.context.metadata.provider` (e.g., `discord`, `telegram`, `slack`, `signal`) |
+| **E.164 phone** | `event.context.metadata.senderE164` (Signal only) |
 
 ## Error Handling
 

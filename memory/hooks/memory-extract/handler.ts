@@ -99,10 +99,11 @@ const handler = async (event) => {
     return;
   }
   
-  // Get sender info for attribution
-  const senderName = ctx.senderName ?? "unknown";
-  const senderId = ctx.senderId ?? "";  // Phone number or UUID for unique matching
-  const isGroup = ctx.isGroup ?? false;
+  // Get sender info for attribution — canonical location is ctx.metadata
+  const meta = (ctx.metadata ?? {}) as Record<string, any>;
+  const senderName = meta.senderName ?? ctx.senderName ?? ctx.from ?? "unknown";
+  const senderId = meta.senderId ?? ctx.senderId ?? "";  // Phone number or UUID for unique matching
+  const isGroup = meta.isGroup ?? ctx.isGroup ?? false;
   
   console.info('[memory-extract] Processing message', {
     sender: senderName,
@@ -130,9 +131,9 @@ const handler = async (event) => {
 
   if (!channelTranscriptId || channelTranscriptId === '0') {
     try {
-      // Derive provider from chat_id format
-      const chatId = String(ctx.conversationId ?? ctx.chatId ?? ctx.chat_id ?? '');
-      let provider = String(ctx.provider ?? ctx.channelId ?? 'openclaw');
+      // Derive provider from chat_id format — read from metadata first
+      const chatId = String(ctx.conversationId ?? meta.conversationId ?? ctx.chatId ?? ctx.chat_id ?? '');
+      let provider = String(meta.provider ?? ctx.provider ?? ctx.channelId ?? 'openclaw');
       if (provider === 'openclaw') {
         // Derive provider from chat_id format when ctx.provider is not set
         if (chatId.startsWith('channel:')) provider = 'discord';
@@ -140,12 +141,13 @@ const handler = async (event) => {
       }
 
       const externalChatId = chatId || sessionId || 'unknown';
-      const externalMessageId = String(ctx.messageId ?? ctx.message_id ?? '');
-      const isGroupBool = Boolean(ctx.isGroup ?? false);
+      const externalMessageId = String(ctx.messageId ?? meta.messageId ?? ctx.message_id ?? '');
+      const isGroupBool = Boolean(meta.isGroup ?? ctx.isGroup ?? false);
       const chatType = isGroupBool ? 'group' : 'direct';
-      const groupSubject = String(ctx.channelName ?? ctx.groupSubject ?? ctx.group_subject ?? '');
-      const groupSpace = String(ctx.guildId ?? ctx.groupSpace ?? ctx.group_space ?? '');
-      const senderTag = String(ctx.senderTag ?? ctx.sender_tag ?? '');
+      const groupSubject = String(meta.channelName ?? ctx.channelName ?? ctx.groupSubject ?? ctx.group_subject ?? '');
+      const groupSpace = String(meta.guildId ?? ctx.guildId ?? ctx.groupSpace ?? ctx.group_space ?? '');
+      const senderTag = String(meta.senderTag ?? ctx.senderTag ?? ctx.sender_tag ?? '');
+      const senderUsername = String(meta.senderUsername ?? ctx.senderUsername ?? '');
 
       // Only attempt upsert when psql is available and we have minimal identifying info
       if (externalMessageId || rawBody.length > 0) {
@@ -166,8 +168,9 @@ const handler = async (event) => {
         ];
 
         const { stdout: sessOut } = await execFileAsync('psql', sessArgs).catch(() => ({ stdout: '' }));
-        const resolvedSessionId = sessOut.trim();
-        if (resolvedSessionId && /^\d+$/.test(resolvedSessionId)) {
+        // psql -t -A may include 'INSERT 0 1' status line — extract first numeric line
+        const resolvedSessionId = (sessOut.match(/^(\d+)/m) ?? [])[1] ?? '';
+        if (resolvedSessionId) {
           channelSessionId = resolvedSessionId;
         }
 
@@ -178,6 +181,7 @@ const handler = async (event) => {
           const senderNameEsc = senderName.replace(/'/g, "''");
           const senderIdEsc = senderId.replace(/'/g, "''");
           const senderTagEsc = senderTag.replace(/'/g, "''");
+          const senderUsernameEsc = senderUsername.replace(/'/g, "''");
 
           const txArgs = [
             'nova_memory', '-t', '-A', '-c',
@@ -185,18 +189,21 @@ const handler = async (event) => {
             (senderId ? ', sender_id' : '') +
             (senderName && senderName !== 'unknown' ? ', sender_name' : '') +
             (senderTag ? ', sender_tag' : '') +
+            (senderUsername ? ', sender_username' : '') +
             `) VALUES (` +
             `${channelSessionId}, '${msgId.replace(/'/g, "''")}', ` +
             `'${messageTimestamp}', 'user', '${contentSnippet}'` +
             (senderId ? `, '${senderIdEsc}'` : '') +
             (senderName && senderName !== 'unknown' ? `, '${senderNameEsc}'` : '') +
             (senderTag ? `, '${senderTagEsc}'` : '') +
+            (senderUsername ? `, '${senderUsernameEsc}'` : '') +
             `) ON CONFLICT (session_id, external_message_id) DO NOTHING RETURNING id;`
           ];
 
           const { stdout: txOut } = await execFileAsync('psql', txArgs).catch(() => ({ stdout: '' }));
-          const resolvedTranscriptId = txOut.trim();
-          if (resolvedTranscriptId && /^\d+$/.test(resolvedTranscriptId)) {
+          // psql -t -A may include 'INSERT 0 1' status line — extract first numeric line
+          const resolvedTranscriptId = (txOut.match(/^(\d+)/m) ?? [])[1] ?? '';
+          if (resolvedTranscriptId) {
             channelTranscriptId = resolvedTranscriptId;
           }
         }

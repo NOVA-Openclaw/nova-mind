@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Fixed
+- **Sender fields read from ctx.metadata** (#179) — Both memory-extract and semantic-recall hooks now read sender/provider fields from `ctx.metadata` (canonical location) with top-level fallbacks (`ctx.senderName`, `ctx.senderId`, etc.). This ensures correct sender attribution when the canonical message:received context from nova-openclaw #41 is deployed, which places sender fields at the top level.
+  - **memory-extract handler**: Resolves `senderName`, `senderId`, `isGroup`, `senderUsername`, `senderTag`, `provider`, `channelName`, `guildId` using `meta.X ?? ctx.X` fallback chain where `meta = ctx.metadata`.
+  - **semantic-recall handler**: Constructs JSON stdin payload using `meta.senderId ?? ctx.senderId` and similar fallbacks for senderName, provider.
+  - **`senderUsername` added to `channel_transcripts` INSERT** — The `handler.ts` now conditionally includes `sender_username` in the transcript row when available from `ctx.metadata.senderUsername`.
+- **psql `RETURNING id` output parsing fixed** (#179) — The memory-extract handler previously did not account for psql's `-t -A` output including a status line like `INSERT 0 1` after `RETURNING id`. Now uses regex `/^(\d+)/m` to reliably extract the numeric id, handling clean output (`"42"`), status-line output (`"42\nINSERT 0 1"`), and empty output (conflict, DO NOTHING). Extraction continues gracefully when psql fails.
+
 ### Added
 - **Hook context fixes and grammar parser removal** (#174, #147, #156, #133) — Multiple hook reliability improvements and removal of deprecated grammar parser:
   - **memory-extract hook** now reads `ctx.content` (canonical OpenClaw context key) with fallback chain `ctx.content → ctx.rawBody → ctx.RawBody → ctx.message → ctx.Body`. Previously only checked `ctx.rawBody` then `ctx.message`.

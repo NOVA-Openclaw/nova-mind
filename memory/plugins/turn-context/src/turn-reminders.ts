@@ -65,23 +65,23 @@ export async function getTurnReminders(agentName: string): Promise<string | null
   const cached = contextCache.get(agentName);
   if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
     // Cache hit
-    return formatReminders(cached);
+    return formatReminders(cached, agentName);
   }
 
   // Cache miss or stale — query DB
   const entry = await queryTurnContext(agentName);
   contextCache.set(agentName, entry);
-  return formatReminders(entry);
+  return formatReminders(entry, agentName);
 }
 
-function formatReminders(entry: CacheEntry): string | null {
+function formatReminders(entry: CacheEntry, agentName: string): string | null {
   if (!entry.content) return null;
 
   let text = `📌 **Per-Turn Reminders:**\n${entry.content}`;
 
   if (entry.truncated) {
     console.warn(
-      `[turn-context] WARNING: turn context truncated — ` +
+      `[turn-context] WARNING: turn context truncated for agent '${agentName}' — ` +
       `${entry.recordsSkipped} record(s) skipped, ${entry.totalChars} chars exceeded budget`
     );
     text += "\n\n⚠️ Turn context truncated — some critical rules may be missing. Alert I)ruid.";

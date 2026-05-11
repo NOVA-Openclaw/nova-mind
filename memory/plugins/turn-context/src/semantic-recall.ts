@@ -98,17 +98,17 @@ export async function runSemanticRecall(
 ): Promise<string | null> {
   const messageText = input.content.substring(0, 2000);
 
-  const stdinPayload = JSON.stringify({
+  const stdinPayload: Record<string, unknown> = {
     content: messageText,
-    senderId: input.senderId ?? '',
-    senderName: input.senderName ?? '',
-    provider: input.provider ?? '',
-    conversationId: input.conversationId ?? '',
-    isGroup: input.isGroup ?? false,
-    channelName: input.channelName ?? '',
-    guildId: input.guildId ?? '',
-    messageId: input.messageId ?? '',
-  });
+  };
+  if (input.senderId) stdinPayload.senderId = input.senderId;
+  if (input.senderName) stdinPayload.senderName = input.senderName;
+  if (input.provider) stdinPayload.provider = input.provider;
+  if (input.conversationId) stdinPayload.conversationId = input.conversationId;
+  if (input.isGroup) stdinPayload.isGroup = input.isGroup;
+  if (input.channelName) stdinPayload.channelName = input.channelName;
+  if (input.guildId) stdinPayload.guildId = input.guildId;
+  if (input.messageId) stdinPayload.messageId = input.messageId;
 
   let result: RecallResult | null = null;
   try {
@@ -204,7 +204,7 @@ function spawnWithTimeout(stdinPayload: string): Promise<RecallResult> {
     });
 
     // Write JSON payload to stdin and close it
-    child.stdin.write(stdinPayload, "utf-8");
+    child.stdin.write(JSON.stringify(stdinPayload), "utf-8");
     child.stdin.end();
   });
 }

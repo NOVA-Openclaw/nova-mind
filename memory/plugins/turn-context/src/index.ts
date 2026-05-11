@@ -86,50 +86,44 @@ export default function register(api: PluginApi): void {
   api.on("message_received", async (event: PluginEvent, ctx: PluginContext) => {
     try {
       const sessionKey = ctx.sessionKey;
-
       if (!sessionKey) return;
 
+      // ── Extract all fields synchronously ──────────────────────────────
       const senderId: string | undefined =
         event.senderId ??
-        (event.metadata as any)?.senderId ??
-        (event as any).context?.senderId;
-
-      if (!senderId) return;
-
-      // CRITICAL: Cache write MUST be synchronous and FIRST.
-      // message_received is fire-and-forget — if an await precedes this,
-      // before_prompt_build may fire before the cache is populated.
-      // See: nova-mind #182 Step 2 race condition analysis
-      evictOldestIfFull();
-      evictStaleCacheEntries();
+        (event.metadata as any)?.senderId;
 
       const senderName: string | undefined =
         event.senderName ??
-        (event.metadata as any)?.senderName ??
-        (event as any).context?.senderName;
+        (event.metadata as any)?.senderName;
 
       const provider: string | undefined =
         ctx.messageProvider ??
-        (event.metadata as any)?.provider ??
-        (event as any).context?.metadata?.provider;
+        (event.metadata as any)?.provider;
 
       const senderE164: string | undefined =
-        (event.metadata as any)?.senderE164 ??
-        (event as any).context?.metadata?.senderE164;
+        (event.metadata as any)?.senderE164;
 
       const content: string | undefined =
         event.content ??
-        (event as any).context?.content ??
-        (event as any).context?.message;
+        (event as any).context?.content;
 
+      // CRITICAL: Cache write MUST happen before any await or async work.
+      // message_received is fire-and-forget — before_prompt_build may fire
+      // before this handler's Promise settles.
+      // See: nova-mind #182 Step 2 race condition analysis
       senderCache.set(sessionKey, {
-        senderId,
+        senderId: senderId ?? "",
         senderName: senderName ?? "",
         provider: provider ?? "",
         senderE164,
         content: content ?? "",
         timestamp: Date.now(),
       });
+
+      // Eviction runs AFTER cache write — safe to defer
+      evictOldestIfFull();
+      evictStaleCacheEntries();
     } catch (err) {
       // Observation-mode hook: swallow all errors
       console.error(
@@ -154,8 +148,10 @@ export default function register(api: PluginApi): void {
       const agentId: string = ctx.agentId ?? "nova";
 
       // Retrieve cached sender info (may be undefined for first message or
-      // if message_received fired from a different process)
-      const cached = sessionKey ? senderCache.get(sessionKey) : undefined;
+      // if message_received fired from a different process).
+      // Check staleness: entries older than CACHE_STALE_MS are treated as expired on read.
+      const raw = sessionKey ? senderCache.get(sessionKey) : undefined;
+      const cached = raw && (Date.now() - raw.timestamp < CACHE_STALE_MS) ? raw : undefined;
 
       const senderInfo: SenderInfo = {
         senderId: cached?.senderId,

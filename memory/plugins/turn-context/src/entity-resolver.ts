@@ -15,18 +15,30 @@ import { join } from "path";
 
 // PG env is already loaded by shared/pg-pool.ts before this module runs,
 // but entity-resolver also calls loadPgEnv() internally — that's fine (idempotent).
-const entityResolverPath = join(os.homedir(), ".openclaw", "lib", "entity-resolver", "index.ts");
-const {
-  resolveEntityByIdentifiers,
-  getEntityProfile,
-  getCachedEntity,
-  setCachedEntity,
-} = await import(entityResolverPath);
+// Wrapped in try/catch for graceful degradation if the library is not installed.
 
-// ── Derived types (can't use static imports from install-time path) ───────────
+// Entity type from dynamic import — use any with runtime property checks
+type Entity = any;
+type EntityFacts = Record<string, unknown>;
 
-type Entity = Exclude<Awaited<ReturnType<typeof import(entityResolverPath).resolveEntity>>, null>;
-type EntityFacts = Awaited<ReturnType<typeof getEntityProfile>>;
+let resolveEntityByIdentifiers: any;
+let getEntityProfile: any;
+let getCachedEntity: any;
+let setCachedEntity: any;
+
+try {
+  const entityResolverPath = join(os.homedir(), ".openclaw", "lib", "entity-resolver", "index.ts");
+  const mod = await import(entityResolverPath);
+  resolveEntityByIdentifiers = mod.resolveEntityByIdentifiers;
+  getEntityProfile = mod.getEntityProfile;
+  getCachedEntity = mod.getCachedEntity;
+  setCachedEntity = mod.setCachedEntity;
+} catch (err) {
+  console.warn("[turn-context] Entity resolver not available:", (err as Error).message);
+  // All four functions remain undefined — resolveEntityContext will return null gracefully
+}
+
+// ── Channel-aware identifier mapping ─────────────────────────────────────────
 
 interface EntityIdentifiers {
   phone?: string;
@@ -39,13 +51,6 @@ interface EntityIdentifiers {
   signalUuid?: string;
   signalUsername?: string;
 }
-
-// ── Per-session entity cache ──────────────────────────────────────────────────
-
-// The entity-resolver library maintains its own cache (getCachedEntity / setCachedEntity),
-// so we delegate to that instead of maintaining a second one here.
-
-// ── Channel-aware identifier mapping ─────────────────────────────────────────
 
 function extractIdentifiers(
   provider: string | undefined,
@@ -75,10 +80,10 @@ function extractIdentifiers(
 // ── Format helpers ────────────────────────────────────────────────────────────
 
 function formatEntityContext(entity: Entity, facts: EntityFacts): string {
-  const displayName = (entity as any).fullName || (entity as any).name;
+  const displayName = entity.fullName || entity.name;
   let context = `👤 **Talking with:** ${displayName}`;
 
-  const factEntries = Object.entries(facts as Record<string, unknown>);
+  const factEntries = Object.entries(facts);
   if (factEntries.length > 0) {
     context += "\n";
     for (const [key, value] of factEntries) {
@@ -111,6 +116,9 @@ export async function resolveEntityContext(
   sessionKey: string,
   info: SenderInfo
 ): Promise<string | null> {
+  // Graceful degradation if entity-resolver library is not installed
+  if (!resolveEntityByIdentifiers) return null;
+
   const { senderId, senderName, provider, senderE164 } = info;
 
   if (!senderId) return null;
@@ -118,7 +126,9 @@ export async function resolveEntityContext(
   let entity: Entity | null = null;
 
   // Check library cache first
-  entity = getCachedEntity(sessionKey) as Entity | null;
+  if (getCachedEntity) {
+    entity = getCachedEntity(sessionKey) as Entity | null;
+  }
 
   if (!entity) {
     const identifiers = extractIdentifiers(provider, senderId, senderE164);
@@ -135,19 +145,19 @@ export async function resolveEntityContext(
       ]);
 
       if (resolveResult) {
-        if ((resolveResult as any).ok) {
-          entity = (resolveResult as any).entity as Entity;
+        if (resolveResult.ok) {
+          entity = resolveResult.entity as Entity;
         } else {
           // Conflict: multiple entities matched — safer to skip
           console.error(
             `[turn-context] Entity conflict for sender ${senderName || senderId}: ` +
-            `${(resolveResult as any).message}`
+            `${resolveResult.message}`
           );
           return null;
         }
       }
 
-      if (entity) {
+      if (entity && setCachedEntity) {
         setCachedEntity(sessionKey, entity);
       }
     } catch (err) {
@@ -168,21 +178,23 @@ export async function resolveEntityContext(
 
   // Load entity facts with a 1s timeout
   let facts: EntityFacts = {};
-  try {
-    facts = await Promise.race([
-      getEntityProfile((entity as any).id),
-      new Promise<EntityFacts>((resolve) => setTimeout(() => resolve({}), 1000)),
-    ]);
-  } catch (err) {
-    console.error(
-      "[turn-context] Entity facts loading error:",
-      err instanceof Error ? err.message : String(err)
-    );
+  if (getEntityProfile) {
+    try {
+      facts = await Promise.race([
+        getEntityProfile(entity.id),
+        new Promise<EntityFacts>((resolve) => setTimeout(() => resolve({}), 1000)),
+      ]);
+    } catch (err) {
+      console.error(
+        "[turn-context] Entity facts loading error:",
+        err instanceof Error ? err.message : String(err)
+      );
+    }
   }
 
   const result = formatEntityContext(entity, facts);
   console.log(
-    `[turn-context] Loaded entity context for: ${(entity as any).name} (${senderId})`
+    `[turn-context] Loaded entity context for: ${entity.name} (${senderId})`
   );
   return result;
 }

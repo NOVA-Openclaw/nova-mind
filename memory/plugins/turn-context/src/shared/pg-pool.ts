@@ -13,9 +13,16 @@ import { homedir } from "os";
 
 // Load PG env BEFORE creating pool — must be top-level await so the pool
 // constructor sees the env vars when this module is first imported.
-const pgEnvPath = join(homedir(), ".openclaw", "lib", "pg-env.ts");
-const { loadPgEnv } = await import(pgEnvPath);
-loadPgEnv();
+// Wrapped in try/catch for graceful degradation if pg-env is not installed.
+try {
+  const pgEnvPath = join(homedir(), ".openclaw", "lib", "pg-env.ts");
+  const { loadPgEnv } = await import(pgEnvPath);
+  loadPgEnv();
+} catch (err) {
+  console.warn("[turn-context] pg-env not available:", (err as Error).message);
+  // Pool will fall back to process.env values (which may be sufficient if
+  // PGPASSWORD etc. are already set in the environment)
+}
 
 const { Pool } = pg;
 

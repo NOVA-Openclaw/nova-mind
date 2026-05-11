@@ -10,7 +10,17 @@
 This issue replaces two broken fire-and-forget internal hooks (`semantic-recall` and `agent-turn-context`) with a proper OpenClaw Plugin SDK plugin. The plugin lives at `memory/plugins/turn-context/` and registers two hooks:
 
 - **`message_received`** (observation, fire-and-forget) — caches sender info per session key
-- **`before_prompt_build`** (awaited, returns result) — runs turn reminders, entity resolution, and semantic recall; injects context into the system prompt via `appendSystemContext`
+- **`before_prompt_build`** (awaited, returns result) — runs turn reminders, entity resolution, and semantic recall; injects context into the system prompt via `prependSystemContext` and `appendSystemContext`
+
+**System prompt composition order:**
+```
+prependSystemContext + baseSystemPrompt + appendSystemContext
+```
+
+- `prependSystemContext` → entity context (`👤 Talking with: ...`) + semantic recall (`🧠 Relevant Context: ...`)
+- `appendSystemContext` → per-turn reminders (`📌 Per-Turn Reminders: ...`)
+
+Entity identity and memories are prepended so the LLM has full context before reading its instructions. Turn reminders are appended so operational rules have proximity to the user message.
 
 **Root cause being fixed:** Old hooks registered on `message:received` internal events which are fire-and-forget — context pushed via `event.messages.push()` never reached the LLM. The `spawnSync` workaround froze the event loop.
 
@@ -113,7 +123,7 @@ This issue replaces two broken fire-and-forget internal hooks (`semantic-recall`
 
 ## Test Area 3: `before_prompt_build` — Happy Path
 
-### TC-008: All three subsystems return context — full injection
+### TC-008: All three subsystems return context — full injection via prependSystemContext and appendSystemContext
 **Preconditions:**
 - Sender cache populated for the session key (from prior `message_received`)
 - DB returns non-empty turn reminders for the agent
@@ -128,17 +138,20 @@ This issue replaces two broken fire-and-forget internal hooks (`semantic-recall`
 ```
 Context (`PluginHookAgentContext`): `{ agentId: "nova", sessionKey: "session:discord:abc123", sessionId: "...", messageProvider: "discord", channelId: "discord:channel:..." }`
 **Expected:**
-- Handler returns `{ appendSystemContext: "<combined context string>" }`
-- `appendSystemContext` contains all three sections: turn reminders block, entity context block, semantic recall memories block
-- Each section is non-empty
+- Handler returns `{ prependSystemContext: "<entity + recall string>", appendSystemContext: "<turn reminders string>" }`
+- `prependSystemContext` contains entity context block (`👤 **Talking with:** ...`) and semantic recall memories block (`🧠 **Relevant Context:** ...`), each non-empty
+- `appendSystemContext` contains turn reminders block (`📌 **Per-Turn Reminders:** ...`), non-empty
+- Entity and recall context precede the base system prompt; turn reminders follow it
 - Result is returned (not pushed to `event.messages`) — it reaches the LLM via the prompt-injection path
 - `before_prompt_build` hook completes within 8s timeout
 
-### TC-009: Returned `appendSystemContext` reaches the LLM system prompt
+### TC-009: Returned context keys reach the LLM system prompt in correct positions
 **Preconditions:** Same as TC-008; gateway running with plugin installed
 **Input:** Full message dispatch triggering an agent LLM call
 **Expected (integration):**
-- LLM call's system prompt contains the injected context from `appendSystemContext`
+- LLM call's composed system prompt is: `prependSystemContext + baseSystemPrompt + appendSystemContext`
+- `prependSystemContext` value (entity + recall) appears BEFORE the base system prompt text
+- `appendSystemContext` value (turn reminders) appears AFTER the base system prompt text
 - Context is not duplicated in user/assistant message history
 - Old `event.messages.push()` pattern is NOT used anywhere in the new plugin
 
@@ -153,7 +166,8 @@ Context (`PluginHookAgentContext`): `{ agentId: "nova", sessionKey: "session:dis
 - Entity resolution is **skipped** (no `senderId` to resolve from)
 - Semantic recall is **skipped** (no sender context to build recall query from)
 - Turn reminders still run (they only need `agentId`, which comes from `ctx.agentId`)
-- Result is `{ appendSystemContext: "<turn reminders only>" }` or `{}` if reminders are also empty
+- `prependSystemContext` is `undefined` (no entity or recall data)
+- Result is `{ appendSystemContext: "<turn reminders only>" }` if reminders are non-empty, or `{}` if reminders are also empty
 - No crash, no null-pointer errors on missing cache entry
 
 ### TC-011: `senderId` present in cache but `senderName` absent — entity resolution proceeds, recall skipped or minimised
@@ -175,7 +189,7 @@ Context (`PluginHookAgentContext`): `{ agentId: "nova", sessionKey: "session:dis
 **Expected:**
 - `extractIdentifiers("discord", "330189773371080716")` returns `{ discordId: "330189773371080716" }`
 - `resolveEntityByIdentifiers({ discordId: "330189773371080716" })` returns `{ ok: true, entity: { id: 1, name: "I)ruid", ... } }`
-- Entity context block injected: contains entity name and any known facts (timezone, expertise, etc.)
+- Entity context block injected into `prependSystemContext`: contains entity name and any known facts (timezone, expertise, etc.)
 
 ### TC-013: Signal sender resolved with UUID + phone
 **Preconditions:** `entity_facts` has `signal_uuid` and `phone` rows for the same entity
@@ -201,14 +215,14 @@ Context (`PluginHookAgentContext`): `{ agentId: "nova", sessionKey: "session:dis
 **Expected:**
 - `extractIdentifiers("matrix", "some-id")` returns `{}` (empty identifiers)
 - Entity resolution is skipped (no identifiers to query with)
-- `before_prompt_build` continues without entity block
+- `before_prompt_build` continues without entity block in `prependSystemContext`
 - No error thrown; logged as a skip, not an error
 
 ### TC-017: Entity resolution conflict — two entities match, none injected
 **Preconditions:** DB has two entities (id=1 and id=2) both with the same `discord_id` value (data integrity issue)
 **Input:** `resolveEntityByIdentifiers({ discordId: "ambiguous-id" })` returns `{ ok: false, conflict: true, entities: [...] }`
 **Expected:**
-- Entity block is NOT injected into the context
+- Entity block is NOT injected into `prependSystemContext`
 - Conflict is logged as a data integrity error (console.error)
 - `before_prompt_build` continues; other subsystems still run
 - No partial/wrong entity data injected
@@ -217,7 +231,7 @@ Context (`PluginHookAgentContext`): `{ agentId: "nova", sessionKey: "session:dis
 **Preconditions:** Entity resolved (id=5, name="Ghost"), but `entity_facts` has no rows for allowed keys (timezone, expertise, etc.)
 **Expected:**
 - `getEntityProfile(5)` returns `{}`
-- Entity context block still injected with at minimum the entity name: `"👤 **Talking with:** Ghost"`
+- Entity context block still injected into `prependSystemContext` with at minimum the entity name: `"👤 **Talking with:** Ghost"`
 - No crash on empty facts object
 
 ### TC-019: Entity resolution timeout (2s guard) — graceful skip
@@ -225,7 +239,7 @@ Context (`PluginHookAgentContext`): `{ agentId: "nova", sessionKey: "session:dis
 **Input:** `Promise.race([resolveEntityByIdentifiers(...), timeout(2000)])` — timeout wins
 **Expected:**
 - `resolveResult` is `null`
-- Entity block skipped
+- Entity block absent from `prependSystemContext`
 - Other subsystems still run
 - No unhandled promise rejection
 
@@ -233,14 +247,14 @@ Context (`PluginHookAgentContext`): `{ agentId: "nova", sessionKey: "session:dis
 
 ## Test Area 6: Semantic Recall
 
-### TC-020: Recall returns memories — injected into `appendSystemContext`
+### TC-020: Recall returns memories — injected into `prependSystemContext`
 **Preconditions:** `proactive-recall.py` available, Ollama running, memories exist in DB
 **Input:** Recall invoked with message content `"What are the open GitHub issues?"`, token budget 1000
 **Expected:**
 - `proactive-recall.py` spawned via `spawn` (async, not `spawnSync`)
 - Promise resolves within 8s
 - Result parsed as JSON with `memories` array
-- Memories formatted and included in `appendSystemContext` output
+- Memories formatted and included in `prependSystemContext` output (before the base system prompt)
 - Log: `"[turn-context] Found N relevant memories (~X/1000 tokens)"`
 
 ### TC-021: Content truncation before recall query
@@ -267,7 +281,7 @@ Context (`PluginHookAgentContext`): `{ agentId: "nova", sessionKey: "session:dis
 - `spawn` emits an error event (ENOENT)
 - Promise rejects; `catch` handles it
 - Error logged
-- `appendSystemContext` returned without recall block
+- `prependSystemContext` returned without recall block (entity block may still be present)
 - No crash
 
 ### TC-024: Recall Python process exits non-zero — graceful degradation
@@ -276,13 +290,13 @@ Context (`PluginHookAgentContext`): `{ agentId: "nova", sessionKey: "session:dis
 **Expected:**
 - Error logged with stderr content
 - `recallResult` treated as null/empty
-- Recall block absent from `appendSystemContext`
+- Recall block absent from `prependSystemContext`
 - No crash
 
 ### TC-025: Recall returns empty memories array — no recall block injected
 **Preconditions:** Script exits 0, stdout is `{"memories": [], "tokens_used": 0}`
 **Expected:**
-- `appendSystemContext` does not contain a recall/memories section (avoid injecting empty block)
+- `prependSystemContext` does not contain a recall/memories section (avoid injecting empty block)
 - No formatting artifacts (e.g., empty `🧠 **Relevant Context:**` header without content)
 
 ### TC-026: Recall JSON parse failure — graceful degradation
@@ -290,20 +304,21 @@ Context (`PluginHookAgentContext`): `{ agentId: "nova", sessionKey: "session:dis
 **Expected:**
 - `JSON.parse()` throws; `catch` handles it
 - Error logged
-- Recall block absent from result
+- Recall block absent from `prependSystemContext`
 - No crash
 
 ---
 
 ## Test Area 7: Turn Reminders
 
-### TC-027: Turn reminders loaded from DB and injected
+### TC-027: Turn reminders loaded from DB and injected into `appendSystemContext`
 **Preconditions:** `get_agent_turn_context('nova')` returns a non-empty `content` string
 **Input:** `before_prompt_build` for `agentId = "nova"`
 **Expected:**
 - `queryTurnContext("nova")` executes `SELECT content, truncated, records_skipped, total_chars FROM get_agent_turn_context($1)`
 - Result has `content` with turn reminder text
 - Turn reminders block present in `appendSystemContext` with header `📌 **Per-Turn Reminders:**`
+- Turn reminders do NOT appear in `prependSystemContext`
 
 ### TC-028: Turn reminders cache — no DB query within TTL
 **Preconditions:** Cache populated for `"nova"` (timestamp = now)
@@ -362,7 +377,7 @@ Context (`PluginHookAgentContext`): `{ agentId: "nova", sessionKey: "session:dis
 **Expected:**
 - Both subsystems catch their connection errors independently
 - Neither subsystem crashes the plugin handler
-- `appendSystemContext` returned with recall-only context (or empty if all subsystems fail)
+- `prependSystemContext` and `appendSystemContext` returned with recall-only context (or absent if all subsystems fail)
 - Pool remains usable after transient failure (does not permanently poison the singleton)
 
 ---
@@ -373,42 +388,44 @@ Context (`PluginHookAgentContext`): `{ agentId: "nova", sessionKey: "session:dis
 **Preconditions:** Turn reminders DB is down; entity resolution and recall succeed
 **Input:** `before_prompt_build`
 **Expected:**
-- Turn reminders block absent
-- Entity block present
-- Recall block present
-- `appendSystemContext` contains partial results from the two healthy subsystems
+- `appendSystemContext` is absent (or undefined) — no turn reminders block
+- `prependSystemContext` contains entity block and recall block
+- Return value: `{ prependSystemContext: "..." }` (only the key that has content)
 - No error thrown to the host
 
 ### TC-036: Two subsystems fail, one succeeds
 **Preconditions:** Entity resolution returns null (no match); recall times out; only turn reminders succeed
 **Expected:**
+- `prependSystemContext` is absent (or undefined) — no entity or recall data
 - `appendSystemContext` contains only turn reminders block
-- Function still returns `{ appendSystemContext: "..." }` (non-empty result)
+- Function returns `{ appendSystemContext: "..." }` (non-empty result)
 
-### TC-037: All three subsystems return nothing — no `appendSystemContext`
+### TC-037: All three subsystems return nothing — neither key is returned
 **Preconditions:**
 - Turn reminders: `content = ""`
 - Entity resolution: no entity found
 - Recall: `memories = []`
 **Expected:**
-- Handler does NOT return `{ appendSystemContext: "" }` (empty string injection avoided)
-- Handler returns `{}` or `undefined` (no-op for the prompt builder)
-- Verify: `appendSystemContext` key absent from return value OR value is falsy/undefined
+- Handler does NOT return `{ prependSystemContext: "" }` or `{ appendSystemContext: "" }` (empty string injection avoided)
+- Neither `prependSystemContext` nor `appendSystemContext` key is present in the return value (return `{}` or `undefined`)
+- Verify: both `prependSystemContext` and `appendSystemContext` are absent from return value OR both values are falsy/undefined
 
 ---
 
 ## Test Area 10: Integration — Context Lands in LLM
 
-### TC-038: End-to-end — injected context visible in LLM call
+### TC-038: End-to-end — injected context visible in LLM call at correct positions
 **Preconditions:** Full stack running; plugin installed; known entity in DB; turn reminders populated
 **Input:** Discord message from known user triggers a full agent run
 **Steps:**
 1. `message_received` fires → sender cached
 2. `before_prompt_build` fires → all three subsystems return data
-3. Plugin returns `{ appendSystemContext: "..." }`
+3. Plugin returns `{ prependSystemContext: "<entity + recall>", appendSystemContext: "<turn reminders>" }`
 4. Agent LLM call proceeds
 **Expected:**
-- LLM system prompt contains the `appendSystemContext` value
+- LLM composed system prompt = `prependSystemContext` + `baseSystemPrompt` + `appendSystemContext`
+- Entity context and recall memories appear BEFORE the base system prompt
+- Turn reminders appear AFTER the base system prompt
 - LLM response demonstrates awareness of injected context (e.g., uses entity name correctly)
 - No event-loop freeze or timeout
 
@@ -460,6 +477,49 @@ Context (`PluginHookAgentContext`): `{ agentId: "nova", sessionKey: "session:dis
 
 ## Test Area 12: Sender Cache Management
 
+### TC-044: `message_received` handler writes to sender cache synchronously before any await
+**Type:** Code-review / static-analysis
+**Preconditions:** Plugin source available at `memory/plugins/turn-context/index.ts` (or compiled equivalent)
+**Input:** Inspect handler source for the `message_received` hook
+**Steps:**
+1. Open the `message_received` handler function body
+2. Identify the first statement after the function signature
+3. Verify it is the synchronous `senderCache.set(...)` call (or synchronous cache-write logic)
+4. Confirm no `await` expression appears before this cache write
+**Expected:**
+- `senderCache.set()` is the very first operation in the handler — no `await` precedes it
+- The cache write is synchronous (no `Promise`, no `await`, no async helper that defers execution)
+- Static analysis / grep confirms: `await` does not appear before the `senderCache.set` line in the handler body
+**Rationale:** `message_received` is fire-and-forget. If an `await` precedes the cache write, `before_prompt_build` may fire before the cache is populated, causing a race condition where entity resolution and recall run without sender info.
+
+### TC-045: Recall spawn args do NOT include `--stdin` flag
+**Type:** Unit / static-analysis
+**Preconditions:** Plugin source available; `proactive-recall.py` at `memory/scripts/proactive-recall.py` (nova-mind commit ecdffb0+)
+**Input:** Inspect the spawn call for `proactive-recall.py` in the recall subsystem
+**Steps:**
+1. Locate the `spawn('python3', [...args])` call (or equivalent) for `proactive-recall.py`
+2. Inspect the args array
+3. Verify `"--stdin"` is NOT present in the args list
+4. Verify the JSON payload is written to the process's stdin
+**Expected:**
+- Spawn args array does NOT contain `"--stdin"`
+- The script reads from stdin by default (no flag required)
+- Payload written to stdin is valid JSON: `{"content": "...", "senderId": "...", "senderName": "...", "provider": "...", ...}`
+- Backward compatibility note documented: old installed versions read plain text stdin; new version parses JSON with `content` field extraction
+
+### TC-046: Recall JSON stdin payload includes required fields
+**Type:** Unit
+**Preconditions:** Sender cache populated with full sender info
+**Input:** Recall subsystem invoked with message content `"Show me recent changes"`, sender `{ senderId: "330189773371080716", senderName: "I)ruid", provider: "discord" }`
+**Expected:**
+- JSON payload written to `proactive-recall.py` stdin contains at minimum:
+  - `content`: the (possibly truncated) message text
+  - `senderId`: from cache
+  - `senderName`: from cache
+  - `provider`: from cache
+- Payload is valid JSON (parseable by `json.loads()`)
+- If sender fields are absent from cache, they are omitted from JSON (not set to `null` unless explicitly intended)
+
 ### TC-047: Sender cache bounded — oldest entries evicted at capacity
 **Preconditions:** Sender cache has reached max capacity (e.g., 1000 entries)
 **Input:** New `message_received` event arrives for a session key not yet in cache
@@ -490,7 +550,8 @@ Context (`PluginHookAgentContext`): `{ agentId: "nova", sessionKey: "session:dis
 **Input:** Three separate messages, one per provider, each from a known entity
 **Expected:**
 - For each: `message_received` caches correct sender with correct provider
-- For each: `before_prompt_build` resolves correct entity and injects correct context
+- For each: `before_prompt_build` resolves correct entity and injects correct context into `prependSystemContext`
+- Turn reminders injected into `appendSystemContext` for all three
 - No cross-provider contamination between session caches
 
 ### TC-050: Heartbeat/cron turns — plugin does not crash when no `senderId` available
@@ -500,6 +561,7 @@ Context (`PluginHookAgentContext`): `{ agentId: "nova", sessionKey: "session:dis
 **Expected:**
 - No crash
 - `appendSystemContext` contains turn reminders only (or empty result)
+- `prependSystemContext` is absent
 - Cron turn completes normally
 
 ### TC-051: Per-handler timeout config — override respected
@@ -526,8 +588,12 @@ Context (`PluginHookAgentContext`): `{ agentId: "nova", sessionKey: "session:dis
 | 9 | `pg.Pool` singleton shared across subsystems | ⚠️ Recommended |
 | 10 | Content truncated to ≤2000 chars before recall query | ✅ Required |
 | 11 | Cache TTL refresh verified (TC-029) | ⚠️ Recommended |
-| 12 | No empty `appendSystemContext` when all subsystems return nothing | ✅ Required |
+| 12 | No empty `prependSystemContext` or `appendSystemContext` when all subsystems return nothing | ✅ Required |
 | 13 | Sender cache bounded — does not grow without limit (TC-047) | ✅ Required |
 | 14 | Sender cache entries expire after inactivity TTL (TC-048) | ⚠️ Recommended |
+| 15 | `prependSystemContext` used for entity context + semantic recall | ✅ Required |
+| 16 | `appendSystemContext` used for turn reminders only | ✅ Required |
+| 17 | Synchronous cache write is first operation in `message_received` handler (TC-044) | ✅ Required |
+| 18 | No `--stdin` flag in `proactive-recall.py` spawn args (TC-045) | ✅ Required |
 
 **Quality gate:** All ✅ Required criteria must pass before PR approval. ⚠️ Recommended items should pass; failures require documented justification.

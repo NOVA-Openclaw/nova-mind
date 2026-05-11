@@ -3,12 +3,20 @@
  *
  * Consolidates the broken `semantic-recall` and `agent-turn-context` internal
  * hooks into a single Plugin SDK plugin that correctly injects context via
- * `before_prompt_build` (awaited, returns { appendSystemContext }).
+ * `before_prompt_build` (awaited, returns { prependSystemContext, appendSystemContext }).
  *
  * Root causes fixed:
  *   1. Old hooks used `event.messages.push()` on fire-and-forget events —
  *      context never reached the LLM prompt.
  *   2. Old semantic-recall hook used spawnSync, blocking the event loop.
+ *
+ * Prompt composition order:
+ *   prependSystemContext + baseSystemPrompt + appendSystemContext
+ *
+ *   - prependSystemContext: entity identity + semantic recall memories
+ *     (BEFORE base system prompt, so LLM has context before reading instructions)
+ *   - appendSystemContext:  per-turn reminders only
+ *     (AFTER base system prompt, for proximity to user message)
  *
  * Registers two hooks:
  *   - `message_received`    (observation, fire-and-forget) — caches sender info
@@ -66,10 +74,10 @@ function evictOldestIfFull(): void {
 // ── Plugin entry ──────────────────────────────────────────────────────────────
 
 /**
- * definePluginEntry is called by the OpenClaw plugin loader.
- * We export it as the default export.
+ * Plugin registration function called by the OpenClaw plugin loader.
+ * The loader calls module.default(api) to register hooks.
  */
-export default function definePluginEntry(api: PluginApi): void {
+export default function register(api: PluginApi): void {
   // ── Hook 1: message_received (observation, fire-and-forget) ──────────────
   //
   // Caches sender info for use in before_prompt_build.
@@ -77,10 +85,23 @@ export default function definePluginEntry(api: PluginApi): void {
 
   api.on("message_received", async (event: PluginEvent, ctx: PluginContext) => {
     try {
+      const sessionKey = ctx.sessionKey;
+
+      if (!sessionKey) return;
+
       const senderId: string | undefined =
         event.senderId ??
         (event.metadata as any)?.senderId ??
         (event as any).context?.senderId;
+
+      if (!senderId) return;
+
+      // CRITICAL: Cache write MUST be synchronous and FIRST.
+      // message_received is fire-and-forget — if an await precedes this,
+      // before_prompt_build may fire before the cache is populated.
+      // See: nova-mind #182 Step 2 race condition analysis
+      evictOldestIfFull();
+      evictStaleCacheEntries();
 
       const senderName: string | undefined =
         event.senderName ??
@@ -101,14 +122,6 @@ export default function definePluginEntry(api: PluginApi): void {
         (event as any).context?.content ??
         (event as any).context?.message;
 
-      const sessionKey = ctx.sessionKey;
-
-      if (!senderId || !sessionKey) return;
-
-      // Evict stale/overflow entries before storing new one
-      evictOldestIfFull();
-      evictStaleCacheEntries();
-
       senderCache.set(sessionKey, {
         senderId,
         senderName: senderName ?? "",
@@ -126,10 +139,13 @@ export default function definePluginEntry(api: PluginApi): void {
     }
   });
 
-  // ── Hook 2: before_prompt_build (awaited, returns { appendSystemContext }) ─
+  // ── Hook 2: before_prompt_build (awaited, returns context segments) ────────
   //
   // Runs three subsystems in parallel, each with independent error handling.
-  // Returns the combined context for injection into the system prompt.
+  // Returns prependSystemContext (entity + recall) and appendSystemContext
+  // (turn reminders) for injection into the system prompt.
+  //
+  // Composition: prependSystemContext + baseSystemPrompt + appendSystemContext
 
   api.on(
     "before_prompt_build",
@@ -150,10 +166,10 @@ export default function definePluginEntry(api: PluginApi): void {
 
       const recallInput: RecallInput = {
         content: cached?.content ?? "",
-        senderId: cached?.senderId,
-        senderName: cached?.senderName,
-        provider: cached?.provider,
-        conversationId: sessionKey,
+        senderId: cached?.senderId ?? "",
+        senderName: cached?.senderName ?? "",
+        provider: cached?.provider ?? "",
+        conversationId: sessionKey ?? "",
         isGroup: false,
         channelName: "",
         guildId: "",
@@ -196,32 +212,49 @@ export default function definePluginEntry(api: PluginApi): void {
             : Promise.resolve(null),
         ]);
 
-      // ── Collect successful results ────────────────────────────────────────
+      // ── Build prependSystemContext: entity identity + recall memories ─────
+      // These go BEFORE the base system prompt so the LLM has full context
+      // before reading instructions.
 
-      const segments: string[] = [];
-
-      if (
-        turnRemindersResult.status === "fulfilled" &&
-        turnRemindersResult.value
-      ) {
-        segments.push(turnRemindersResult.value);
-      }
+      const prependSegments: string[] = [];
 
       if (
         entityContextResult.status === "fulfilled" &&
         entityContextResult.value
       ) {
-        segments.push(entityContextResult.value);
+        prependSegments.push(entityContextResult.value);
       }
 
       if (recallResult.status === "fulfilled" && recallResult.value) {
-        segments.push(recallResult.value);
+        prependSegments.push(recallResult.value);
+      }
+
+      // ── Build appendSystemContext: per-turn reminders ─────────────────────
+      // These go AFTER the base system prompt for proximity to the user message.
+
+      const appendSegments: string[] = [];
+
+      if (
+        turnRemindersResult.status === "fulfilled" &&
+        turnRemindersResult.value
+      ) {
+        appendSegments.push(turnRemindersResult.value);
+      }
+
+      // ── Assemble result ───────────────────────────────────────────────────
+
+      const result: PromptBuildResult = {};
+      if (prependSegments.length > 0) {
+        result.prependSystemContext = prependSegments.join("\n\n");
+      }
+      if (appendSegments.length > 0) {
+        result.appendSystemContext = appendSegments.join("\n\n");
       }
 
       // If all subsystems produced nothing, return undefined (no injection)
-      if (segments.length === 0) return undefined;
+      if (Object.keys(result).length === 0) return undefined;
 
-      return { appendSystemContext: segments.join("\n\n") };
+      return result;
     },
     { timeoutMs: 8000 }
   );
@@ -255,5 +288,6 @@ interface PluginContext {
 }
 
 interface PromptBuildResult {
+  prependSystemContext?: string;
   appendSystemContext?: string;
 }

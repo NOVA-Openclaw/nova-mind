@@ -89,16 +89,30 @@ export interface RecallInput {
  *
  * Uses async spawn (child_process.spawn wrapped in a Promise) so the Node.js
  * event loop is NEVER blocked.
+ *
+ * Sends a JSON payload via stdin (no --stdin flag; proactive-recall.py reads
+ * JSON from stdin when no positional args are given).
  */
 export async function runSemanticRecall(
   input: RecallInput
 ): Promise<string | null> {
-  // Pass a plain-text message via stdin (the --stdin flag reads it)
   const messageText = input.content.substring(0, 2000);
+
+  const stdinPayload = JSON.stringify({
+    content: messageText,
+    senderId: input.senderId ?? '',
+    senderName: input.senderName ?? '',
+    provider: input.provider ?? '',
+    conversationId: input.conversationId ?? '',
+    isGroup: input.isGroup ?? false,
+    channelName: input.channelName ?? '',
+    guildId: input.guildId ?? '',
+    messageId: input.messageId ?? '',
+  });
 
   let result: RecallResult | null = null;
   try {
-    result = await spawnWithTimeout(messageText);
+    result = await spawnWithTimeout(stdinPayload);
   } catch (err) {
     console.error(
       "[turn-context] Semantic recall error:",
@@ -131,13 +145,12 @@ export async function runSemanticRecall(
 
 // ── Async spawn helper ────────────────────────────────────────────────────────
 
-function spawnWithTimeout(messageText: string): Promise<RecallResult> {
+function spawnWithTimeout(stdinPayload: string): Promise<RecallResult> {
   return new Promise((resolve, reject) => {
     const child = spawn(
       PYTHON_BIN,
       [
         RECALL_SCRIPT,
-        "--stdin",
         "--max-tokens",
         String(TOKEN_BUDGET),
         "--high-confidence",
@@ -190,8 +203,8 @@ function spawnWithTimeout(messageText: string): Promise<RecallResult> {
       reject(err);
     });
 
-    // Write message text to stdin and close it
-    child.stdin.write(messageText, "utf-8");
+    // Write JSON payload to stdin and close it
+    child.stdin.write(stdinPayload, "utf-8");
     child.stdin.end();
   });
 }

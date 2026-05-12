@@ -42,7 +42,7 @@ load_pg_env()
 # ── Constants ─────────────────────────────────────────────────────────────────
 
 MIN_MESSAGE_LENGTH = 10  # characters (trimmed)
-DEFAULT_MODEL = "google/gemini-2.5-flash-preview-05-20"
+DEFAULT_MODEL = "google/gemini-2.5-flash"
 OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 # New extraction categories (additive to existing ones)

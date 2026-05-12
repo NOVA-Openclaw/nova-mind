@@ -32,11 +32,10 @@ fi
 echo "✅ Database connection OK"
 echo ""
 
-# Install management functions
-echo "Installing management functions..."
-psql -d "$DB_NAME" -f "$SCRIPT_DIR/sql/management-functions.sql"
-echo "✅ Functions installed"
-echo ""
+# NOTE: Database functions (get_agent_bootstrap, etc.) are managed by pgschema
+# via database/schema.sql. Do NOT apply management-functions.sql here — that
+# file is kept as a reference only. Applying it overwrites pgschema-managed
+# functions and has caused regression bugs (see nova-mind#171).
 
 # Install audit triggers
 echo "Installing audit triggers..."

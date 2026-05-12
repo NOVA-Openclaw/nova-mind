@@ -450,7 +450,9 @@ verify_config() {
         echo -e "  ${CHECK_MARK} OpenClaw hook config exists"
         
         # Check if our hooks are registered
-        for hook in "memory-extract" "semantic-recall" "session-init" "agent-turn-context"; do
+        # Note: semantic-recall and agent-turn-context are now consolidated into the
+        # turn-context plugin (memory/plugins/turn-context/). See issue #182.
+        for hook in "memory-extract" "session-init"; do
             if grep -q "\"$hook\"" "$HOOK_CONFIG" 2>/dev/null; then
                 ENABLED=$(grep -A5 "\"$hook\"" "$HOOK_CONFIG" | grep -c "\"enabled\": true" || echo "0")
                 if [ "$ENABLED" -gt 0 ]; then
@@ -877,9 +879,11 @@ install_hook() {
 }
 
 # Install each hook
+# Note: semantic-recall and agent-turn-context are now consolidated into the
+# turn-context plugin (memory/plugins/turn-context/). See issue #182.
 INSTALLED_HOOKS=()
 SKIPPED_HOOKS=()
-for hook in "memory-extract" "semantic-recall" "session-init" "agent-turn-context"; do
+for hook in "memory-extract" "session-init"; do
     install_hook "$hook" && result=$? || result=$?
     if [ $result -eq 0 ]; then
         INSTALLED_HOOKS+=("$hook")
@@ -914,7 +918,7 @@ fi
 
 # Copy scripts directory to both locations:
 # 1. Workspace scripts (for hooks using relative paths)
-# 2. OpenClaw scripts (where semantic-recall handler expects them)
+# 2. OpenClaw scripts (where hooks and the turn-context plugin expect them)
 if [ -d "$SCRIPTS_SOURCE" ]; then
     # Create both target directories
     mkdir -p "$SCRIPTS_TARGET_WORKSPACE"
@@ -1043,9 +1047,7 @@ else
     if "$ENABLE_HOOKS_SCRIPT" "$OPENCLAW_CONFIG" > /dev/null 2>&1; then
         echo -e "  ${CHECK_MARK} Hooks enabled in OpenClaw config"
         echo "      • memory-extract"
-        echo "      • semantic-recall"
         echo "      • session-init"
-        echo "      • agent-turn-context"
         GATEWAY_RESTART_NEEDED=1
     else
         echo -e "  ${WARNING} Failed to patch OpenClaw config"

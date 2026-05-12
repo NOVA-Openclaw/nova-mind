@@ -5,7 +5,9 @@
 set -e
 
 CONFIG_FILE="${1:-$HOME/.openclaw/openclaw.json}"
-HOOKS_TO_ENABLE=("memory-extract" "semantic-recall" "session-init" "agent-turn-context")
+# Note: semantic-recall and agent-turn-context are now consolidated into the
+# turn-context plugin (memory/plugins/turn-context/). See issue #182.
+HOOKS_TO_ENABLE=("memory-extract" "session-init")
 DRY_RUN="${DRY_RUN:-0}"
 
 # Color codes
@@ -89,10 +91,9 @@ if .hooks.internal | has("entries") | not then
 else . end |
 
 # Enable each hook
+# Note: semantic-recall and agent-turn-context replaced by turn-context plugin (#182)
 .hooks.internal.entries["memory-extract"] = {"enabled": true} |
-.hooks.internal.entries["semantic-recall"] = {"enabled": true} |
-.hooks.internal.entries["session-init"] = {"enabled": true} |
-.hooks.internal.entries["agent-turn-context"] = {"enabled": true}
+.hooks.internal.entries["session-init"] = {"enabled": true}
 '
 
 # Apply the filter

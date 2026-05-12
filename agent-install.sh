@@ -705,9 +705,20 @@ if [ -d "$ENTITY_RESOLVER_SRC" ]; then
         cd "$SCRIPT_DIR"
     fi
 
-    echo -e "  ${CHECK_MARK} entity-resolver installed to $ENTITY_RESOLVER_DST"
+    # Verify critical files exist at destination
+    if [ -f "$ENTITY_RESOLVER_DST/index.ts" ] && [ -d "$ENTITY_RESOLVER_DST/node_modules" ]; then
+        echo -e "  ${CHECK_MARK} entity-resolver installed to $ENTITY_RESOLVER_DST"
+    elif [ -f "$ENTITY_RESOLVER_DST/index.ts" ]; then
+        echo -e "  ${WARNING} entity-resolver files present but node_modules missing at $ENTITY_RESOLVER_DST"
+        VERIFICATION_WARNINGS=$((VERIFICATION_WARNINGS + 1))
+    else
+        echo -e "  ${CROSS_MARK} entity-resolver installation incomplete at $ENTITY_RESOLVER_DST"
+        VERIFICATION_ERRORS=$((VERIFICATION_ERRORS + 1))
+    fi
 else
-    echo -e "  ${WARNING} entity-resolver source not found at $ENTITY_RESOLVER_SRC (skipping)"
+    echo -e "  ${CROSS_MARK} entity-resolver source not found at $ENTITY_RESOLVER_SRC"
+    echo -e "      This is required for the turn-context plugin's entity resolution."
+    VERIFICATION_ERRORS=$((VERIFICATION_ERRORS + 1))
 fi
 
 # --- Sync relationship hooks ---
@@ -1091,6 +1102,23 @@ if [ -d "$SCRIPTS_SOURCE" ]; then
         done
     done
     echo -e "  ${CHECK_MARK} Made $SCRIPT_COUNT scripts executable"
+
+    # Verify critical config files were deployed
+    CRITICAL_CONFIGS=("embedding-config.json")
+    for cfg in "${CRITICAL_CONFIGS[@]}"; do
+        if [ ! -f "$SCRIPTS_TARGET_OPENCLAW/$cfg" ]; then
+            if [ -f "$SCRIPTS_SOURCE/$cfg" ]; then
+                cp "$SCRIPTS_SOURCE/$cfg" "$SCRIPTS_TARGET_OPENCLAW/$cfg"
+                cp "$SCRIPTS_SOURCE/$cfg" "$SCRIPTS_TARGET_WORKSPACE/$cfg" 2>/dev/null || true
+                echo -e "  ${CHECK_MARK} $cfg deployed (missed by glob, copied explicitly)"
+            else
+                echo -e "  ${CROSS_MARK} Critical config $cfg not found in source ($SCRIPTS_SOURCE)"
+                VERIFICATION_ERRORS=$((VERIFICATION_ERRORS + 1))
+            fi
+        else
+            echo -e "  ${CHECK_MARK} $cfg present"
+        fi
+    done
 
     # Check Python dependencies
     if ls "$SCRIPTS_TARGET_WORKSPACE"/*.py &>/dev/null; then
@@ -1706,30 +1734,57 @@ echo "Configuring agent_chat channel..."
 
 OPENCLAW_CONFIG="$OPENCLAW_DIR/openclaw.json"
 if [ -f "$OPENCLAW_CONFIG" ] && command -v jq &>/dev/null; then
-    jq '.channels.agent_chat = (.channels.agent_chat // {}) * {
-            "enabled": true
+    # Read DB password from postgres.json (may be empty for peer auth)
+    AGENT_CHAT_PASSWORD=""
+    if [ -f "$PG_CONFIG" ]; then
+        AGENT_CHAT_PASSWORD=$(jq -r '.password // empty' "$PG_CONFIG" 2>/dev/null || true)
+    fi
+
+    jq --arg db "$DB_NAME" --arg user "$DB_USER" --arg pass "$AGENT_CHAT_PASSWORD" --arg agent "$DB_USER" \
+        '.channels.agent_chat = (.channels.agent_chat // {}) * {
+            "enabled": true,
+            "agentName": $agent,
+            "database": $db,
+            "host": "localhost",
+            "port": 5432,
+            "user": $user,
+            "password": $pass
         }' \
         "$OPENCLAW_CONFIG" >"$OPENCLAW_CONFIG.tmp" && \
         mv "$OPENCLAW_CONFIG.tmp" "$OPENCLAW_CONFIG" && \
-        echo -e "  ${CHECK_MARK} Configured channels.agent_chat" || \
+        echo -e "  ${CHECK_MARK} Configured channels.agent_chat (db=$DB_NAME, user=$DB_USER)" || \
         echo -e "  ${WARNING} Could not configure agent_chat channel"
 
-    jq '.plugins.entries.agent_chat = (.plugins.entries.agent_chat // {}) * {
-            "enabled": true
+    jq --arg db "$DB_NAME" --arg user "$DB_USER" --arg pass "$AGENT_CHAT_PASSWORD" --arg agent "$DB_USER" \
+        '.plugins.entries.agent_chat = (.plugins.entries.agent_chat // {}) * {
+            "enabled": true,
+            "config": ((.plugins.entries.agent_chat.config // {}) * {
+                "agentName": $agent,
+                "database": $db,
+                "host": "localhost",
+                "port": 5432,
+                "user": $user,
+                "password": $pass,
+                "routeToSession": "main"
+            })
         }' \
         "$OPENCLAW_CONFIG" >"$OPENCLAW_CONFIG.tmp" && \
         mv "$OPENCLAW_CONFIG.tmp" "$OPENCLAW_CONFIG" && \
-        echo -e "  ${CHECK_MARK} Configured plugins.entries.agent_chat" || \
+        echo -e "  ${CHECK_MARK} Configured plugins.entries.agent_chat (db=$DB_NAME, user=$DB_USER)" || \
         echo -e "  ${WARNING} Could not configure agent_chat plugin"
 else
     echo -e "  ${WARNING} Cannot configure agent_chat (missing config or jq)"
 fi
 
-# --- Generate hooks.token if hooks enabled ---
+# --- Generate hooks.token if hooks are enabled or internal hooks are enabled ---
+echo ""
+echo "Hooks token configuration..."
+
 OPENCLAW_CONFIG="$OPENCLAW_DIR/openclaw.json"
 if [ -f "$OPENCLAW_CONFIG" ] && command -v jq &>/dev/null; then
     HOOKS_ENABLED=$(jq -r '.hooks.enabled // false' "$OPENCLAW_CONFIG" 2>/dev/null)
-    if [ "$HOOKS_ENABLED" = "true" ]; then
+    INTERNAL_HOOKS_ENABLED=$(jq -r '.hooks.internal.enabled // false' "$OPENCLAW_CONFIG" 2>/dev/null)
+    if [ "$HOOKS_ENABLED" = "true" ] || [ "$INTERNAL_HOOKS_ENABLED" = "true" ]; then
         EXISTING_TOKEN=$(jq -r '.hooks.token // empty' "$OPENCLAW_CONFIG")
         if [ -z "$EXISTING_TOKEN" ]; then
             HOOKS_TOKEN=$(openssl rand -hex 32)
@@ -1741,7 +1796,11 @@ if [ -f "$OPENCLAW_CONFIG" ] && command -v jq &>/dev/null; then
         else
             echo -e "  ${CHECK_MARK} hooks.token already exists (preserved)"
         fi
+    else
+        echo -e "  ${INFO} Hooks not enabled — skipping token generation"
     fi
+else
+    echo -e "  ${WARNING} Cannot check hooks config (missing config or jq)"
 fi
 
 # ============================================

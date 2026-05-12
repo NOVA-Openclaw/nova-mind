@@ -78,6 +78,8 @@ function evictOldestIfFull(): void {
  * The loader calls module.default(api) to register hooks.
  */
 export default function register(api: PluginApi): void {
+  console.info("[turn-context] Plugin registered — hooks: message_received, before_prompt_build");
+
   // ── Hook 1: message_received (observation, fire-and-forget) ──────────────
   //
   // Caches sender info for use in before_prompt_build.
@@ -144,14 +146,19 @@ export default function register(api: PluginApi): void {
   api.on(
     "before_prompt_build",
     async (event: PluginEvent, ctx: PluginContext): Promise<PromptBuildResult | undefined> => {
+      const hookStart = Date.now();
       const sessionKey = ctx.sessionKey;
       const agentId: string = ctx.agentId ?? "nova";
+
+      console.info(`[turn-context] before_prompt_build START agent=${agentId} session=${sessionKey ?? "none"}`);
 
       // Retrieve cached sender info (may be undefined for first message or
       // if message_received fired from a different process).
       // Check staleness: entries older than CACHE_STALE_MS are treated as expired on read.
       const raw = sessionKey ? senderCache.get(sessionKey) : undefined;
       const cached = raw && (Date.now() - raw.timestamp < CACHE_STALE_MS) ? raw : undefined;
+
+      console.info(`[turn-context] Sender cache ${cached ? `HIT sender=${cached.senderName} content=${cached.content.length}chars` : "MISS (no cached sender info)"}`);
 
       const senderInfo: SenderInfo = {
         senderId: cached?.senderId,
@@ -173,6 +180,9 @@ export default function register(api: PluginApi): void {
       };
 
       // ── Run all three subsystems in parallel ────────────────────────────
+
+      console.info("[turn-context] Starting parallel subsystems: turn-reminders, entity-resolver, semantic-recall");
+      const subsystemStart = Date.now();
 
       const [turnRemindersResult, entityContextResult, recallResult] =
         await Promise.allSettled([
@@ -208,21 +218,32 @@ export default function register(api: PluginApi): void {
             : Promise.resolve(null),
         ]);
 
+      const subsystemMs = Date.now() - subsystemStart;
+
+      // Log each subsystem result
+      const remindersOk = turnRemindersResult.status === "fulfilled" && turnRemindersResult.value;
+      const entityOk = entityContextResult.status === "fulfilled" && entityContextResult.value;
+      const recallOk = recallResult.status === "fulfilled" && recallResult.value;
+
+      console.info(
+        `[turn-context] Subsystems completed in ${subsystemMs}ms:` +
+        ` reminders=${turnRemindersResult.status}${remindersOk ? `(${(turnRemindersResult as PromiseFulfilledResult<string | null>).value!.length}chars)` : ""}` +
+        ` entity=${entityContextResult.status}${entityOk ? `(${(entityContextResult as PromiseFulfilledResult<string | null>).value!.length}chars)` : ""}` +
+        ` recall=${recallResult.status}${recallOk ? `(${(recallResult as PromiseFulfilledResult<string | null>).value!.length}chars)` : cached?.content ? "(no results)" : "(skipped, no content)"}`
+      );
+
       // ── Build prependSystemContext: entity identity + recall memories ─────
       // These go BEFORE the base system prompt so the LLM has full context
       // before reading instructions.
 
       const prependSegments: string[] = [];
 
-      if (
-        entityContextResult.status === "fulfilled" &&
-        entityContextResult.value
-      ) {
-        prependSegments.push(entityContextResult.value);
+      if (entityOk) {
+        prependSegments.push((entityContextResult as PromiseFulfilledResult<string>).value);
       }
 
-      if (recallResult.status === "fulfilled" && recallResult.value) {
-        prependSegments.push(recallResult.value);
+      if (recallOk) {
+        prependSegments.push((recallResult as PromiseFulfilledResult<string>).value);
       }
 
       // ── Build appendSystemContext: per-turn reminders ─────────────────────
@@ -230,11 +251,8 @@ export default function register(api: PluginApi): void {
 
       const appendSegments: string[] = [];
 
-      if (
-        turnRemindersResult.status === "fulfilled" &&
-        turnRemindersResult.value
-      ) {
-        appendSegments.push(turnRemindersResult.value);
+      if (remindersOk) {
+        appendSegments.push((turnRemindersResult as PromiseFulfilledResult<string>).value);
       }
 
       // ── Assemble result ───────────────────────────────────────────────────
@@ -247,8 +265,17 @@ export default function register(api: PluginApi): void {
         result.appendSystemContext = appendSegments.join("\n\n");
       }
 
+      const totalMs = Date.now() - hookStart;
+
       // If all subsystems produced nothing, return undefined (no injection)
-      if (Object.keys(result).length === 0) return undefined;
+      if (Object.keys(result).length === 0) {
+        console.info(`[turn-context] before_prompt_build DONE in ${totalMs}ms — no context to inject`);
+        return undefined;
+      }
+
+      const prependLen = result.prependSystemContext?.length ?? 0;
+      const appendLen = result.appendSystemContext?.length ?? 0;
+      console.info(`[turn-context] before_prompt_build DONE in ${totalMs}ms — injecting prepend=${prependLen}chars append=${appendLen}chars`);
 
       return result;
     },

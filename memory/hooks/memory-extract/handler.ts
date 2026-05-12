@@ -101,8 +101,9 @@ const handler = async (event) => {
   
   // Get sender info for attribution — canonical location is ctx.metadata
   const meta = (ctx.metadata ?? {}) as Record<string, any>;
-  const senderName = meta.senderName ?? ctx.senderName ?? ctx.from ?? "unknown";
-  const senderId = meta.senderId ?? ctx.senderId ?? "";  // Phone number or UUID for unique matching
+  // Canonical field paths per MessageReceivedHookContext spec (#184)
+  const senderName = meta.senderName ?? ctx.from ?? "unknown";
+  const senderId = meta.senderId ?? "";  // Phone number or UUID for unique matching
   const isGroup = meta.isGroup ?? ctx.isGroup ?? false;
   
   console.info('[memory-extract] Processing message', {
@@ -115,7 +116,8 @@ const handler = async (event) => {
   
   // Run extraction via stdin pipe — never pass untrusted message text as shell args (#155)
   // LLM extracts every message directly via process-input.sh (#165)
-  const scriptPath = join(os.homedir(), '.openclaw', 'scripts', 'process-input.sh');
+  // Updated to call Python extraction pipeline (#112)
+  const scriptPath = join(os.homedir(), '.openclaw', 'scripts', 'extract_memories.py');
 
   // Store the full sessionKey as the source identifier — it's the canonical session reference
   // When chat logs move to DB (#170), this maps directly to the session record
@@ -215,7 +217,7 @@ const handler = async (event) => {
     }
   }
 
-  const child = spawn(scriptPath, [], {
+  const child = spawn('python3', [scriptPath], {
     stdio: ['pipe', 'pipe', 'pipe'],
     env: {
       ...process.env,

@@ -18,6 +18,12 @@ CREATE TYPE agent_chat_status AS ENUM (
 );
 
 --
+-- Name: nova:TABLES:argus; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
+--
+
+ALTER DEFAULT PRIVILEGES FOR ROLE nova IN SCHEMA public GRANT SELECT ON TABLES TO argus;
+
+--
 -- Name: nova:TABLES:athena; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
 --
 
@@ -30,10 +36,22 @@ ALTER DEFAULT PRIVILEGES FOR ROLE nova IN SCHEMA public GRANT SELECT ON TABLES T
 ALTER DEFAULT PRIVILEGES FOR ROLE nova IN SCHEMA public GRANT SELECT ON TABLES TO coder;
 
 --
+-- Name: nova:TABLES:conductor; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
+--
+
+ALTER DEFAULT PRIVILEGES FOR ROLE nova IN SCHEMA public GRANT SELECT ON TABLES TO conductor;
+
+--
 -- Name: nova:TABLES:erato; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
 --
 
 ALTER DEFAULT PRIVILEGES FOR ROLE nova IN SCHEMA public GRANT SELECT ON TABLES TO erato;
+
+--
+-- Name: nova:TABLES:flint; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
+--
+
+ALTER DEFAULT PRIVILEGES FOR ROLE nova IN SCHEMA public GRANT SELECT ON TABLES TO flint;
 
 --
 -- Name: nova:TABLES:gem; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
@@ -54,10 +72,22 @@ ALTER DEFAULT PRIVILEGES FOR ROLE nova IN SCHEMA public GRANT SELECT ON TABLES T
 ALTER DEFAULT PRIVILEGES FOR ROLE nova IN SCHEMA public GRANT SELECT ON TABLES TO graybeard;
 
 --
+-- Name: nova:TABLES:hermes; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
+--
+
+ALTER DEFAULT PRIVILEGES FOR ROLE nova IN SCHEMA public GRANT SELECT ON TABLES TO hermes;
+
+--
 -- Name: nova:TABLES:iris; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
 --
 
 ALTER DEFAULT PRIVILEGES FOR ROLE nova IN SCHEMA public GRANT SELECT ON TABLES TO iris;
+
+--
+-- Name: nova:TABLES:marcie; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
+--
+
+ALTER DEFAULT PRIVILEGES FOR ROLE nova IN SCHEMA public GRANT SELECT ON TABLES TO marcie;
 
 --
 -- Name: nova:TABLES:newhart; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
@@ -78,16 +108,34 @@ ALTER DEFAULT PRIVILEGES FOR ROLE nova IN SCHEMA public GRANT SELECT ON TABLES T
 ALTER DEFAULT PRIVILEGES FOR ROLE nova IN SCHEMA public GRANT SELECT ON TABLES TO openproject_user;
 
 --
+-- Name: nova:TABLES:quill; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
+--
+
+ALTER DEFAULT PRIVILEGES FOR ROLE nova IN SCHEMA public GRANT SELECT ON TABLES TO quill;
+
+--
 -- Name: nova:TABLES:scout; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
 --
 
 ALTER DEFAULT PRIVILEGES FOR ROLE nova IN SCHEMA public GRANT SELECT ON TABLES TO scout;
 
 --
+-- Name: nova:TABLES:scribe; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
+--
+
+ALTER DEFAULT PRIVILEGES FOR ROLE nova IN SCHEMA public GRANT SELECT ON TABLES TO scribe;
+
+--
 -- Name: nova:TABLES:ticker; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
 --
 
 ALTER DEFAULT PRIVILEGES FOR ROLE nova IN SCHEMA public GRANT SELECT ON TABLES TO ticker;
+
+--
+-- Name: postgres:SEQUENCES:argus; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
+--
+
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT USAGE ON SEQUENCES TO argus;
 
 --
 -- Name: postgres:SEQUENCES:athena; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
@@ -102,10 +150,22 @@ ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT USAGE ON SEQUE
 ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT USAGE ON SEQUENCES TO coder;
 
 --
+-- Name: postgres:SEQUENCES:conductor; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
+--
+
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT USAGE ON SEQUENCES TO conductor;
+
+--
 -- Name: postgres:SEQUENCES:erato; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
 --
 
 ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT USAGE ON SEQUENCES TO erato;
+
+--
+-- Name: postgres:SEQUENCES:flint; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
+--
+
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT USAGE ON SEQUENCES TO flint;
 
 --
 -- Name: postgres:SEQUENCES:gem; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
@@ -120,10 +180,22 @@ ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT USAGE ON SEQUE
 ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT USAGE ON SEQUENCES TO gidget;
 
 --
+-- Name: postgres:SEQUENCES:hermes; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
+--
+
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT USAGE ON SEQUENCES TO hermes;
+
+--
 -- Name: postgres:SEQUENCES:iris; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
 --
 
 ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT USAGE ON SEQUENCES TO iris;
+
+--
+-- Name: postgres:SEQUENCES:marcie; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
+--
+
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT USAGE ON SEQUENCES TO marcie;
 
 --
 -- Name: postgres:SEQUENCES:newhart; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
@@ -138,16 +210,34 @@ ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT USAGE ON SEQUE
 ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT USAGE ON SEQUENCES TO nova;
 
 --
+-- Name: postgres:SEQUENCES:quill; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
+--
+
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT USAGE ON SEQUENCES TO quill;
+
+--
 -- Name: postgres:SEQUENCES:scout; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
 --
 
 ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT USAGE ON SEQUENCES TO scout;
 
 --
+-- Name: postgres:SEQUENCES:scribe; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
+--
+
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT USAGE ON SEQUENCES TO scribe;
+
+--
 -- Name: postgres:SEQUENCES:ticker; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
 --
 
 ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT USAGE ON SEQUENCES TO ticker;
+
+--
+-- Name: postgres:TABLES:argus; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
+--
+
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT DELETE, INSERT, SELECT, UPDATE ON TABLES TO argus;
 
 --
 -- Name: postgres:TABLES:athena; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
@@ -162,10 +252,22 @@ ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT DELETE, INSERT
 ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT DELETE, INSERT, SELECT, UPDATE ON TABLES TO coder;
 
 --
+-- Name: postgres:TABLES:conductor; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
+--
+
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT DELETE, INSERT, SELECT, UPDATE ON TABLES TO conductor;
+
+--
 -- Name: postgres:TABLES:erato; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
 --
 
 ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT DELETE, INSERT, SELECT, UPDATE ON TABLES TO erato;
+
+--
+-- Name: postgres:TABLES:flint; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
+--
+
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT DELETE, INSERT, SELECT, UPDATE ON TABLES TO flint;
 
 --
 -- Name: postgres:TABLES:gem; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
@@ -180,10 +282,22 @@ ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT DELETE, INSERT
 ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT DELETE, INSERT, SELECT, UPDATE ON TABLES TO gidget;
 
 --
+-- Name: postgres:TABLES:hermes; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
+--
+
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT DELETE, INSERT, SELECT, UPDATE ON TABLES TO hermes;
+
+--
 -- Name: postgres:TABLES:iris; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
 --
 
 ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT DELETE, INSERT, SELECT, UPDATE ON TABLES TO iris;
+
+--
+-- Name: postgres:TABLES:marcie; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
+--
+
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT DELETE, INSERT, SELECT, UPDATE ON TABLES TO marcie;
 
 --
 -- Name: postgres:TABLES:newhart; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
@@ -198,10 +312,22 @@ ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT DELETE, INSERT
 ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT DELETE, INSERT, SELECT, UPDATE ON TABLES TO nova;
 
 --
+-- Name: postgres:TABLES:quill; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
+--
+
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT DELETE, INSERT, SELECT, UPDATE ON TABLES TO quill;
+
+--
 -- Name: postgres:TABLES:scout; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
 --
 
 ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT DELETE, INSERT, SELECT, UPDATE ON TABLES TO scout;
+
+--
+-- Name: postgres:TABLES:scribe; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
+--
+
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT DELETE, INSERT, SELECT, UPDATE ON TABLES TO scribe;
 
 --
 -- Name: postgres:TABLES:ticker; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
@@ -3800,7 +3926,10 @@ AS $$
 DECLARE
     v_agent_id INTEGER;
 BEGIN
-    -- Resolve agent ID (may be NULL if agent not in agents table)
+    IF NOT (SELECT value::boolean FROM bootstrap_context_config WHERE key = 'enabled') THEN
+        RETURN;
+    END IF;
+
     SELECT id INTO v_agent_id FROM agents WHERE name = p_agent_name LIMIT 1;
 
     RETURN QUERY
@@ -3809,7 +3938,7 @@ BEGIN
         subq.content,
         subq.source
     FROM (
-        -- 1. UNIVERSAL — everyone gets these
+        -- 1. UNIVERSAL (highest priority)
         SELECT abc.file_key || '.md' AS filename, abc.content,
             'universal'::TEXT AS source, 1 AS priority
         FROM agent_bootstrap_context abc
@@ -3817,7 +3946,7 @@ BEGIN
 
         UNION ALL
 
-        -- 2. GLOBAL — everyone gets these
+        -- 2. GLOBAL
         SELECT abc.file_key || '.md' AS filename, abc.content,
             'global'::TEXT AS source, 2 AS priority
         FROM agent_bootstrap_context abc
@@ -3825,7 +3954,7 @@ BEGIN
 
         UNION ALL
 
-        -- 3. DOMAIN — matched via agent's domains in agent_domains
+        -- 3. DOMAIN (matched via agent_domains)
         SELECT abc.file_key || '.md' AS filename, abc.content,
             'domain:' || abc.domain_name AS source, 3 AS priority
         FROM agent_bootstrap_context abc
@@ -3835,83 +3964,54 @@ BEGIN
 
         UNION ALL
 
-        -- 4. WORKFLOW — inject workflow SUMMARIES with agent role context
+        -- 4. WORKFLOW (dynamic from workflows/workflow_steps)
+        -- Matches workflows where agent is assigned to steps,
+        -- workflow domains overlap agent domains,
+        -- OR agent is the workflow orchestrator
         SELECT
             'WORKFLOW_' || upper(replace(w.name, '-', '_')) || '.md' AS filename,
             w.name || ': ' || w.description ||
-            E'\n\n' ||
-            -- Orchestrator note
-            CASE WHEN EXISTS (
-                SELECT 1 FROM agent_domains ad
-                WHERE ad.agent_id = v_agent_id
-                  AND ad.domain_topic = w.orchestrator_domain
-            )
-            THEN 'You are the **orchestrator** of this workflow (via ' || w.orchestrator_domain || ' domain). '
-                 || 'You are responsible for reading and understanding the entire workflow, maintaining state, delegating to domain-appropriate agents, and tracking progress.'
-                 || E'\n\n'
-            ELSE ''
-            END ||
-            -- Agent's steps
-            'Your steps: ' || COALESCE(agent_steps.step_list, 'none directly assigned') ||
-            E'\n' ||
-            -- All domains
-            'All domains involved: ' || COALESCE(all_domains.domain_list, 'none') ||
-            ' (' || COALESCE(step_count.cnt, 0) || ' steps total).' ||
-            E'\n\n' ||
-            '> When you are employed to participate in this workflow, understand your role and what is expected of you in the steps you own before beginning. ' ||
-            'Query your steps for full details:' ||
-            E'\n> ```sql' ||
-            E'\n> SELECT step_order, domain, requires_discussion, requires_authorization, description' ||
-            E'\n> FROM workflow_steps WHERE workflow_id = ' || w.id || ' ORDER BY step_order;' ||
-            E'\n> ```'
-            AS content,
+            CASE WHEN steps_text IS NOT NULL
+                 THEN E'\n\nSteps:\n' || steps_text
+                 ELSE ''
+            END AS content,
             'workflow:' || w.name AS source,
             4 AS priority
         FROM workflows w
-        -- Agent's specific steps (by domain match)
         LEFT JOIN LATERAL (
             SELECT string_agg(
-                'Step ' || ws.step_order || ' (' || ws.domain || ')',
-                ', ' ORDER BY ws.step_order
-            ) AS step_list
+                ws.step_order || '. ' || ws.description ||
+                COALESCE(' [agent: ' || a2.name || ']', '') ||
+                COALESCE(' [domain: ' || ws.domain || ']', ''),
+                E'\n' ORDER BY ws.step_order
+            ) AS steps_text
             FROM workflow_steps ws
-            JOIN agent_domains ad ON ad.agent_id = v_agent_id
+            LEFT JOIN agents a2 ON a2.id = ws.agent_id
             WHERE ws.workflow_id = w.id
-              AND (ad.domain_topic = ws.domain OR ad.domain_topic = ANY(ws.domains))
-        ) agent_steps ON true
-        -- All domains across all steps
-        LEFT JOIN LATERAL (
-            SELECT string_agg(DISTINCT ws.domain, ', ' ORDER BY ws.domain) AS domain_list
-            FROM workflow_steps ws
-            WHERE ws.workflow_id = w.id
-        ) all_domains ON true
-        -- Step count
-        LEFT JOIN LATERAL (
-            SELECT count(*)::int AS cnt
-            FROM workflow_steps ws
-            WHERE ws.workflow_id = w.id
-        ) step_count ON true
+        ) ws_agg ON true
         WHERE w.status = 'active'
           AND (
-            -- Workflow's orchestrator domain matches one of the agent's domains
+            -- Agent is the workflow orchestrator
+            w.orchestrator_agent_id = v_agent_id
+            OR
+            -- Agent is directly assigned to a step
             EXISTS (
-                SELECT 1 FROM agent_domains ad
-                WHERE ad.agent_id = v_agent_id
-                  AND ad.domain_topic = w.orchestrator_domain
+                SELECT 1 FROM workflow_steps ws2
+                WHERE ws2.workflow_id = w.id AND ws2.agent_id = v_agent_id
             )
             OR
             -- Workflow step domains overlap with agent's domains
             EXISTS (
-                SELECT 1 FROM workflow_steps ws
+                SELECT 1 FROM workflow_steps ws3
                 JOIN agent_domains ad ON ad.agent_id = v_agent_id
-                WHERE ws.workflow_id = w.id
-                  AND (ad.domain_topic = ws.domain OR ad.domain_topic = ANY(ws.domains))
+                WHERE ws3.workflow_id = w.id
+                  AND (ad.domain_topic = ws3.domain OR ad.domain_topic = ANY(ws3.domains))
             )
           )
 
         UNION ALL
 
-        -- 5. AGENT — the ONLY lookup by agent name directly
+        -- 5. AGENT-specific (lowest priority)
         SELECT abc.file_key || '.md' AS filename, abc.content,
             'agent'::TEXT AS source, 5 AS priority
         FROM agent_bootstrap_context abc
@@ -3926,7 +4026,7 @@ $$;
 -- Name: get_agent_bootstrap(text); Type: FUNCTION; Schema: -; Owner: -
 --
 
-COMMENT ON FUNCTION get_agent_bootstrap(text) IS 'Get all bootstrap files for an agent: UNIVERSAL + GLOBAL + DOMAIN-matched + WORKFLOW summaries (matched by orchestrator_domain or workflow_steps.domain/domains[] overlap with agent_domains) + AGENT-specific. Domain-based workflow matching (orchestrator_agent_id and workflow_steps.agent_id were dropped). See nova-mind#171 / 5b20b40.';
+COMMENT ON FUNCTION get_agent_bootstrap(text) IS 'Get all bootstrap files for an agent: universal + GLOBAL + agent domains + workflows (dynamic, includes orchestrator_agent_id matching) + agent-specific. Issue #97: orchestrator_agent_id support.';
 
 --
 -- Name: get_agent_skills(text); Type: FUNCTION; Schema: -; Owner: -
@@ -6823,13 +6923,13 @@ REVOKE DELETE ON TABLE agent_bootstrap_context FROM iris;
 -- Name: agent_bootstrap_context; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_bootstrap_context FROM newhart;
+REVOKE SELECT ON TABLE agent_bootstrap_context FROM newhart;
 
 --
 -- Name: agent_bootstrap_context; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE agent_bootstrap_context FROM newhart;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_bootstrap_context FROM newhart;
 
 --
 -- Name: agent_bootstrap_context; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -6913,13 +7013,13 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE agent_domains FROM iris;
 -- Name: agent_domains; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE agent_domains FROM newhart;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_domains FROM newhart;
 
 --
 -- Name: agent_domains; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_domains FROM newhart;
+REVOKE SELECT ON TABLE agent_domains FROM newhart;
 
 --
 -- Name: agent_domains; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -7021,13 +7121,13 @@ REVOKE DELETE ON TABLE agent_modifications FROM ticker;
 -- Name: agent_spawns; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_spawns FROM newhart;
+REVOKE SELECT ON TABLE agent_spawns FROM newhart;
 
 --
 -- Name: agent_spawns; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE agent_spawns FROM newhart;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_spawns FROM newhart;
 
 --
 -- Name: agent_system_config; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -7099,13 +7199,13 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE agent_system_config FROM ticker;
 -- Name: agent_turn_context; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_turn_context FROM newhart;
+REVOKE SELECT ON TABLE agent_turn_context FROM newhart;
 
 --
 -- Name: agent_turn_context; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE agent_turn_context FROM newhart;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_turn_context FROM newhart;
 
 --
 -- Name: agents; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -7243,13 +7343,13 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE ai_models FROM ticker;
 -- Name: artwork; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE artwork FROM iris;
+REVOKE SELECT ON TABLE artwork FROM iris;
 
 --
 -- Name: artwork; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE artwork FROM iris;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE artwork FROM iris;
 
 --
 -- Name: asset_classes; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -7345,6 +7445,12 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE channel_activity FROM nova;
 -- Name: channel_sessions; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+REVOKE DELETE, INSERT, UPDATE ON TABLE channel_sessions FROM argus;
+
+--
+-- Name: channel_sessions; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 REVOKE DELETE, INSERT, UPDATE ON TABLE channel_sessions FROM athena;
 
 --
@@ -7357,7 +7463,19 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE channel_sessions FROM coder;
 -- Name: channel_sessions; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+REVOKE DELETE, INSERT, UPDATE ON TABLE channel_sessions FROM conductor;
+
+--
+-- Name: channel_sessions; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 REVOKE DELETE, INSERT, UPDATE ON TABLE channel_sessions FROM erato;
+
+--
+-- Name: channel_sessions; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, UPDATE ON TABLE channel_sessions FROM flint;
 
 --
 -- Name: channel_sessions; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -7375,7 +7493,19 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE channel_sessions FROM gidget;
 -- Name: channel_sessions; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+REVOKE DELETE, INSERT, UPDATE ON TABLE channel_sessions FROM hermes;
+
+--
+-- Name: channel_sessions; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 REVOKE DELETE, INSERT, UPDATE ON TABLE channel_sessions FROM iris;
+
+--
+-- Name: channel_sessions; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, UPDATE ON TABLE channel_sessions FROM marcie;
 
 --
 -- Name: channel_sessions; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -7393,13 +7523,31 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE channel_sessions FROM nova;
 -- Name: channel_sessions; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+REVOKE DELETE, INSERT, UPDATE ON TABLE channel_sessions FROM quill;
+
+--
+-- Name: channel_sessions; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 REVOKE DELETE, INSERT, UPDATE ON TABLE channel_sessions FROM scout;
 
 --
 -- Name: channel_sessions; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+REVOKE DELETE, INSERT, UPDATE ON TABLE channel_sessions FROM scribe;
+
+--
+-- Name: channel_sessions; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 REVOKE DELETE, INSERT, UPDATE ON TABLE channel_sessions FROM ticker;
+
+--
+-- Name: channel_transcripts; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, UPDATE ON TABLE channel_transcripts FROM argus;
 
 --
 -- Name: channel_transcripts; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -7417,7 +7565,19 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE channel_transcripts FROM coder;
 -- Name: channel_transcripts; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+REVOKE DELETE, INSERT, UPDATE ON TABLE channel_transcripts FROM conductor;
+
+--
+-- Name: channel_transcripts; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 REVOKE DELETE, INSERT, UPDATE ON TABLE channel_transcripts FROM erato;
+
+--
+-- Name: channel_transcripts; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, UPDATE ON TABLE channel_transcripts FROM flint;
 
 --
 -- Name: channel_transcripts; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -7435,7 +7595,19 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE channel_transcripts FROM gidget;
 -- Name: channel_transcripts; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+REVOKE DELETE, INSERT, UPDATE ON TABLE channel_transcripts FROM hermes;
+
+--
+-- Name: channel_transcripts; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 REVOKE DELETE, INSERT, UPDATE ON TABLE channel_transcripts FROM iris;
+
+--
+-- Name: channel_transcripts; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, UPDATE ON TABLE channel_transcripts FROM marcie;
 
 --
 -- Name: channel_transcripts; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -7453,13 +7625,31 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE channel_transcripts FROM nova;
 -- Name: channel_transcripts; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+REVOKE DELETE, INSERT, UPDATE ON TABLE channel_transcripts FROM quill;
+
+--
+-- Name: channel_transcripts; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 REVOKE DELETE, INSERT, UPDATE ON TABLE channel_transcripts FROM scout;
 
 --
 -- Name: channel_transcripts; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+REVOKE DELETE, INSERT, UPDATE ON TABLE channel_transcripts FROM scribe;
+
+--
+-- Name: channel_transcripts; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 REVOKE DELETE, INSERT, UPDATE ON TABLE channel_transcripts FROM ticker;
+
+--
+-- Name: comms_checks; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, UPDATE ON TABLE comms_checks FROM argus;
 
 --
 -- Name: comms_checks; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -7477,7 +7667,19 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE comms_checks FROM coder;
 -- Name: comms_checks; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+REVOKE DELETE, INSERT, UPDATE ON TABLE comms_checks FROM conductor;
+
+--
+-- Name: comms_checks; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 REVOKE DELETE, INSERT, UPDATE ON TABLE comms_checks FROM erato;
+
+--
+-- Name: comms_checks; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, UPDATE ON TABLE comms_checks FROM flint;
 
 --
 -- Name: comms_checks; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -7495,7 +7697,19 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE comms_checks FROM gidget;
 -- Name: comms_checks; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+REVOKE DELETE, INSERT, UPDATE ON TABLE comms_checks FROM hermes;
+
+--
+-- Name: comms_checks; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 REVOKE DELETE, INSERT, UPDATE ON TABLE comms_checks FROM iris;
+
+--
+-- Name: comms_checks; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, UPDATE ON TABLE comms_checks FROM marcie;
 
 --
 -- Name: comms_checks; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -7513,13 +7727,31 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE comms_checks FROM nova;
 -- Name: comms_checks; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+REVOKE DELETE, INSERT, UPDATE ON TABLE comms_checks FROM quill;
+
+--
+-- Name: comms_checks; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 REVOKE DELETE, INSERT, UPDATE ON TABLE comms_checks FROM scout;
 
 --
 -- Name: comms_checks; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+REVOKE DELETE, INSERT, UPDATE ON TABLE comms_checks FROM scribe;
+
+--
+-- Name: comms_checks; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 REVOKE DELETE, INSERT, UPDATE ON TABLE comms_checks FROM ticker;
+
+--
+-- Name: comms_digests; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, UPDATE ON TABLE comms_digests FROM argus;
 
 --
 -- Name: comms_digests; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -7537,7 +7769,19 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE comms_digests FROM coder;
 -- Name: comms_digests; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+REVOKE DELETE, INSERT, UPDATE ON TABLE comms_digests FROM conductor;
+
+--
+-- Name: comms_digests; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 REVOKE DELETE, INSERT, UPDATE ON TABLE comms_digests FROM erato;
+
+--
+-- Name: comms_digests; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, UPDATE ON TABLE comms_digests FROM flint;
 
 --
 -- Name: comms_digests; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -7555,7 +7799,19 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE comms_digests FROM gidget;
 -- Name: comms_digests; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+REVOKE DELETE, INSERT, UPDATE ON TABLE comms_digests FROM hermes;
+
+--
+-- Name: comms_digests; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 REVOKE DELETE, INSERT, UPDATE ON TABLE comms_digests FROM iris;
+
+--
+-- Name: comms_digests; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, UPDATE ON TABLE comms_digests FROM marcie;
 
 --
 -- Name: comms_digests; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -7573,13 +7829,31 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE comms_digests FROM nova;
 -- Name: comms_digests; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+REVOKE DELETE, INSERT, UPDATE ON TABLE comms_digests FROM quill;
+
+--
+-- Name: comms_digests; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 REVOKE DELETE, INSERT, UPDATE ON TABLE comms_digests FROM scout;
 
 --
 -- Name: comms_digests; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+REVOKE DELETE, INSERT, UPDATE ON TABLE comms_digests FROM scribe;
+
+--
+-- Name: comms_digests; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 REVOKE DELETE, INSERT, UPDATE ON TABLE comms_digests FROM ticker;
+
+--
+-- Name: comms_state; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, UPDATE ON TABLE comms_state FROM argus;
 
 --
 -- Name: comms_state; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -7597,7 +7871,19 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE comms_state FROM coder;
 -- Name: comms_state; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+REVOKE DELETE, INSERT, UPDATE ON TABLE comms_state FROM conductor;
+
+--
+-- Name: comms_state; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 REVOKE DELETE, INSERT, UPDATE ON TABLE comms_state FROM erato;
+
+--
+-- Name: comms_state; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, UPDATE ON TABLE comms_state FROM flint;
 
 --
 -- Name: comms_state; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -7615,7 +7901,19 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE comms_state FROM gidget;
 -- Name: comms_state; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+REVOKE DELETE, INSERT, UPDATE ON TABLE comms_state FROM hermes;
+
+--
+-- Name: comms_state; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 REVOKE DELETE, INSERT, UPDATE ON TABLE comms_state FROM iris;
+
+--
+-- Name: comms_state; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, UPDATE ON TABLE comms_state FROM marcie;
 
 --
 -- Name: comms_state; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -7633,7 +7931,19 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE comms_state FROM nova;
 -- Name: comms_state; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+REVOKE DELETE, INSERT, UPDATE ON TABLE comms_state FROM quill;
+
+--
+-- Name: comms_state; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 REVOKE DELETE, INSERT, UPDATE ON TABLE comms_state FROM scout;
+
+--
+-- Name: comms_state; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, UPDATE ON TABLE comms_state FROM scribe;
 
 --
 -- Name: comms_state; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -7759,13 +8069,13 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE lessons_archive FROM nova;
 -- Name: library_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE library_authors FROM athena;
+REVOKE SELECT ON TABLE library_authors FROM athena;
 
 --
 -- Name: library_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE library_authors FROM athena;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE library_authors FROM athena;
 
 --
 -- Name: library_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -7891,13 +8201,13 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE library_tags FROM ticker;
 -- Name: library_work_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE library_work_authors FROM athena;
+REVOKE SELECT ON TABLE library_work_authors FROM athena;
 
 --
 -- Name: library_work_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE library_work_authors FROM athena;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE library_work_authors FROM athena;
 
 --
 -- Name: library_work_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -8023,13 +8333,13 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE library_work_relationships FROM ticker;
 -- Name: library_work_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE library_work_tags FROM athena;
+REVOKE SELECT ON TABLE library_work_tags FROM athena;
 
 --
 -- Name: library_work_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE library_work_tags FROM athena;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE library_work_tags FROM athena;
 
 --
 -- Name: library_work_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -8089,13 +8399,13 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE library_work_tags FROM ticker;
 -- Name: library_works; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE library_works FROM athena;
+REVOKE SELECT ON TABLE library_works FROM athena;
 
 --
 -- Name: library_works; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE library_works FROM athena;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE library_works FROM athena;
 
 --
 -- Name: library_works; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -8197,25 +8507,25 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE motivation_d100 FROM nova;
 -- Name: music_analysis; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_analysis FROM iris;
+REVOKE SELECT ON TABLE music_analysis FROM iris;
 
 --
 -- Name: music_analysis; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE music_analysis FROM iris;
-
---
--- Name: music_library; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_library FROM iris;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_analysis FROM iris;
 
 --
 -- Name: music_library; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
 REVOKE SELECT ON TABLE music_library FROM iris;
+
+--
+-- Name: music_library; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_library FROM iris;
 
 --
 -- Name: place_properties; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -8233,13 +8543,13 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE places FROM nova;
 -- Name: pm_domain_portfolio_snapshots; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE pm_domain_portfolio_snapshots FROM ticker;
+REVOKE SELECT ON TABLE pm_domain_portfolio_snapshots FROM ticker;
 
 --
 -- Name: pm_domain_portfolio_snapshots; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE pm_domain_portfolio_snapshots FROM ticker;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE pm_domain_portfolio_snapshots FROM ticker;
 
 --
 -- Name: portfolio_history; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -8257,13 +8567,13 @@ REVOKE SELECT ON TABLE portfolio_history FROM ticker;
 -- Name: portfolio_metrics; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE portfolio_metrics FROM ticker;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE portfolio_metrics FROM ticker;
 
 --
 -- Name: portfolio_metrics; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE portfolio_metrics FROM ticker;
+REVOKE SELECT ON TABLE portfolio_metrics FROM ticker;
 
 --
 -- Name: portfolio_positions; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -8293,13 +8603,13 @@ REVOKE SELECT ON TABLE portfolio_snapshots FROM ticker;
 -- Name: portfolio_updates; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE portfolio_updates FROM ticker;
+REVOKE SELECT ON TABLE portfolio_updates FROM ticker;
 
 --
 -- Name: portfolio_updates; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE portfolio_updates FROM ticker;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE portfolio_updates FROM ticker;
 
 --
 -- Name: positions; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -8323,13 +8633,13 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE preferences FROM nova;
 -- Name: price_cache_v2; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE price_cache_v2 FROM ticker;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE price_cache_v2 FROM ticker;
 
 --
 -- Name: price_cache_v2; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE price_cache_v2 FROM ticker;
+REVOKE SELECT ON TABLE price_cache_v2 FROM ticker;
 
 --
 -- Name: project_entities; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -8677,13 +8987,13 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE research_provenance FROM nova;
 -- Name: research_provenance; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE research_provenance FROM scout;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE research_provenance FROM scout;
 
 --
 -- Name: research_provenance; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE research_provenance FROM scout;
+REVOKE SELECT ON TABLE research_provenance FROM scout;
 
 --
 -- Name: research_provenance; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -8875,13 +9185,13 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE research_tasks FROM nova;
 -- Name: research_tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE research_tasks FROM scout;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE research_tasks FROM scout;
 
 --
 -- Name: research_tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE research_tasks FROM scout;
+REVOKE SELECT ON TABLE research_tasks FROM scout;
 
 --
 -- Name: research_tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -8947,13 +9257,13 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE tasks FROM nova;
 -- Name: ticker_portfolio; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE ticker_portfolio FROM ticker;
+REVOKE SELECT ON TABLE ticker_portfolio FROM ticker;
 
 --
 -- Name: ticker_portfolio; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE ticker_portfolio FROM ticker;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE ticker_portfolio FROM ticker;
 
 --
 -- Name: tools; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9013,13 +9323,13 @@ REVOKE SELECT ON TABLE workflow_runs FROM erato;
 -- Name: workflow_runs; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE workflow_runs FROM gem;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE workflow_runs FROM gem;
 
 --
 -- Name: workflow_runs; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE workflow_runs FROM gem;
+REVOKE SELECT ON TABLE workflow_runs FROM gem;
 
 --
 -- Name: workflow_runs; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9031,25 +9341,25 @@ REVOKE DELETE ON TABLE workflow_runs FROM gidget;
 -- Name: workflow_runs; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE workflow_runs FROM iris;
-
---
--- Name: workflow_runs; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE workflow_runs FROM iris;
 
 --
 -- Name: workflow_runs; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE workflow_runs FROM newhart;
+REVOKE SELECT ON TABLE workflow_runs FROM iris;
 
 --
 -- Name: workflow_runs; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE workflow_runs FROM newhart;
+
+--
+-- Name: workflow_runs; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE workflow_runs FROM newhart;
 
 --
 -- Name: workflow_runs; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9079,13 +9389,13 @@ REVOKE DELETE ON TABLE workflow_runs FROM scout;
 -- Name: workflow_runs; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE workflow_runs FROM ticker;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE workflow_runs FROM ticker;
 
 --
 -- Name: workflow_runs; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE workflow_runs FROM ticker;
+REVOKE SELECT ON TABLE workflow_runs FROM ticker;
 
 --
 -- Name: workflow_steps; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9109,6 +9419,12 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE works FROM nova;
 -- Name: agent_actions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE agent_actions_id_seq TO argus;
+
+--
+-- Name: agent_actions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT SELECT, USAGE ON SEQUENCE agent_actions_id_seq TO athena;
 
 --
@@ -9121,7 +9437,19 @@ GRANT USAGE ON SEQUENCE agent_actions_id_seq TO coder;
 -- Name: agent_actions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE agent_actions_id_seq TO conductor;
+
+--
+-- Name: agent_actions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE agent_actions_id_seq TO erato;
+
+--
+-- Name: agent_actions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE agent_actions_id_seq TO flint;
 
 --
 -- Name: agent_actions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9145,7 +9473,19 @@ GRANT USAGE ON SEQUENCE agent_actions_id_seq TO graybeard;
 -- Name: agent_actions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE agent_actions_id_seq TO hermes;
+
+--
+-- Name: agent_actions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE agent_actions_id_seq TO iris;
+
+--
+-- Name: agent_actions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE agent_actions_id_seq TO marcie;
 
 --
 -- Name: agent_actions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9157,13 +9497,31 @@ GRANT USAGE ON SEQUENCE agent_actions_id_seq TO nova;
 -- Name: agent_actions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE agent_actions_id_seq TO quill;
+
+--
+-- Name: agent_actions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT SELECT, USAGE ON SEQUENCE agent_actions_id_seq TO scout;
 
 --
 -- Name: agent_actions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE agent_actions_id_seq TO scribe;
+
+--
+-- Name: agent_actions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE agent_actions_id_seq TO ticker;
+
+--
+-- Name: agent_bootstrap_context_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE agent_bootstrap_context_id_seq TO argus;
 
 --
 -- Name: agent_bootstrap_context_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9181,7 +9539,19 @@ GRANT USAGE ON SEQUENCE agent_bootstrap_context_id_seq TO coder;
 -- Name: agent_bootstrap_context_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE agent_bootstrap_context_id_seq TO conductor;
+
+--
+-- Name: agent_bootstrap_context_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE agent_bootstrap_context_id_seq TO erato;
+
+--
+-- Name: agent_bootstrap_context_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE agent_bootstrap_context_id_seq TO flint;
 
 --
 -- Name: agent_bootstrap_context_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9199,7 +9569,19 @@ GRANT USAGE ON SEQUENCE agent_bootstrap_context_id_seq TO gidget;
 -- Name: agent_bootstrap_context_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE agent_bootstrap_context_id_seq TO hermes;
+
+--
+-- Name: agent_bootstrap_context_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE agent_bootstrap_context_id_seq TO iris;
+
+--
+-- Name: agent_bootstrap_context_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE agent_bootstrap_context_id_seq TO marcie;
 
 --
 -- Name: agent_bootstrap_context_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9211,13 +9593,31 @@ GRANT USAGE ON SEQUENCE agent_bootstrap_context_id_seq TO nova;
 -- Name: agent_bootstrap_context_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE agent_bootstrap_context_id_seq TO quill;
+
+--
+-- Name: agent_bootstrap_context_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT SELECT, USAGE ON SEQUENCE agent_bootstrap_context_id_seq TO scout;
 
 --
 -- Name: agent_bootstrap_context_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE agent_bootstrap_context_id_seq TO scribe;
+
+--
+-- Name: agent_bootstrap_context_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE agent_bootstrap_context_id_seq TO ticker;
+
+--
+-- Name: agent_chat_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE agent_chat_id_seq TO argus;
 
 --
 -- Name: agent_chat_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9235,7 +9635,19 @@ GRANT USAGE ON SEQUENCE agent_chat_id_seq TO coder;
 -- Name: agent_chat_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE agent_chat_id_seq TO conductor;
+
+--
+-- Name: agent_chat_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE agent_chat_id_seq TO erato;
+
+--
+-- Name: agent_chat_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE agent_chat_id_seq TO flint;
 
 --
 -- Name: agent_chat_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9259,7 +9671,19 @@ GRANT USAGE ON SEQUENCE agent_chat_id_seq TO graybeard;
 -- Name: agent_chat_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE agent_chat_id_seq TO hermes;
+
+--
+-- Name: agent_chat_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE agent_chat_id_seq TO iris;
+
+--
+-- Name: agent_chat_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE agent_chat_id_seq TO marcie;
 
 --
 -- Name: agent_chat_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9271,13 +9695,31 @@ GRANT USAGE ON SEQUENCE agent_chat_id_seq TO nova;
 -- Name: agent_chat_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE agent_chat_id_seq TO quill;
+
+--
+-- Name: agent_chat_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT SELECT, USAGE ON SEQUENCE agent_chat_id_seq TO scout;
 
 --
 -- Name: agent_chat_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE agent_chat_id_seq TO scribe;
+
+--
+-- Name: agent_chat_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE agent_chat_id_seq TO ticker;
+
+--
+-- Name: agent_domains_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE agent_domains_id_seq TO argus;
 
 --
 -- Name: agent_domains_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9295,7 +9737,19 @@ GRANT USAGE ON SEQUENCE agent_domains_id_seq TO coder;
 -- Name: agent_domains_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE agent_domains_id_seq TO conductor;
+
+--
+-- Name: agent_domains_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE agent_domains_id_seq TO erato;
+
+--
+-- Name: agent_domains_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE agent_domains_id_seq TO flint;
 
 --
 -- Name: agent_domains_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9313,7 +9767,19 @@ GRANT USAGE ON SEQUENCE agent_domains_id_seq TO gidget;
 -- Name: agent_domains_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE agent_domains_id_seq TO hermes;
+
+--
+-- Name: agent_domains_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE agent_domains_id_seq TO iris;
+
+--
+-- Name: agent_domains_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE agent_domains_id_seq TO marcie;
 
 --
 -- Name: agent_domains_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9325,13 +9791,31 @@ GRANT USAGE ON SEQUENCE agent_domains_id_seq TO nova;
 -- Name: agent_domains_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE agent_domains_id_seq TO quill;
+
+--
+-- Name: agent_domains_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT SELECT, USAGE ON SEQUENCE agent_domains_id_seq TO scout;
 
 --
 -- Name: agent_domains_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE agent_domains_id_seq TO scribe;
+
+--
+-- Name: agent_domains_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE agent_domains_id_seq TO ticker;
+
+--
+-- Name: agent_jobs_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE agent_jobs_id_seq TO argus;
 
 --
 -- Name: agent_jobs_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9349,7 +9833,19 @@ GRANT USAGE ON SEQUENCE agent_jobs_id_seq TO coder;
 -- Name: agent_jobs_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE agent_jobs_id_seq TO conductor;
+
+--
+-- Name: agent_jobs_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE agent_jobs_id_seq TO erato;
+
+--
+-- Name: agent_jobs_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE agent_jobs_id_seq TO flint;
 
 --
 -- Name: agent_jobs_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9373,7 +9869,19 @@ GRANT USAGE ON SEQUENCE agent_jobs_id_seq TO graybeard;
 -- Name: agent_jobs_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE agent_jobs_id_seq TO hermes;
+
+--
+-- Name: agent_jobs_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE agent_jobs_id_seq TO iris;
+
+--
+-- Name: agent_jobs_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE agent_jobs_id_seq TO marcie;
 
 --
 -- Name: agent_jobs_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9385,13 +9893,31 @@ GRANT USAGE ON SEQUENCE agent_jobs_id_seq TO nova;
 -- Name: agent_jobs_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE agent_jobs_id_seq TO quill;
+
+--
+-- Name: agent_jobs_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT SELECT, USAGE ON SEQUENCE agent_jobs_id_seq TO scout;
 
 --
 -- Name: agent_jobs_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE agent_jobs_id_seq TO scribe;
+
+--
+-- Name: agent_jobs_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE agent_jobs_id_seq TO ticker;
+
+--
+-- Name: agent_modifications_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE agent_modifications_id_seq TO argus;
 
 --
 -- Name: agent_modifications_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9409,7 +9935,19 @@ GRANT USAGE ON SEQUENCE agent_modifications_id_seq TO coder;
 -- Name: agent_modifications_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE agent_modifications_id_seq TO conductor;
+
+--
+-- Name: agent_modifications_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE agent_modifications_id_seq TO erato;
+
+--
+-- Name: agent_modifications_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE agent_modifications_id_seq TO flint;
 
 --
 -- Name: agent_modifications_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9427,7 +9965,19 @@ GRANT USAGE ON SEQUENCE agent_modifications_id_seq TO gidget;
 -- Name: agent_modifications_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE agent_modifications_id_seq TO hermes;
+
+--
+-- Name: agent_modifications_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE agent_modifications_id_seq TO iris;
+
+--
+-- Name: agent_modifications_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE agent_modifications_id_seq TO marcie;
 
 --
 -- Name: agent_modifications_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9439,13 +9989,31 @@ GRANT USAGE ON SEQUENCE agent_modifications_id_seq TO nova;
 -- Name: agent_modifications_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE agent_modifications_id_seq TO quill;
+
+--
+-- Name: agent_modifications_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT SELECT, USAGE ON SEQUENCE agent_modifications_id_seq TO scout;
 
 --
 -- Name: agent_modifications_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE agent_modifications_id_seq TO scribe;
+
+--
+-- Name: agent_modifications_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE agent_modifications_id_seq TO ticker;
+
+--
+-- Name: agent_spawns_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE agent_spawns_id_seq TO argus;
 
 --
 -- Name: agent_spawns_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9463,7 +10031,19 @@ GRANT USAGE ON SEQUENCE agent_spawns_id_seq TO coder;
 -- Name: agent_spawns_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE agent_spawns_id_seq TO conductor;
+
+--
+-- Name: agent_spawns_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE agent_spawns_id_seq TO erato;
+
+--
+-- Name: agent_spawns_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE agent_spawns_id_seq TO flint;
 
 --
 -- Name: agent_spawns_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9487,7 +10067,19 @@ GRANT USAGE ON SEQUENCE agent_spawns_id_seq TO graybeard;
 -- Name: agent_spawns_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE agent_spawns_id_seq TO hermes;
+
+--
+-- Name: agent_spawns_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE agent_spawns_id_seq TO iris;
+
+--
+-- Name: agent_spawns_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE agent_spawns_id_seq TO marcie;
 
 --
 -- Name: agent_spawns_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9499,13 +10091,31 @@ GRANT USAGE ON SEQUENCE agent_spawns_id_seq TO nova;
 -- Name: agent_spawns_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE agent_spawns_id_seq TO quill;
+
+--
+-- Name: agent_spawns_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT SELECT, USAGE ON SEQUENCE agent_spawns_id_seq TO scout;
 
 --
 -- Name: agent_spawns_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE agent_spawns_id_seq TO scribe;
+
+--
+-- Name: agent_spawns_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE agent_spawns_id_seq TO ticker;
+
+--
+-- Name: agent_turn_context_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE agent_turn_context_id_seq TO argus;
 
 --
 -- Name: agent_turn_context_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9523,7 +10133,19 @@ GRANT USAGE ON SEQUENCE agent_turn_context_id_seq TO coder;
 -- Name: agent_turn_context_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE agent_turn_context_id_seq TO conductor;
+
+--
+-- Name: agent_turn_context_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE agent_turn_context_id_seq TO erato;
+
+--
+-- Name: agent_turn_context_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE agent_turn_context_id_seq TO flint;
 
 --
 -- Name: agent_turn_context_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9547,7 +10169,19 @@ GRANT USAGE ON SEQUENCE agent_turn_context_id_seq TO graybeard;
 -- Name: agent_turn_context_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE agent_turn_context_id_seq TO hermes;
+
+--
+-- Name: agent_turn_context_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE agent_turn_context_id_seq TO iris;
+
+--
+-- Name: agent_turn_context_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE agent_turn_context_id_seq TO marcie;
 
 --
 -- Name: agent_turn_context_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9559,13 +10193,31 @@ GRANT USAGE ON SEQUENCE agent_turn_context_id_seq TO nova;
 -- Name: agent_turn_context_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE agent_turn_context_id_seq TO quill;
+
+--
+-- Name: agent_turn_context_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT SELECT, USAGE ON SEQUENCE agent_turn_context_id_seq TO scout;
 
 --
 -- Name: agent_turn_context_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE agent_turn_context_id_seq TO scribe;
+
+--
+-- Name: agent_turn_context_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE agent_turn_context_id_seq TO ticker;
+
+--
+-- Name: agents_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE agents_id_seq TO argus;
 
 --
 -- Name: agents_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9583,7 +10235,19 @@ GRANT USAGE ON SEQUENCE agents_id_seq TO coder;
 -- Name: agents_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE agents_id_seq TO conductor;
+
+--
+-- Name: agents_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE agents_id_seq TO erato;
+
+--
+-- Name: agents_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE agents_id_seq TO flint;
 
 --
 -- Name: agents_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9601,7 +10265,19 @@ GRANT USAGE ON SEQUENCE agents_id_seq TO gidget;
 -- Name: agents_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE agents_id_seq TO hermes;
+
+--
+-- Name: agents_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE agents_id_seq TO iris;
+
+--
+-- Name: agents_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE agents_id_seq TO marcie;
 
 --
 -- Name: agents_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9613,13 +10289,31 @@ GRANT USAGE ON SEQUENCE agents_id_seq TO nova;
 -- Name: agents_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE agents_id_seq TO quill;
+
+--
+-- Name: agents_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT SELECT, USAGE ON SEQUENCE agents_id_seq TO scout;
 
 --
 -- Name: agents_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE agents_id_seq TO scribe;
+
+--
+-- Name: agents_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE agents_id_seq TO ticker;
+
+--
+-- Name: ai_models_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE ai_models_id_seq TO argus;
 
 --
 -- Name: ai_models_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9637,7 +10331,19 @@ GRANT USAGE ON SEQUENCE ai_models_id_seq TO coder;
 -- Name: ai_models_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE ai_models_id_seq TO conductor;
+
+--
+-- Name: ai_models_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE ai_models_id_seq TO erato;
+
+--
+-- Name: ai_models_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE ai_models_id_seq TO flint;
 
 --
 -- Name: ai_models_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9655,7 +10361,19 @@ GRANT USAGE ON SEQUENCE ai_models_id_seq TO gidget;
 -- Name: ai_models_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE ai_models_id_seq TO hermes;
+
+--
+-- Name: ai_models_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE ai_models_id_seq TO iris;
+
+--
+-- Name: ai_models_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE ai_models_id_seq TO marcie;
 
 --
 -- Name: ai_models_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9667,13 +10385,31 @@ GRANT USAGE ON SEQUENCE ai_models_id_seq TO nova;
 -- Name: ai_models_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE ai_models_id_seq TO quill;
+
+--
+-- Name: ai_models_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT SELECT, USAGE ON SEQUENCE ai_models_id_seq TO scout;
 
 --
 -- Name: ai_models_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE ai_models_id_seq TO scribe;
+
+--
+-- Name: ai_models_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE ai_models_id_seq TO ticker;
+
+--
+-- Name: artwork_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE artwork_id_seq TO argus;
 
 --
 -- Name: artwork_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9691,7 +10427,19 @@ GRANT USAGE ON SEQUENCE artwork_id_seq TO coder;
 -- Name: artwork_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE artwork_id_seq TO conductor;
+
+--
+-- Name: artwork_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE artwork_id_seq TO erato;
+
+--
+-- Name: artwork_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE artwork_id_seq TO flint;
 
 --
 -- Name: artwork_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9709,6 +10457,18 @@ GRANT USAGE ON SEQUENCE artwork_id_seq TO gidget;
 -- Name: artwork_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE artwork_id_seq TO hermes;
+
+--
+-- Name: artwork_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE artwork_id_seq TO marcie;
+
+--
+-- Name: artwork_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE artwork_id_seq TO newhart;
 
 --
@@ -9721,13 +10481,31 @@ GRANT SELECT, USAGE ON SEQUENCE artwork_id_seq TO nova;
 -- Name: artwork_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE artwork_id_seq TO quill;
+
+--
+-- Name: artwork_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT SELECT, USAGE ON SEQUENCE artwork_id_seq TO scout;
 
 --
 -- Name: artwork_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE artwork_id_seq TO scribe;
+
+--
+-- Name: artwork_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE artwork_id_seq TO ticker;
+
+--
+-- Name: certificates_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE certificates_id_seq TO argus;
 
 --
 -- Name: certificates_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9745,7 +10523,19 @@ GRANT USAGE ON SEQUENCE certificates_id_seq TO coder;
 -- Name: certificates_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE certificates_id_seq TO conductor;
+
+--
+-- Name: certificates_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE certificates_id_seq TO erato;
+
+--
+-- Name: certificates_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE certificates_id_seq TO flint;
 
 --
 -- Name: certificates_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9769,7 +10559,19 @@ GRANT USAGE ON SEQUENCE certificates_id_seq TO graybeard;
 -- Name: certificates_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE certificates_id_seq TO hermes;
+
+--
+-- Name: certificates_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE certificates_id_seq TO iris;
+
+--
+-- Name: certificates_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE certificates_id_seq TO marcie;
 
 --
 -- Name: certificates_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9781,13 +10583,199 @@ GRANT USAGE ON SEQUENCE certificates_id_seq TO newhart;
 -- Name: certificates_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE certificates_id_seq TO quill;
+
+--
+-- Name: certificates_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT SELECT, USAGE ON SEQUENCE certificates_id_seq TO scout;
 
 --
 -- Name: certificates_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE certificates_id_seq TO scribe;
+
+--
+-- Name: certificates_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE certificates_id_seq TO ticker;
+
+--
+-- Name: channel_sessions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE channel_sessions_id_seq TO argus;
+
+--
+-- Name: channel_sessions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE channel_sessions_id_seq TO conductor;
+
+--
+-- Name: channel_sessions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE channel_sessions_id_seq TO flint;
+
+--
+-- Name: channel_sessions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE channel_sessions_id_seq TO hermes;
+
+--
+-- Name: channel_sessions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE channel_sessions_id_seq TO marcie;
+
+--
+-- Name: channel_sessions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE channel_sessions_id_seq TO quill;
+
+--
+-- Name: channel_sessions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE channel_sessions_id_seq TO scribe;
+
+--
+-- Name: channel_transcripts_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE channel_transcripts_id_seq TO argus;
+
+--
+-- Name: channel_transcripts_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE channel_transcripts_id_seq TO conductor;
+
+--
+-- Name: channel_transcripts_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE channel_transcripts_id_seq TO flint;
+
+--
+-- Name: channel_transcripts_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE channel_transcripts_id_seq TO hermes;
+
+--
+-- Name: channel_transcripts_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE channel_transcripts_id_seq TO marcie;
+
+--
+-- Name: channel_transcripts_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE channel_transcripts_id_seq TO quill;
+
+--
+-- Name: channel_transcripts_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE channel_transcripts_id_seq TO scribe;
+
+--
+-- Name: comms_checks_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE comms_checks_id_seq TO argus;
+
+--
+-- Name: comms_checks_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE comms_checks_id_seq TO conductor;
+
+--
+-- Name: comms_checks_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE comms_checks_id_seq TO flint;
+
+--
+-- Name: comms_checks_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE comms_checks_id_seq TO hermes;
+
+--
+-- Name: comms_checks_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE comms_checks_id_seq TO marcie;
+
+--
+-- Name: comms_checks_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE comms_checks_id_seq TO quill;
+
+--
+-- Name: comms_checks_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE comms_checks_id_seq TO scribe;
+
+--
+-- Name: comms_digests_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE comms_digests_id_seq TO argus;
+
+--
+-- Name: comms_digests_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE comms_digests_id_seq TO conductor;
+
+--
+-- Name: comms_digests_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE comms_digests_id_seq TO flint;
+
+--
+-- Name: comms_digests_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE comms_digests_id_seq TO hermes;
+
+--
+-- Name: comms_digests_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE comms_digests_id_seq TO marcie;
+
+--
+-- Name: comms_digests_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE comms_digests_id_seq TO quill;
+
+--
+-- Name: comms_digests_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE comms_digests_id_seq TO scribe;
+
+--
+-- Name: entities_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE entities_id_seq TO argus;
 
 --
 -- Name: entities_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9805,7 +10793,19 @@ GRANT USAGE ON SEQUENCE entities_id_seq TO coder;
 -- Name: entities_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE entities_id_seq TO conductor;
+
+--
+-- Name: entities_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE entities_id_seq TO erato;
+
+--
+-- Name: entities_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE entities_id_seq TO flint;
 
 --
 -- Name: entities_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9829,7 +10829,19 @@ GRANT USAGE ON SEQUENCE entities_id_seq TO graybeard;
 -- Name: entities_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE entities_id_seq TO hermes;
+
+--
+-- Name: entities_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE entities_id_seq TO iris;
+
+--
+-- Name: entities_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE entities_id_seq TO marcie;
 
 --
 -- Name: entities_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9841,13 +10853,31 @@ GRANT USAGE ON SEQUENCE entities_id_seq TO newhart;
 -- Name: entities_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE entities_id_seq TO quill;
+
+--
+-- Name: entities_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT SELECT, USAGE ON SEQUENCE entities_id_seq TO scout;
 
 --
 -- Name: entities_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE entities_id_seq TO scribe;
+
+--
+-- Name: entities_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE entities_id_seq TO ticker;
+
+--
+-- Name: entity_fact_conflicts_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE entity_fact_conflicts_id_seq TO argus;
 
 --
 -- Name: entity_fact_conflicts_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9865,7 +10895,19 @@ GRANT USAGE ON SEQUENCE entity_fact_conflicts_id_seq TO coder;
 -- Name: entity_fact_conflicts_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE entity_fact_conflicts_id_seq TO conductor;
+
+--
+-- Name: entity_fact_conflicts_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE entity_fact_conflicts_id_seq TO erato;
+
+--
+-- Name: entity_fact_conflicts_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE entity_fact_conflicts_id_seq TO flint;
 
 --
 -- Name: entity_fact_conflicts_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9889,7 +10931,19 @@ GRANT USAGE ON SEQUENCE entity_fact_conflicts_id_seq TO graybeard;
 -- Name: entity_fact_conflicts_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE entity_fact_conflicts_id_seq TO hermes;
+
+--
+-- Name: entity_fact_conflicts_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE entity_fact_conflicts_id_seq TO iris;
+
+--
+-- Name: entity_fact_conflicts_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE entity_fact_conflicts_id_seq TO marcie;
 
 --
 -- Name: entity_fact_conflicts_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9901,13 +10955,31 @@ GRANT USAGE ON SEQUENCE entity_fact_conflicts_id_seq TO newhart;
 -- Name: entity_fact_conflicts_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE entity_fact_conflicts_id_seq TO quill;
+
+--
+-- Name: entity_fact_conflicts_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT SELECT, USAGE ON SEQUENCE entity_fact_conflicts_id_seq TO scout;
 
 --
 -- Name: entity_fact_conflicts_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE entity_fact_conflicts_id_seq TO scribe;
+
+--
+-- Name: entity_fact_conflicts_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE entity_fact_conflicts_id_seq TO ticker;
+
+--
+-- Name: entity_facts_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE entity_facts_id_seq TO argus;
 
 --
 -- Name: entity_facts_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9925,7 +10997,19 @@ GRANT USAGE ON SEQUENCE entity_facts_id_seq TO coder;
 -- Name: entity_facts_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE entity_facts_id_seq TO conductor;
+
+--
+-- Name: entity_facts_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE entity_facts_id_seq TO erato;
+
+--
+-- Name: entity_facts_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE entity_facts_id_seq TO flint;
 
 --
 -- Name: entity_facts_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9949,7 +11033,19 @@ GRANT USAGE ON SEQUENCE entity_facts_id_seq TO graybeard;
 -- Name: entity_facts_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE entity_facts_id_seq TO hermes;
+
+--
+-- Name: entity_facts_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE entity_facts_id_seq TO iris;
+
+--
+-- Name: entity_facts_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE entity_facts_id_seq TO marcie;
 
 --
 -- Name: entity_facts_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9961,13 +11057,31 @@ GRANT USAGE ON SEQUENCE entity_facts_id_seq TO newhart;
 -- Name: entity_facts_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE entity_facts_id_seq TO quill;
+
+--
+-- Name: entity_facts_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT SELECT, USAGE ON SEQUENCE entity_facts_id_seq TO scout;
 
 --
 -- Name: entity_facts_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE entity_facts_id_seq TO scribe;
+
+--
+-- Name: entity_facts_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE entity_facts_id_seq TO ticker;
+
+--
+-- Name: entity_relationships_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE entity_relationships_id_seq TO argus;
 
 --
 -- Name: entity_relationships_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9985,7 +11099,19 @@ GRANT USAGE ON SEQUENCE entity_relationships_id_seq TO coder;
 -- Name: entity_relationships_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE entity_relationships_id_seq TO conductor;
+
+--
+-- Name: entity_relationships_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE entity_relationships_id_seq TO erato;
+
+--
+-- Name: entity_relationships_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE entity_relationships_id_seq TO flint;
 
 --
 -- Name: entity_relationships_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10009,7 +11135,19 @@ GRANT USAGE ON SEQUENCE entity_relationships_id_seq TO graybeard;
 -- Name: entity_relationships_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE entity_relationships_id_seq TO hermes;
+
+--
+-- Name: entity_relationships_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE entity_relationships_id_seq TO iris;
+
+--
+-- Name: entity_relationships_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE entity_relationships_id_seq TO marcie;
 
 --
 -- Name: entity_relationships_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10021,13 +11159,31 @@ GRANT USAGE ON SEQUENCE entity_relationships_id_seq TO newhart;
 -- Name: entity_relationships_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE entity_relationships_id_seq TO quill;
+
+--
+-- Name: entity_relationships_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT SELECT, USAGE ON SEQUENCE entity_relationships_id_seq TO scout;
 
 --
 -- Name: entity_relationships_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE entity_relationships_id_seq TO scribe;
+
+--
+-- Name: entity_relationships_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE entity_relationships_id_seq TO ticker;
+
+--
+-- Name: events_archive_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE events_archive_id_seq TO argus;
 
 --
 -- Name: events_archive_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10045,7 +11201,19 @@ GRANT USAGE ON SEQUENCE events_archive_id_seq TO coder;
 -- Name: events_archive_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE events_archive_id_seq TO conductor;
+
+--
+-- Name: events_archive_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE events_archive_id_seq TO erato;
+
+--
+-- Name: events_archive_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE events_archive_id_seq TO flint;
 
 --
 -- Name: events_archive_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10069,7 +11237,19 @@ GRANT USAGE ON SEQUENCE events_archive_id_seq TO graybeard;
 -- Name: events_archive_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE events_archive_id_seq TO hermes;
+
+--
+-- Name: events_archive_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE events_archive_id_seq TO iris;
+
+--
+-- Name: events_archive_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE events_archive_id_seq TO marcie;
 
 --
 -- Name: events_archive_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10081,13 +11261,31 @@ GRANT USAGE ON SEQUENCE events_archive_id_seq TO newhart;
 -- Name: events_archive_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE events_archive_id_seq TO quill;
+
+--
+-- Name: events_archive_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT SELECT, USAGE ON SEQUENCE events_archive_id_seq TO scout;
 
 --
 -- Name: events_archive_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE events_archive_id_seq TO scribe;
+
+--
+-- Name: events_archive_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE events_archive_id_seq TO ticker;
+
+--
+-- Name: events_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE events_id_seq TO argus;
 
 --
 -- Name: events_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10105,7 +11303,19 @@ GRANT USAGE ON SEQUENCE events_id_seq TO coder;
 -- Name: events_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE events_id_seq TO conductor;
+
+--
+-- Name: events_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE events_id_seq TO erato;
+
+--
+-- Name: events_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE events_id_seq TO flint;
 
 --
 -- Name: events_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10129,7 +11339,19 @@ GRANT USAGE ON SEQUENCE events_id_seq TO graybeard;
 -- Name: events_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE events_id_seq TO hermes;
+
+--
+-- Name: events_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE events_id_seq TO iris;
+
+--
+-- Name: events_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE events_id_seq TO marcie;
 
 --
 -- Name: events_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10141,13 +11363,31 @@ GRANT USAGE ON SEQUENCE events_id_seq TO newhart;
 -- Name: events_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE events_id_seq TO quill;
+
+--
+-- Name: events_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT SELECT, USAGE ON SEQUENCE events_id_seq TO scout;
 
 --
 -- Name: events_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE events_id_seq TO scribe;
+
+--
+-- Name: events_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE events_id_seq TO ticker;
+
+--
+-- Name: extraction_metrics_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE extraction_metrics_id_seq TO argus;
 
 --
 -- Name: extraction_metrics_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10165,7 +11405,19 @@ GRANT USAGE ON SEQUENCE extraction_metrics_id_seq TO coder;
 -- Name: extraction_metrics_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE extraction_metrics_id_seq TO conductor;
+
+--
+-- Name: extraction_metrics_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE extraction_metrics_id_seq TO erato;
+
+--
+-- Name: extraction_metrics_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE extraction_metrics_id_seq TO flint;
 
 --
 -- Name: extraction_metrics_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10189,7 +11441,19 @@ GRANT USAGE ON SEQUENCE extraction_metrics_id_seq TO graybeard;
 -- Name: extraction_metrics_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE extraction_metrics_id_seq TO hermes;
+
+--
+-- Name: extraction_metrics_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE extraction_metrics_id_seq TO iris;
+
+--
+-- Name: extraction_metrics_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE extraction_metrics_id_seq TO marcie;
 
 --
 -- Name: extraction_metrics_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10201,13 +11465,31 @@ GRANT USAGE ON SEQUENCE extraction_metrics_id_seq TO newhart;
 -- Name: extraction_metrics_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE extraction_metrics_id_seq TO quill;
+
+--
+-- Name: extraction_metrics_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT SELECT, USAGE ON SEQUENCE extraction_metrics_id_seq TO scout;
 
 --
 -- Name: extraction_metrics_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE extraction_metrics_id_seq TO scribe;
+
+--
+-- Name: extraction_metrics_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE extraction_metrics_id_seq TO ticker;
+
+--
+-- Name: fact_change_log_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE fact_change_log_id_seq TO argus;
 
 --
 -- Name: fact_change_log_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10225,7 +11507,19 @@ GRANT USAGE ON SEQUENCE fact_change_log_id_seq TO coder;
 -- Name: fact_change_log_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE fact_change_log_id_seq TO conductor;
+
+--
+-- Name: fact_change_log_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE fact_change_log_id_seq TO erato;
+
+--
+-- Name: fact_change_log_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE fact_change_log_id_seq TO flint;
 
 --
 -- Name: fact_change_log_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10249,7 +11543,19 @@ GRANT USAGE ON SEQUENCE fact_change_log_id_seq TO graybeard;
 -- Name: fact_change_log_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE fact_change_log_id_seq TO hermes;
+
+--
+-- Name: fact_change_log_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE fact_change_log_id_seq TO iris;
+
+--
+-- Name: fact_change_log_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE fact_change_log_id_seq TO marcie;
 
 --
 -- Name: fact_change_log_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10261,13 +11567,31 @@ GRANT USAGE ON SEQUENCE fact_change_log_id_seq TO newhart;
 -- Name: fact_change_log_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE fact_change_log_id_seq TO quill;
+
+--
+-- Name: fact_change_log_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT SELECT, USAGE ON SEQUENCE fact_change_log_id_seq TO scout;
 
 --
 -- Name: fact_change_log_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE fact_change_log_id_seq TO scribe;
+
+--
+-- Name: fact_change_log_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE fact_change_log_id_seq TO ticker;
+
+--
+-- Name: gambling_entries_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE gambling_entries_id_seq TO argus;
 
 --
 -- Name: gambling_entries_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10285,7 +11609,19 @@ GRANT USAGE ON SEQUENCE gambling_entries_id_seq TO coder;
 -- Name: gambling_entries_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE gambling_entries_id_seq TO conductor;
+
+--
+-- Name: gambling_entries_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE gambling_entries_id_seq TO erato;
+
+--
+-- Name: gambling_entries_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE gambling_entries_id_seq TO flint;
 
 --
 -- Name: gambling_entries_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10309,7 +11645,19 @@ GRANT USAGE ON SEQUENCE gambling_entries_id_seq TO graybeard;
 -- Name: gambling_entries_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE gambling_entries_id_seq TO hermes;
+
+--
+-- Name: gambling_entries_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE gambling_entries_id_seq TO iris;
+
+--
+-- Name: gambling_entries_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE gambling_entries_id_seq TO marcie;
 
 --
 -- Name: gambling_entries_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10321,13 +11669,31 @@ GRANT USAGE ON SEQUENCE gambling_entries_id_seq TO newhart;
 -- Name: gambling_entries_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE gambling_entries_id_seq TO quill;
+
+--
+-- Name: gambling_entries_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT SELECT, USAGE ON SEQUENCE gambling_entries_id_seq TO scout;
 
 --
 -- Name: gambling_entries_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE gambling_entries_id_seq TO scribe;
+
+--
+-- Name: gambling_entries_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE gambling_entries_id_seq TO ticker;
+
+--
+-- Name: gambling_logs_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE gambling_logs_id_seq TO argus;
 
 --
 -- Name: gambling_logs_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10345,7 +11711,19 @@ GRANT USAGE ON SEQUENCE gambling_logs_id_seq TO coder;
 -- Name: gambling_logs_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE gambling_logs_id_seq TO conductor;
+
+--
+-- Name: gambling_logs_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE gambling_logs_id_seq TO erato;
+
+--
+-- Name: gambling_logs_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE gambling_logs_id_seq TO flint;
 
 --
 -- Name: gambling_logs_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10369,7 +11747,19 @@ GRANT USAGE ON SEQUENCE gambling_logs_id_seq TO graybeard;
 -- Name: gambling_logs_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE gambling_logs_id_seq TO hermes;
+
+--
+-- Name: gambling_logs_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE gambling_logs_id_seq TO iris;
+
+--
+-- Name: gambling_logs_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE gambling_logs_id_seq TO marcie;
 
 --
 -- Name: gambling_logs_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10381,7 +11771,19 @@ GRANT USAGE ON SEQUENCE gambling_logs_id_seq TO newhart;
 -- Name: gambling_logs_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE gambling_logs_id_seq TO quill;
+
+--
+-- Name: gambling_logs_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT SELECT, USAGE ON SEQUENCE gambling_logs_id_seq TO scout;
+
+--
+-- Name: gambling_logs_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE gambling_logs_id_seq TO scribe;
 
 --
 -- Name: gambling_logs_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10393,13 +11795,31 @@ GRANT USAGE ON SEQUENCE gambling_logs_id_seq TO ticker;
 -- Name: git_issue_queue_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE git_issue_queue_id_seq TO argus;
+
+--
+-- Name: git_issue_queue_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT SELECT, USAGE ON SEQUENCE git_issue_queue_id_seq TO athena;
 
 --
 -- Name: git_issue_queue_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE git_issue_queue_id_seq TO conductor;
+
+--
+-- Name: git_issue_queue_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE git_issue_queue_id_seq TO erato;
+
+--
+-- Name: git_issue_queue_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE git_issue_queue_id_seq TO flint;
 
 --
 -- Name: git_issue_queue_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10417,7 +11837,19 @@ GRANT USAGE ON SEQUENCE git_issue_queue_id_seq TO gidget;
 -- Name: git_issue_queue_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE git_issue_queue_id_seq TO hermes;
+
+--
+-- Name: git_issue_queue_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE git_issue_queue_id_seq TO iris;
+
+--
+-- Name: git_issue_queue_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE git_issue_queue_id_seq TO marcie;
 
 --
 -- Name: git_issue_queue_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10435,13 +11867,31 @@ GRANT USAGE ON SEQUENCE git_issue_queue_id_seq TO nova;
 -- Name: git_issue_queue_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE git_issue_queue_id_seq TO quill;
+
+--
+-- Name: git_issue_queue_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT SELECT, USAGE ON SEQUENCE git_issue_queue_id_seq TO scout;
 
 --
 -- Name: git_issue_queue_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE git_issue_queue_id_seq TO scribe;
+
+--
+-- Name: git_issue_queue_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE git_issue_queue_id_seq TO ticker;
+
+--
+-- Name: job_messages_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE job_messages_id_seq TO argus;
 
 --
 -- Name: job_messages_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10459,7 +11909,19 @@ GRANT USAGE ON SEQUENCE job_messages_id_seq TO coder;
 -- Name: job_messages_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE job_messages_id_seq TO conductor;
+
+--
+-- Name: job_messages_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE job_messages_id_seq TO erato;
+
+--
+-- Name: job_messages_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE job_messages_id_seq TO flint;
 
 --
 -- Name: job_messages_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10483,7 +11945,19 @@ GRANT USAGE ON SEQUENCE job_messages_id_seq TO graybeard;
 -- Name: job_messages_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE job_messages_id_seq TO hermes;
+
+--
+-- Name: job_messages_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE job_messages_id_seq TO iris;
+
+--
+-- Name: job_messages_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE job_messages_id_seq TO marcie;
 
 --
 -- Name: job_messages_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10495,13 +11969,31 @@ GRANT USAGE ON SEQUENCE job_messages_id_seq TO newhart;
 -- Name: job_messages_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE job_messages_id_seq TO quill;
+
+--
+-- Name: job_messages_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT SELECT, USAGE ON SEQUENCE job_messages_id_seq TO scout;
 
 --
 -- Name: job_messages_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE job_messages_id_seq TO scribe;
+
+--
+-- Name: job_messages_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE job_messages_id_seq TO ticker;
+
+--
+-- Name: lessons_archive_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE lessons_archive_id_seq TO argus;
 
 --
 -- Name: lessons_archive_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10519,7 +12011,19 @@ GRANT USAGE ON SEQUENCE lessons_archive_id_seq TO coder;
 -- Name: lessons_archive_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE lessons_archive_id_seq TO conductor;
+
+--
+-- Name: lessons_archive_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE lessons_archive_id_seq TO erato;
+
+--
+-- Name: lessons_archive_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE lessons_archive_id_seq TO flint;
 
 --
 -- Name: lessons_archive_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10543,7 +12047,19 @@ GRANT USAGE ON SEQUENCE lessons_archive_id_seq TO graybeard;
 -- Name: lessons_archive_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE lessons_archive_id_seq TO hermes;
+
+--
+-- Name: lessons_archive_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE lessons_archive_id_seq TO iris;
+
+--
+-- Name: lessons_archive_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE lessons_archive_id_seq TO marcie;
 
 --
 -- Name: lessons_archive_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10555,13 +12071,31 @@ GRANT USAGE ON SEQUENCE lessons_archive_id_seq TO newhart;
 -- Name: lessons_archive_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE lessons_archive_id_seq TO quill;
+
+--
+-- Name: lessons_archive_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT SELECT, USAGE ON SEQUENCE lessons_archive_id_seq TO scout;
 
 --
 -- Name: lessons_archive_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE lessons_archive_id_seq TO scribe;
+
+--
+-- Name: lessons_archive_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE lessons_archive_id_seq TO ticker;
+
+--
+-- Name: lessons_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE lessons_id_seq TO argus;
 
 --
 -- Name: lessons_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10579,7 +12113,19 @@ GRANT USAGE ON SEQUENCE lessons_id_seq TO coder;
 -- Name: lessons_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE lessons_id_seq TO conductor;
+
+--
+-- Name: lessons_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE lessons_id_seq TO erato;
+
+--
+-- Name: lessons_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE lessons_id_seq TO flint;
 
 --
 -- Name: lessons_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10603,7 +12149,19 @@ GRANT USAGE ON SEQUENCE lessons_id_seq TO graybeard;
 -- Name: lessons_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE lessons_id_seq TO hermes;
+
+--
+-- Name: lessons_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE lessons_id_seq TO iris;
+
+--
+-- Name: lessons_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE lessons_id_seq TO marcie;
 
 --
 -- Name: lessons_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10615,7 +12173,19 @@ GRANT USAGE ON SEQUENCE lessons_id_seq TO newhart;
 -- Name: lessons_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE lessons_id_seq TO quill;
+
+--
+-- Name: lessons_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT SELECT, USAGE ON SEQUENCE lessons_id_seq TO scout;
+
+--
+-- Name: lessons_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE lessons_id_seq TO scribe;
 
 --
 -- Name: lessons_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10627,13 +12197,31 @@ GRANT USAGE ON SEQUENCE lessons_id_seq TO ticker;
 -- Name: library_authors_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE library_authors_id_seq TO argus;
+
+--
+-- Name: library_authors_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE library_authors_id_seq TO coder;
 
 --
 -- Name: library_authors_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE library_authors_id_seq TO conductor;
+
+--
+-- Name: library_authors_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE library_authors_id_seq TO erato;
+
+--
+-- Name: library_authors_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE library_authors_id_seq TO flint;
 
 --
 -- Name: library_authors_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10651,7 +12239,19 @@ GRANT USAGE ON SEQUENCE library_authors_id_seq TO gidget;
 -- Name: library_authors_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE library_authors_id_seq TO hermes;
+
+--
+-- Name: library_authors_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE library_authors_id_seq TO iris;
+
+--
+-- Name: library_authors_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE library_authors_id_seq TO marcie;
 
 --
 -- Name: library_authors_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10669,7 +12269,19 @@ GRANT USAGE ON SEQUENCE library_authors_id_seq TO nova;
 -- Name: library_authors_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE library_authors_id_seq TO quill;
+
+--
+-- Name: library_authors_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT SELECT, USAGE ON SEQUENCE library_authors_id_seq TO scout;
+
+--
+-- Name: library_authors_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE library_authors_id_seq TO scribe;
 
 --
 -- Name: library_authors_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10681,13 +12293,31 @@ GRANT USAGE ON SEQUENCE library_authors_id_seq TO ticker;
 -- Name: library_tags_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE library_tags_id_seq TO argus;
+
+--
+-- Name: library_tags_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE library_tags_id_seq TO coder;
 
 --
 -- Name: library_tags_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE library_tags_id_seq TO conductor;
+
+--
+-- Name: library_tags_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE library_tags_id_seq TO erato;
+
+--
+-- Name: library_tags_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE library_tags_id_seq TO flint;
 
 --
 -- Name: library_tags_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10705,7 +12335,19 @@ GRANT USAGE ON SEQUENCE library_tags_id_seq TO gidget;
 -- Name: library_tags_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE library_tags_id_seq TO hermes;
+
+--
+-- Name: library_tags_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE library_tags_id_seq TO iris;
+
+--
+-- Name: library_tags_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE library_tags_id_seq TO marcie;
 
 --
 -- Name: library_tags_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10723,7 +12365,19 @@ GRANT USAGE ON SEQUENCE library_tags_id_seq TO nova;
 -- Name: library_tags_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE library_tags_id_seq TO quill;
+
+--
+-- Name: library_tags_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT SELECT, USAGE ON SEQUENCE library_tags_id_seq TO scout;
+
+--
+-- Name: library_tags_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE library_tags_id_seq TO scribe;
 
 --
 -- Name: library_tags_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10735,13 +12389,31 @@ GRANT USAGE ON SEQUENCE library_tags_id_seq TO ticker;
 -- Name: library_works_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE library_works_id_seq TO argus;
+
+--
+-- Name: library_works_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE library_works_id_seq TO coder;
 
 --
 -- Name: library_works_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE library_works_id_seq TO conductor;
+
+--
+-- Name: library_works_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE library_works_id_seq TO erato;
+
+--
+-- Name: library_works_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE library_works_id_seq TO flint;
 
 --
 -- Name: library_works_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10759,7 +12431,19 @@ GRANT USAGE ON SEQUENCE library_works_id_seq TO gidget;
 -- Name: library_works_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE library_works_id_seq TO hermes;
+
+--
+-- Name: library_works_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE library_works_id_seq TO iris;
+
+--
+-- Name: library_works_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE library_works_id_seq TO marcie;
 
 --
 -- Name: library_works_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10777,13 +12461,31 @@ GRANT USAGE ON SEQUENCE library_works_id_seq TO nova;
 -- Name: library_works_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE library_works_id_seq TO quill;
+
+--
+-- Name: library_works_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT SELECT, USAGE ON SEQUENCE library_works_id_seq TO scout;
 
 --
 -- Name: library_works_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE library_works_id_seq TO scribe;
+
+--
+-- Name: library_works_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE library_works_id_seq TO ticker;
+
+--
+-- Name: media_consumed_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE media_consumed_id_seq TO argus;
 
 --
 -- Name: media_consumed_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10801,7 +12503,19 @@ GRANT USAGE ON SEQUENCE media_consumed_id_seq TO coder;
 -- Name: media_consumed_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE media_consumed_id_seq TO conductor;
+
+--
+-- Name: media_consumed_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE media_consumed_id_seq TO erato;
+
+--
+-- Name: media_consumed_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE media_consumed_id_seq TO flint;
 
 --
 -- Name: media_consumed_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10825,7 +12539,19 @@ GRANT USAGE ON SEQUENCE media_consumed_id_seq TO graybeard;
 -- Name: media_consumed_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE media_consumed_id_seq TO hermes;
+
+--
+-- Name: media_consumed_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE media_consumed_id_seq TO iris;
+
+--
+-- Name: media_consumed_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE media_consumed_id_seq TO marcie;
 
 --
 -- Name: media_consumed_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10837,13 +12563,31 @@ GRANT USAGE ON SEQUENCE media_consumed_id_seq TO newhart;
 -- Name: media_consumed_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE media_consumed_id_seq TO quill;
+
+--
+-- Name: media_consumed_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT SELECT, USAGE ON SEQUENCE media_consumed_id_seq TO scout;
 
 --
 -- Name: media_consumed_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE media_consumed_id_seq TO scribe;
+
+--
+-- Name: media_consumed_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE media_consumed_id_seq TO ticker;
+
+--
+-- Name: media_queue_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE media_queue_id_seq TO argus;
 
 --
 -- Name: media_queue_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10861,7 +12605,19 @@ GRANT USAGE ON SEQUENCE media_queue_id_seq TO coder;
 -- Name: media_queue_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE media_queue_id_seq TO conductor;
+
+--
+-- Name: media_queue_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE media_queue_id_seq TO erato;
+
+--
+-- Name: media_queue_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE media_queue_id_seq TO flint;
 
 --
 -- Name: media_queue_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10885,7 +12641,19 @@ GRANT USAGE ON SEQUENCE media_queue_id_seq TO graybeard;
 -- Name: media_queue_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE media_queue_id_seq TO hermes;
+
+--
+-- Name: media_queue_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE media_queue_id_seq TO iris;
+
+--
+-- Name: media_queue_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE media_queue_id_seq TO marcie;
 
 --
 -- Name: media_queue_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10897,13 +12665,31 @@ GRANT USAGE ON SEQUENCE media_queue_id_seq TO newhart;
 -- Name: media_queue_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE media_queue_id_seq TO quill;
+
+--
+-- Name: media_queue_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT SELECT, USAGE ON SEQUENCE media_queue_id_seq TO scout;
 
 --
 -- Name: media_queue_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE media_queue_id_seq TO scribe;
+
+--
+-- Name: media_queue_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE media_queue_id_seq TO ticker;
+
+--
+-- Name: media_tags_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE media_tags_id_seq TO argus;
 
 --
 -- Name: media_tags_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10921,7 +12707,19 @@ GRANT USAGE ON SEQUENCE media_tags_id_seq TO coder;
 -- Name: media_tags_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE media_tags_id_seq TO conductor;
+
+--
+-- Name: media_tags_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE media_tags_id_seq TO erato;
+
+--
+-- Name: media_tags_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE media_tags_id_seq TO flint;
 
 --
 -- Name: media_tags_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10945,7 +12743,19 @@ GRANT USAGE ON SEQUENCE media_tags_id_seq TO graybeard;
 -- Name: media_tags_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE media_tags_id_seq TO hermes;
+
+--
+-- Name: media_tags_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE media_tags_id_seq TO iris;
+
+--
+-- Name: media_tags_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE media_tags_id_seq TO marcie;
 
 --
 -- Name: media_tags_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10957,13 +12767,31 @@ GRANT USAGE ON SEQUENCE media_tags_id_seq TO newhart;
 -- Name: media_tags_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE media_tags_id_seq TO quill;
+
+--
+-- Name: media_tags_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT SELECT, USAGE ON SEQUENCE media_tags_id_seq TO scout;
 
 --
 -- Name: media_tags_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE media_tags_id_seq TO scribe;
+
+--
+-- Name: media_tags_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE media_tags_id_seq TO ticker;
+
+--
+-- Name: memory_embeddings_archive_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE memory_embeddings_archive_id_seq TO argus;
 
 --
 -- Name: memory_embeddings_archive_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10981,7 +12809,19 @@ GRANT USAGE ON SEQUENCE memory_embeddings_archive_id_seq TO coder;
 -- Name: memory_embeddings_archive_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE memory_embeddings_archive_id_seq TO conductor;
+
+--
+-- Name: memory_embeddings_archive_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE memory_embeddings_archive_id_seq TO erato;
+
+--
+-- Name: memory_embeddings_archive_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE memory_embeddings_archive_id_seq TO flint;
 
 --
 -- Name: memory_embeddings_archive_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -11005,7 +12845,19 @@ GRANT USAGE ON SEQUENCE memory_embeddings_archive_id_seq TO graybeard;
 -- Name: memory_embeddings_archive_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE memory_embeddings_archive_id_seq TO hermes;
+
+--
+-- Name: memory_embeddings_archive_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE memory_embeddings_archive_id_seq TO iris;
+
+--
+-- Name: memory_embeddings_archive_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE memory_embeddings_archive_id_seq TO marcie;
 
 --
 -- Name: memory_embeddings_archive_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -11017,13 +12869,31 @@ GRANT USAGE ON SEQUENCE memory_embeddings_archive_id_seq TO newhart;
 -- Name: memory_embeddings_archive_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE memory_embeddings_archive_id_seq TO quill;
+
+--
+-- Name: memory_embeddings_archive_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT SELECT, USAGE ON SEQUENCE memory_embeddings_archive_id_seq TO scout;
 
 --
 -- Name: memory_embeddings_archive_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE memory_embeddings_archive_id_seq TO scribe;
+
+--
+-- Name: memory_embeddings_archive_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE memory_embeddings_archive_id_seq TO ticker;
+
+--
+-- Name: memory_embeddings_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE memory_embeddings_id_seq TO argus;
 
 --
 -- Name: memory_embeddings_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -11041,7 +12911,19 @@ GRANT USAGE ON SEQUENCE memory_embeddings_id_seq TO coder;
 -- Name: memory_embeddings_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE memory_embeddings_id_seq TO conductor;
+
+--
+-- Name: memory_embeddings_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE memory_embeddings_id_seq TO erato;
+
+--
+-- Name: memory_embeddings_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE memory_embeddings_id_seq TO flint;
 
 --
 -- Name: memory_embeddings_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -11065,7 +12947,19 @@ GRANT USAGE ON SEQUENCE memory_embeddings_id_seq TO graybeard;
 -- Name: memory_embeddings_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE memory_embeddings_id_seq TO hermes;
+
+--
+-- Name: memory_embeddings_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE memory_embeddings_id_seq TO iris;
+
+--
+-- Name: memory_embeddings_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE memory_embeddings_id_seq TO marcie;
 
 --
 -- Name: memory_embeddings_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -11077,13 +12971,31 @@ GRANT USAGE ON SEQUENCE memory_embeddings_id_seq TO newhart;
 -- Name: memory_embeddings_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE memory_embeddings_id_seq TO quill;
+
+--
+-- Name: memory_embeddings_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT SELECT, USAGE ON SEQUENCE memory_embeddings_id_seq TO scout;
 
 --
 -- Name: memory_embeddings_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE memory_embeddings_id_seq TO scribe;
+
+--
+-- Name: memory_embeddings_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE memory_embeddings_id_seq TO ticker;
+
+--
+-- Name: music_analysis_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE music_analysis_id_seq TO argus;
 
 --
 -- Name: music_analysis_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -11101,7 +13013,19 @@ GRANT USAGE ON SEQUENCE music_analysis_id_seq TO coder;
 -- Name: music_analysis_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE music_analysis_id_seq TO conductor;
+
+--
+-- Name: music_analysis_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE music_analysis_id_seq TO erato;
+
+--
+-- Name: music_analysis_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE music_analysis_id_seq TO flint;
 
 --
 -- Name: music_analysis_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -11119,6 +13043,18 @@ GRANT USAGE ON SEQUENCE music_analysis_id_seq TO gidget;
 -- Name: music_analysis_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE music_analysis_id_seq TO hermes;
+
+--
+-- Name: music_analysis_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE music_analysis_id_seq TO marcie;
+
+--
+-- Name: music_analysis_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE music_analysis_id_seq TO newhart;
 
 --
@@ -11131,13 +13067,31 @@ GRANT USAGE ON SEQUENCE music_analysis_id_seq TO nova;
 -- Name: music_analysis_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE music_analysis_id_seq TO quill;
+
+--
+-- Name: music_analysis_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT SELECT, USAGE ON SEQUENCE music_analysis_id_seq TO scout;
 
 --
 -- Name: music_analysis_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE music_analysis_id_seq TO scribe;
+
+--
+-- Name: music_analysis_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE music_analysis_id_seq TO ticker;
+
+--
+-- Name: music_library_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE music_library_id_seq TO argus;
 
 --
 -- Name: music_library_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -11155,7 +13109,19 @@ GRANT USAGE ON SEQUENCE music_library_id_seq TO coder;
 -- Name: music_library_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE music_library_id_seq TO conductor;
+
+--
+-- Name: music_library_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE music_library_id_seq TO erato;
+
+--
+-- Name: music_library_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE music_library_id_seq TO flint;
 
 --
 -- Name: music_library_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -11173,6 +13139,18 @@ GRANT USAGE ON SEQUENCE music_library_id_seq TO gidget;
 -- Name: music_library_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE music_library_id_seq TO hermes;
+
+--
+-- Name: music_library_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE music_library_id_seq TO marcie;
+
+--
+-- Name: music_library_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE music_library_id_seq TO newhart;
 
 --
@@ -11185,13 +13163,31 @@ GRANT USAGE ON SEQUENCE music_library_id_seq TO nova;
 -- Name: music_library_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE music_library_id_seq TO quill;
+
+--
+-- Name: music_library_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT SELECT, USAGE ON SEQUENCE music_library_id_seq TO scout;
 
 --
 -- Name: music_library_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE music_library_id_seq TO scribe;
+
+--
+-- Name: music_library_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE music_library_id_seq TO ticker;
+
+--
+-- Name: place_properties_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE place_properties_id_seq TO argus;
 
 --
 -- Name: place_properties_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -11209,7 +13205,19 @@ GRANT USAGE ON SEQUENCE place_properties_id_seq TO coder;
 -- Name: place_properties_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE place_properties_id_seq TO conductor;
+
+--
+-- Name: place_properties_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE place_properties_id_seq TO erato;
+
+--
+-- Name: place_properties_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE place_properties_id_seq TO flint;
 
 --
 -- Name: place_properties_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -11233,7 +13241,19 @@ GRANT USAGE ON SEQUENCE place_properties_id_seq TO graybeard;
 -- Name: place_properties_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE place_properties_id_seq TO hermes;
+
+--
+-- Name: place_properties_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE place_properties_id_seq TO iris;
+
+--
+-- Name: place_properties_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE place_properties_id_seq TO marcie;
 
 --
 -- Name: place_properties_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -11245,13 +13265,31 @@ GRANT USAGE ON SEQUENCE place_properties_id_seq TO newhart;
 -- Name: place_properties_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE place_properties_id_seq TO quill;
+
+--
+-- Name: place_properties_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT SELECT, USAGE ON SEQUENCE place_properties_id_seq TO scout;
 
 --
 -- Name: place_properties_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE place_properties_id_seq TO scribe;
+
+--
+-- Name: place_properties_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE place_properties_id_seq TO ticker;
+
+--
+-- Name: places_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE places_id_seq TO argus;
 
 --
 -- Name: places_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -11269,7 +13307,19 @@ GRANT USAGE ON SEQUENCE places_id_seq TO coder;
 -- Name: places_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE places_id_seq TO conductor;
+
+--
+-- Name: places_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE places_id_seq TO erato;
+
+--
+-- Name: places_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE places_id_seq TO flint;
 
 --
 -- Name: places_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -11293,7 +13343,19 @@ GRANT USAGE ON SEQUENCE places_id_seq TO graybeard;
 -- Name: places_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE places_id_seq TO hermes;
+
+--
+-- Name: places_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE places_id_seq TO iris;
+
+--
+-- Name: places_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE places_id_seq TO marcie;
 
 --
 -- Name: places_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -11305,13 +13367,31 @@ GRANT USAGE ON SEQUENCE places_id_seq TO newhart;
 -- Name: places_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE places_id_seq TO quill;
+
+--
+-- Name: places_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT SELECT, USAGE ON SEQUENCE places_id_seq TO scout;
 
 --
 -- Name: places_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE places_id_seq TO scribe;
+
+--
+-- Name: places_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE places_id_seq TO ticker;
+
+--
+-- Name: pm_domain_portfolio_snapshots_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE pm_domain_portfolio_snapshots_id_seq TO argus;
 
 --
 -- Name: pm_domain_portfolio_snapshots_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -11329,7 +13409,19 @@ GRANT USAGE ON SEQUENCE pm_domain_portfolio_snapshots_id_seq TO coder;
 -- Name: pm_domain_portfolio_snapshots_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE pm_domain_portfolio_snapshots_id_seq TO conductor;
+
+--
+-- Name: pm_domain_portfolio_snapshots_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE pm_domain_portfolio_snapshots_id_seq TO erato;
+
+--
+-- Name: pm_domain_portfolio_snapshots_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE pm_domain_portfolio_snapshots_id_seq TO flint;
 
 --
 -- Name: pm_domain_portfolio_snapshots_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -11347,7 +13439,19 @@ GRANT USAGE ON SEQUENCE pm_domain_portfolio_snapshots_id_seq TO gidget;
 -- Name: pm_domain_portfolio_snapshots_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE pm_domain_portfolio_snapshots_id_seq TO hermes;
+
+--
+-- Name: pm_domain_portfolio_snapshots_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE pm_domain_portfolio_snapshots_id_seq TO iris;
+
+--
+-- Name: pm_domain_portfolio_snapshots_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE pm_domain_portfolio_snapshots_id_seq TO marcie;
 
 --
 -- Name: pm_domain_portfolio_snapshots_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -11365,7 +13469,25 @@ GRANT USAGE ON SEQUENCE pm_domain_portfolio_snapshots_id_seq TO nova;
 -- Name: pm_domain_portfolio_snapshots_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE pm_domain_portfolio_snapshots_id_seq TO quill;
+
+--
+-- Name: pm_domain_portfolio_snapshots_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE pm_domain_portfolio_snapshots_id_seq TO scout;
+
+--
+-- Name: pm_domain_portfolio_snapshots_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE pm_domain_portfolio_snapshots_id_seq TO scribe;
+
+--
+-- Name: portfolio_history_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE portfolio_history_id_seq TO argus;
 
 --
 -- Name: portfolio_history_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -11383,7 +13505,19 @@ GRANT USAGE ON SEQUENCE portfolio_history_id_seq TO coder;
 -- Name: portfolio_history_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE portfolio_history_id_seq TO conductor;
+
+--
+-- Name: portfolio_history_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE portfolio_history_id_seq TO erato;
+
+--
+-- Name: portfolio_history_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE portfolio_history_id_seq TO flint;
 
 --
 -- Name: portfolio_history_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -11401,7 +13535,19 @@ GRANT USAGE ON SEQUENCE portfolio_history_id_seq TO gidget;
 -- Name: portfolio_history_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE portfolio_history_id_seq TO hermes;
+
+--
+-- Name: portfolio_history_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE portfolio_history_id_seq TO iris;
+
+--
+-- Name: portfolio_history_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE portfolio_history_id_seq TO marcie;
 
 --
 -- Name: portfolio_history_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -11419,7 +13565,25 @@ GRANT USAGE ON SEQUENCE portfolio_history_id_seq TO nova;
 -- Name: portfolio_history_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE portfolio_history_id_seq TO quill;
+
+--
+-- Name: portfolio_history_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT SELECT, USAGE ON SEQUENCE portfolio_history_id_seq TO scout;
+
+--
+-- Name: portfolio_history_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE portfolio_history_id_seq TO scribe;
+
+--
+-- Name: portfolio_metrics_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE portfolio_metrics_id_seq TO argus;
 
 --
 -- Name: portfolio_metrics_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -11437,7 +13601,19 @@ GRANT USAGE ON SEQUENCE portfolio_metrics_id_seq TO coder;
 -- Name: portfolio_metrics_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE portfolio_metrics_id_seq TO conductor;
+
+--
+-- Name: portfolio_metrics_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE portfolio_metrics_id_seq TO erato;
+
+--
+-- Name: portfolio_metrics_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE portfolio_metrics_id_seq TO flint;
 
 --
 -- Name: portfolio_metrics_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -11455,7 +13631,19 @@ GRANT USAGE ON SEQUENCE portfolio_metrics_id_seq TO gidget;
 -- Name: portfolio_metrics_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE portfolio_metrics_id_seq TO hermes;
+
+--
+-- Name: portfolio_metrics_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE portfolio_metrics_id_seq TO iris;
+
+--
+-- Name: portfolio_metrics_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE portfolio_metrics_id_seq TO marcie;
 
 --
 -- Name: portfolio_metrics_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -11473,7 +13661,25 @@ GRANT USAGE ON SEQUENCE portfolio_metrics_id_seq TO nova;
 -- Name: portfolio_metrics_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE portfolio_metrics_id_seq TO quill;
+
+--
+-- Name: portfolio_metrics_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT SELECT, USAGE ON SEQUENCE portfolio_metrics_id_seq TO scout;
+
+--
+-- Name: portfolio_metrics_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE portfolio_metrics_id_seq TO scribe;
+
+--
+-- Name: portfolio_positions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE portfolio_positions_id_seq TO argus;
 
 --
 -- Name: portfolio_positions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -11491,7 +13697,19 @@ GRANT USAGE ON SEQUENCE portfolio_positions_id_seq TO coder;
 -- Name: portfolio_positions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE portfolio_positions_id_seq TO conductor;
+
+--
+-- Name: portfolio_positions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE portfolio_positions_id_seq TO erato;
+
+--
+-- Name: portfolio_positions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE portfolio_positions_id_seq TO flint;
 
 --
 -- Name: portfolio_positions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -11509,7 +13727,19 @@ GRANT USAGE ON SEQUENCE portfolio_positions_id_seq TO gidget;
 -- Name: portfolio_positions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE portfolio_positions_id_seq TO hermes;
+
+--
+-- Name: portfolio_positions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE portfolio_positions_id_seq TO iris;
+
+--
+-- Name: portfolio_positions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE portfolio_positions_id_seq TO marcie;
 
 --
 -- Name: portfolio_positions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -11527,7 +13757,25 @@ GRANT USAGE ON SEQUENCE portfolio_positions_id_seq TO nova;
 -- Name: portfolio_positions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE portfolio_positions_id_seq TO quill;
+
+--
+-- Name: portfolio_positions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT SELECT, USAGE ON SEQUENCE portfolio_positions_id_seq TO scout;
+
+--
+-- Name: portfolio_positions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE portfolio_positions_id_seq TO scribe;
+
+--
+-- Name: portfolio_snapshots_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE portfolio_snapshots_id_seq TO argus;
 
 --
 -- Name: portfolio_snapshots_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -11545,7 +13793,19 @@ GRANT USAGE ON SEQUENCE portfolio_snapshots_id_seq TO coder;
 -- Name: portfolio_snapshots_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE portfolio_snapshots_id_seq TO conductor;
+
+--
+-- Name: portfolio_snapshots_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE portfolio_snapshots_id_seq TO erato;
+
+--
+-- Name: portfolio_snapshots_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE portfolio_snapshots_id_seq TO flint;
 
 --
 -- Name: portfolio_snapshots_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -11563,7 +13823,19 @@ GRANT USAGE ON SEQUENCE portfolio_snapshots_id_seq TO gidget;
 -- Name: portfolio_snapshots_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE portfolio_snapshots_id_seq TO hermes;
+
+--
+-- Name: portfolio_snapshots_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE portfolio_snapshots_id_seq TO iris;
+
+--
+-- Name: portfolio_snapshots_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE portfolio_snapshots_id_seq TO marcie;
 
 --
 -- Name: portfolio_snapshots_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -11581,7 +13853,25 @@ GRANT USAGE ON SEQUENCE portfolio_snapshots_id_seq TO nova;
 -- Name: portfolio_snapshots_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE portfolio_snapshots_id_seq TO quill;
+
+--
+-- Name: portfolio_snapshots_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT SELECT, USAGE ON SEQUENCE portfolio_snapshots_id_seq TO scout;
+
+--
+-- Name: portfolio_snapshots_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE portfolio_snapshots_id_seq TO scribe;
+
+--
+-- Name: portfolio_updates_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE portfolio_updates_id_seq TO argus;
 
 --
 -- Name: portfolio_updates_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -11599,7 +13889,19 @@ GRANT USAGE ON SEQUENCE portfolio_updates_id_seq TO coder;
 -- Name: portfolio_updates_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE portfolio_updates_id_seq TO conductor;
+
+--
+-- Name: portfolio_updates_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE portfolio_updates_id_seq TO erato;
+
+--
+-- Name: portfolio_updates_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE portfolio_updates_id_seq TO flint;
 
 --
 -- Name: portfolio_updates_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -11617,7 +13919,19 @@ GRANT USAGE ON SEQUENCE portfolio_updates_id_seq TO gidget;
 -- Name: portfolio_updates_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE portfolio_updates_id_seq TO hermes;
+
+--
+-- Name: portfolio_updates_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE portfolio_updates_id_seq TO iris;
+
+--
+-- Name: portfolio_updates_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE portfolio_updates_id_seq TO marcie;
 
 --
 -- Name: portfolio_updates_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -11635,7 +13949,25 @@ GRANT USAGE ON SEQUENCE portfolio_updates_id_seq TO nova;
 -- Name: portfolio_updates_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE portfolio_updates_id_seq TO quill;
+
+--
+-- Name: portfolio_updates_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT SELECT, USAGE ON SEQUENCE portfolio_updates_id_seq TO scout;
+
+--
+-- Name: portfolio_updates_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE portfolio_updates_id_seq TO scribe;
+
+--
+-- Name: positions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE positions_id_seq TO argus;
 
 --
 -- Name: positions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -11653,7 +13985,19 @@ GRANT USAGE ON SEQUENCE positions_id_seq TO coder;
 -- Name: positions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE positions_id_seq TO conductor;
+
+--
+-- Name: positions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE positions_id_seq TO erato;
+
+--
+-- Name: positions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE positions_id_seq TO flint;
 
 --
 -- Name: positions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -11671,7 +14015,19 @@ GRANT USAGE ON SEQUENCE positions_id_seq TO gidget;
 -- Name: positions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE positions_id_seq TO hermes;
+
+--
+-- Name: positions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE positions_id_seq TO iris;
+
+--
+-- Name: positions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE positions_id_seq TO marcie;
 
 --
 -- Name: positions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -11689,7 +14045,25 @@ GRANT USAGE ON SEQUENCE positions_id_seq TO nova;
 -- Name: positions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE positions_id_seq TO quill;
+
+--
+-- Name: positions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT SELECT, USAGE ON SEQUENCE positions_id_seq TO scout;
+
+--
+-- Name: positions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE positions_id_seq TO scribe;
+
+--
+-- Name: preferences_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE preferences_id_seq TO argus;
 
 --
 -- Name: preferences_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -11707,7 +14081,19 @@ GRANT USAGE ON SEQUENCE preferences_id_seq TO coder;
 -- Name: preferences_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE preferences_id_seq TO conductor;
+
+--
+-- Name: preferences_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE preferences_id_seq TO erato;
+
+--
+-- Name: preferences_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE preferences_id_seq TO flint;
 
 --
 -- Name: preferences_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -11731,7 +14117,19 @@ GRANT USAGE ON SEQUENCE preferences_id_seq TO graybeard;
 -- Name: preferences_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE preferences_id_seq TO hermes;
+
+--
+-- Name: preferences_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE preferences_id_seq TO iris;
+
+--
+-- Name: preferences_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE preferences_id_seq TO marcie;
 
 --
 -- Name: preferences_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -11743,13 +14141,31 @@ GRANT USAGE ON SEQUENCE preferences_id_seq TO newhart;
 -- Name: preferences_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE preferences_id_seq TO quill;
+
+--
+-- Name: preferences_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT SELECT, USAGE ON SEQUENCE preferences_id_seq TO scout;
 
 --
 -- Name: preferences_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE preferences_id_seq TO scribe;
+
+--
+-- Name: preferences_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE preferences_id_seq TO ticker;
+
+--
+-- Name: project_tasks_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE project_tasks_id_seq TO argus;
 
 --
 -- Name: project_tasks_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -11767,7 +14183,19 @@ GRANT USAGE ON SEQUENCE project_tasks_id_seq TO coder;
 -- Name: project_tasks_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE project_tasks_id_seq TO conductor;
+
+--
+-- Name: project_tasks_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE project_tasks_id_seq TO erato;
+
+--
+-- Name: project_tasks_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE project_tasks_id_seq TO flint;
 
 --
 -- Name: project_tasks_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -11791,7 +14219,19 @@ GRANT USAGE ON SEQUENCE project_tasks_id_seq TO graybeard;
 -- Name: project_tasks_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE project_tasks_id_seq TO hermes;
+
+--
+-- Name: project_tasks_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE project_tasks_id_seq TO iris;
+
+--
+-- Name: project_tasks_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE project_tasks_id_seq TO marcie;
 
 --
 -- Name: project_tasks_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -11803,13 +14243,31 @@ GRANT USAGE ON SEQUENCE project_tasks_id_seq TO newhart;
 -- Name: project_tasks_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE project_tasks_id_seq TO quill;
+
+--
+-- Name: project_tasks_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT SELECT, USAGE ON SEQUENCE project_tasks_id_seq TO scout;
 
 --
 -- Name: project_tasks_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE project_tasks_id_seq TO scribe;
+
+--
+-- Name: project_tasks_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE project_tasks_id_seq TO ticker;
+
+--
+-- Name: projects_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE projects_id_seq TO argus;
 
 --
 -- Name: projects_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -11827,7 +14285,19 @@ GRANT USAGE ON SEQUENCE projects_id_seq TO coder;
 -- Name: projects_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE projects_id_seq TO conductor;
+
+--
+-- Name: projects_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE projects_id_seq TO erato;
+
+--
+-- Name: projects_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE projects_id_seq TO flint;
 
 --
 -- Name: projects_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -11851,7 +14321,19 @@ GRANT USAGE ON SEQUENCE projects_id_seq TO graybeard;
 -- Name: projects_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE projects_id_seq TO hermes;
+
+--
+-- Name: projects_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE projects_id_seq TO iris;
+
+--
+-- Name: projects_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE projects_id_seq TO marcie;
 
 --
 -- Name: projects_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -11863,13 +14345,31 @@ GRANT USAGE ON SEQUENCE projects_id_seq TO newhart;
 -- Name: projects_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE projects_id_seq TO quill;
+
+--
+-- Name: projects_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT SELECT, USAGE ON SEQUENCE projects_id_seq TO scout;
 
 --
 -- Name: projects_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE projects_id_seq TO scribe;
+
+--
+-- Name: projects_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE projects_id_seq TO ticker;
+
+--
+-- Name: publications_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE publications_id_seq TO argus;
 
 --
 -- Name: publications_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -11887,7 +14387,19 @@ GRANT USAGE ON SEQUENCE publications_id_seq TO coder;
 -- Name: publications_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE publications_id_seq TO conductor;
+
+--
+-- Name: publications_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE publications_id_seq TO erato;
+
+--
+-- Name: publications_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE publications_id_seq TO flint;
 
 --
 -- Name: publications_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -11911,7 +14423,19 @@ GRANT USAGE ON SEQUENCE publications_id_seq TO graybeard;
 -- Name: publications_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE publications_id_seq TO hermes;
+
+--
+-- Name: publications_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE publications_id_seq TO iris;
+
+--
+-- Name: publications_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE publications_id_seq TO marcie;
 
 --
 -- Name: publications_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -11923,13 +14447,31 @@ GRANT USAGE ON SEQUENCE publications_id_seq TO newhart;
 -- Name: publications_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE publications_id_seq TO quill;
+
+--
+-- Name: publications_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT SELECT, USAGE ON SEQUENCE publications_id_seq TO scout;
 
 --
 -- Name: publications_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE publications_id_seq TO scribe;
+
+--
+-- Name: publications_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE publications_id_seq TO ticker;
+
+--
+-- Name: ralph_sessions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE ralph_sessions_id_seq TO argus;
 
 --
 -- Name: ralph_sessions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -11947,7 +14489,19 @@ GRANT USAGE ON SEQUENCE ralph_sessions_id_seq TO coder;
 -- Name: ralph_sessions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE ralph_sessions_id_seq TO conductor;
+
+--
+-- Name: ralph_sessions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE ralph_sessions_id_seq TO erato;
+
+--
+-- Name: ralph_sessions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE ralph_sessions_id_seq TO flint;
 
 --
 -- Name: ralph_sessions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -11971,7 +14525,19 @@ GRANT USAGE ON SEQUENCE ralph_sessions_id_seq TO graybeard;
 -- Name: ralph_sessions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE ralph_sessions_id_seq TO hermes;
+
+--
+-- Name: ralph_sessions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE ralph_sessions_id_seq TO iris;
+
+--
+-- Name: ralph_sessions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE ralph_sessions_id_seq TO marcie;
 
 --
 -- Name: ralph_sessions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -11983,13 +14549,31 @@ GRANT USAGE ON SEQUENCE ralph_sessions_id_seq TO newhart;
 -- Name: ralph_sessions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE ralph_sessions_id_seq TO quill;
+
+--
+-- Name: ralph_sessions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT SELECT, USAGE ON SEQUENCE ralph_sessions_id_seq TO scout;
 
 --
 -- Name: ralph_sessions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE ralph_sessions_id_seq TO scribe;
+
+--
+-- Name: ralph_sessions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE ralph_sessions_id_seq TO ticker;
+
+--
+-- Name: research_citations_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE research_citations_id_seq TO argus;
 
 --
 -- Name: research_citations_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -12007,7 +14591,19 @@ GRANT USAGE ON SEQUENCE research_citations_id_seq TO coder;
 -- Name: research_citations_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE research_citations_id_seq TO conductor;
+
+--
+-- Name: research_citations_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE research_citations_id_seq TO erato;
+
+--
+-- Name: research_citations_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE research_citations_id_seq TO flint;
 
 --
 -- Name: research_citations_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -12025,7 +14621,19 @@ GRANT USAGE ON SEQUENCE research_citations_id_seq TO gidget;
 -- Name: research_citations_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE research_citations_id_seq TO hermes;
+
+--
+-- Name: research_citations_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE research_citations_id_seq TO iris;
+
+--
+-- Name: research_citations_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE research_citations_id_seq TO marcie;
 
 --
 -- Name: research_citations_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -12043,7 +14651,25 @@ GRANT USAGE ON SEQUENCE research_citations_id_seq TO nova;
 -- Name: research_citations_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE research_citations_id_seq TO quill;
+
+--
+-- Name: research_citations_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE research_citations_id_seq TO scribe;
+
+--
+-- Name: research_citations_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE research_citations_id_seq TO ticker;
+
+--
+-- Name: research_conclusions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE research_conclusions_id_seq TO argus;
 
 --
 -- Name: research_conclusions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -12061,7 +14687,19 @@ GRANT USAGE ON SEQUENCE research_conclusions_id_seq TO coder;
 -- Name: research_conclusions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE research_conclusions_id_seq TO conductor;
+
+--
+-- Name: research_conclusions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE research_conclusions_id_seq TO erato;
+
+--
+-- Name: research_conclusions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE research_conclusions_id_seq TO flint;
 
 --
 -- Name: research_conclusions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -12079,7 +14717,19 @@ GRANT USAGE ON SEQUENCE research_conclusions_id_seq TO gidget;
 -- Name: research_conclusions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE research_conclusions_id_seq TO hermes;
+
+--
+-- Name: research_conclusions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE research_conclusions_id_seq TO iris;
+
+--
+-- Name: research_conclusions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE research_conclusions_id_seq TO marcie;
 
 --
 -- Name: research_conclusions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -12097,7 +14747,25 @@ GRANT USAGE ON SEQUENCE research_conclusions_id_seq TO nova;
 -- Name: research_conclusions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE research_conclusions_id_seq TO quill;
+
+--
+-- Name: research_conclusions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE research_conclusions_id_seq TO scribe;
+
+--
+-- Name: research_conclusions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE research_conclusions_id_seq TO ticker;
+
+--
+-- Name: research_findings_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE research_findings_id_seq TO argus;
 
 --
 -- Name: research_findings_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -12115,7 +14783,19 @@ GRANT USAGE ON SEQUENCE research_findings_id_seq TO coder;
 -- Name: research_findings_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE research_findings_id_seq TO conductor;
+
+--
+-- Name: research_findings_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE research_findings_id_seq TO erato;
+
+--
+-- Name: research_findings_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE research_findings_id_seq TO flint;
 
 --
 -- Name: research_findings_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -12133,7 +14813,19 @@ GRANT USAGE ON SEQUENCE research_findings_id_seq TO gidget;
 -- Name: research_findings_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE research_findings_id_seq TO hermes;
+
+--
+-- Name: research_findings_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE research_findings_id_seq TO iris;
+
+--
+-- Name: research_findings_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE research_findings_id_seq TO marcie;
 
 --
 -- Name: research_findings_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -12151,7 +14843,25 @@ GRANT USAGE ON SEQUENCE research_findings_id_seq TO nova;
 -- Name: research_findings_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE research_findings_id_seq TO quill;
+
+--
+-- Name: research_findings_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE research_findings_id_seq TO scribe;
+
+--
+-- Name: research_findings_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE research_findings_id_seq TO ticker;
+
+--
+-- Name: research_projects_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE research_projects_id_seq TO argus;
 
 --
 -- Name: research_projects_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -12169,7 +14879,19 @@ GRANT USAGE ON SEQUENCE research_projects_id_seq TO coder;
 -- Name: research_projects_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE research_projects_id_seq TO conductor;
+
+--
+-- Name: research_projects_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE research_projects_id_seq TO erato;
+
+--
+-- Name: research_projects_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE research_projects_id_seq TO flint;
 
 --
 -- Name: research_projects_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -12187,7 +14909,19 @@ GRANT USAGE ON SEQUENCE research_projects_id_seq TO gidget;
 -- Name: research_projects_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE research_projects_id_seq TO hermes;
+
+--
+-- Name: research_projects_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE research_projects_id_seq TO iris;
+
+--
+-- Name: research_projects_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE research_projects_id_seq TO marcie;
 
 --
 -- Name: research_projects_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -12205,7 +14939,25 @@ GRANT USAGE ON SEQUENCE research_projects_id_seq TO nova;
 -- Name: research_projects_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE research_projects_id_seq TO quill;
+
+--
+-- Name: research_projects_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE research_projects_id_seq TO scribe;
+
+--
+-- Name: research_projects_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE research_projects_id_seq TO ticker;
+
+--
+-- Name: research_provenance_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE research_provenance_id_seq TO argus;
 
 --
 -- Name: research_provenance_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -12223,7 +14975,19 @@ GRANT USAGE ON SEQUENCE research_provenance_id_seq TO coder;
 -- Name: research_provenance_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE research_provenance_id_seq TO conductor;
+
+--
+-- Name: research_provenance_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE research_provenance_id_seq TO erato;
+
+--
+-- Name: research_provenance_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE research_provenance_id_seq TO flint;
 
 --
 -- Name: research_provenance_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -12241,7 +15005,19 @@ GRANT USAGE ON SEQUENCE research_provenance_id_seq TO gidget;
 -- Name: research_provenance_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE research_provenance_id_seq TO hermes;
+
+--
+-- Name: research_provenance_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE research_provenance_id_seq TO iris;
+
+--
+-- Name: research_provenance_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE research_provenance_id_seq TO marcie;
 
 --
 -- Name: research_provenance_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -12259,7 +15035,25 @@ GRANT USAGE ON SEQUENCE research_provenance_id_seq TO nova;
 -- Name: research_provenance_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE research_provenance_id_seq TO quill;
+
+--
+-- Name: research_provenance_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE research_provenance_id_seq TO scribe;
+
+--
+-- Name: research_provenance_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE research_provenance_id_seq TO ticker;
+
+--
+-- Name: research_taggings_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE research_taggings_id_seq TO argus;
 
 --
 -- Name: research_taggings_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -12277,7 +15071,19 @@ GRANT USAGE ON SEQUENCE research_taggings_id_seq TO coder;
 -- Name: research_taggings_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE research_taggings_id_seq TO conductor;
+
+--
+-- Name: research_taggings_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE research_taggings_id_seq TO erato;
+
+--
+-- Name: research_taggings_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE research_taggings_id_seq TO flint;
 
 --
 -- Name: research_taggings_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -12295,7 +15101,19 @@ GRANT USAGE ON SEQUENCE research_taggings_id_seq TO gidget;
 -- Name: research_taggings_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE research_taggings_id_seq TO hermes;
+
+--
+-- Name: research_taggings_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE research_taggings_id_seq TO iris;
+
+--
+-- Name: research_taggings_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE research_taggings_id_seq TO marcie;
 
 --
 -- Name: research_taggings_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -12313,7 +15131,25 @@ GRANT USAGE ON SEQUENCE research_taggings_id_seq TO nova;
 -- Name: research_taggings_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE research_taggings_id_seq TO quill;
+
+--
+-- Name: research_taggings_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE research_taggings_id_seq TO scribe;
+
+--
+-- Name: research_taggings_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE research_taggings_id_seq TO ticker;
+
+--
+-- Name: research_tags_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE research_tags_id_seq TO argus;
 
 --
 -- Name: research_tags_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -12331,7 +15167,19 @@ GRANT USAGE ON SEQUENCE research_tags_id_seq TO coder;
 -- Name: research_tags_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE research_tags_id_seq TO conductor;
+
+--
+-- Name: research_tags_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE research_tags_id_seq TO erato;
+
+--
+-- Name: research_tags_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE research_tags_id_seq TO flint;
 
 --
 -- Name: research_tags_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -12349,7 +15197,19 @@ GRANT USAGE ON SEQUENCE research_tags_id_seq TO gidget;
 -- Name: research_tags_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE research_tags_id_seq TO hermes;
+
+--
+-- Name: research_tags_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE research_tags_id_seq TO iris;
+
+--
+-- Name: research_tags_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE research_tags_id_seq TO marcie;
 
 --
 -- Name: research_tags_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -12367,7 +15227,25 @@ GRANT USAGE ON SEQUENCE research_tags_id_seq TO nova;
 -- Name: research_tags_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE research_tags_id_seq TO quill;
+
+--
+-- Name: research_tags_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE research_tags_id_seq TO scribe;
+
+--
+-- Name: research_tags_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE research_tags_id_seq TO ticker;
+
+--
+-- Name: research_tasks_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE research_tasks_id_seq TO argus;
 
 --
 -- Name: research_tasks_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -12385,7 +15263,19 @@ GRANT USAGE ON SEQUENCE research_tasks_id_seq TO coder;
 -- Name: research_tasks_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE research_tasks_id_seq TO conductor;
+
+--
+-- Name: research_tasks_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE research_tasks_id_seq TO erato;
+
+--
+-- Name: research_tasks_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE research_tasks_id_seq TO flint;
 
 --
 -- Name: research_tasks_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -12403,7 +15293,19 @@ GRANT USAGE ON SEQUENCE research_tasks_id_seq TO gidget;
 -- Name: research_tasks_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE research_tasks_id_seq TO hermes;
+
+--
+-- Name: research_tasks_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE research_tasks_id_seq TO iris;
+
+--
+-- Name: research_tasks_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE research_tasks_id_seq TO marcie;
 
 --
 -- Name: research_tasks_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -12421,7 +15323,25 @@ GRANT USAGE ON SEQUENCE research_tasks_id_seq TO nova;
 -- Name: research_tasks_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE research_tasks_id_seq TO quill;
+
+--
+-- Name: research_tasks_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE research_tasks_id_seq TO scribe;
+
+--
+-- Name: research_tasks_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE research_tasks_id_seq TO ticker;
+
+--
+-- Name: shopping_history_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE shopping_history_id_seq TO argus;
 
 --
 -- Name: shopping_history_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -12439,7 +15359,19 @@ GRANT USAGE ON SEQUENCE shopping_history_id_seq TO coder;
 -- Name: shopping_history_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE shopping_history_id_seq TO conductor;
+
+--
+-- Name: shopping_history_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE shopping_history_id_seq TO erato;
+
+--
+-- Name: shopping_history_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE shopping_history_id_seq TO flint;
 
 --
 -- Name: shopping_history_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -12463,7 +15395,19 @@ GRANT USAGE ON SEQUENCE shopping_history_id_seq TO graybeard;
 -- Name: shopping_history_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE shopping_history_id_seq TO hermes;
+
+--
+-- Name: shopping_history_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE shopping_history_id_seq TO iris;
+
+--
+-- Name: shopping_history_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE shopping_history_id_seq TO marcie;
 
 --
 -- Name: shopping_history_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -12475,13 +15419,31 @@ GRANT USAGE ON SEQUENCE shopping_history_id_seq TO newhart;
 -- Name: shopping_history_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE shopping_history_id_seq TO quill;
+
+--
+-- Name: shopping_history_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT SELECT, USAGE ON SEQUENCE shopping_history_id_seq TO scout;
 
 --
 -- Name: shopping_history_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE shopping_history_id_seq TO scribe;
+
+--
+-- Name: shopping_history_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE shopping_history_id_seq TO ticker;
+
+--
+-- Name: shopping_preferences_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE shopping_preferences_id_seq TO argus;
 
 --
 -- Name: shopping_preferences_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -12499,7 +15461,19 @@ GRANT USAGE ON SEQUENCE shopping_preferences_id_seq TO coder;
 -- Name: shopping_preferences_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE shopping_preferences_id_seq TO conductor;
+
+--
+-- Name: shopping_preferences_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE shopping_preferences_id_seq TO erato;
+
+--
+-- Name: shopping_preferences_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE shopping_preferences_id_seq TO flint;
 
 --
 -- Name: shopping_preferences_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -12523,7 +15497,19 @@ GRANT USAGE ON SEQUENCE shopping_preferences_id_seq TO graybeard;
 -- Name: shopping_preferences_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE shopping_preferences_id_seq TO hermes;
+
+--
+-- Name: shopping_preferences_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE shopping_preferences_id_seq TO iris;
+
+--
+-- Name: shopping_preferences_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE shopping_preferences_id_seq TO marcie;
 
 --
 -- Name: shopping_preferences_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -12535,13 +15521,31 @@ GRANT USAGE ON SEQUENCE shopping_preferences_id_seq TO newhart;
 -- Name: shopping_preferences_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE shopping_preferences_id_seq TO quill;
+
+--
+-- Name: shopping_preferences_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT SELECT, USAGE ON SEQUENCE shopping_preferences_id_seq TO scout;
 
 --
 -- Name: shopping_preferences_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE shopping_preferences_id_seq TO scribe;
+
+--
+-- Name: shopping_preferences_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE shopping_preferences_id_seq TO ticker;
+
+--
+-- Name: shopping_wishlist_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE shopping_wishlist_id_seq TO argus;
 
 --
 -- Name: shopping_wishlist_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -12559,7 +15563,19 @@ GRANT USAGE ON SEQUENCE shopping_wishlist_id_seq TO coder;
 -- Name: shopping_wishlist_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE shopping_wishlist_id_seq TO conductor;
+
+--
+-- Name: shopping_wishlist_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE shopping_wishlist_id_seq TO erato;
+
+--
+-- Name: shopping_wishlist_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE shopping_wishlist_id_seq TO flint;
 
 --
 -- Name: shopping_wishlist_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -12583,7 +15599,19 @@ GRANT USAGE ON SEQUENCE shopping_wishlist_id_seq TO graybeard;
 -- Name: shopping_wishlist_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE shopping_wishlist_id_seq TO hermes;
+
+--
+-- Name: shopping_wishlist_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE shopping_wishlist_id_seq TO iris;
+
+--
+-- Name: shopping_wishlist_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE shopping_wishlist_id_seq TO marcie;
 
 --
 -- Name: shopping_wishlist_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -12595,13 +15623,31 @@ GRANT USAGE ON SEQUENCE shopping_wishlist_id_seq TO newhart;
 -- Name: shopping_wishlist_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE shopping_wishlist_id_seq TO quill;
+
+--
+-- Name: shopping_wishlist_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT SELECT, USAGE ON SEQUENCE shopping_wishlist_id_seq TO scout;
 
 --
 -- Name: shopping_wishlist_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE shopping_wishlist_id_seq TO scribe;
+
+--
+-- Name: shopping_wishlist_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE shopping_wishlist_id_seq TO ticker;
+
+--
+-- Name: skills_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE skills_id_seq TO argus;
 
 --
 -- Name: skills_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -12619,7 +15665,19 @@ GRANT USAGE ON SEQUENCE skills_id_seq TO coder;
 -- Name: skills_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE skills_id_seq TO conductor;
+
+--
+-- Name: skills_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE skills_id_seq TO erato;
+
+--
+-- Name: skills_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE skills_id_seq TO flint;
 
 --
 -- Name: skills_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -12643,7 +15701,19 @@ GRANT USAGE ON SEQUENCE skills_id_seq TO graybeard;
 -- Name: skills_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE skills_id_seq TO hermes;
+
+--
+-- Name: skills_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE skills_id_seq TO iris;
+
+--
+-- Name: skills_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE skills_id_seq TO marcie;
 
 --
 -- Name: skills_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -12655,13 +15725,31 @@ GRANT USAGE ON SEQUENCE skills_id_seq TO newhart;
 -- Name: skills_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE skills_id_seq TO quill;
+
+--
+-- Name: skills_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT SELECT, USAGE ON SEQUENCE skills_id_seq TO scout;
 
 --
 -- Name: skills_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE skills_id_seq TO scribe;
+
+--
+-- Name: skills_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE skills_id_seq TO ticker;
+
+--
+-- Name: tags_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE tags_id_seq TO argus;
 
 --
 -- Name: tags_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -12679,7 +15767,19 @@ GRANT USAGE ON SEQUENCE tags_id_seq TO coder;
 -- Name: tags_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE tags_id_seq TO conductor;
+
+--
+-- Name: tags_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE tags_id_seq TO erato;
+
+--
+-- Name: tags_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE tags_id_seq TO flint;
 
 --
 -- Name: tags_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -12703,7 +15803,19 @@ GRANT USAGE ON SEQUENCE tags_id_seq TO graybeard;
 -- Name: tags_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE tags_id_seq TO hermes;
+
+--
+-- Name: tags_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE tags_id_seq TO iris;
+
+--
+-- Name: tags_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE tags_id_seq TO marcie;
 
 --
 -- Name: tags_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -12715,13 +15827,31 @@ GRANT USAGE ON SEQUENCE tags_id_seq TO newhart;
 -- Name: tags_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE tags_id_seq TO quill;
+
+--
+-- Name: tags_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT SELECT, USAGE ON SEQUENCE tags_id_seq TO scout;
 
 --
 -- Name: tags_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE tags_id_seq TO scribe;
+
+--
+-- Name: tags_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE tags_id_seq TO ticker;
+
+--
+-- Name: tasks_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE tasks_id_seq TO argus;
 
 --
 -- Name: tasks_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -12739,7 +15869,19 @@ GRANT USAGE ON SEQUENCE tasks_id_seq TO coder;
 -- Name: tasks_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE tasks_id_seq TO conductor;
+
+--
+-- Name: tasks_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE tasks_id_seq TO erato;
+
+--
+-- Name: tasks_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE tasks_id_seq TO flint;
 
 --
 -- Name: tasks_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -12763,7 +15905,19 @@ GRANT USAGE ON SEQUENCE tasks_id_seq TO graybeard;
 -- Name: tasks_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE tasks_id_seq TO hermes;
+
+--
+-- Name: tasks_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE tasks_id_seq TO iris;
+
+--
+-- Name: tasks_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE tasks_id_seq TO marcie;
 
 --
 -- Name: tasks_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -12775,13 +15929,31 @@ GRANT USAGE ON SEQUENCE tasks_id_seq TO newhart;
 -- Name: tasks_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE tasks_id_seq TO quill;
+
+--
+-- Name: tasks_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT SELECT, USAGE ON SEQUENCE tasks_id_seq TO scout;
 
 --
 -- Name: tasks_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE tasks_id_seq TO scribe;
+
+--
+-- Name: tasks_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE tasks_id_seq TO ticker;
+
+--
+-- Name: tools_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE tools_id_seq TO argus;
 
 --
 -- Name: tools_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -12799,7 +15971,19 @@ GRANT USAGE ON SEQUENCE tools_id_seq TO coder;
 -- Name: tools_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE tools_id_seq TO conductor;
+
+--
+-- Name: tools_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE tools_id_seq TO erato;
+
+--
+-- Name: tools_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE tools_id_seq TO flint;
 
 --
 -- Name: tools_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -12823,7 +16007,19 @@ GRANT USAGE ON SEQUENCE tools_id_seq TO graybeard;
 -- Name: tools_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE tools_id_seq TO hermes;
+
+--
+-- Name: tools_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE tools_id_seq TO iris;
+
+--
+-- Name: tools_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE tools_id_seq TO marcie;
 
 --
 -- Name: tools_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -12835,13 +16031,31 @@ GRANT USAGE ON SEQUENCE tools_id_seq TO newhart;
 -- Name: tools_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE tools_id_seq TO quill;
+
+--
+-- Name: tools_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT SELECT, USAGE ON SEQUENCE tools_id_seq TO scout;
 
 --
 -- Name: tools_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE tools_id_seq TO scribe;
+
+--
+-- Name: tools_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE tools_id_seq TO ticker;
+
+--
+-- Name: unsolved_problems_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE unsolved_problems_id_seq TO argus;
 
 --
 -- Name: unsolved_problems_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -12859,7 +16073,19 @@ GRANT USAGE ON SEQUENCE unsolved_problems_id_seq TO coder;
 -- Name: unsolved_problems_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE unsolved_problems_id_seq TO conductor;
+
+--
+-- Name: unsolved_problems_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE unsolved_problems_id_seq TO erato;
+
+--
+-- Name: unsolved_problems_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE unsolved_problems_id_seq TO flint;
 
 --
 -- Name: unsolved_problems_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -12883,7 +16109,19 @@ GRANT USAGE ON SEQUENCE unsolved_problems_id_seq TO graybeard;
 -- Name: unsolved_problems_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE unsolved_problems_id_seq TO hermes;
+
+--
+-- Name: unsolved_problems_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE unsolved_problems_id_seq TO iris;
+
+--
+-- Name: unsolved_problems_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE unsolved_problems_id_seq TO marcie;
 
 --
 -- Name: unsolved_problems_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -12895,13 +16133,31 @@ GRANT USAGE ON SEQUENCE unsolved_problems_id_seq TO newhart;
 -- Name: unsolved_problems_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE unsolved_problems_id_seq TO quill;
+
+--
+-- Name: unsolved_problems_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT SELECT, USAGE ON SEQUENCE unsolved_problems_id_seq TO scout;
 
 --
 -- Name: unsolved_problems_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE unsolved_problems_id_seq TO scribe;
+
+--
+-- Name: unsolved_problems_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE unsolved_problems_id_seq TO ticker;
+
+--
+-- Name: vehicles_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE vehicles_id_seq TO argus;
 
 --
 -- Name: vehicles_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -12919,7 +16175,19 @@ GRANT USAGE ON SEQUENCE vehicles_id_seq TO coder;
 -- Name: vehicles_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE vehicles_id_seq TO conductor;
+
+--
+-- Name: vehicles_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE vehicles_id_seq TO erato;
+
+--
+-- Name: vehicles_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE vehicles_id_seq TO flint;
 
 --
 -- Name: vehicles_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -12943,7 +16211,19 @@ GRANT USAGE ON SEQUENCE vehicles_id_seq TO graybeard;
 -- Name: vehicles_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE vehicles_id_seq TO hermes;
+
+--
+-- Name: vehicles_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE vehicles_id_seq TO iris;
+
+--
+-- Name: vehicles_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE vehicles_id_seq TO marcie;
 
 --
 -- Name: vehicles_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -12955,13 +16235,31 @@ GRANT USAGE ON SEQUENCE vehicles_id_seq TO newhart;
 -- Name: vehicles_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE vehicles_id_seq TO quill;
+
+--
+-- Name: vehicles_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT SELECT, USAGE ON SEQUENCE vehicles_id_seq TO scout;
 
 --
 -- Name: vehicles_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE vehicles_id_seq TO scribe;
+
+--
+-- Name: vehicles_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE vehicles_id_seq TO ticker;
+
+--
+-- Name: vocabulary_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE vocabulary_id_seq TO argus;
 
 --
 -- Name: vocabulary_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -12979,7 +16277,19 @@ GRANT USAGE ON SEQUENCE vocabulary_id_seq TO coder;
 -- Name: vocabulary_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE vocabulary_id_seq TO conductor;
+
+--
+-- Name: vocabulary_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE vocabulary_id_seq TO erato;
+
+--
+-- Name: vocabulary_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE vocabulary_id_seq TO flint;
 
 --
 -- Name: vocabulary_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -13003,7 +16313,19 @@ GRANT USAGE ON SEQUENCE vocabulary_id_seq TO graybeard;
 -- Name: vocabulary_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE vocabulary_id_seq TO hermes;
+
+--
+-- Name: vocabulary_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE vocabulary_id_seq TO iris;
+
+--
+-- Name: vocabulary_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE vocabulary_id_seq TO marcie;
 
 --
 -- Name: vocabulary_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -13015,13 +16337,31 @@ GRANT USAGE ON SEQUENCE vocabulary_id_seq TO newhart;
 -- Name: vocabulary_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE vocabulary_id_seq TO quill;
+
+--
+-- Name: vocabulary_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT SELECT, USAGE ON SEQUENCE vocabulary_id_seq TO scout;
 
 --
 -- Name: vocabulary_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE vocabulary_id_seq TO scribe;
+
+--
+-- Name: vocabulary_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE vocabulary_id_seq TO ticker;
+
+--
+-- Name: workflow_runs_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE workflow_runs_id_seq TO argus;
 
 --
 -- Name: workflow_runs_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -13039,6 +16379,18 @@ GRANT SELECT, USAGE ON SEQUENCE workflow_runs_id_seq TO coder;
 -- Name: workflow_runs_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE workflow_runs_id_seq TO conductor;
+
+--
+-- Name: workflow_runs_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE workflow_runs_id_seq TO flint;
+
+--
+-- Name: workflow_runs_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT SELECT, USAGE ON SEQUENCE workflow_runs_id_seq TO gidget;
 
 --
@@ -13051,13 +16403,43 @@ GRANT SELECT, USAGE ON SEQUENCE workflow_runs_id_seq TO graybeard;
 -- Name: workflow_runs_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE workflow_runs_id_seq TO hermes;
+
+--
+-- Name: workflow_runs_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE workflow_runs_id_seq TO marcie;
+
+--
+-- Name: workflow_runs_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT SELECT, USAGE ON SEQUENCE workflow_runs_id_seq TO nova;
 
 --
 -- Name: workflow_runs_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE workflow_runs_id_seq TO quill;
+
+--
+-- Name: workflow_runs_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT SELECT, USAGE ON SEQUENCE workflow_runs_id_seq TO scout;
+
+--
+-- Name: workflow_runs_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE workflow_runs_id_seq TO scribe;
+
+--
+-- Name: workflow_steps_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE workflow_steps_id_seq TO argus;
 
 --
 -- Name: workflow_steps_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -13075,7 +16457,19 @@ GRANT USAGE ON SEQUENCE workflow_steps_id_seq TO coder;
 -- Name: workflow_steps_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE workflow_steps_id_seq TO conductor;
+
+--
+-- Name: workflow_steps_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE workflow_steps_id_seq TO erato;
+
+--
+-- Name: workflow_steps_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE workflow_steps_id_seq TO flint;
 
 --
 -- Name: workflow_steps_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -13099,7 +16493,19 @@ GRANT USAGE ON SEQUENCE workflow_steps_id_seq TO graybeard;
 -- Name: workflow_steps_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE workflow_steps_id_seq TO hermes;
+
+--
+-- Name: workflow_steps_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE workflow_steps_id_seq TO iris;
+
+--
+-- Name: workflow_steps_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE workflow_steps_id_seq TO marcie;
 
 --
 -- Name: workflow_steps_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -13111,13 +16517,31 @@ GRANT USAGE ON SEQUENCE workflow_steps_id_seq TO newhart;
 -- Name: workflow_steps_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE workflow_steps_id_seq TO quill;
+
+--
+-- Name: workflow_steps_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT SELECT, USAGE ON SEQUENCE workflow_steps_id_seq TO scout;
 
 --
 -- Name: workflow_steps_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE workflow_steps_id_seq TO scribe;
+
+--
+-- Name: workflow_steps_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE workflow_steps_id_seq TO ticker;
+
+--
+-- Name: workflows_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE workflows_id_seq TO argus;
 
 --
 -- Name: workflows_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -13135,7 +16559,19 @@ GRANT USAGE ON SEQUENCE workflows_id_seq TO coder;
 -- Name: workflows_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE workflows_id_seq TO conductor;
+
+--
+-- Name: workflows_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE workflows_id_seq TO erato;
+
+--
+-- Name: workflows_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE workflows_id_seq TO flint;
 
 --
 -- Name: workflows_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -13159,7 +16595,19 @@ GRANT USAGE ON SEQUENCE workflows_id_seq TO graybeard;
 -- Name: workflows_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE workflows_id_seq TO hermes;
+
+--
+-- Name: workflows_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE workflows_id_seq TO iris;
+
+--
+-- Name: workflows_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE workflows_id_seq TO marcie;
 
 --
 -- Name: workflows_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -13171,13 +16619,31 @@ GRANT USAGE ON SEQUENCE workflows_id_seq TO newhart;
 -- Name: workflows_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE workflows_id_seq TO quill;
+
+--
+-- Name: workflows_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT SELECT, USAGE ON SEQUENCE workflows_id_seq TO scout;
 
 --
 -- Name: workflows_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE workflows_id_seq TO scribe;
+
+--
+-- Name: workflows_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE workflows_id_seq TO ticker;
+
+--
+-- Name: works_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE works_id_seq TO argus;
 
 --
 -- Name: works_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -13195,7 +16661,19 @@ GRANT USAGE ON SEQUENCE works_id_seq TO coder;
 -- Name: works_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE works_id_seq TO conductor;
+
+--
+-- Name: works_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE works_id_seq TO erato;
+
+--
+-- Name: works_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE works_id_seq TO flint;
 
 --
 -- Name: works_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -13219,7 +16697,19 @@ GRANT USAGE ON SEQUENCE works_id_seq TO graybeard;
 -- Name: works_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE works_id_seq TO hermes;
+
+--
+-- Name: works_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT USAGE ON SEQUENCE works_id_seq TO iris;
+
+--
+-- Name: works_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE works_id_seq TO marcie;
 
 --
 -- Name: works_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -13231,7 +16721,19 @@ GRANT USAGE ON SEQUENCE works_id_seq TO newhart;
 -- Name: works_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT USAGE ON SEQUENCE works_id_seq TO quill;
+
+--
+-- Name: works_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT SELECT, USAGE ON SEQUENCE works_id_seq TO scout;
+
+--
+-- Name: works_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE works_id_seq TO scribe;
 
 --
 -- Name: works_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -13675,6 +17177,12 @@ GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE works TO graybeard;
 -- Name: delegation_knowledge; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE delegation_knowledge TO argus;
+
+--
+-- Name: delegation_knowledge; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE delegation_knowledge TO athena;
 
 --
@@ -13687,7 +17195,19 @@ GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE delegation_knowledge TO coder;
 -- Name: delegation_knowledge; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE delegation_knowledge TO conductor;
+
+--
+-- Name: delegation_knowledge; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE delegation_knowledge TO erato;
+
+--
+-- Name: delegation_knowledge; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE delegation_knowledge TO flint;
 
 --
 -- Name: delegation_knowledge; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -13711,7 +17231,19 @@ GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE delegation_knowledge TO graybeard;
 -- Name: delegation_knowledge; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE delegation_knowledge TO hermes;
+
+--
+-- Name: delegation_knowledge; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE delegation_knowledge TO iris;
+
+--
+-- Name: delegation_knowledge; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE delegation_knowledge TO marcie;
 
 --
 -- Name: delegation_knowledge; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -13735,13 +17267,31 @@ GRANT SELECT ON TABLE delegation_knowledge TO openproject_user;
 -- Name: delegation_knowledge; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE delegation_knowledge TO quill;
+
+--
+-- Name: delegation_knowledge; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE delegation_knowledge TO scout;
 
 --
 -- Name: delegation_knowledge; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE delegation_knowledge TO scribe;
+
+--
+-- Name: delegation_knowledge; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE delegation_knowledge TO ticker;
+
+--
+-- Name: v_agent_chat_recent; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_agent_chat_recent TO argus;
 
 --
 -- Name: v_agent_chat_recent; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -13759,7 +17309,19 @@ GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_agent_chat_recent TO coder;
 -- Name: v_agent_chat_recent; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_agent_chat_recent TO conductor;
+
+--
+-- Name: v_agent_chat_recent; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_agent_chat_recent TO erato;
+
+--
+-- Name: v_agent_chat_recent; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_agent_chat_recent TO flint;
 
 --
 -- Name: v_agent_chat_recent; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -13783,7 +17345,19 @@ GRANT SELECT ON TABLE v_agent_chat_recent TO graybeard;
 -- Name: v_agent_chat_recent; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_agent_chat_recent TO hermes;
+
+--
+-- Name: v_agent_chat_recent; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_agent_chat_recent TO iris;
+
+--
+-- Name: v_agent_chat_recent; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_agent_chat_recent TO marcie;
 
 --
 -- Name: v_agent_chat_recent; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -13807,13 +17381,31 @@ GRANT SELECT ON TABLE v_agent_chat_recent TO openproject_user;
 -- Name: v_agent_chat_recent; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_agent_chat_recent TO quill;
+
+--
+-- Name: v_agent_chat_recent; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_agent_chat_recent TO scout;
 
 --
 -- Name: v_agent_chat_recent; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_agent_chat_recent TO scribe;
+
+--
+-- Name: v_agent_chat_recent; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_agent_chat_recent TO ticker;
+
+--
+-- Name: v_agent_chat_stats; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_agent_chat_stats TO argus;
 
 --
 -- Name: v_agent_chat_stats; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -13831,7 +17423,19 @@ GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_agent_chat_stats TO coder;
 -- Name: v_agent_chat_stats; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_agent_chat_stats TO conductor;
+
+--
+-- Name: v_agent_chat_stats; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_agent_chat_stats TO erato;
+
+--
+-- Name: v_agent_chat_stats; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_agent_chat_stats TO flint;
 
 --
 -- Name: v_agent_chat_stats; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -13855,7 +17459,19 @@ GRANT SELECT ON TABLE v_agent_chat_stats TO graybeard;
 -- Name: v_agent_chat_stats; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_agent_chat_stats TO hermes;
+
+--
+-- Name: v_agent_chat_stats; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_agent_chat_stats TO iris;
+
+--
+-- Name: v_agent_chat_stats; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_agent_chat_stats TO marcie;
 
 --
 -- Name: v_agent_chat_stats; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -13879,13 +17495,31 @@ GRANT SELECT ON TABLE v_agent_chat_stats TO openproject_user;
 -- Name: v_agent_chat_stats; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_agent_chat_stats TO quill;
+
+--
+-- Name: v_agent_chat_stats; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_agent_chat_stats TO scout;
 
 --
 -- Name: v_agent_chat_stats; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_agent_chat_stats TO scribe;
+
+--
+-- Name: v_agent_chat_stats; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_agent_chat_stats TO ticker;
+
+--
+-- Name: v_agent_spawn_stats; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_agent_spawn_stats TO argus;
 
 --
 -- Name: v_agent_spawn_stats; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -13903,7 +17537,19 @@ GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_agent_spawn_stats TO coder;
 -- Name: v_agent_spawn_stats; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_agent_spawn_stats TO conductor;
+
+--
+-- Name: v_agent_spawn_stats; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_agent_spawn_stats TO erato;
+
+--
+-- Name: v_agent_spawn_stats; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_agent_spawn_stats TO flint;
 
 --
 -- Name: v_agent_spawn_stats; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -13927,7 +17573,19 @@ GRANT SELECT ON TABLE v_agent_spawn_stats TO graybeard;
 -- Name: v_agent_spawn_stats; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_agent_spawn_stats TO hermes;
+
+--
+-- Name: v_agent_spawn_stats; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_agent_spawn_stats TO iris;
+
+--
+-- Name: v_agent_spawn_stats; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_agent_spawn_stats TO marcie;
 
 --
 -- Name: v_agent_spawn_stats; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -13951,13 +17609,31 @@ GRANT SELECT ON TABLE v_agent_spawn_stats TO openproject_user;
 -- Name: v_agent_spawn_stats; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_agent_spawn_stats TO quill;
+
+--
+-- Name: v_agent_spawn_stats; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_agent_spawn_stats TO scout;
 
 --
 -- Name: v_agent_spawn_stats; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_agent_spawn_stats TO scribe;
+
+--
+-- Name: v_agent_spawn_stats; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_agent_spawn_stats TO ticker;
+
+--
+-- Name: v_agents; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_agents TO argus;
 
 --
 -- Name: v_agents; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -13975,7 +17651,19 @@ GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_agents TO coder;
 -- Name: v_agents; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_agents TO conductor;
+
+--
+-- Name: v_agents; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_agents TO erato;
+
+--
+-- Name: v_agents; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_agents TO flint;
 
 --
 -- Name: v_agents; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -13999,7 +17687,19 @@ GRANT SELECT ON TABLE v_agents TO graybeard;
 -- Name: v_agents; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_agents TO hermes;
+
+--
+-- Name: v_agents; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_agents TO iris;
+
+--
+-- Name: v_agents; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_agents TO marcie;
 
 --
 -- Name: v_agents; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -14023,13 +17723,31 @@ GRANT SELECT ON TABLE v_agents TO openproject_user;
 -- Name: v_agents; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_agents TO quill;
+
+--
+-- Name: v_agents; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_agents TO scout;
 
 --
 -- Name: v_agents; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_agents TO scribe;
+
+--
+-- Name: v_agents; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_agents TO ticker;
+
+--
+-- Name: v_entity_facts; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_entity_facts TO argus;
 
 --
 -- Name: v_entity_facts; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -14047,7 +17765,19 @@ GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_entity_facts TO coder;
 -- Name: v_entity_facts; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_entity_facts TO conductor;
+
+--
+-- Name: v_entity_facts; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_entity_facts TO erato;
+
+--
+-- Name: v_entity_facts; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_entity_facts TO flint;
 
 --
 -- Name: v_entity_facts; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -14071,7 +17801,19 @@ GRANT SELECT ON TABLE v_entity_facts TO graybeard;
 -- Name: v_entity_facts; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_entity_facts TO hermes;
+
+--
+-- Name: v_entity_facts; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_entity_facts TO iris;
+
+--
+-- Name: v_entity_facts; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_entity_facts TO marcie;
 
 --
 -- Name: v_entity_facts; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -14095,13 +17837,31 @@ GRANT SELECT ON TABLE v_entity_facts TO openproject_user;
 -- Name: v_entity_facts; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_entity_facts TO quill;
+
+--
+-- Name: v_entity_facts; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_entity_facts TO scout;
 
 --
 -- Name: v_entity_facts; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_entity_facts TO scribe;
+
+--
+-- Name: v_entity_facts; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_entity_facts TO ticker;
+
+--
+-- Name: v_event_timeline; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_event_timeline TO argus;
 
 --
 -- Name: v_event_timeline; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -14119,7 +17879,19 @@ GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_event_timeline TO coder;
 -- Name: v_event_timeline; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_event_timeline TO conductor;
+
+--
+-- Name: v_event_timeline; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_event_timeline TO erato;
+
+--
+-- Name: v_event_timeline; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_event_timeline TO flint;
 
 --
 -- Name: v_event_timeline; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -14143,7 +17915,19 @@ GRANT SELECT ON TABLE v_event_timeline TO graybeard;
 -- Name: v_event_timeline; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_event_timeline TO hermes;
+
+--
+-- Name: v_event_timeline; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_event_timeline TO iris;
+
+--
+-- Name: v_event_timeline; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_event_timeline TO marcie;
 
 --
 -- Name: v_event_timeline; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -14167,13 +17951,31 @@ GRANT SELECT ON TABLE v_event_timeline TO openproject_user;
 -- Name: v_event_timeline; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_event_timeline TO quill;
+
+--
+-- Name: v_event_timeline; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_event_timeline TO scout;
 
 --
 -- Name: v_event_timeline; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_event_timeline TO scribe;
+
+--
+-- Name: v_event_timeline; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_event_timeline TO ticker;
+
+--
+-- Name: v_gambling_summary; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_gambling_summary TO argus;
 
 --
 -- Name: v_gambling_summary; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -14191,7 +17993,19 @@ GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_gambling_summary TO coder;
 -- Name: v_gambling_summary; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_gambling_summary TO conductor;
+
+--
+-- Name: v_gambling_summary; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_gambling_summary TO erato;
+
+--
+-- Name: v_gambling_summary; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_gambling_summary TO flint;
 
 --
 -- Name: v_gambling_summary; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -14215,7 +18029,19 @@ GRANT SELECT ON TABLE v_gambling_summary TO graybeard;
 -- Name: v_gambling_summary; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_gambling_summary TO hermes;
+
+--
+-- Name: v_gambling_summary; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_gambling_summary TO iris;
+
+--
+-- Name: v_gambling_summary; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_gambling_summary TO marcie;
 
 --
 -- Name: v_gambling_summary; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -14239,13 +18065,31 @@ GRANT SELECT ON TABLE v_gambling_summary TO openproject_user;
 -- Name: v_gambling_summary; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_gambling_summary TO quill;
+
+--
+-- Name: v_gambling_summary; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_gambling_summary TO scout;
 
 --
 -- Name: v_gambling_summary; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_gambling_summary TO scribe;
+
+--
+-- Name: v_gambling_summary; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_gambling_summary TO ticker;
+
+--
+-- Name: v_media_queue_pending; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_media_queue_pending TO argus;
 
 --
 -- Name: v_media_queue_pending; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -14263,7 +18107,19 @@ GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_media_queue_pending TO coder;
 -- Name: v_media_queue_pending; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_media_queue_pending TO conductor;
+
+--
+-- Name: v_media_queue_pending; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_media_queue_pending TO erato;
+
+--
+-- Name: v_media_queue_pending; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_media_queue_pending TO flint;
 
 --
 -- Name: v_media_queue_pending; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -14287,7 +18143,19 @@ GRANT SELECT ON TABLE v_media_queue_pending TO graybeard;
 -- Name: v_media_queue_pending; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_media_queue_pending TO hermes;
+
+--
+-- Name: v_media_queue_pending; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_media_queue_pending TO iris;
+
+--
+-- Name: v_media_queue_pending; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_media_queue_pending TO marcie;
 
 --
 -- Name: v_media_queue_pending; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -14311,13 +18179,31 @@ GRANT SELECT ON TABLE v_media_queue_pending TO openproject_user;
 -- Name: v_media_queue_pending; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_media_queue_pending TO quill;
+
+--
+-- Name: v_media_queue_pending; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_media_queue_pending TO scout;
 
 --
 -- Name: v_media_queue_pending; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_media_queue_pending TO scribe;
+
+--
+-- Name: v_media_queue_pending; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_media_queue_pending TO ticker;
+
+--
+-- Name: v_media_with_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_media_with_tags TO argus;
 
 --
 -- Name: v_media_with_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -14335,7 +18221,19 @@ GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_media_with_tags TO coder;
 -- Name: v_media_with_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_media_with_tags TO conductor;
+
+--
+-- Name: v_media_with_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_media_with_tags TO erato;
+
+--
+-- Name: v_media_with_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_media_with_tags TO flint;
 
 --
 -- Name: v_media_with_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -14359,7 +18257,19 @@ GRANT SELECT ON TABLE v_media_with_tags TO graybeard;
 -- Name: v_media_with_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_media_with_tags TO hermes;
+
+--
+-- Name: v_media_with_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_media_with_tags TO iris;
+
+--
+-- Name: v_media_with_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_media_with_tags TO marcie;
 
 --
 -- Name: v_media_with_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -14383,13 +18293,31 @@ GRANT SELECT ON TABLE v_media_with_tags TO openproject_user;
 -- Name: v_media_with_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_media_with_tags TO quill;
+
+--
+-- Name: v_media_with_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_media_with_tags TO scout;
 
 --
 -- Name: v_media_with_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_media_with_tags TO scribe;
+
+--
+-- Name: v_media_with_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_media_with_tags TO ticker;
+
+--
+-- Name: v_metamours; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_metamours TO argus;
 
 --
 -- Name: v_metamours; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -14407,7 +18335,19 @@ GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_metamours TO coder;
 -- Name: v_metamours; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_metamours TO conductor;
+
+--
+-- Name: v_metamours; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_metamours TO erato;
+
+--
+-- Name: v_metamours; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_metamours TO flint;
 
 --
 -- Name: v_metamours; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -14431,7 +18371,19 @@ GRANT SELECT ON TABLE v_metamours TO graybeard;
 -- Name: v_metamours; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_metamours TO hermes;
+
+--
+-- Name: v_metamours; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_metamours TO iris;
+
+--
+-- Name: v_metamours; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_metamours TO marcie;
 
 --
 -- Name: v_metamours; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -14455,13 +18407,31 @@ GRANT SELECT ON TABLE v_metamours TO openproject_user;
 -- Name: v_metamours; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_metamours TO quill;
+
+--
+-- Name: v_metamours; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_metamours TO scout;
 
 --
 -- Name: v_metamours; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_metamours TO scribe;
+
+--
+-- Name: v_metamours; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_metamours TO ticker;
+
+--
+-- Name: v_pending_tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_pending_tasks TO argus;
 
 --
 -- Name: v_pending_tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -14479,7 +18449,19 @@ GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_pending_tasks TO coder;
 -- Name: v_pending_tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_pending_tasks TO conductor;
+
+--
+-- Name: v_pending_tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_pending_tasks TO erato;
+
+--
+-- Name: v_pending_tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_pending_tasks TO flint;
 
 --
 -- Name: v_pending_tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -14503,7 +18485,19 @@ GRANT SELECT ON TABLE v_pending_tasks TO graybeard;
 -- Name: v_pending_tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_pending_tasks TO hermes;
+
+--
+-- Name: v_pending_tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_pending_tasks TO iris;
+
+--
+-- Name: v_pending_tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_pending_tasks TO marcie;
 
 --
 -- Name: v_pending_tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -14527,13 +18521,31 @@ GRANT SELECT ON TABLE v_pending_tasks TO openproject_user;
 -- Name: v_pending_tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_pending_tasks TO quill;
+
+--
+-- Name: v_pending_tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_pending_tasks TO scout;
 
 --
 -- Name: v_pending_tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_pending_tasks TO scribe;
+
+--
+-- Name: v_pending_tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_pending_tasks TO ticker;
+
+--
+-- Name: v_pending_test_failures; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_pending_test_failures TO argus;
 
 --
 -- Name: v_pending_test_failures; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -14551,7 +18563,19 @@ GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_pending_test_failures TO coder;
 -- Name: v_pending_test_failures; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_pending_test_failures TO conductor;
+
+--
+-- Name: v_pending_test_failures; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_pending_test_failures TO erato;
+
+--
+-- Name: v_pending_test_failures; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_pending_test_failures TO flint;
 
 --
 -- Name: v_pending_test_failures; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -14575,7 +18599,19 @@ GRANT SELECT ON TABLE v_pending_test_failures TO graybeard;
 -- Name: v_pending_test_failures; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_pending_test_failures TO hermes;
+
+--
+-- Name: v_pending_test_failures; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_pending_test_failures TO iris;
+
+--
+-- Name: v_pending_test_failures; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_pending_test_failures TO marcie;
 
 --
 -- Name: v_pending_test_failures; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -14599,13 +18635,31 @@ GRANT SELECT ON TABLE v_pending_test_failures TO openproject_user;
 -- Name: v_pending_test_failures; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_pending_test_failures TO quill;
+
+--
+-- Name: v_pending_test_failures; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_pending_test_failures TO scout;
 
 --
 -- Name: v_pending_test_failures; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_pending_test_failures TO scribe;
+
+--
+-- Name: v_pending_test_failures; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_pending_test_failures TO ticker;
+
+--
+-- Name: v_portfolio_allocation; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_portfolio_allocation TO argus;
 
 --
 -- Name: v_portfolio_allocation; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -14623,7 +18677,19 @@ GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_portfolio_allocation TO coder;
 -- Name: v_portfolio_allocation; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_portfolio_allocation TO conductor;
+
+--
+-- Name: v_portfolio_allocation; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_portfolio_allocation TO erato;
+
+--
+-- Name: v_portfolio_allocation; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_portfolio_allocation TO flint;
 
 --
 -- Name: v_portfolio_allocation; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -14647,7 +18713,19 @@ GRANT SELECT ON TABLE v_portfolio_allocation TO graybeard;
 -- Name: v_portfolio_allocation; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_portfolio_allocation TO hermes;
+
+--
+-- Name: v_portfolio_allocation; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_portfolio_allocation TO iris;
+
+--
+-- Name: v_portfolio_allocation; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_portfolio_allocation TO marcie;
 
 --
 -- Name: v_portfolio_allocation; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -14671,13 +18749,31 @@ GRANT SELECT ON TABLE v_portfolio_allocation TO openproject_user;
 -- Name: v_portfolio_allocation; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_portfolio_allocation TO quill;
+
+--
+-- Name: v_portfolio_allocation; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_portfolio_allocation TO scout;
 
 --
 -- Name: v_portfolio_allocation; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_portfolio_allocation TO scribe;
+
+--
+-- Name: v_portfolio_allocation; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_portfolio_allocation TO ticker;
+
+--
+-- Name: v_ralph_active; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_ralph_active TO argus;
 
 --
 -- Name: v_ralph_active; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -14695,7 +18791,19 @@ GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_ralph_active TO coder;
 -- Name: v_ralph_active; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_ralph_active TO conductor;
+
+--
+-- Name: v_ralph_active; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_ralph_active TO erato;
+
+--
+-- Name: v_ralph_active; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_ralph_active TO flint;
 
 --
 -- Name: v_ralph_active; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -14719,7 +18827,19 @@ GRANT SELECT ON TABLE v_ralph_active TO graybeard;
 -- Name: v_ralph_active; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_ralph_active TO hermes;
+
+--
+-- Name: v_ralph_active; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_ralph_active TO iris;
+
+--
+-- Name: v_ralph_active; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_ralph_active TO marcie;
 
 --
 -- Name: v_ralph_active; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -14743,13 +18863,31 @@ GRANT SELECT ON TABLE v_ralph_active TO openproject_user;
 -- Name: v_ralph_active; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_ralph_active TO quill;
+
+--
+-- Name: v_ralph_active; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_ralph_active TO scout;
 
 --
 -- Name: v_ralph_active; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_ralph_active TO scribe;
+
+--
+-- Name: v_ralph_active; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_ralph_active TO ticker;
+
+--
+-- Name: v_relationships; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_relationships TO argus;
 
 --
 -- Name: v_relationships; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -14767,7 +18905,19 @@ GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_relationships TO coder;
 -- Name: v_relationships; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_relationships TO conductor;
+
+--
+-- Name: v_relationships; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_relationships TO erato;
+
+--
+-- Name: v_relationships; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_relationships TO flint;
 
 --
 -- Name: v_relationships; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -14791,7 +18941,19 @@ GRANT SELECT ON TABLE v_relationships TO graybeard;
 -- Name: v_relationships; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_relationships TO hermes;
+
+--
+-- Name: v_relationships; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_relationships TO iris;
+
+--
+-- Name: v_relationships; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_relationships TO marcie;
 
 --
 -- Name: v_relationships; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -14815,13 +18977,31 @@ GRANT SELECT ON TABLE v_relationships TO openproject_user;
 -- Name: v_relationships; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_relationships TO quill;
+
+--
+-- Name: v_relationships; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_relationships TO scout;
 
 --
 -- Name: v_relationships; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_relationships TO scribe;
+
+--
+-- Name: v_relationships; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_relationships TO ticker;
+
+--
+-- Name: v_task_tree; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_task_tree TO argus;
 
 --
 -- Name: v_task_tree; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -14839,7 +19019,19 @@ GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_task_tree TO coder;
 -- Name: v_task_tree; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_task_tree TO conductor;
+
+--
+-- Name: v_task_tree; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_task_tree TO erato;
+
+--
+-- Name: v_task_tree; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_task_tree TO flint;
 
 --
 -- Name: v_task_tree; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -14863,7 +19055,19 @@ GRANT SELECT ON TABLE v_task_tree TO graybeard;
 -- Name: v_task_tree; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_task_tree TO hermes;
+
+--
+-- Name: v_task_tree; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_task_tree TO iris;
+
+--
+-- Name: v_task_tree; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_task_tree TO marcie;
 
 --
 -- Name: v_task_tree; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -14887,13 +19091,31 @@ GRANT SELECT ON TABLE v_task_tree TO openproject_user;
 -- Name: v_task_tree; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_task_tree TO quill;
+
+--
+-- Name: v_task_tree; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_task_tree TO scout;
 
 --
 -- Name: v_task_tree; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_task_tree TO scribe;
+
+--
+-- Name: v_task_tree; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_task_tree TO ticker;
+
+--
+-- Name: v_users; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_users TO argus;
 
 --
 -- Name: v_users; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -14911,7 +19133,19 @@ GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_users TO coder;
 -- Name: v_users; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_users TO conductor;
+
+--
+-- Name: v_users; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_users TO erato;
+
+--
+-- Name: v_users; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_users TO flint;
 
 --
 -- Name: v_users; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -14935,7 +19169,19 @@ GRANT SELECT ON TABLE v_users TO graybeard;
 -- Name: v_users; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_users TO hermes;
+
+--
+-- Name: v_users; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_users TO iris;
+
+--
+-- Name: v_users; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_users TO marcie;
 
 --
 -- Name: v_users; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -14959,13 +19205,31 @@ GRANT SELECT ON TABLE v_users TO openproject_user;
 -- Name: v_users; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_users TO quill;
+
+--
+-- Name: v_users; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_users TO scout;
 
 --
 -- Name: v_users; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_users TO scribe;
+
+--
+-- Name: v_users; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_users TO ticker;
+
+--
+-- Name: workflow_steps_detail; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE workflow_steps_detail TO argus;
 
 --
 -- Name: workflow_steps_detail; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -14983,7 +19247,19 @@ GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE workflow_steps_detail TO coder;
 -- Name: workflow_steps_detail; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE workflow_steps_detail TO conductor;
+
+--
+-- Name: workflow_steps_detail; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE workflow_steps_detail TO erato;
+
+--
+-- Name: workflow_steps_detail; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE workflow_steps_detail TO flint;
 
 --
 -- Name: workflow_steps_detail; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -15007,7 +19283,19 @@ GRANT SELECT ON TABLE workflow_steps_detail TO graybeard;
 -- Name: workflow_steps_detail; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE workflow_steps_detail TO hermes;
+
+--
+-- Name: workflow_steps_detail; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE workflow_steps_detail TO iris;
+
+--
+-- Name: workflow_steps_detail; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE workflow_steps_detail TO marcie;
 
 --
 -- Name: workflow_steps_detail; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -15031,7 +19319,19 @@ GRANT SELECT ON TABLE workflow_steps_detail TO openproject_user;
 -- Name: workflow_steps_detail; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE workflow_steps_detail TO quill;
+
+--
+-- Name: workflow_steps_detail; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE workflow_steps_detail TO scout;
+
+--
+-- Name: workflow_steps_detail; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE workflow_steps_detail TO scribe;
 
 --
 -- Name: workflow_steps_detail; Type: PRIVILEGE; Schema: privileges; Owner: -

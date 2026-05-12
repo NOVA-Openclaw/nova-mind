@@ -1120,7 +1120,7 @@ if [ -d "$SCRIPTS_SOURCE" ]; then
     echo -e "  ${CHECK_MARK} Made $SCRIPT_COUNT scripts executable"
 
     # Verify critical config files were deployed
-    CRITICAL_CONFIGS=("embedding-config.json" "extraction-config.json")
+    CRITICAL_CONFIGS=("embedding-config.json" "memory-extraction-config.json")
     for cfg in "${CRITICAL_CONFIGS[@]}"; do
         if [ ! -f "$SCRIPTS_TARGET_OPENCLAW/$cfg" ]; then
             if [ -f "$SCRIPTS_SOURCE/$cfg" ]; then

@@ -56,7 +56,7 @@ def load_config_file(config_path: str) -> dict:
 
 
 # Config resolution: env var > config file > hardcoded default
-CONFIG_PATH = os.path.expanduser("~/.openclaw/scripts/extraction-config.json")
+CONFIG_PATH = os.path.expanduser("~/.openclaw/scripts/memory-extraction-config.json")
 CONFIG = load_config_file(CONFIG_PATH)
 
 DEFAULT_MODEL = CONFIG.get("model") or "deepseek/deepseek-v4-flash"

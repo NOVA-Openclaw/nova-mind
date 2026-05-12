@@ -112,7 +112,7 @@ export async function runSemanticRecall(
 
   let result: RecallResult | null = null;
   try {
-    result = await spawnWithTimeout(stdinPayload);
+    result = await spawnWithTimeout(JSON.stringify(stdinPayload));
   } catch (err) {
     console.error(
       "[turn-context] Semantic recall error:",

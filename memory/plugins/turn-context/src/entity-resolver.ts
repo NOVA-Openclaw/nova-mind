@@ -13,10 +13,6 @@ import { join } from "path";
 
 // ── Dynamic import of entity-resolver from installed location ─────────────────
 
-// PG env is already loaded by shared/pg-pool.ts before this module runs,
-// but entity-resolver also calls loadPgEnv() internally — that's fine (idempotent).
-// Wrapped in try/catch for graceful degradation if the library is not installed.
-
 // Entity type from dynamic import — use any with runtime property checks
 type Entity = any;
 type EntityFacts = Record<string, unknown>;
@@ -25,17 +21,24 @@ let resolveEntityByIdentifiers: any;
 let getEntityProfile: any;
 let getCachedEntity: any;
 let setCachedEntity: any;
+let entityResolverLoaded = false;
 
-try {
-  const entityResolverPath = join(os.homedir(), ".openclaw", "lib", "entity-resolver", "index.ts");
-  const mod = await import(entityResolverPath);
-  resolveEntityByIdentifiers = mod.resolveEntityByIdentifiers;
-  getEntityProfile = mod.getEntityProfile;
-  getCachedEntity = mod.getCachedEntity;
-  setCachedEntity = mod.setCachedEntity;
-} catch (err) {
-  console.warn("[turn-context] Entity resolver not available:", (err as Error).message);
-  // All four functions remain undefined — resolveEntityContext will return null gracefully
+async function ensureEntityResolver(): Promise<boolean> {
+  if (entityResolverLoaded) return !!resolveEntityByIdentifiers;
+  entityResolverLoaded = true;
+  try {
+    const entityResolverPath = join(os.homedir(), ".openclaw", "lib", "entity-resolver", "index.ts");
+    const mod = await import(entityResolverPath);
+    resolveEntityByIdentifiers = mod.resolveEntityByIdentifiers;
+    getEntityProfile = mod.getEntityProfile;
+    getCachedEntity = mod.getCachedEntity;
+    setCachedEntity = mod.setCachedEntity;
+    return true;
+  } catch (err) {
+    console.warn("[turn-context] Entity resolver not available:", (err as Error).message);
+    // All four functions remain undefined — resolveEntityContext will return null gracefully
+    return false;
+  }
 }
 
 // ── Channel-aware identifier mapping ─────────────────────────────────────────
@@ -116,8 +119,8 @@ export async function resolveEntityContext(
   sessionKey: string,
   info: SenderInfo
 ): Promise<string | null> {
-  // Graceful degradation if entity-resolver library is not installed
-  if (!resolveEntityByIdentifiers) return null;
+  // Lazy-load entity resolver — graceful degradation if not installed
+  if (!(await ensureEntityResolver())) return null;
 
   const { senderId, senderName, provider, senderE164 } = info;
 

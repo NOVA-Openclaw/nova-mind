@@ -8,7 +8,7 @@
     "runtimeExtensions": ["./dist/index.js"]
   },
   "scripts": {
-    "build": "tsc --noEmit",
+    "build": "tsc",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {

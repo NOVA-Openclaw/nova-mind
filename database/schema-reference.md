@@ -1,6 +1,6 @@
 # Database Schema Reference
 
-*Auto-generated: 2026-05-09T22:46:58.050168*
+*Auto-generated: 2026-05-12T03:15:20.289612*
 
 ## Tables
 
@@ -26,6 +26,9 @@
 | channel_activity | Tracks last message per channel for idle detection. Read/write: NOVA, Newhart. | 3 |
 | channel_sessions | - | 16 |
 | channel_transcripts | - | 14 |
+| comms_checks | Individual Hermes check run results. Each row = one social/email/digest check. Replaces memory/hermes-*.md files. Owner: Communications domain (hermes). | 11 |
+| comms_digests | Daily/weekly communications digests. Replaces hermes-social-digest-*.md and NOVA_Comms_Digest_*.html. Owner: Communications domain (hermes). | 11 |
+| comms_state | Per-platform communications tracking state (seen IDs, cursors). Replaces hermes-social-state.json. Owner: Communications domain (hermes). | 5 |
 | entities | People, AIs, organizations. NOVA has full access. Use entity_facts for attributes. | 20 |
 | entity_fact_conflicts | Conflicts between entity facts requiring resolution. Part of the truth reconciliation system. | 13 |
 | entity_facts | Key-value facts about entities. Check current_timezone for I)ruid before time-based actions. | 21 |

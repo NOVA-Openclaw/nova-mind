@@ -1,0 +1,18 @@
+{
+  "id": "turn-context",
+  "name": "Turn Context",
+  "description": "Injects per-turn context (reminders, entity identity, semantic recall) into agent prompts",
+  "version": "1.0.0",
+  "main": "./src/index.ts",
+  "hooks": [
+    "message_received",
+    "before_prompt_build"
+  ],
+  "activation": {
+    "onStartup": true
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false
+  }
+}

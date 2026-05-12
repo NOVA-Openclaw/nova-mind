@@ -1,0 +1,316 @@
+/**
+ * Turn Context Plugin — index.ts
+ *
+ * Consolidates the broken `semantic-recall` and `agent-turn-context` internal
+ * hooks into a single Plugin SDK plugin that correctly injects context via
+ * `before_prompt_build` (awaited, returns { prependSystemContext, appendSystemContext }).
+ *
+ * Root causes fixed:
+ *   1. Old hooks used `event.messages.push()` on fire-and-forget events —
+ *      context never reached the LLM prompt.
+ *   2. Old semantic-recall hook used spawnSync, blocking the event loop.
+ *
+ * Prompt composition order:
+ *   prependSystemContext + baseSystemPrompt + appendSystemContext
+ *
+ *   - prependSystemContext: entity identity + semantic recall memories
+ *     (BEFORE base system prompt, so LLM has context before reading instructions)
+ *   - appendSystemContext:  per-turn reminders only
+ *     (AFTER base system prompt, for proximity to user message)
+ *
+ * Registers two hooks:
+ *   - `message_received`    (observation, fire-and-forget) — caches sender info
+ *   - `before_prompt_build` (awaited, returns result)       — injects context
+ *
+ * Issue: nova-mind #182
+ * Closes: nova-openclaw #40, nova-openclaw #41
+ */
+
+import { getTurnReminders } from "./turn-reminders.ts";
+import { resolveEntityContext, type SenderInfo } from "./entity-resolver.ts";
+import { runSemanticRecall, type RecallInput } from "./semantic-recall.ts";
+
+// ── Sender info cache (message_received → before_prompt_build) ───────────────
+
+interface SenderCache {
+  senderId: string;
+  senderName: string;
+  provider: string;
+  senderE164?: string;
+  content: string;
+  timestamp: number;
+}
+
+const CACHE_MAX_SIZE = 1000;
+const CACHE_STALE_MS = 30 * 60 * 1000; // 30 minutes
+
+const senderCache = new Map<string, SenderCache>();
+
+function evictStaleCacheEntries(): void {
+  const now = Date.now();
+  // Remove stale entries
+  for (const [key, entry] of senderCache.entries()) {
+    if (now - entry.timestamp > CACHE_STALE_MS) {
+      senderCache.delete(key);
+    }
+  }
+}
+
+function evictOldestIfFull(): void {
+  if (senderCache.size < CACHE_MAX_SIZE) return;
+
+  // Find oldest entry by timestamp and evict it
+  let oldestKey: string | null = null;
+  let oldestTime = Infinity;
+  for (const [key, entry] of senderCache.entries()) {
+    if (entry.timestamp < oldestTime) {
+      oldestTime = entry.timestamp;
+      oldestKey = key;
+    }
+  }
+  if (oldestKey) senderCache.delete(oldestKey);
+}
+
+// ── Plugin entry ──────────────────────────────────────────────────────────────
+
+/**
+ * Plugin registration function called by the OpenClaw plugin loader.
+ * The loader calls module.default(api) to register hooks.
+ */
+export default function register(api: PluginApi): void {
+  console.info("[turn-context] Plugin registered — hooks: message_received, before_prompt_build");
+
+  // ── Hook 1: message_received (observation, fire-and-forget) ──────────────
+  //
+  // Caches sender info for use in before_prompt_build.
+  // No return value; errors are swallowed (must not block message flow).
+
+  api.on("message_received", async (event: PluginEvent, ctx: PluginContext) => {
+    try {
+      const sessionKey = ctx.sessionKey;
+      if (!sessionKey) return;
+
+      // ── Extract all fields synchronously ──────────────────────────────
+      const senderId: string | undefined =
+        event.senderId ??
+        (event.metadata as any)?.senderId;
+
+      const senderName: string | undefined =
+        event.senderName ??
+        (event.metadata as any)?.senderName;
+
+      const provider: string | undefined =
+        ctx.messageProvider ??
+        (event.metadata as any)?.provider;
+
+      const senderE164: string | undefined =
+        (event.metadata as any)?.senderE164;
+
+      const content: string | undefined =
+        event.content ??
+        (event as any).context?.content;
+
+      // CRITICAL: Cache write MUST happen before any await or async work.
+      // message_received is fire-and-forget — before_prompt_build may fire
+      // before this handler's Promise settles.
+      // See: nova-mind #182 Step 2 race condition analysis
+      senderCache.set(sessionKey, {
+        senderId: senderId ?? "",
+        senderName: senderName ?? "",
+        provider: provider ?? "",
+        senderE164,
+        content: content ?? "",
+        timestamp: Date.now(),
+      });
+
+      // Eviction runs AFTER cache write — safe to defer
+      evictOldestIfFull();
+      evictStaleCacheEntries();
+    } catch (err) {
+      // Observation-mode hook: swallow all errors
+      console.error(
+        "[turn-context] message_received cache error:",
+        err instanceof Error ? err.message : String(err)
+      );
+    }
+  });
+
+  // ── Hook 2: before_prompt_build (awaited, returns context segments) ────────
+  //
+  // Runs three subsystems in parallel, each with independent error handling.
+  // Returns prependSystemContext (entity + recall) and appendSystemContext
+  // (turn reminders) for injection into the system prompt.
+  //
+  // Composition: prependSystemContext + baseSystemPrompt + appendSystemContext
+
+  api.on(
+    "before_prompt_build",
+    async (event: PluginEvent, ctx: PluginContext): Promise<PromptBuildResult | undefined> => {
+      const hookStart = Date.now();
+      const sessionKey = ctx.sessionKey;
+      const agentId: string = ctx.agentId ?? "nova";
+
+      console.info(`[turn-context] before_prompt_build START agent=${agentId} session=${sessionKey ?? "none"}`);
+
+      // Retrieve cached sender info (may be undefined for first message or
+      // if message_received fired from a different process).
+      // Check staleness: entries older than CACHE_STALE_MS are treated as expired on read.
+      const raw = sessionKey ? senderCache.get(sessionKey) : undefined;
+      const cached = raw && (Date.now() - raw.timestamp < CACHE_STALE_MS) ? raw : undefined;
+
+      console.info(`[turn-context] Sender cache ${cached ? `HIT sender=${cached.senderName} content=${cached.content.length}chars` : "MISS (no cached sender info)"}`);
+
+      const senderInfo: SenderInfo = {
+        senderId: cached?.senderId,
+        senderName: cached?.senderName,
+        provider: cached?.provider,
+        senderE164: cached?.senderE164,
+      };
+
+      const recallInput: RecallInput = {
+        content: cached?.content ?? "",
+        senderId: cached?.senderId ?? "",
+        senderName: cached?.senderName ?? "",
+        provider: cached?.provider ?? "",
+        conversationId: sessionKey ?? "",
+        isGroup: false,
+        channelName: "",
+        guildId: "",
+        messageId: "",
+      };
+
+      // ── Run all three subsystems in parallel ────────────────────────────
+
+      console.info("[turn-context] Starting parallel subsystems: turn-reminders, entity-resolver, semantic-recall");
+      const subsystemStart = Date.now();
+
+      const [turnRemindersResult, entityContextResult, recallResult] =
+        await Promise.allSettled([
+          // 1. Turn reminders (DB-backed, 5-min cache)
+          getTurnReminders(agentId).catch((err) => {
+            console.error(
+              "[turn-context] Turn reminders error:",
+              err instanceof Error ? err.message : String(err)
+            );
+            return null;
+          }),
+
+          // 2. Entity resolution (channel-aware, session-cached)
+          sessionKey
+            ? resolveEntityContext(sessionKey, senderInfo).catch((err) => {
+                console.error(
+                  "[turn-context] Entity resolution error:",
+                  err instanceof Error ? err.message : String(err)
+                );
+                return null;
+              })
+            : Promise.resolve(null),
+
+          // 3. Semantic recall (async spawn of proactive-recall.py)
+          cached?.content
+            ? runSemanticRecall(recallInput).catch((err) => {
+                console.error(
+                  "[turn-context] Semantic recall error:",
+                  err instanceof Error ? err.message : String(err)
+                );
+                return null;
+              })
+            : Promise.resolve(null),
+        ]);
+
+      const subsystemMs = Date.now() - subsystemStart;
+
+      // Log each subsystem result
+      const remindersOk = turnRemindersResult.status === "fulfilled" && turnRemindersResult.value;
+      const entityOk = entityContextResult.status === "fulfilled" && entityContextResult.value;
+      const recallOk = recallResult.status === "fulfilled" && recallResult.value;
+
+      console.info(
+        `[turn-context] Subsystems completed in ${subsystemMs}ms:` +
+        ` reminders=${turnRemindersResult.status}${remindersOk ? `(${(turnRemindersResult as PromiseFulfilledResult<string | null>).value!.length}chars)` : ""}` +
+        ` entity=${entityContextResult.status}${entityOk ? `(${(entityContextResult as PromiseFulfilledResult<string | null>).value!.length}chars)` : ""}` +
+        ` recall=${recallResult.status}${recallOk ? `(${(recallResult as PromiseFulfilledResult<string | null>).value!.length}chars)` : cached?.content ? "(no results)" : "(skipped, no content)"}`
+      );
+
+      // ── Build prependSystemContext: entity identity + recall memories ─────
+      // These go BEFORE the base system prompt so the LLM has full context
+      // before reading instructions.
+
+      const prependSegments: string[] = [];
+
+      if (entityOk) {
+        prependSegments.push((entityContextResult as PromiseFulfilledResult<string>).value);
+      }
+
+      if (recallOk) {
+        prependSegments.push((recallResult as PromiseFulfilledResult<string>).value);
+      }
+
+      // ── Build appendSystemContext: per-turn reminders ─────────────────────
+      // These go AFTER the base system prompt for proximity to the user message.
+
+      const appendSegments: string[] = [];
+
+      if (remindersOk) {
+        appendSegments.push((turnRemindersResult as PromiseFulfilledResult<string>).value);
+      }
+
+      // ── Assemble result ───────────────────────────────────────────────────
+
+      const result: PromptBuildResult = {};
+      if (prependSegments.length > 0) {
+        result.prependSystemContext = prependSegments.join("\n\n");
+      }
+      if (appendSegments.length > 0) {
+        result.appendSystemContext = appendSegments.join("\n\n");
+      }
+
+      const totalMs = Date.now() - hookStart;
+
+      // If all subsystems produced nothing, return undefined (no injection)
+      if (Object.keys(result).length === 0) {
+        console.info(`[turn-context] before_prompt_build DONE in ${totalMs}ms — no context to inject`);
+        return undefined;
+      }
+
+      const prependLen = result.prependSystemContext?.length ?? 0;
+      const appendLen = result.appendSystemContext?.length ?? 0;
+      console.info(`[turn-context] before_prompt_build DONE in ${totalMs}ms — injecting prepend=${prependLen}chars append=${appendLen}chars`);
+
+      return result;
+    },
+    { timeoutMs: 8000 }
+  );
+}
+
+// ── Plugin API type stubs ─────────────────────────────────────────────────────
+// Minimal type declarations for the Plugin SDK surface we use.
+// The actual types come from the OpenClaw plugin loader at runtime.
+
+interface PluginApi {
+  on(
+    hook: string,
+    handler: (event: PluginEvent, ctx: PluginContext) => Promise<void | PromptBuildResult | undefined>,
+    options?: { timeoutMs?: number }
+  ): void;
+}
+
+interface PluginEvent {
+  senderId?: string;
+  senderName?: string;
+  content?: string;
+  metadata?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
+interface PluginContext {
+  sessionKey?: string;
+  agentId?: string;
+  messageProvider?: string;
+  [key: string]: unknown;
+}
+
+interface PromptBuildResult {
+  prependSystemContext?: string;
+  appendSystemContext?: string;
+}

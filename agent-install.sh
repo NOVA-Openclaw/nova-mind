@@ -594,7 +594,7 @@ verify_config() {
     local HOOK_CONFIG="$HOME/.openclaw/hooks.json"
     if [ -f "$HOOK_CONFIG" ]; then
         echo -e "  ${CHECK_MARK} OpenClaw hook config exists"
-        for hook in "memory-extract" "semantic-recall" "session-init" "agent-turn-context"; do
+        for hook in "memory-extract" "session-init"; do
             if grep -q "\"$hook\"" "$HOOK_CONFIG" 2>/dev/null; then
                 local ENABLED
                 ENABLED=$(grep -A5 "\"$hook\"" "$HOOK_CONFIG" | grep -c "\"enabled\": true" || echo "0")
@@ -1042,7 +1042,8 @@ echo "Memory hooks installation..."
 HOOKS_TARGET="$OPENCLAW_DIR/hooks"
 mkdir -p "$HOOKS_TARGET"
 
-for hook in "memory-extract" "semantic-recall" "session-init" "agent-turn-context"; do
+# Note: semantic-recall and agent-turn-context were replaced by turn-context plugin (#182)
+for hook in "memory-extract" "session-init"; do
     install_hook "$hook" "$SCRIPT_DIR/memory/hooks" && result=$? || result=$?
     if [ "$result" -eq 0 ]; then
         INSTALLED_HOOKS+=("$hook")
@@ -1174,9 +1175,7 @@ else
     if "$ENABLE_HOOKS_SCRIPT" "$OPENCLAW_CONFIG" >/dev/null 2>&1; then
         echo -e "  ${CHECK_MARK} Hooks enabled in OpenClaw config"
         echo "      • memory-extract"
-        echo "      • semantic-recall"
         echo "      • session-init"
-        echo "      • agent-turn-context"
         GATEWAY_RESTART_NEEDED=1
     else
         echo -e "  ${WARNING} Failed to patch OpenClaw config"
@@ -1389,6 +1388,19 @@ if [ -d "$COG_SKILLS_SOURCE" ]; then
 else
     echo -e "  ${INFO} No cognition focus skills directory found (skipping)"
 fi
+
+# --- Remove old hooks replaced by turn-context plugin ---
+echo ""
+echo "Cleaning up old hooks replaced by turn-context plugin..."
+
+for old_hook in "semantic-recall" "agent-turn-context"; do
+    OLD_HOOK_DIR="$OPENCLAW_DIR/hooks/$old_hook"
+    if [ -d "$OLD_HOOK_DIR" ]; then
+        rm -rf "$OLD_HOOK_DIR"
+        echo -e "  ${CHECK_MARK} Removed old hook: $old_hook"
+        GATEWAY_RESTART_NEEDED=1
+    fi
+done
 
 # --- Turn-context plugin (replaces old semantic-recall + agent-turn-context hooks) ---
 echo ""

@@ -1740,10 +1740,9 @@ if [ -f "$OPENCLAW_CONFIG" ] && command -v jq &>/dev/null; then
         AGENT_CHAT_PASSWORD=$(jq -r '.password // empty' "$PG_CONFIG" 2>/dev/null || true)
     fi
 
-    jq --arg db "$DB_NAME" --arg user "$DB_USER" --arg pass "$AGENT_CHAT_PASSWORD" --arg agent "$DB_USER" \
+    jq --arg db "$DB_NAME" --arg user "$DB_USER" --arg pass "$AGENT_CHAT_PASSWORD" \
         '.channels.agent_chat = (.channels.agent_chat // {}) * {
             "enabled": true,
-            "agentName": $agent,
             "database": $db,
             "host": "localhost",
             "port": 5432,
@@ -1755,11 +1754,10 @@ if [ -f "$OPENCLAW_CONFIG" ] && command -v jq &>/dev/null; then
         echo -e "  ${CHECK_MARK} Configured channels.agent_chat (db=$DB_NAME, user=$DB_USER)" || \
         echo -e "  ${WARNING} Could not configure agent_chat channel"
 
-    jq --arg db "$DB_NAME" --arg user "$DB_USER" --arg pass "$AGENT_CHAT_PASSWORD" --arg agent "$DB_USER" \
+    jq --arg db "$DB_NAME" --arg user "$DB_USER" --arg pass "$AGENT_CHAT_PASSWORD" \
         '.plugins.entries.agent_chat = (.plugins.entries.agent_chat // {}) * {
             "enabled": true,
             "config": ((.plugins.entries.agent_chat.config // {}) * {
-                "agentName": $agent,
                 "database": $db,
                 "host": "localhost",
                 "port": 5432,

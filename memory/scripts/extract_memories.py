@@ -42,8 +42,26 @@ load_pg_env()
 # ── Constants ─────────────────────────────────────────────────────────────────
 
 MIN_MESSAGE_LENGTH = 10  # characters (trimmed)
-DEFAULT_MODEL = "google/gemini-2.5-flash"
-OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
+
+
+def load_config_file(config_path: str) -> dict:
+    """Load extraction config from JSON file. Returns empty dict on any error."""
+    try:
+        if os.path.isfile(config_path):
+            with open(config_path, "r") as f:
+                return json.load(f)
+    except (OSError, json.JSONDecodeError) as e:
+        print(f"[extract_memories] WARNING: Could not load config {config_path}: {e}", file=sys.stderr)
+    return {}
+
+
+# Config resolution: env var > config file > hardcoded default
+CONFIG_PATH = os.path.expanduser("~/.openclaw/scripts/extraction-config.json")
+CONFIG = load_config_file(CONFIG_PATH)
+
+DEFAULT_MODEL = CONFIG.get("model") or "deepseek/deepseek-v4-flash"
+OPENROUTER_API_URL = CONFIG.get("api_url") or "https://openrouter.ai/api/v1/chat/completions"
+CONFIG_MAX_TOKENS = CONFIG.get("max_tokens") or 2048
 
 # New extraction categories (additive to existing ones)
 NEW_CATEGORIES = ("decisions", "milestones", "problems")
@@ -414,7 +432,7 @@ def call_llm(prompt: str, api_key: str, model: str) -> dict:
     """
     payload = {
         "model": model,
-        "max_tokens": 2048,
+        "max_tokens": CONFIG_MAX_TOKENS,
         "messages": [{"role": "user", "content": prompt}],
     }
     try:

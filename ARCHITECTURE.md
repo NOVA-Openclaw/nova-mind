@@ -91,11 +91,10 @@ graph TB
 - **Schema Management:** Declarative schema via `pgschema` (plan → hazard-check → apply)
 - **Extraction Pipeline:** Natural language → Claude extraction → structured JSON → PostgreSQL
 - **Embedding Engine:** Local Ollama (`mxbai-embed-large`) for semantic search over memories
-- **Hook Integration:** Four OpenClaw hooks automate memory operations:
+- **Hook Integration:** Two managed hooks + one Plugin SDK plugin automate memory operations:
   - `memory-extract` — Extracts structured memories from incoming messages
-  - `semantic-recall` — Provides relevant memories during conversations
   - `session-init` — Generates privacy-filtered context at session start
-  - `agent-turn-context` — Injects per-turn critical context (500‑char × 2000‑char total)
+  - **turn-context plugin** — Consolidates the old `semantic-recall` and `agent-turn-context` hooks. Runs entity resolution, semantic recall, and turn-reminder injection in parallel via `before_prompt_build`.
 
 **Key Tables:**
 - `entities`, `entity_facts`, `entity_relationships` — People, organizations, facts, and connections
@@ -150,8 +149,7 @@ User Message
 OpenClaw Gateway (message:received event)
     ↓
 memory-extract hook → Claude extraction → entities/facts/opinions → PostgreSQL
-semantic-recall hook → vector search → relevant memories → prompt context
-agent-turn-context hook → high‑priority rules → prompt context
+turn-context plugin → entity resolution + semantic recall + turn reminders (parallel)
     ↓
 Agent Processes Message (with enriched context)
     ↓
@@ -231,12 +229,13 @@ nova‑mind integrates with OpenClaw via hooks that run on gateway events:
 
 ### Memory Hooks (`memory/hooks/`)
 
-| Hook | Event | Purpose |
-|------|-------|---------|
-| `memory‑extract` | `message:received` | Extract structured memories from natural language using Claude. Real-time upserts `channel_sessions`/`channel_transcripts` rows and passes FK IDs as env vars to the extraction pipeline for source attribution. |
-| `semantic‑recall` | `message:received` | Search vector embeddings for relevant memories; inject into context |
-| `session‑init` | `session:init` | Generate privacy‑filtered context when sessions start |
-| `agent‑turn‑context` | `message:received` | Inject high‑priority context from `agent_turn_context` table (cached 5‑min) |
+| Hook / Plugin | Event | Purpose |
+|--------------|-------|---------|
+| `memory‑extract` (hook) | `message:received` | Extract structured memories from natural language using Claude. Real-time upserts `channel_sessions`/`channel_transcripts` rows and passes FK IDs as env vars to the extraction pipeline for source attribution. |
+| `session‑init` (hook) | `session:init` | Generate privacy‑filtered context when sessions start |
+| **turn-context** (Plugin SDK) | `before_prompt_build` | Consolidates old `semantic-recall` + `agent-turn-context` hooks. Runs entity resolution, vector search, and turn-reminder injection in parallel. [Source](memory/plugins/turn-context/) |
+
+> **Note:** The old `semantic-recall` and `agent-turn-context` hooks were removed and replaced by the `turn-context` Plugin SDK plugin at `memory/plugins/turn-context/` ([#182](https://github.com/NOVA-Openclaw/nova-mind/issues/182)). The installer removes stale hook directories from `~/.openclaw/hooks/` before installing the plugin.
 
 ### Cognition Hooks (`cognition/focus/`)
 
@@ -249,7 +248,7 @@ nova‑mind integrates with OpenClaw via hooks that run on gateway events:
 
 No standalone hooks; the entity‑resolver library is integrated into channel plugins (Signal, web, email).
 
-**Hook Installation:** The unified installer copies hook directories to `~/.openclaw/hooks/` and enables them via `openclaw hooks enable`.
+**Hook/Plugin Installation:** The unified installer copies hook directories to `~/.openclaw/hooks/` and enables them. Plugin SDK plugins (e.g., `turn-context`) are built from TypeScript source, installed to `~/.openclaw/plugins/`, and enabled in `openclaw.json`. Both hooks and plugins support idempotent hash-based sync.
 
 ## Installer Architecture
 
@@ -349,7 +348,7 @@ The installer enforces this order automatically.
 - **Embedding Batch Processing:** Embedding scripts run incrementally via cron to avoid overwhelming Ollama.
 - **Connection Pooling:** All PostgreSQL clients use connection pools (default size 5).
 - **Vector Indexes:** `memory_embeddings` uses PostgreSQL `pgvector` indexes for fast similarity search.
-- **Semantic Recall Context Budget:** The `semantic-recall` hook budgets ~1000 tokens for context injection. High-confidence results (>0.7 threshold) get full content injected; lower-confidence results get a summary only. Configurable via `SEMANTIC_RECALL_TOKEN_BUDGET` and `SEMANTIC_RECALL_HIGH_CONFIDENCE` environment variables.
+- **Turn-Context Plugin Context Budget:** The `turn-context` plugin budgets ~1000 tokens for context injection. High-confidence results (>0.7 threshold) get full content injected; lower-confidence results get a summary only. Configurable via `SEMANTIC_RECALL_TOKEN_BUDGET` and `SEMANTIC_RECALL_HIGH_CONFIDENCE` environment variables.
 - **Semantic Recall Priority Weighting:** Results are scored as `vector_similarity × priority_weight` from the `memory_type_priorities` table. Workflows (1.50) and lessons (1.30) surface before entity_facts (1.00) and daily_logs (0.90).
 - **Ghost Embeddings (⚠️ Known Failure Mode):** Orphaned vectors in `memory_embeddings` from deleted source records surface stale information with high confidence. Detection requires manual LEFT JOIN queries. No automatic cleanup exists yet — this is the most dangerous class of memory corruption.
 
@@ -369,7 +368,7 @@ The `entity_facts` table includes `visibility` (public/trusted/private) and `pri
 - Indexes: `idx_entity_facts_visibility`, `idx_entity_facts_privacy_scope` (GIN)
 
 **What is missing:**
-- Enforcement in `semantic-recall` hook queries
+- Enforcement in `turn-context` plugin queries
 - Enforcement in `entity-resolver` library `getEntityProfile()` / `getAllEntityFacts()`
 - Enforcement in `session-init` hook
 - Enforcement in any ad-hoc agent queries
@@ -378,11 +377,17 @@ The `entity_facts` table includes `visibility` (public/trusted/private) and `pri
 
 ## Extension Points
 
-### Adding a New Hook
+### Adding a New Hook or Plugin
 
+**Hook (gateway events):**
 1. Create hook directory in appropriate subsystem (`memory/hooks/`, `cognition/focus/`)
 2. Include `handler.ts`, `package.json`, and `HOOK.md`
 3. The installer will copy it to `~/.openclaw/hooks/` and enable it
+
+**Plugin SDK (rich runtime with parallel hooks):**
+1. Create plugin directory in `memory/plugins/<name>/` or `cognition/focus/<name>/`
+2. Include `openclaw.plugin.json`, `tsconfig.json`, `package.json`, and TypeScript source under `src/`
+3. The installer will build the TypeScript, install to `~/.openclaw/plugins/`, and enable it in `openclaw.json`
 
 ### Adding a New Table
 

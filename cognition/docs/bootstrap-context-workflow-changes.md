@@ -89,7 +89,7 @@ SELECT * FROM verify_workflow_context('conductor');
 ## Related Files
 
 - `migrations/061_remove_workflow_context_type.sql` - Main migration
-- `focus/bootstrap-context/sql/management-functions.sql` - Updated function
+- `focus/bootstrap-context/sql/management-functions.sql` — Removed in [#171](https://github.com/NOVA-Openclaw/nova-mind/issues/171). Functions now defined in `database/schema.sql` and managed by pgschema.
 - `migrations/059_domain_based_bootstrap.sql` - Original domain-based architecture
 
 ## Testing

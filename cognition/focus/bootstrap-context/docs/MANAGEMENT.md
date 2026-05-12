@@ -241,10 +241,13 @@ sudo systemctl status postgresql
 ```
 
 **Function not found (42883)** - Management functions not installed:
+The management functions are now defined in `database/schema.sql` and applied by `pgschema`. Re-run the root installer:
 ```bash
-cd ~/workspace/nova-mind/cognition/focus/bootstrap-context
-psql -d nova_memory -f sql/management-functions.sql
+cd ~/workspace/nova-mind
+./agent-install.sh
 ```
+
+> **Note:** The old `sql/management-functions.sql` file was removed in [#171](https://github.com/NOVA-Openclaw/nova-mind/issues/171) — it was redundant with the canonical schema and caused regression bugs by overwriting `get_agent_bootstrap()` on every install.
 
 **Table not found** - Schema not applied (pgschema manages this):
 ```bash

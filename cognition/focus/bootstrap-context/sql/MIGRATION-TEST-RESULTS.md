@@ -107,8 +107,8 @@ If rollback is needed:
 -- 1. Rename column back
 ALTER TABLE agents RENAME COLUMN bootstrap_context TO seed_context;
 
--- 2. Restore old function definitions from backup
-\i focus/bootstrap-context/sql/management-functions.sql.backup
+-- 2. Management functions are now defined in database/schema.sql and applied by pgschema.
+--    The old management-functions.sql was removed in #171 — use the canonical schema instead.
 ```
 
 ## Next Steps

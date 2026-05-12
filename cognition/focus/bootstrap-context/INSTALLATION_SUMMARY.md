@@ -16,15 +16,18 @@ Quick reference for installing and verifying the database bootstrap context syst
 
 ### 1. Install Database Components
 
+> **Note:** Database tables (`agent_bootstrap_context`) and management functions are managed by pgschema via `database/schema.sql`. The root `agent-install.sh` applies the schema and installs the bootstrap-context hook. There is no separate `sql/management-functions.sql` file — all functions are defined in the canonical schema.
+
 ```bash
-cd ~/workspace/nova-mind/cognition/focus/bootstrap-context
-psql -d nova_memory -f sql/management-functions.sql
+# Run the root unified installer instead:
+cd ~/workspace/nova-mind
+./agent-install.sh
 ```
 
-**Creates:**
-- Functions: `update_universal_context`, `update_agent_context`, `get_agent_bootstrap`, etc.
+**Functions managed by pgschema:**
+- `update_universal_context`, `update_agent_context`, `get_agent_bootstrap`, etc.
 
-> **Note:** Database tables (`agent_bootstrap_context`) are managed by pgschema via `database/schema.sql`. The old `bootstrap_context.sql` schema file is intentionally empty — tables are no longer created by this installer. See [#110](https://github.com/nova-openclaw/nova-mind/issues/110).
+> **Migration note:** The old `sql/management-functions.sql` file was removed in [#171](https://github.com/NOVA-Openclaw/nova-mind/issues/171). It was redundant with `database/schema.sql` and caused regression bugs by overwriting the canonical `get_agent_bootstrap()` function on every install.
 
 ### 2. Install OpenClaw Hook
 

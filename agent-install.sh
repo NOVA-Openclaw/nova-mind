@@ -112,9 +112,17 @@ while [[ $# -gt 0 ]]; do
             echo "  $0 --force                      # Force reinstall all components"
             echo ""
             echo "Installs:"
-            echo "  [relationships] entity-resolver lib, relationship hooks/skills"
-            echo "  [memory]        schema (pgschema), hooks, scripts, skills, embeddings"
-            echo "  [cognition]     hooks, workflows, bootstrap context, agent_chat plugin"
+            echo "  [relationships] entity-resolver lib, relationship skills"
+            echo "  [memory]        schema (pgschema), shared PG libs, hooks, scripts, skills, venv, embeddings"
+            echo "  [cognition]     hooks, workflows, bootstrap context, agent_chat plugin,"
+            echo "                  agent_config_sync plugin, turn-context plugin, shell aliases"
+            echo ""
+            echo "Components get installed to:"
+            echo "  ~/.openclaw/hooks/           — memory-extract, session-init, db-bootstrap-context"
+            echo "  ~/.openclaw/plugins/         — turn-context"
+            echo "  ~/.openclaw/extensions/      — agent_chat, agent_config_sync"
+            echo "  ~/.openclaw/lib/             — PG loader libraries, entity-resolver"
+            echo "  ~/.local/share/nova/         — shell-aliases.sh"
             exit 0
             ;;
         *)

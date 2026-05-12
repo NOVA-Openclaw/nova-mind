@@ -1,0 +1,6 @@
+{
+  "provider": "openrouter",
+  "model": "deepseek/deepseek-v4-flash",
+  "api_url": "https://openrouter.ai/api/v1/chat/completions",
+  "max_tokens": 2048
+}

@@ -32,11 +32,6 @@ fi
 echo "✅ Database connection OK"
 echo ""
 
-# NOTE: Database functions (get_agent_bootstrap, etc.) are managed by pgschema
-# via database/schema.sql. Do NOT apply management-functions.sql here — that
-# file is kept as a reference only. Applying it overwrites pgschema-managed
-# functions and has caused regression bugs (see nova-mind#171).
-
 # Install audit triggers
 echo "Installing audit triggers..."
 psql -d "$DB_NAME" -f "$SCRIPT_DIR/sql/triggers.sql"

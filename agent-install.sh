@@ -546,6 +546,13 @@ verify_cognition() {
         VERIFICATION_ERRORS=$((VERIFICATION_ERRORS + 1))
     fi
 
+    if [ -f "$OPENCLAW_DIR/plugins/turn-context/dist/index.js" ]; then
+        echo -e "  ${CHECK_MARK} turn-context plugin installed"
+    else
+        echo -e "  ${CROSS_MARK} turn-context plugin not installed"
+        VERIFICATION_ERRORS=$((VERIFICATION_ERRORS + 1))
+    fi
+
     if [ -d "$OPENCLAW_DIR/hooks/db-bootstrap-context" ]; then
         echo -e "  ${CHECK_MARK} Bootstrap context hook installed"
     else
@@ -1383,6 +1390,84 @@ else
     echo -e "  ${INFO} No cognition focus skills directory found (skipping)"
 fi
 
+# --- Turn-context plugin (replaces old semantic-recall + agent-turn-context hooks) ---
+echo ""
+echo "Turn-context plugin installation..."
+
+TURN_CONTEXT_SOURCE="$SCRIPT_DIR/memory/plugins/turn-context"
+TURN_CONTEXT_TARGET="$OPENCLAW_DIR/plugins/turn-context"
+
+if [ -d "$TURN_CONTEXT_SOURCE" ]; then
+    mkdir -p "$TURN_CONTEXT_TARGET/dist"
+
+    # Copy source and config files
+    for f in package.json openclaw.plugin.json tsconfig.json; do
+        if [ -f "$TURN_CONTEXT_SOURCE/$f" ]; then
+            cp "$TURN_CONTEXT_SOURCE/$f" "$TURN_CONTEXT_TARGET/$f"
+        fi
+    done
+    echo -e "  ${CHECK_MARK} Plugin config files copied"
+
+    # Build TypeScript if source exists
+    if [ -d "$TURN_CONTEXT_SOURCE/src" ]; then
+        if [ -f "$TURN_CONTEXT_TARGET/dist/index.js" ] && [ "$FORCE_INSTALL" -eq 0 ]; then
+            # Check if source is newer than dist
+            NEWEST_SRC=$(find "$TURN_CONTEXT_SOURCE/src" -name '*.ts' -newer "$TURN_CONTEXT_TARGET/dist/index.js" 2>/dev/null | head -1)
+            if [ -z "$NEWEST_SRC" ]; then
+                echo -e "  ${CHECK_MARK} Plugin dist is up to date (use --force to rebuild)"
+            else
+                echo "  Source changed, rebuilding..."
+                NEEDS_BUILD=1
+            fi
+        else
+            NEEDS_BUILD=1
+        fi
+
+        if [ "${NEEDS_BUILD:-0}" -eq 1 ]; then
+            # Ensure typescript is available
+            if [ ! -d "$TURN_CONTEXT_SOURCE/node_modules/typescript" ]; then
+                echo "  Installing build dependencies..."
+                (cd "$TURN_CONTEXT_SOURCE" && npm install --save-dev typescript) >/dev/null 2>&1
+            fi
+            echo "  Building turn-context plugin..."
+            BUILD_LOG=$(mktemp /tmp/turn-context-build-XXXXXX.log)
+            TMPFILES+=("$BUILD_LOG")
+            if (cd "$TURN_CONTEXT_SOURCE" && npx tsc) >"$BUILD_LOG" 2>&1; then
+                # Copy built dist to target
+                cp -r "$TURN_CONTEXT_SOURCE/dist/"* "$TURN_CONTEXT_TARGET/dist/"
+                echo -e "  ${CHECK_MARK} Plugin built and installed"
+            else
+                echo -e "  ${CROSS_MARK} Plugin build failed"
+                tail -10 "$BUILD_LOG"
+                VERIFICATION_ERRORS=$((VERIFICATION_ERRORS + 1))
+            fi
+        fi
+    fi
+
+    # Enable in OpenClaw config
+    if [ -f "$OPENCLAW_CONFIG" ] && command -v jq &>/dev/null; then
+        PLUGIN_PATH="$TURN_CONTEXT_TARGET"
+        jq --arg path "$PLUGIN_PATH" '
+            .plugins.load.paths = ((.plugins.load.paths // []) + [$path] | unique)
+            | .plugins.entries."turn-context" = {"enabled": true}
+        ' "$OPENCLAW_CONFIG" >"$OPENCLAW_CONFIG.tmp" && \
+            mv "$OPENCLAW_CONFIG.tmp" "$OPENCLAW_CONFIG" && \
+            echo -e "  ${CHECK_MARK} Plugin enabled in OpenClaw config" || \
+            echo -e "  ${WARNING} Could not enable plugin in config"
+    fi
+
+    # Verify installation
+    if [ -f "$TURN_CONTEXT_TARGET/dist/index.js" ] && [ -f "$TURN_CONTEXT_TARGET/openclaw.plugin.json" ]; then
+        echo -e "  ${CHECK_MARK} turn-context plugin installed to $TURN_CONTEXT_TARGET"
+    else
+        echo -e "  ${CROSS_MARK} turn-context plugin installation incomplete"
+        VERIFICATION_ERRORS=$((VERIFICATION_ERRORS + 1))
+    fi
+else
+    echo -e "  ${CROSS_MARK} turn-context plugin source not found at $TURN_CONTEXT_SOURCE"
+    VERIFICATION_ERRORS=$((VERIFICATION_ERRORS + 1))
+fi
+
 # --- Bootstrap context system ---
 echo ""
 echo "Bootstrap context system installation..."
@@ -1848,6 +1933,7 @@ echo "    • Python venv → $VENV_DIR"
 echo "  [cognition]"
 echo "    • agent_chat extension → $EXTENSIONS_DIR/agent_chat"
 echo "    • agent_config_sync extension → $EXTENSIONS_DIR/agent_config_sync"
+echo "    • turn-context plugin → $OPENCLAW_DIR/plugins/turn-context"
 echo "    • Bootstrap context → $OPENCLAW_DIR/hooks/db-bootstrap-context"
 echo "    • agents.json → $OPENCLAW_DIR/agents.json"
 echo "    • shell-aliases.sh → $NOVA_DIR/shell-aliases.sh"

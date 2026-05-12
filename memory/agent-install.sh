@@ -103,7 +103,7 @@ NC='\033[0m' # No Color
 CHECK_MARK="${GREEN}✅${NC}"
 CROSS_MARK="${RED}❌${NC}"
 WARNING="${YELLOW}⚠️${NC}"
-INFO="${BLUE}ℹ️${NC}"
+INFO="${BLUE}i️${NC}"
 
 # Verification results
 VERIFICATION_PASSED=0
@@ -182,31 +182,31 @@ echo ""
 
 verify_schema() {
     echo "Schema verification..."
-    
+
     # Check if database exists
     if ! psql -U "$DB_USER" -lqt | cut -d \| -f 1 | grep -qw "$DB_NAME"; then
         echo -e "  ${CROSS_MARK} Database '$DB_NAME' does not exist"
         VERIFICATION_ERRORS=$((VERIFICATION_ERRORS + 1))
         return 1
     fi
-    
+
     # Extract expected table names from schema/schema.sql
     TABLE_NAMES=$(grep "^CREATE TABLE" "$SCRIPT_DIR/schema/schema.sql" | sed -E 's/CREATE TABLE IF NOT EXISTS ([^ ]+).*/\1/' | sort)
-    
+
     local tables_missing=()
     local tables_present=0
-    
+
     for table in $TABLE_NAMES; do
         # Check if table exists
         TABLE_EXISTS=$(psql -U "$DB_USER" -d "$DB_NAME" -tAc "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name = '$table'" | tr -d '[:space:]')
-        
+
         if [ "$TABLE_EXISTS" -eq 0 ]; then
             tables_missing+=("$table")
         else
             tables_present=$((tables_present + 1))
         fi
     done
-    
+
     if [ ${#tables_missing[@]} -gt 0 ]; then
         echo -e "  ${WARNING} Missing tables:"
         for table in "${tables_missing[@]}"; do
@@ -214,18 +214,18 @@ verify_schema() {
         done
         VERIFICATION_WARNINGS=$((VERIFICATION_WARNINGS + ${#tables_missing[@]}))
     fi
-    
+
     # Reverse check: warn about extra tables not defined in schema.sql
     local db_tables
     db_tables=$(psql -U "$DB_USER" -d "$DB_NAME" -tAc "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE' ORDER BY table_name")
-    
+
     local tables_extra=()
     for db_table in $db_tables; do
         if ! echo "$TABLE_NAMES" | grep -qxF "$db_table"; then
             tables_extra+=("$db_table")
         fi
     done
-    
+
     if [ ${#tables_extra[@]} -gt 0 ]; then
         echo -e "  ${WARNING} Extra tables not in schema/schema.sql (not managed by installer):"
         for table in "${tables_extra[@]}"; do
@@ -235,15 +235,15 @@ verify_schema() {
     else
         echo -e "  ${CHECK_MARK} No extra tables found outside schema/schema.sql"
     fi
-    
+
     # Sample column count check for a few key tables
     local sample_tables=("entities" "entity_facts" "events" "lessons" "agents")
     local column_issues=0
-    
+
     for table in "${sample_tables[@]}"; do
         # Get column count from database
         COL_COUNT=$(psql -U "$DB_USER" -d "$DB_NAME" -tAc "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = '$table'" 2>/dev/null | tr -d '[:space:]')
-        
+
         if [ -n "$COL_COUNT" ] && [ "$COL_COUNT" -gt 0 ]; then
             echo -e "  ${CHECK_MARK} Table '$table' schema present ($COL_COUNT columns)"
         elif psql -U "$DB_USER" -d "$DB_NAME" -tAc "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name = '$table'" | grep -q 1; then
@@ -251,59 +251,59 @@ verify_schema() {
             column_issues=$((column_issues + 1))
         fi
     done
-    
+
     if [ $column_issues -gt 0 ]; then
         VERIFICATION_WARNINGS=$((VERIFICATION_WARNINGS + column_issues))
     fi
-    
+
     return 0
 }
 
 verify_files() {
     echo ""
     echo "File verification..."
-    
+
     local files_checked=0
     local files_matching=0
     local files_different=0
     local files_missing=0
-    
+
     # Check hooks
     for hook_dir in "$SCRIPT_DIR/hooks"/*; do
         if [ ! -d "$hook_dir" ]; then
             continue
         fi
-        
+
         hook_name=$(basename "$hook_dir")
         target_dir="$HOME/.openclaw/hooks/$hook_name"
-        
+
         if [ ! -d "$target_dir" ]; then
             echo -e "  ${WARNING} Hook '$hook_name' not installed"
             files_missing=$((files_missing + 1))
             continue
         fi
-        
+
         # Check each file in the hook
         for source_file in "$hook_dir"/*.ts "$hook_dir"/*.js "$hook_dir"/*.sh; do
             if [ ! -f "$source_file" ]; then
                 continue
             fi
-            
+
             filename=$(basename "$source_file")
             target_file="$target_dir/$filename"
-            
+
             if [ ! -f "$target_file" ]; then
                 echo -e "  ${WARNING} $hook_name/$filename missing"
                 files_missing=$((files_missing + 1))
                 continue
             fi
-            
+
             # Compare checksums
             source_hash=$(sha256sum "$source_file" | awk '{print $1}')
             target_hash=$(sha256sum "$target_file" | awk '{print $1}')
-            
+
             files_checked=$((files_checked + 1))
-            
+
             if [ "$source_hash" = "$target_hash" ]; then
                 echo -e "  ${CHECK_MARK} $hook_name/$filename matches source"
                 files_matching=$((files_matching + 1))
@@ -313,29 +313,29 @@ verify_files() {
             fi
         done
     done
-    
+
     # Check scripts
     if [ -d "$SCRIPT_DIR/scripts" ]; then
         for source_file in "$SCRIPT_DIR/scripts"/*.sh "$SCRIPT_DIR/scripts"/*.py; do
             if [ ! -f "$source_file" ]; then
                 continue
             fi
-            
+
             filename=$(basename "$source_file")
             target_file="$WORKSPACE/scripts/$filename"
-            
+
             if [ ! -f "$target_file" ]; then
                 echo -e "  ${WARNING} scripts/$filename missing"
                 files_missing=$((files_missing + 1))
                 continue
             fi
-            
+
             # Compare checksums
             source_hash=$(sha256sum "$source_file" | awk '{print $1}')
             target_hash=$(sha256sum "$target_file" | awk '{print $1}')
-            
+
             files_checked=$((files_checked + 1))
-            
+
             if [ "$source_hash" = "$target_hash" ]; then
                 echo -e "  ${CHECK_MARK} scripts/$filename matches source"
                 files_matching=$((files_matching + 1))
@@ -345,7 +345,7 @@ verify_files() {
             fi
         done
     fi
-    
+
     # Check skills
     if [ -d "$SCRIPT_DIR/skills" ]; then
         local skills_target="$HOME/.openclaw/skills"
@@ -353,24 +353,24 @@ verify_files() {
             if [ ! -d "$skill_dir" ]; then
                 continue
             fi
-            
+
             skill_name=$(basename "$skill_dir")
             target_skill="$skills_target/$skill_name"
-            
+
             if [ ! -d "$target_skill" ]; then
                 echo -e "  ${WARNING} skill '$skill_name' not installed"
                 files_missing=$((files_missing + 1))
                 continue
             fi
-            
+
             # Check for SKILL.md file (required for OpenClaw skills)
             if [ -f "$skill_dir/SKILL.md" ]; then
                 if [ -f "$target_skill/SKILL.md" ]; then
                     source_hash=$(sha256sum "$skill_dir/SKILL.md" | awk '{print $1}')
                     target_hash=$(sha256sum "$target_skill/SKILL.md" | awk '{print $1}')
-                    
+
                     files_checked=$((files_checked + 1))
-                    
+
                     if [ "$source_hash" = "$target_hash" ]; then
                         echo -e "  ${CHECK_MARK} skill '$skill_name' SKILL.md matches"
                         files_matching=$((files_matching + 1))
@@ -385,34 +385,42 @@ verify_files() {
             fi
         done
     fi
-    
+
+    # Check turn-context plugin
+    if [ -d "$HOME/.openclaw/plugins/turn-context" ] && [ -f "$HOME/.openclaw/plugins/turn-context/dist/index.js" ]; then
+        echo -e "  ${CHECK_MARK} turn-context plugin installed and compiled"
+    else
+        echo -e "  ${WARNING} turn-context plugin not installed or not compiled"
+        VERIFICATION_WARNINGS=$((VERIFICATION_WARNINGS + 1))
+    fi
+
     if [ $files_different -gt 0 ]; then
         echo -e "  ${INFO} Run with --force to overwrite modified files"
         VERIFICATION_WARNINGS=$((VERIFICATION_WARNINGS + files_different))
     fi
-    
+
     if [ $files_missing -gt 0 ]; then
         VERIFICATION_WARNINGS=$((VERIFICATION_WARNINGS + files_missing))
     fi
-    
+
     return 0
 }
 
 verify_config() {
     echo ""
     echo "Config verification..."
-    
+
     # Check environment variables
     # Note: Hooks run as child processes of OpenClaw and inherit its environment
     # API keys should be configured in OpenClaw, not separately for nova-memory
-    
+
     if [ -z "$PGUSER" ]; then
         echo -e "  ${WARNING} PGUSER not set (using current user: $(whoami))"
         VERIFICATION_WARNINGS=$((VERIFICATION_WARNINGS + 1))
     else
         echo -e "  ${CHECK_MARK} PGUSER set: $PGUSER"
     fi
-    
+
     if [ -z "$ANTHROPIC_API_KEY" ]; then
         echo -e "  ${WARNING} ANTHROPIC_API_KEY not set in environment"
         echo -e "      Hooks will inherit from OpenClaw's environment"
@@ -420,7 +428,7 @@ verify_config() {
     else
         echo -e "  ${CHECK_MARK} ANTHROPIC_API_KEY set: ${ANTHROPIC_API_KEY:0:8}..."
     fi
-    
+
     if [ -z "$OPENAI_API_KEY" ]; then
         echo -e "  ${WARNING} OPENAI_API_KEY not set in environment"
         echo -e "      Hooks will inherit from OpenClaw's environment"
@@ -428,13 +436,13 @@ verify_config() {
     else
         echo -e "  ${CHECK_MARK} OPENAI_API_KEY set: ${OPENAI_API_KEY:0:8}..."
     fi
-    
+
     if [ -z "$OPENCLAW_WORKSPACE" ]; then
         echo -e "  ${INFO} OPENCLAW_WORKSPACE not set (using default: $WORKSPACE)"
     else
         echo -e "  ${CHECK_MARK} OPENCLAW_WORKSPACE set: $OPENCLAW_WORKSPACE"
     fi
-    
+
     # Check database connection
     if psql -U "$DB_USER" -d "$DB_NAME" -c '\q' 2>/dev/null; then
         echo -e "  ${CHECK_MARK} Database connection works"
@@ -443,12 +451,12 @@ verify_config() {
         VERIFICATION_ERRORS=$((VERIFICATION_ERRORS + 1))
         return 1
     fi
-    
+
     # Check OpenClaw hook config
     HOOK_CONFIG="$HOME/.openclaw/hooks.json"
     if [ -f "$HOOK_CONFIG" ]; then
         echo -e "  ${CHECK_MARK} OpenClaw hook config exists"
-        
+
         # Check if our hooks are registered
         # Note: semantic-recall and agent-turn-context are now consolidated into the
         # turn-context plugin (memory/plugins/turn-context/). See issue #182.
@@ -470,7 +478,7 @@ verify_config() {
         echo -e "  ${WARNING} OpenClaw hook config not found at $HOOK_CONFIG"
         VERIFICATION_WARNINGS=$((VERIFICATION_WARNINGS + 1))
     fi
-    
+
     # Check cron job installation
     CRON_FILE="/etc/cron.d/nova-memory-maintenance"
     if [ -f "$CRON_FILE" ]; then
@@ -486,7 +494,7 @@ verify_config() {
         echo -e "  ${WARNING} Cron job not installed (requires manual setup)"
         VERIFICATION_WARNINGS=$((VERIFICATION_WARNINGS + 1))
     fi
-    
+
     return 0
 }
 
@@ -594,7 +602,7 @@ if [ $VERIFY_ONLY -eq 1 ]; then
     verify_schema
     verify_files
     verify_config
-    
+
     echo ""
     echo "═══════════════════════════════════════════"
     echo "  Verification Summary"
@@ -620,7 +628,7 @@ echo "Database setup..."
 # Check if database exists
 if psql -U "$DB_USER" -lqt | cut -d \| -f 1 | grep -qw "$DB_NAME"; then
     echo -e "  ${CHECK_MARK} Database '$DB_NAME' exists"
-    
+
     # Verify connection
     if psql -U "$DB_USER" -d "$DB_NAME" -c '\q' 2>/dev/null; then
         echo -e "  ${CHECK_MARK} Database connection verified"
@@ -668,11 +676,11 @@ if [ -n "$EXTENSIONS" ]; then
         if psql -U "$DB_USER" -d "$DB_NAME" -tAc "SELECT 1 FROM pg_extension WHERE extname = '$ext'" | grep -q 1; then
             echo -e "  ${CHECK_MARK} Extension '$ext' already installed"
         else
-            # Try to install — will succeed if user is superuser, fail gracefully if not
+            # Try to install - will succeed if user is superuser, fail gracefully if not
             if psql -U "$DB_USER" -d "$DB_NAME" -c "CREATE EXTENSION IF NOT EXISTS \"$ext\";" > /dev/null 2>&1; then
                 echo -e "  ${CHECK_MARK} Extension '$ext' installed"
             else
-                echo -e "  ${WARNING} Extension '$ext' not installed — requires superuser"
+                echo -e "  ${WARNING} Extension '$ext' not installed - requires superuser"
                 echo "      Ask a superuser to run: CREATE EXTENSION IF NOT EXISTS \"$ext\";"
                 echo "      Then re-run the installer."
                 SCHEMA_DIFF_SKIPPED=1
@@ -719,7 +727,7 @@ else
 
     echo "  Running pgschema plan..."
 
-    # Build connection args — omit --password if PGPASSWORD is empty (peer auth)
+    # Build connection args - omit --password if PGPASSWORD is empty (peer auth)
     PGSCHEMA_CONN_ARGS=(
         "--host" "${PGHOST:-/var/run/postgresql}"
         "--port" "${PGPORT:-5432}"
@@ -747,19 +755,19 @@ else
         --no-color 2>&1 || PLAN_EXIT=$?
 
     if [ $PLAN_EXIT -ne 0 ]; then
-        echo -e "  ${WARNING} pgschema plan failed (exit $PLAN_EXIT) — schema apply skipped"
+        echo -e "  ${WARNING} pgschema plan failed (exit $PLAN_EXIT) - schema apply skipped"
         SCHEMA_DIFF_SKIPPED=1
     else
         # ----------------------------------------------------------
-        # Step 4: Hazard check — look for destructive table/column drops
+        # Step 4: Hazard check - look for destructive table/column drops
         # ----------------------------------------------------------
-        # Check for DROP TABLE, DROP COLUMN (not privilege revokes — those are ignored)
+        # Check for DROP TABLE, DROP COLUMN (not privilege revokes - those are ignored)
         # Note: .groups may be null when there are no changes
         HAZARD_COUNT=$(jq '[(.groups // [])[] | .steps[] | select(.type != "privilege") | select(.operation == "drop") | select(.type | test("^table"))] | length' "$PLAN_FILE" 2>/dev/null || echo "0")
         TOTAL_STEPS=$(jq '[(.groups // [])[] | .steps[] | select(.type != "privilege")] | length' "$PLAN_FILE" 2>/dev/null || echo "0")
 
         if [ "$HAZARD_COUNT" -gt 0 ] 2>/dev/null; then
-            echo -e "  ${WARNING} Destructive changes detected in plan — schema apply SKIPPED"
+            echo -e "  ${WARNING} Destructive changes detected in plan - schema apply SKIPPED"
             echo "      $HAZARD_COUNT destructive operation(s) found (DROP on table/column):"
             jq -r '(.groups // [])[] | .steps[] | select(.type != "privilege") | select(.operation == "drop") | select(.type | test("^table")) | "      • " + .path' "$PLAN_FILE" 2>/dev/null || true
             echo ""
@@ -770,7 +778,7 @@ else
             echo "      $PGSCHEMA_BIN apply ${PGSCHEMA_CONN_ARGS[*]} --schema public --plan $PLAN_FILE --auto-approve"
             SCHEMA_DIFF_SKIPPED=1
         elif [ "$TOTAL_STEPS" -eq 0 ] 2>/dev/null; then
-            echo -e "  ${CHECK_MARK} Schema is up to date — no changes needed"
+            echo -e "  ${CHECK_MARK} Schema is up to date - no changes needed"
         else
             # ----------------------------------------------------------
             # Step 5: Apply
@@ -789,7 +797,7 @@ else
                 TABLE_COUNT=$(psql -U "$DB_USER" -d "$DB_NAME" -tAc "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE'" | tr -d '[:space:]')
                 echo "      Total tables in database: $TABLE_COUNT"
             else
-                echo -e "  ${WARNING} Schema apply failed (exit $APPLY_EXIT) — continuing installer"
+                echo -e "  ${WARNING} Schema apply failed (exit $APPLY_EXIT) - continuing installer"
                 SCHEMA_DIFF_SKIPPED=1
             fi
         fi
@@ -823,12 +831,12 @@ install_hook() {
     local hook_name="$1"
     local source="$HOOKS_SOURCE/$hook_name"
     local target="$HOOKS_TARGET/$hook_name"
-    
+
     if [ ! -d "$source" ]; then
         echo -e "  ${WARNING} Hook not found: $hook_name (skipping)"
         return 1
     fi
-    
+
     # If not forcing, check if files are already up to date
     if [ $FORCE_INSTALL -eq 0 ] && [ -d "$target" ]; then
         local all_match=1
@@ -836,14 +844,14 @@ install_hook() {
             if [ ! -f "$source_file" ]; then
                 continue
             fi
-            
+
             filename=$(basename "$source_file")
             target_file="$target/$filename"
-            
+
             if [ -f "$target_file" ]; then
                 source_hash=$(sha256sum "$source_file" | awk '{print $1}')
                 target_hash=$(sha256sum "$target_file" | awk '{print $1}')
-                
+
                 if [ "$source_hash" != "$target_hash" ]; then
                     all_match=0
                     break
@@ -854,20 +862,20 @@ install_hook() {
                 break
             fi
         done
-        
+
         if [ $all_match -eq 1 ]; then
             echo -e "  ${INFO} $hook_name up to date"
             return 2
         fi
     fi
-    
+
     # Remove existing target if it exists
     local was_existing=0
     if [ -e "$target" ]; then
         was_existing=1
         rm -rf "$target"
     fi
-    
+
     # Copy hook directory (excluding node_modules and dist)
     copy_excluding "$source" "$target"
     if [ $was_existing -eq 1 ]; then
@@ -923,53 +931,53 @@ if [ -d "$SCRIPTS_SOURCE" ]; then
     # Create both target directories
     mkdir -p "$SCRIPTS_TARGET_WORKSPACE"
     mkdir -p "$SCRIPTS_TARGET_OPENCLAW"
-    
+
     # Copy scripts, respecting force flag
     scripts_copied=0
     scripts_updated=0
     scripts_skipped=0
-    
+
     for source_file in "$SCRIPTS_SOURCE"/*.sh "$SCRIPTS_SOURCE"/*.py; do
         if [ ! -f "$source_file" ]; then
             continue
         fi
-        
+
         filename=$(basename "$source_file")
         target_file_workspace="$SCRIPTS_TARGET_WORKSPACE/$filename"
         target_file_openclaw="$SCRIPTS_TARGET_OPENCLAW/$filename"
-        
+
         # Check if we should skip (both files match source)
         if [ $FORCE_INSTALL -eq 0 ]; then
             source_hash=$(sha256sum "$source_file" | awk '{print $1}')
-            
+
             workspace_matches=0
             openclaw_matches=0
-            
+
             if [ -f "$target_file_workspace" ]; then
                 workspace_hash=$(sha256sum "$target_file_workspace" | awk '{print $1}')
                 [ "$source_hash" = "$workspace_hash" ] && workspace_matches=1
             fi
-            
+
             if [ -f "$target_file_openclaw" ]; then
                 openclaw_hash=$(sha256sum "$target_file_openclaw" | awk '{print $1}')
                 [ "$source_hash" = "$openclaw_hash" ] && openclaw_matches=1
             fi
-            
+
             # If both locations match source, skip
             if [ $workspace_matches -eq 1 ] && [ $openclaw_matches -eq 1 ]; then
                 continue
             fi
         fi
-        
+
         # Copy to both locations
         cp "$source_file" "$target_file_workspace"
         cp "$source_file" "$target_file_openclaw"
-        
+
         if [ -f "$target_file_workspace" ] && [ -f "$target_file_openclaw" ]; then
             scripts_copied=$((scripts_copied + 1))
         fi
     done
-    
+
     echo -e "  ${CHECK_MARK} $scripts_copied scripts installed to:"
     echo "      • $SCRIPTS_TARGET_WORKSPACE"
     echo "      • $SCRIPTS_TARGET_OPENCLAW"
@@ -995,7 +1003,7 @@ echo -e "  ${CHECK_MARK} Made $SCRIPT_COUNT scripts executable"
 if ls "$SCRIPTS_TARGET_WORKSPACE"/*.py &> /dev/null; then
     if command -v python3 &> /dev/null; then
         echo -e "  ${CHECK_MARK} Python3 available"
-        
+
         # Check for common dependencies
         MISSING_DEPS=()
         for dep in "psycopg2" "anthropic" "openai"; do
@@ -1003,7 +1011,7 @@ if ls "$SCRIPTS_TARGET_WORKSPACE"/*.py &> /dev/null; then
                 MISSING_DEPS+=("$dep")
             fi
         done
-        
+
         if [ ${#MISSING_DEPS[@]} -gt 0 ]; then
             echo -e "  ${WARNING} Missing Python dependencies: ${MISSING_DEPS[*]}"
             echo "      Install: pip3 install ${MISSING_DEPS[*]}"
@@ -1041,7 +1049,7 @@ elif [ ! -f "$ENABLE_HOOKS_SCRIPT" ]; then
 else
     # Make sure enable-hooks.sh is executable
     chmod +x "$ENABLE_HOOKS_SCRIPT"
-    
+
     # Run the config patching script
     echo "  Enabling nova-memory hooks in OpenClaw config..."
     if "$ENABLE_HOOKS_SCRIPT" "$OPENCLAW_CONFIG" > /dev/null 2>&1; then
@@ -1054,6 +1062,96 @@ else
         echo "      You can run manually: $ENABLE_HOOKS_SCRIPT"
         VERIFICATION_WARNINGS=$((VERIFICATION_WARNINGS + 1))
     fi
+fi
+
+# ============================================
+# Part 4.65: Turn Context Plugin Installation
+# ============================================
+echo ""
+echo "Turn context plugin installation..."
+
+# Clean up old hooks replaced by turn-context plugin (issue #182)
+for old_hook in "semantic-recall" "agent-turn-context"; do
+    OLD_HOOK_DIR="$HOME/.openclaw/hooks/$old_hook"
+    if [ -d "$OLD_HOOK_DIR" ]; then
+        rm -rf "$OLD_HOOK_DIR"
+        echo -e "  ${CHECK_MARK} Removed old hook: $old_hook (replaced by turn-context plugin)"
+    fi
+done
+
+# Also remove any .disabled variants
+for old_hook_disabled in "$HOME/.openclaw/hooks/semantic-recall.disabled"*; do
+    if [ -d "$old_hook_disabled" ]; then
+        rm -rf "$old_hook_disabled"
+        echo -e "  ${CHECK_MARK} Removed disabled hook: $(basename "$old_hook_disabled")"
+    fi
+done
+
+# Remove old hook config entries from openclaw.json if they exist
+if [ -f "$OPENCLAW_CONFIG" ] && command -v jq &> /dev/null; then
+    NEEDS_CLEANUP=0
+    for old_hook in "semantic-recall" "agent-turn-context"; do
+        if jq -e ".hooks.internal.entries.\"$old_hook\"" "$OPENCLAW_CONFIG" &>/dev/null; then
+            NEEDS_CLEANUP=1
+        fi
+    done
+    if [ "$NEEDS_CLEANUP" -eq 1 ]; then
+        jq 'del(.hooks.internal.entries["semantic-recall"]) | del(.hooks.internal.entries["agent-turn-context"])' \
+            "$OPENCLAW_CONFIG" > "$OPENCLAW_CONFIG.tmp" && \
+            mv "$OPENCLAW_CONFIG.tmp" "$OPENCLAW_CONFIG"
+        echo -e "  ${CHECK_MARK} Removed old hook config entries from openclaw.json"
+        GATEWAY_RESTART_NEEDED=1
+    fi
+fi
+
+# Install turn-context plugin
+PLUGIN_SOURCE="$SCRIPT_DIR/plugins/turn-context"
+PLUGIN_TARGET="$HOME/.openclaw/plugins/turn-context"
+
+if [ -d "$PLUGIN_SOURCE" ]; then
+    echo "  Installing turn-context plugin..."
+
+    # Copy plugin source to installed location
+    mkdir -p "$HOME/.openclaw/plugins"
+    rm -rf "$PLUGIN_TARGET"
+    cp -r "$PLUGIN_SOURCE" "$PLUGIN_TARGET"
+
+    # Install npm dependencies
+    if command -v npm &> /dev/null; then
+        (cd "$PLUGIN_TARGET" && npm install --production 2>&1 | tail -1)
+        echo -e "  ${CHECK_MARK} Plugin dependencies installed"
+    else
+        echo -e "  ${WARNING} npm not found — plugin dependencies not installed"
+        VERIFICATION_WARNINGS=$((VERIFICATION_WARNINGS + 1))
+    fi
+
+    # Build TypeScript
+    if command -v npx &> /dev/null; then
+        (cd "$PLUGIN_TARGET" && npx tsc 2>&1 | tail -3)
+        if [ -f "$PLUGIN_TARGET/dist/index.js" ]; then
+            echo -e "  ${CHECK_MARK} Plugin compiled successfully"
+        else
+            echo -e "  ${WARNING} Plugin compilation may have failed — dist/index.js not found"
+            VERIFICATION_WARNINGS=$((VERIFICATION_WARNINGS + 1))
+        fi
+    else
+        echo -e "  ${WARNING} npx not found — plugin not compiled"
+        VERIFICATION_WARNINGS=$((VERIFICATION_WARNINGS + 1))
+    fi
+
+    # Register with OpenClaw via plugins install --link
+    if command -v openclaw &> /dev/null; then
+        openclaw plugins install --link --dangerously-force-unsafe-install "$PLUGIN_TARGET" 2>&1 | grep -v "^WARNING" | tail -2
+        echo -e "  ${CHECK_MARK} Plugin registered with OpenClaw"
+        GATEWAY_RESTART_NEEDED=1
+    else
+        echo -e "  ${WARNING} openclaw CLI not found — plugin not registered"
+        echo "      Run manually: openclaw plugins install --link --dangerously-force-unsafe-install $PLUGIN_TARGET"
+        VERIFICATION_WARNINGS=$((VERIFICATION_WARNINGS + 1))
+    fi
+else
+    echo -e "  ${WARNING} Turn-context plugin source not found at $PLUGIN_SOURCE"
+    VERIFICATION_WARNINGS=$((VERIFICATION_WARNINGS + 1))
 fi
 
 # ============================================
@@ -1072,33 +1170,33 @@ install_skills() {
         VERIFICATION_WARNINGS=$((VERIFICATION_WARNINGS + 1))
         return 1
     fi
-    
+
     # Check if source is empty
     if [ -z "$(ls -A "$SKILLS_SOURCE" 2>/dev/null)" ]; then
         echo -e "  ${WARNING} Skills source directory is empty"
         VERIFICATION_WARNINGS=$((VERIFICATION_WARNINGS + 1))
         return 1
     fi
-    
+
     # Create target directory if needed
     if [ ! -d "$SKILLS_TARGET" ]; then
         mkdir -p "$SKILLS_TARGET"
         echo -e "  ${CHECK_MARK} Created skills directory: $SKILLS_TARGET"
     fi
-    
+
     local skills_installed=0
     local skills_skipped=0
     local skills_updated=0
-    
+
     # Iterate through each skill directory
     for skill_dir in "$SKILLS_SOURCE"/*/; do
         if [ ! -d "$skill_dir" ]; then
             continue
         fi
-        
+
         skill_name=$(basename "$skill_dir")
         target_skill="$SKILLS_TARGET/$skill_name"
-        
+
         # Check if skill already exists
         if [ -d "$target_skill" ]; then
             if [ $FORCE_INSTALL -eq 1 ]; then
@@ -1110,26 +1208,26 @@ install_skills() {
             else
                 # Check if files match
                 local needs_update=0
-                
+
                 # Find all files in source skill and compare
                 while IFS= read -r -d '' source_file; do
                     rel_path="${source_file#$skill_dir}"
                     target_file="$target_skill/$rel_path"
-                    
+
                     if [ ! -f "$target_file" ]; then
                         needs_update=1
                         break
                     fi
-                    
+
                     source_hash=$(sha256sum "$source_file" | awk '{print $1}')
                     target_hash=$(sha256sum "$target_file" | awk '{print $1}')
-                    
+
                     if [ "$source_hash" != "$target_hash" ]; then
                         needs_update=1
                         break
                     fi
                 done < <(find "$skill_dir" -type f -print0)
-                
+
                 if [ $needs_update -eq 0 ]; then
                     echo -e "  ${INFO} $skill_name up to date"
                     skills_skipped=$((skills_skipped + 1))
@@ -1145,14 +1243,14 @@ install_skills() {
             skills_installed=$((skills_installed + 1))
         fi
     done
-    
+
     # Summary
     if [ $skills_installed -gt 0 ] || [ $skills_updated -gt 0 ]; then
         echo -e "  ${CHECK_MARK} Skills: $skills_installed installed, $skills_updated updated, $skills_skipped skipped"
     elif [ $skills_skipped -gt 0 ]; then
         echo -e "  ${INFO} Skills: all $skills_skipped skill(s) already present"
     fi
-    
+
     return 0
 }
 
@@ -1214,7 +1312,7 @@ else
     echo "  Creating virtual environment at $VENV_DIR..."
     # Create parent directories if needed
     mkdir -p "$(dirname "$VENV_DIR")"
-    
+
     if python3 -m venv "$VENV_DIR" &> /dev/null; then
         echo -e "  ${CHECK_MARK} Virtual environment created"
     else
@@ -1329,7 +1427,7 @@ PGDATABASE=$DB_NAME
         echo ""
         echo "      Or manually create $CRON_FILE with the above content"
         echo ""
-        
+
         # Try to save to a temp file for easy installation
         TEMP_CRON=$(mktemp /tmp/nova-memory-cron-XXXXXX)
         TMPFILES+=("$TEMP_CRON")
@@ -1337,7 +1435,7 @@ PGDATABASE=$DB_NAME
         echo "      Temp cron file created at: $TEMP_CRON"
         echo "      Run: sudo cp $TEMP_CRON $CRON_FILE && sudo chmod 644 $CRON_FILE"
         echo ""
-        
+
         VERIFICATION_WARNINGS=$((VERIFICATION_WARNINGS + 1))
     fi
 fi
@@ -1380,6 +1478,10 @@ if [ ${#SKIPPED_HOOKS[@]} -gt 0 ]; then
     done
     echo ""
 fi
+
+echo "Installed plugins:"
+echo "  • turn-context plugin → $HOME/.openclaw/plugins/turn-context"
+echo ""
 
 echo "Next steps:"
 echo ""

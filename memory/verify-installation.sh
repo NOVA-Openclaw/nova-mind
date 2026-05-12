@@ -55,7 +55,7 @@ echo ""
 
 # Check hooks directory
 echo "Checking hooks installation..."
-for hook in "memory-extract" "semantic-recall" "session-init"; do
+for hook in "memory-extract" "session-init"; do
     if [ -d "$WORKSPACE/hooks/$hook" ]; then
         echo -e "  ${GREEN}✅${NC} Hook directory exists: $hook"
         

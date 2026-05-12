@@ -59,6 +59,18 @@ The installer is **idempotent** — safe to run multiple times. Use `./agent-ins
 
 ## Recent Changes
 
+### 2026-05-12: Turn-Context Plugin Replaces Old Hooks (#182)
+
+The old `semantic-recall` and `agent-turn-context` hooks have been removed and consolidated into a single **turn-context plugin** at `memory/plugins/turn-context/`. The plugin uses the OpenClaw Plugin SDK and registers `before_prompt_build` and `message_received` hooks.
+
+**What Changed:**
+- `memory/hooks/semantic-recall/` — deleted
+- `memory/hooks/agent-turn-context/` — deleted
+- `memory/plugins/turn-context/` — new Plugin SDK plugin handling entity resolution, semantic recall, and turn reminders in parallel
+- `memory/scripts/enable-hooks.sh` — now only enables `memory-extract` and `session-init`
+- `agent-install.sh` — installs the turn-context plugin, removes old hook references from config
+- `verify-installation.sh` — updated to only check for `memory-extract` and `session-init` hooks
+
 ### 2026-02-28: Step 1.5 — Declarative Renames via `renames.json` (#107, #106)
 
 `agent-install.sh` now has a **Step 1.5** that applies declarative column/table renames before `pgschema plan/apply`.
@@ -108,6 +120,13 @@ openclaw hooks enable memory-extract
 openclaw hooks enable semantic-recall
 openclaw hooks enable session-init
 openclaw hooks enable agent-turn-context
+# (old semantic-recall and agent-turn-context hooks — now replaced by turn-context plugin)
+openclaw gateway restart
+```
+
+**After (current):**
+```bash
+./agent-install.sh  # Automatically installs turn-context plugin, enables memory-extract + session-init
 openclaw gateway restart
 ```
 
@@ -296,7 +315,9 @@ The installer and hooks use these environment variables:
 
 ### Semantic Recall Context Budget Architecture
 
-The `semantic-recall` hook uses a two-tier injection strategy to stay within context window limits:
+### Turn-Context Plugin: Semantic Recall Context Budget Architecture
+
+The `turn-context` plugin's recall module (replacing the old `semantic-recall` hook) uses a two-tier injection strategy to stay within context window limits:
 
 1. **Query:** All relevant `source_type`s are queried with vector similarity search, then scored as `vector_similarity × priority_weight` from `memory_type_priorities`.
 2. **Threshold gating:** Results above `SEMANTIC_RECALL_HIGH_CONFIDENCE` (default 0.7) get full content injected. Results below the threshold get a summary (just the source_type and a snippet).
@@ -333,10 +354,10 @@ If automatic configuration failed (e.g., jq not installed), you can manually ena
 
 # Option 2: Use OpenClaw CLI (legacy method)
 openclaw hooks enable memory-extract
-openclaw hooks enable semantic-recall
 openclaw hooks enable session-init
-openclaw hooks enable agent-turn-context
 ```
+
+> **Note:** The old `semantic-recall` and `agent-turn-context` hooks have been replaced by the `turn-context` plugin, which is installed automatically by `agent-install.sh`. See [#182](https://github.com/NOVA-Openclaw/nova-mind/issues/182).
 
 ## Schema Management
 
@@ -424,6 +445,7 @@ The new `install.sh` copies hooks instead, which is more reliable.
 If you previously used symlinks (old method installed to `~/.openclaw/workspace/hooks/`), remove them first:
 
 ```bash
+# Clean up old hooks
 rm -rf ~/.openclaw/workspace/hooks/memory-extract
 rm -rf ~/.openclaw/workspace/hooks/semantic-recall
 rm -rf ~/.openclaw/workspace/hooks/session-init
@@ -431,6 +453,7 @@ rm -rf ~/.openclaw/hooks/memory-extract
 rm -rf ~/.openclaw/hooks/semantic-recall
 rm -rf ~/.openclaw/hooks/session-init
 rm -rf ~/.openclaw/hooks/agent-turn-context
+# The turn-context plugin replaces semantic-recall and agent-turn-context - see #182
 ```
 
 Then run the new installer:
@@ -588,9 +611,9 @@ nova-mind/memory/
 │   └── (*.sql files)       # Executed in filename order (e.g., rename a column before schema diff)
 ├── hooks/                  # OpenClaw hooks (source)
 │   ├── memory-extract/     # Extracts memories from messages
-│   ├── semantic-recall/    # Recalls relevant context
-│   ├── session-init/       # Initializes session context
-│   └── agent-turn-context/ # Injects per-turn critical context from DB
+│   └── session-init/       # Initializes session context
+├── plugins/                # OpenClaw Plugin SDK plugins
+│   └── turn-context/       # Consolidates old semantic-recall + agent-turn-context (#182)
 └── scripts/                # Shell and Python scripts (source)
     ├── process-input.sh    # Entry point for memory extraction
     ├── extract-memories.sh # Memory extraction logic
@@ -603,13 +626,16 @@ nova-mind/memory/
 ### After Installation (Workspace)
 ```
 ~/.openclaw/hooks/
-├── memory-extract/         # → Uses scripts/process-input.sh
-├── semantic-recall/        # → Uses scripts/proactive-recall.py
-├── session-init/           # → Uses scripts/generate-session-context.sh
-└── agent-turn-context/     # → Queries agent_turn_context table directly via DB
+├── memory-extract/     # → Uses scripts/process-input.sh
+└── session-init/       # → Uses scripts/generate-session-context.sh
+
+~/.openclaw/plugins/
+└── turn-context/       # Plugin SDK plugin: entity resolution, semantic recall, turn reminders
 ```
 
 All hooks now use **absolute paths** via `os.homedir()/.openclaw/` to locate scripts (#174), replacing the previous `../../scripts/` relative path scheme. This resolves issues when hooks are installed to `~/.openclaw/hooks/` where relative paths from legacy locations break.
+
+The turn-context plugin uses dynamic imports from `~/.openclaw/lib/` for the entity-resolver and pg-pool modules.
 
 ### Hook Script Path Resolution
 
@@ -618,9 +644,8 @@ Each hook resolves its script path using `join(os.homedir(), '.openclaw', 'scrip
 | Hook | Script | Path Resolution |
 |------|--------|----------------|
 | `memory-extract` | `process-input.sh` | `os.homedir() + /.openclaw/scripts/process-input.sh` |
-| `semantic-recall` | `proactive-recall.py` | `os.homedir() + /.openclaw/scripts/proactive-recall.py` |
 | `session-init` | `generate-session-context.sh` | `os.homedir() + /.openclaw/scripts/generate-session-context.sh` |
-| `agent-turn-context` | (queries DB directly) | N/A |
+| `turn-context` plugin | (DS API handlers) | Plugin SDK `runtime.ds` with dynamic imports from `~/.openclaw/lib/` |
 
 ## Portability
 

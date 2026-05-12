@@ -2,7 +2,22 @@
 
 ## Unreleased
 
+### Changed
+- **Turn-context plugin replaces old semantic-recall and agent-turn-context hooks** (#182, #185) — The broken fire-and-forget internal hooks have been removed and consolidated into a single OpenClaw Plugin SDK plugin at `memory/plugins/turn-context/`. The plugin runs entity resolution, semantic recall, and turn reminders in parallel via `before_prompt_build` and `message_received` hooks.
+  - `memory/hooks/semantic-recall/` — deleted (HOOK.md, IMPLEMENTATION.md, handler.ts, test-entity-resolution.js, verify-refactor.ts)
+  - `memory/hooks/agent-turn-context/` — deleted (HOOK.md, handler.ts, package.json)
+  - New plugin: `memory/plugins/turn-context/` with src/index.ts (main), src/entity-resolver.ts, src/semantic-recall.ts, src/turn-reminders.ts, src/shared/pg-pool.ts
+  - Installer updated: `agent-install.sh` now installs the turn-context plugin and removes old hook references from OpenClaw config
+  - `enable-hooks.sh` now only enables `memory-extract` and `session-init` hooks
+  - `verify-installation.sh` updated to reflect current hooks
+- **Installer fixes** (#182, #185) — Multiple improvements to `agent-install.sh`:
+  - `agent_chat` config now populates full DB credentials from `postgres.json`
+  - `hooks.token` generation triggers on `hooks.internal.enabled`
+  - Embedding-config.json verification added
+  - Entity-resolver post-install verification added
+
 ### Fixed
+- **agentName removed from agent_chat config** (#182) — Removed `agentName` from agent_chat config injection (rejected by extension schema's `additionalProperties: false`).
 - **Sender fields read from ctx.metadata** (#179) — Both memory-extract and semantic-recall hooks now read sender/provider fields from `ctx.metadata` (canonical location) with top-level fallbacks (`ctx.senderName`, `ctx.senderId`, etc.). This ensures correct sender attribution when the canonical message:received context from nova-openclaw #41 is deployed, which places sender fields at the top level.
   - **memory-extract handler**: Resolves `senderName`, `senderId`, `isGroup`, `senderUsername`, `senderTag`, `provider`, `channelName`, `guildId` using `meta.X ?? ctx.X` fallback chain where `meta = ctx.metadata`.
   - **semantic-recall handler**: Constructs JSON stdin payload using `meta.senderId ?? ctx.senderId` and similar fallbacks for senderName, provider.

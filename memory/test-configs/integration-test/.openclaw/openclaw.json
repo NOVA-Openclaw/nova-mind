@@ -16,9 +16,6 @@
         "memory-extract": {
           "enabled": true
         },
-        "semantic-recall": {
-          "enabled": true
-        },
         "session-init": {
           "enabled": true
         }

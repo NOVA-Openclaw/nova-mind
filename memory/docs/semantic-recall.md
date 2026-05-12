@@ -6,6 +6,8 @@ Automatic context injection based on semantic similarity search.
 
 The semantic recall system searches embedded memories when messages arrive and injects relevant context before the agent processes the message. This enables meaning-based recall ("what did we discuss about X") rather than keyword matching.
 
+> **⚠️ Note:** The old `semantic-recall` hook was **removed** in #182 and replaced by the `turn-context` plugin (`memory/plugins/turn-context/`), which uses the OpenClaw Plugin SDK. The `proactive-recall.py` script is still used by the plugin for the actual vector search. This document describes the underlying recall architecture; the installation and hook-specific details have moved to [the turn-context plugin](../plugins/turn-context/).
+
 ## Architecture
 
 ```
@@ -42,13 +44,13 @@ python proactive-recall.py "query" --inject
 - `--threshold` - Minimum similarity score (default: 0.4)
 - `--high-confidence` - Threshold for full vs summary content (default: 0.7)
 
-### Hook (semantic-recall/)
+### Plugin (turn-context/)
 
-OpenClaw hook that runs on `message:received`:
-1. Receives incoming message
+OpenClaw plugin that runs `before_prompt_build` (replaces old `semantic-recall` and `agent-turn-context` hooks):
+1. Receives the current prompt context
 2. Resolves sender to entity (phone/UUID lookup)
 3. Runs semantic search
-4. Injects entity profile + relevant memories
+4. Injects entity profile + relevant memories + turn reminders
 
 **Environment Variables:**
 - `SEMANTIC_RECALL_TOKEN_BUDGET` - Max injection tokens (default: 1000)
@@ -130,9 +132,11 @@ CREATE TABLE memory_embeddings (
 To use in an OpenClaw installation:
 
 1. Copy `scripts/proactive-recall.py` to your scripts directory
-2. Copy `hooks/semantic-recall/` to your hooks directory
+2. Install the `turn-context` plugin (`memory/plugins/turn-context/`) via the OpenClaw Plugin SDK
 3. Ensure pgvector extension and memory_embeddings table exist
 4. Ensure Ollama is running with `mxbai-embed-large` model loaded
+
+> **Note:** The old `semantic-recall` hook has been removed. Use the `turn-context` plugin instead (see #182).
 
 ## OpenClaw Session Memory Indexing (2026.2.6+)
 

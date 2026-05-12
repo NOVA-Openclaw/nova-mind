@@ -374,7 +374,9 @@ UPDATE agent_turn_context SET enabled = false WHERE file_key = 'MY_RULE';
 **Note:** This is separate from `agent_bootstrap_context`, which is injected once at session start. `agent_turn_context` fires on every `message:received` event.
 
 **Migration:** `migrations/065_agent_turn_context.sql`  
-**Hook:** `hooks/agent-turn-context/` — see `HOOK.md` for full details.
+**Plugin:** `plugins/turn-context/` — see `src/turn-reminders.ts` for full details.
+
+> **Note:** The old `agent-turn-context` hook was removed and replaced by the turn-context Plugin SDK plugin (#182).
 
 ### Knowledge and Learning
 

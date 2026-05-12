@@ -78,11 +78,11 @@ The `entity_facts` table includes privacy and provenance columns that exist in t
 | `vote_count` | int | Reinforcement count — incremented each time re-confirmed |
 | `last_confirmed` | timestamptz | Most recent confirmation/reinforcement timestamp |
 
-**⚠️ Privacy enforcement is schema-ready but NOT yet implemented in retrieval code** (semantic-recall hook, entity-resolver library). The `visibility` and `privacy_scope` columns exist, indexes are present (`idx_entity_facts_visibility`, `idx_entity_facts_privacy_scope`), but filtering by visibility at query time is not done. All facts are returned regardless of their visibility setting.
+**⚠️ Privacy enforcement is schema-ready but NOT yet implemented in retrieval code** (turn-context plugin's recall module, entity-resolver library). The `visibility` and `privacy_scope` columns exist, indexes are present (`idx_entity_facts_visibility`, `idx_entity_facts_privacy_scope`), but filtering by visibility at query time is not done. All facts are returned regardless of their visibility setting.
 
 #### Turn Context Injection (`agent_turn_context`)
 
-The `agent_turn_context` table stores short, high-priority context records that are injected into **every agent turn** via the `agent-turn-context` hook. Unlike `agent_bootstrap_context` (session-level bootstrap), these records fire on every `message:received` event.
+The `agent_turn_context` table stores short, high-priority context records that are injected into **every agent turn** via the `turn-context` plugin's turn-reminders module. Unlike `agent_bootstrap_context` (session-level bootstrap), these records fire before every agent response via the `after_message` hook.
 
 **Key properties:**
 - Each record capped at **500 characters** (CHECK constraint in DB)
@@ -92,7 +92,9 @@ The `agent_turn_context` table stores short, high-priority context records that 
 - Scopes: `UNIVERSAL` (all agents), `GLOBAL` (all agents), `DOMAIN` (agents in matching `agent_domains`), `AGENT` (specific agent)
 
 **Migration:** `migrations/065_agent_turn_context.sql`  
-**Hook:** `hooks/agent-turn-context/` (handler.ts, package.json, HOOK.md)
+**Plugin:** `plugins/turn-context/` (openclaw.plugin.json, src/turn-reminders.ts)
+
+> **Note:** The old `hooks/agent-turn-context/` hook was removed and replaced by the turn-context Plugin SDK plugin (#182).
 
 #### SOPs (Standard Operating Procedures)
 

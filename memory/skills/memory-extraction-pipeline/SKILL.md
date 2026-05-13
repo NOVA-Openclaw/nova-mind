@@ -50,8 +50,12 @@ This captures:
 **Instead of deduplication, matching data REINFORCES existing knowledge:**
 
 **Schema:**
-- `vote_count INTEGER DEFAULT 1` - incremented on each re-confirmation
-- `last_confirmed TIMESTAMP` - tracks recency of confirmation
+- `extraction_count INTEGER DEFAULT 1` - incremented on each re-extraction or reinforcement
+- `last_confirmed_at TIMESTAMPTZ` - tracks recency of confirmation
+- `durability VARCHAR(20)` - `permanent`, `long_term`, `short_term`, `ephemeral`
+- `category TEXT` - free-form (e.g., `identity`, `preference`, `observation`)
+
+**Source attribution** is stored in the `entity_fact_sources` table, one row per fact-source pair.
 
 **Layer 1 - Extraction Prompt:**
 - Queries existing facts/vocab for context
@@ -59,14 +63,14 @@ This captures:
 
 **Layer 2 - Storage Script:**
 - `fact_find_match()` - fuzzy match on entity+key+value, returns ID
-- `reinforce_fact()` - increments vote_count, updates last_confirmed
-- Logs `↑ (reinforced, +1 vote)` when strengthening existing facts
+- `reinforce_fact()` - increments extraction_count, updates last_confirmed_at, UPSERTs into entity_fact_sources
+- Logs `↑ (reinforced, +1 extraction)` when strengthening existing facts
 
 **Benefits:**
-- Facts mentioned once = low confidence (vote_count: 1)
-- Facts mentioned repeatedly = high confidence (vote_count: 10+)
+- Facts mentioned once = low confidence (extraction_count: 1)
+- Facts mentioned repeatedly = high confidence (extraction_count: 10+)
 - Enables confidence-weighted retrieval
-- Can detect stale knowledge via last_confirmed
+- Can detect stale knowledge via last_confirmed_at
 
 ## Procedure
 

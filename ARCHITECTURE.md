@@ -364,7 +364,7 @@ The installer enforces this order automatically.
 The `entity_facts` table includes `visibility` (public/trusted/private) and `privacy_scope` (entity ID allowlist) columns in the schema, and indexes exist for both. **However, these are NOT filtered at retrieval time** — no hook, resolver, or query currently enforces visibility. All facts are returned regardless of their visibility setting.
 
 **What exists:**
-- Schema columns: `visibility`, `privacy_scope`, `source_entity_id`
+- Schema columns: `visibility`, `privacy_scope` (source attribution moved to `entity_fact_sources.source_entity_id`)
 - Indexes: `idx_entity_facts_visibility`, `idx_entity_facts_privacy_scope` (GIN)
 
 **What is missing:**

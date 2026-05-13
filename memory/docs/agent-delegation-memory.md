@@ -44,16 +44,16 @@ Agent delegation knowledge is stored as `entity_facts` for NOVA (entity_id=1):
 
 ```sql
 -- Agent relationships
-INSERT INTO entity_facts (entity_id, key, value, category, confidence, data_type) VALUES
+INSERT INTO entity_facts (entity_id, key, value, category, confidence, durability) VALUES
 (1, 'delegates_to', 'Coder for coding tasks', 'delegation', 1.0, 'permanent'),
 (1, 'delegates_to', 'Gidget for git operations', 'delegation', 1.0, 'permanent'),
 (1, 'delegates_to', 'Scout for research', 'delegation', 1.0, 'permanent');
 
 -- Agent capabilities (learned from experience)
-INSERT INTO entity_facts (entity_id, key, value, category, confidence, data_type) VALUES
-(1, 'agent_capability', 'Coder: excellent at Python debugging', 'delegation', 0.9, 'observation'),
-(1, 'agent_capability', 'Gidget: reliable for git operations', 'delegation', 0.95, 'observation'),
-(1, 'agent_success', 'Scout successfully researched X topic on YYYY-MM-DD', 'delegation', 1.0, 'observation');
+INSERT INTO entity_facts (entity_id, key, value, category, confidence, durability) VALUES
+(1, 'agent_capability', 'Coder: excellent at Python debugging', 'delegation', 0.9, 'long_term'),
+(1, 'agent_capability', 'Gidget: reliable for git operations', 'delegation', 0.95, 'long_term'),
+(1, 'agent_success', 'Scout successfully researched X topic on YYYY-MM-DD', 'delegation', 1.0, 'long_term');
 ```
 
 ### memory_embeddings Integration

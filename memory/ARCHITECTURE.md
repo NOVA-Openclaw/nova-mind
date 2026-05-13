@@ -50,7 +50,7 @@ This is the source of truth for persistent information.
 | Table | Purpose |
 |-------|---------|
 | `entities` | People, AIs, organizations — things with agency |
-| `entity_facts` | Key-value facts about entities (includes `visibility`, `privacy_scope`, `data_type` for access control — see note below). Now includes `source_channel_transcript_id` and `source_channel_session_id` FK columns linking facts back to their source chat messages. |
+| `entity_facts` | Key-value facts about entities (includes `visibility`, `privacy_scope`, `durability`, `category` for access control — see note below). Now includes `source_channel_transcript_id` and `source_channel_session_id` FK columns linking facts back to their source chat messages. |
 | `entity_relationships` | Connections between entities |
 | `places` | Locations, networks, venues |
 | `projects` | Active efforts with goals |
@@ -73,10 +73,15 @@ The `entity_facts` table includes privacy and provenance columns that exist in t
 |--------|------|---------|
 | `visibility` | varchar(20) | `public`, `trusted`, `private` — intended audience level |
 | `privacy_scope` | integer[] | Array of entity IDs explicitly allowed to see this fact |
-| `data_type` | varchar(20) | One of `permanent`, `identity`, `preference`, `temporal`, `observation` |
-| `source_entity_id` | int | FK to entity who provided the information (privacy ownership) |
-| `vote_count` | int | Reinforcement count — incremented each time re-confirmed |
-| `last_confirmed` | timestamptz | Most recent confirmation/reinforcement timestamp |
+| `durability` | varchar(20) | `permanent`, `long_term`, `short_term`, `ephemeral` — fact lifespan category |
+| `category` | text | Free-form category replacing `data_type` (e.g., `identity`, `preference`, `observation`) |
+| `extraction_count` | integer | Reinforcement count — incremented each time re-extracted/reinforced |
+| `last_confirmed_at` | timestamptz | Most recent confirmation/reinforcement timestamp |
+| `expires` | timestamptz | Temporal validity boundary — fact is eligible for cleanup after this timestamp |
+| `source_channel_transcript_id` | bigint | FK to channel_transcripts row that triggered extraction |
+| `source_channel_session_id` | bigint | FK to channel_sessions row (denormalised for fast queries) |
+
+**Note:** Source attribution (`source_entity_id`) moved to `entity_fact_sources` table, enabling multi-source tracking.
 
 **⚠️ Privacy enforcement is schema-ready but NOT yet implemented in retrieval code** (turn-context plugin's recall module, entity-resolver library). The `visibility` and `privacy_scope` columns exist, indexes are present (`idx_entity_facts_visibility`, `idx_entity_facts_privacy_scope`), but filtering by visibility at query time is not done. All facts are returned regardless of their visibility setting.
 

@@ -888,16 +888,18 @@ def main() -> int:
         if sender_name and sender_name != "unknown":
             ensure_entity(sender_name, "person", conn)
             # If we have a sender_id that looks like a phone number, store it
-            if sender_id and sender_id not in ("", "unknown"):
+            # Skip platform IDs (Discord snowflakes, Telegram chat IDs, etc.) — only store actual phone numbers
+            if sender_id and sender_id not in ("", "unknown") and sender_provider in ("signal", "whatsapp", "sms", ""):
                 entity_id = find_entity_id(sender_name, conn)
                 if entity_id is not None:
                     digits = re.sub(r"[^0-9+]", "", sender_id)
-                    if digits:
+                    # Only store if it looks like a real phone number (starts with + or has 10-15 digits)
+                    if digits and (digits.startswith("+") or 10 <= len(digits) <= 15):
                         with conn.cursor() as cur:
                             cur.execute(
                                 """
-                                INSERT INTO entity_facts (entity_id, key, value, source, visibility)
-                                VALUES (%s, 'phone', %s, 'auto-extracted', 'private')
+                                INSERT INTO entity_facts (entity_id, key, value, visibility, durability, category)
+                                VALUES (%s, 'phone', %s, 'private', 'permanent', 'identity')
                                 ON CONFLICT DO NOTHING
                                 """,
                                 (entity_id, sender_id),

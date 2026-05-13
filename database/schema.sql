@@ -1244,29 +1244,27 @@ CREATE TABLE IF NOT EXISTS entity_facts (
     key varchar(255) NOT NULL,
     value text NOT NULL,
     data jsonb,
-    source varchar(255),
     confidence double precision DEFAULT 1.0,
     learned_at timestamp DEFAULT CURRENT_TIMESTAMP,
     updated_at timestamp DEFAULT CURRENT_TIMESTAMP,
     visibility varchar(20) DEFAULT 'public',
     privacy_scope integer[],
-    source_entity_id integer,
     visibility_reason text,
-    vote_count integer DEFAULT 1,
-    last_confirmed timestamp DEFAULT now(),
-    data_type varchar(20) DEFAULT 'observation',
+    extraction_count INTEGER DEFAULT 1,
     last_confirmed_at timestamptz DEFAULT now(),
     confirmation_count integer DEFAULT 1,
     decay_rate real,
+    expires TIMESTAMPTZ,
+    durability VARCHAR(20) NOT NULL DEFAULT 'long_term',
+    category TEXT NOT NULL DEFAULT 'observation',
     source_channel_transcript_id bigint,
     source_channel_session_id bigint,
     CONSTRAINT entity_facts_pkey PRIMARY KEY (id),
     CONSTRAINT entity_facts_entity_id_fkey FOREIGN KEY (entity_id) REFERENCES entities (id) ON DELETE CASCADE,
     CONSTRAINT entity_facts_source_channel_session_id_fkey FOREIGN KEY (source_channel_session_id) REFERENCES channel_sessions (id),
     CONSTRAINT entity_facts_source_channel_transcript_id_fkey FOREIGN KEY (source_channel_transcript_id) REFERENCES channel_transcripts (id),
-    CONSTRAINT entity_facts_source_entity_id_fkey FOREIGN KEY (source_entity_id) REFERENCES entities (id),
     CONSTRAINT chk_confidence CHECK (confidence >= 0::double precision AND confidence <= 1::double precision),
-    CONSTRAINT chk_data_type CHECK (data_type::text IN ('permanent'::character varying, 'identity'::character varying, 'preference'::character varying, 'temporal'::character varying, 'observation'::character varying))
+    CONSTRAINT chk_durability CHECK (durability IN ('permanent', 'long_term', 'short_term', 'ephemeral'))
 );
 
 
@@ -1279,16 +1277,15 @@ COMMENT ON COLUMN entity_facts.visibility IS 'Privacy level: public (anyone), tr
 COMMENT ON COLUMN entity_facts.privacy_scope IS 'Array of entity IDs explicitly allowed to see this fact (overrides visibility)';
 
 
-COMMENT ON COLUMN entity_facts.source_entity_id IS 'FK to entity who provided this information (for privacy ownership)';
 
 
 COMMENT ON COLUMN entity_facts.visibility_reason IS 'Reason visibility deviated from user default (audit trail)';
 
 
-COMMENT ON COLUMN entity_facts.vote_count IS 'Reinforcement count - incremented each time this fact is re-confirmed in conversation';
+COMMENT ON COLUMN entity_facts.extraction_count IS 'Number of times this fact has been extracted/observed from conversation';
 
 
-COMMENT ON COLUMN entity_facts.last_confirmed IS 'Timestamp of most recent confirmation/reinforcement';
+COMMENT ON COLUMN entity_facts.durability IS 'Fact lifespan category: permanent, long_term, short_term, ephemeral';
 
 
 COMMENT ON COLUMN entity_facts.source_channel_transcript_id IS 'FK to channel_transcripts row that triggered this fact extraction (#170)';
@@ -1315,10 +1312,16 @@ CREATE INDEX IF NOT EXISTS idx_entity_facts_channel_transcript ON entity_facts (
 CREATE INDEX IF NOT EXISTS idx_entity_facts_confidence ON entity_facts (confidence) WHERE (confidence < (1.0)::double precision);
 
 --
--- Name: idx_entity_facts_data_type; Type: INDEX; Schema: -; Owner: -
+-- Name: idx_entity_facts_durability; Type: INDEX; Schema: -; Owner: -
 --
 
-CREATE INDEX IF NOT EXISTS idx_entity_facts_data_type ON entity_facts (data_type);
+CREATE INDEX IF NOT EXISTS idx_entity_facts_durability ON entity_facts (durability);
+
+--
+-- Name: idx_entity_facts_category; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_entity_facts_category ON entity_facts (category);
 
 --
 -- Name: idx_entity_facts_entity; Type: INDEX; Schema: -; Owner: -
@@ -1339,12 +1342,6 @@ CREATE INDEX IF NOT EXISTS idx_entity_facts_key ON entity_facts (key);
 CREATE INDEX IF NOT EXISTS idx_entity_facts_privacy_scope ON entity_facts USING gin (privacy_scope);
 
 --
--- Name: idx_entity_facts_source_entity; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_entity_facts_source_entity ON entity_facts (source_entity_id);
-
---
 -- Name: idx_entity_facts_value_trgm; Type: INDEX; Schema: -; Owner: -
 --
 
@@ -1357,12 +1354,6 @@ CREATE INDEX IF NOT EXISTS idx_entity_facts_value_trgm ON entity_facts USING gin
 CREATE INDEX IF NOT EXISTS idx_entity_facts_visibility ON entity_facts (visibility);
 
 --
--- Name: idx_entity_facts_vote_count; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_entity_facts_vote_count ON entity_facts (vote_count DESC);
-
---
 -- Name: entity_facts_archive; Type: TABLE; Schema: -; Owner: -
 --
 
@@ -1372,20 +1363,19 @@ CREATE TABLE IF NOT EXISTS entity_facts_archive (
     key varchar(255),
     value text,
     data jsonb,
-    source varchar(255),
     confidence double precision,
     learned_at timestamp,
     updated_at timestamp,
     visibility varchar(20),
     privacy_scope integer[],
-    source_entity_id integer,
     visibility_reason text,
-    vote_count integer,
-    last_confirmed timestamp,
-    data_type varchar(20),
+    extraction_count INTEGER,
     last_confirmed_at timestamptz,
     confirmation_count integer,
     decay_rate real,
+    expires timestamptz,
+    durability VARCHAR(20),
+    category TEXT,
     archived_at timestamptz DEFAULT now(),
     archive_reason varchar(50),
     archived_by varchar(50) DEFAULT 'decay_script'
@@ -1402,6 +1392,125 @@ COMMENT ON COLUMN entity_facts_archive.archive_reason IS 'Why the fact was archi
 
 
 COMMENT ON COLUMN entity_facts_archive.archived_by IS 'System or agent that archived the fact';
+
+--
+-- Name: entity_fact_sources; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS entity_fact_sources (
+    id SERIAL PRIMARY KEY,
+    fact_id INTEGER NOT NULL REFERENCES entity_facts(id) ON DELETE CASCADE,
+    source_entity_id INTEGER NOT NULL REFERENCES entities(id),
+    source_citation TEXT,
+    attribution_count INTEGER DEFAULT 1,
+    first_seen TIMESTAMPTZ DEFAULT now(),
+    last_seen TIMESTAMPTZ DEFAULT now(),
+    CONSTRAINT uq_fact_source UNIQUE (fact_id, source_entity_id)
+);
+
+COMMENT ON TABLE entity_fact_sources IS 'Tracks the origin and attribution of entity facts. One row per fact-source pair.';
+
+COMMENT ON COLUMN entity_fact_sources.fact_id IS 'FK to the entity_fact this source attribution belongs to';
+
+COMMENT ON COLUMN entity_fact_sources.source_entity_id IS 'FK to the entity (person, AI, system) that provided this information';
+
+COMMENT ON COLUMN entity_fact_sources.source_citation IS 'Optional citation or reference text for the source';
+
+COMMENT ON COLUMN entity_fact_sources.attribution_count IS 'How many times this source has been observed for this fact';
+
+COMMENT ON COLUMN entity_fact_sources.first_seen IS 'First time this source was observed for this fact';
+
+COMMENT ON COLUMN entity_fact_sources.last_seen IS 'Most recent time this source was observed for this fact';
+
+--
+-- Name: idx_entity_fact_sources_fact; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_entity_fact_sources_fact ON entity_fact_sources (fact_id);
+
+--
+-- Name: idx_entity_fact_sources_entity; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_entity_fact_sources_entity ON entity_fact_sources (source_entity_id);
+
+--
+-- Name: merge_facts(survivor_id, absorbed_id); Type: FUNCTION; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE FUNCTION merge_facts(
+    survivor_id INTEGER,
+    absorbed_id INTEGER
+)
+RETURNS entity_facts
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    survivor_row entity_facts%ROWTYPE;
+    absorbed_row entity_facts%ROWTYPE;
+    merged_sources INTEGER;
+    result_row entity_facts%ROWTYPE;
+BEGIN
+    -- Validate inputs
+    IF survivor_id = absorbed_id THEN
+        RAISE EXCEPTION 'cannot merge a fact with itself';
+    END IF;
+
+    SELECT * INTO survivor_row FROM entity_facts WHERE id = survivor_id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'survivor fact % does not exist', survivor_id;
+    END IF;
+
+    SELECT * INTO absorbed_row FROM entity_facts WHERE id = absorbed_id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'absorbed fact % does not exist', absorbed_id;
+    END IF;
+
+    IF survivor_row.entity_id != absorbed_row.entity_id THEN
+        RAISE EXCEPTION 'cannot merge facts from different entities';
+    END IF;
+
+    -- Merge source attributions
+    -- Shared sources: sum attribution_count, keep earliest first_seen, latest last_seen
+    UPDATE entity_fact_sources s_survivor
+    SET attribution_count = s_survivor.attribution_count + s_absorbed.attribution_count,
+        first_seen = LEAST(s_survivor.first_seen, s_absorbed.first_seen),
+        last_seen  = GREATEST(s_survivor.last_seen, s_absorbed.last_seen)
+    FROM entity_fact_sources s_absorbed
+    WHERE s_survivor.fact_id = survivor_id
+      AND s_absorbed.fact_id = absorbed_id
+      AND s_survivor.source_entity_id = s_absorbed.source_entity_id;
+
+    GET DIAGNOSTICS merged_sources = ROW_COUNT;
+
+    -- Move unique sources from absorbed to survivor
+    INSERT INTO entity_fact_sources (fact_id, source_entity_id, source_citation, attribution_count, first_seen, last_seen)
+    SELECT survivor_id, source_entity_id, source_citation, attribution_count, first_seen, last_seen
+    FROM entity_fact_sources
+    WHERE fact_id = absorbed_id
+      AND source_entity_id NOT IN (
+          SELECT source_entity_id FROM entity_fact_sources WHERE fact_id = survivor_id
+      );
+
+    -- Delete absorbed sources
+    DELETE FROM entity_fact_sources WHERE fact_id = absorbed_id;
+
+    -- Update survivor with merged values
+    UPDATE entity_facts
+    SET extraction_count = COALESCE(survivor_row.extraction_count, 1) + COALESCE(absorbed_row.extraction_count, 1),
+        last_confirmed_at = GREATEST(survivor_row.last_confirmed_at, absorbed_row.last_confirmed_at),
+        confidence = GREATEST(survivor_row.confidence, absorbed_row.confidence),
+        updated_at = NOW()
+    WHERE id = survivor_id;
+
+    -- Delete absorbed fact
+    DELETE FROM entity_facts WHERE id = absorbed_id;
+
+    -- Return updated survivor
+    SELECT * INTO result_row FROM entity_facts WHERE id = survivor_id;
+    RETURN result_row;
+END;
+$$;
 
 --
 -- Name: entity_relationships; Type: TABLE; Schema: -; Owner: -
@@ -6425,8 +6534,8 @@ CREATE OR REPLACE VIEW delegation_knowledge AS
     key,
     value,
     confidence,
-    data_type,
-    source,
+    durability,
+    category,
     learned_at,
     updated_at
    FROM entity_facts ef
@@ -6515,7 +6624,9 @@ CREATE OR REPLACE VIEW v_entity_facts AS
     ef.key,
     ef.value,
     ef.data,
-    ef.learned_at
+    ef.learned_at,
+    ef.durability,
+    ef.category
    FROM entities e
      JOIN entity_facts ef ON e.id = ef.entity_id;
 

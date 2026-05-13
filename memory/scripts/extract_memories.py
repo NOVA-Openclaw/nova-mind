@@ -92,17 +92,16 @@ def lookup_default_visibility(sender_id: str, sender_provider: str, conn) -> str
 
     try:
         with conn.cursor() as cur:
-            # Platform-specific ID lookup (highest priority)
-            if sender_provider:
-                platform_match = _platform_id_lookup(sender_id, sender_provider, cur)
-                if platform_match is not None:
-                    cur.execute(
-                        "SELECT value FROM entity_facts WHERE entity_id = %s AND key = 'default_visibility' LIMIT 1",
-                        (platform_match,),
-                    )
-                    row = cur.fetchone()
-                    if row and row[0]:
-                        return row[0]
+            # Value-first scan (highest priority)
+            value_match = _resolve_by_sender_id(sender_id, conn)
+            if value_match is not None:
+                cur.execute(
+                    "SELECT value FROM entity_facts WHERE entity_id = %s AND key = 'default_visibility' LIMIT 1",
+                    (value_match,),
+                )
+                row = cur.fetchone()
+                if row and row[0]:
+                    return row[0]
 
             # Normalise to digits only for phone matching
             digits_only = re.sub(r"[^0-9]", "", sender_id)
@@ -145,56 +144,39 @@ def lookup_default_visibility(sender_id: str, sender_provider: str, conn) -> str
     return "public"
 
 
-def _platform_id_lookup(sender_id: str, sender_provider: str, cur) -> Optional[int]:
-    """Look up entity by platform-specific ID. Returns entity_id or None."""
-    if not sender_id or sender_id in ("", "unknown") or not sender_provider:
+def _resolve_by_sender_id(sender_id: str, conn) -> Optional[int]:
+    """Resolve entity by searching for sender_id as a VALUE in entity_facts.
+    
+    Platform IDs (Discord snowflakes, Telegram IDs, Signal UUIDs) are unique
+    enough that matching on value alone is safe. We add a length/format guard
+    to avoid false positives on short/common values.
+    """
+    if not sender_id or sender_id in ("", "unknown"):
         return None
-
-    provider = sender_provider.lower().strip()
-
-    # Map provider to the entity_fact key(s) to check
-    if provider == "discord":
-        keys = ("discord_id",)
-    elif provider == "telegram":
-        keys = ("telegram_id",)
-    elif provider == "signal":
-        keys = ("signal_id", "phone", "has_phone_number")
-    elif provider == "whatsapp":
-        keys = ("whatsapp_id", "phone")
-    else:
-        # Unknown provider — fall through
+    
+    # Only do value-scan for IDs that look like platform identifiers
+    # Discord snowflakes: 17-19 digits
+    # Telegram IDs: 9-10 digits  
+    # Signal UUIDs: 36 chars with hyphens
+    # Phone numbers: 10-15 digits with optional +
+    # Skip short/ambiguous values
+    clean = sender_id.strip()
+    if len(clean) < 8:
         return None
-
-    # For signal/whatsapp, also try digits-only match on phone-style keys
-    if provider in ("signal", "whatsapp"):
-        digits_only = re.sub(r"[^0-9]", "", sender_id)
-        if digits_only:
-            cur.execute(
-                """
-                SELECT DISTINCT entity_id FROM entity_facts
-                WHERE key = ANY(%s)
-                  AND REGEXP_REPLACE(value, '[^0-9]', '', 'g') = %s
-                LIMIT 1
-                """,
-                (list(keys), digits_only),
-            )
-            row = cur.fetchone()
-            if row:
-                return row[0]
-
-    # Exact match on platform-specific ID keys
-    cur.execute(
-        """
-        SELECT DISTINCT entity_id FROM entity_facts
-        WHERE key = ANY(%s) AND value = %s
-        LIMIT 1
-        """,
-        (list(keys), sender_id),
-    )
-    row = cur.fetchone()
-    if row:
-        return row[0]
-
+    
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT DISTINCT entity_id FROM entity_facts
+            WHERE value = %s
+            LIMIT 1
+            """,
+            (sender_id,)
+        )
+        row = cur.fetchone()
+        if row:
+            return row[0]
+    
     return None
 
 
@@ -207,11 +189,10 @@ def resolve_source_entity_id(
 
     try:
         with conn.cursor() as cur:
-            # 1. Platform-specific ID lookup (highest priority)
-            if sender_provider:
-                platform_match = _platform_id_lookup(sender_id, sender_provider, cur)
-                if platform_match is not None:
-                    return platform_match
+            # 1. Value-first scan (highest priority)
+            value_match = _resolve_by_sender_id(sender_id, conn)
+            if value_match is not None:
+                return value_match
 
             # 2. Legacy phone/UUID match (fallback)
             if sender_id and sender_id not in ("", "unknown"):
@@ -269,9 +250,9 @@ def find_entity_id(
                 and sender_name
                 and subject_name.lower() == sender_name.lower()
             ):
-                platform_match = _platform_id_lookup(sender_id, sender_provider, cur)
-                if platform_match is not None:
-                    return platform_match
+                value_match = _resolve_by_sender_id(sender_id, conn)
+                if value_match is not None:
+                    return value_match
 
             # Fallback to name matching
             cur.execute(

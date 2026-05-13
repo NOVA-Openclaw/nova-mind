@@ -1244,26 +1244,29 @@ CREATE TABLE IF NOT EXISTS entity_facts (
     key varchar(255) NOT NULL,
     value text NOT NULL,
     data jsonb,
+    source varchar(255),
     confidence double precision DEFAULT 1.0,
     learned_at timestamp DEFAULT CURRENT_TIMESTAMP,
     updated_at timestamp DEFAULT CURRENT_TIMESTAMP,
     visibility varchar(20) DEFAULT 'public',
     privacy_scope integer[],
+    source_entity_id integer,
     visibility_reason text,
-    extraction_count INTEGER DEFAULT 1,
+    vote_count integer DEFAULT 1,
+    last_confirmed timestamp DEFAULT now(),
+    data_type varchar(20) DEFAULT 'observation',
     last_confirmed_at timestamptz DEFAULT now(),
+    confirmation_count integer DEFAULT 1,
     decay_rate real,
-    expires TIMESTAMPTZ,
-    durability VARCHAR(20) NOT NULL DEFAULT 'long_term',
-    category TEXT NOT NULL DEFAULT 'observation',
     source_channel_transcript_id bigint,
     source_channel_session_id bigint,
     CONSTRAINT entity_facts_pkey PRIMARY KEY (id),
     CONSTRAINT entity_facts_entity_id_fkey FOREIGN KEY (entity_id) REFERENCES entities (id) ON DELETE CASCADE,
     CONSTRAINT entity_facts_source_channel_session_id_fkey FOREIGN KEY (source_channel_session_id) REFERENCES channel_sessions (id),
     CONSTRAINT entity_facts_source_channel_transcript_id_fkey FOREIGN KEY (source_channel_transcript_id) REFERENCES channel_transcripts (id),
+    CONSTRAINT entity_facts_source_entity_id_fkey FOREIGN KEY (source_entity_id) REFERENCES entities (id),
     CONSTRAINT chk_confidence CHECK (confidence >= 0::double precision AND confidence <= 1::double precision),
-    CONSTRAINT chk_durability CHECK (durability IN ('permanent', 'long_term', 'short_term', 'ephemeral'))
+    CONSTRAINT chk_data_type CHECK (data_type::text IN ('permanent'::character varying, 'identity'::character varying, 'preference'::character varying, 'temporal'::character varying, 'observation'::character varying))
 );
 
 
@@ -1276,15 +1279,16 @@ COMMENT ON COLUMN entity_facts.visibility IS 'Privacy level: public (anyone), tr
 COMMENT ON COLUMN entity_facts.privacy_scope IS 'Array of entity IDs explicitly allowed to see this fact (overrides visibility)';
 
 
+COMMENT ON COLUMN entity_facts.source_entity_id IS 'FK to entity who provided this information (for privacy ownership)';
 
 
 COMMENT ON COLUMN entity_facts.visibility_reason IS 'Reason visibility deviated from user default (audit trail)';
 
 
-COMMENT ON COLUMN entity_facts.extraction_count IS 'Number of times this fact has been extracted/observed from conversation';
+COMMENT ON COLUMN entity_facts.vote_count IS 'Reinforcement count - incremented each time this fact is re-confirmed in conversation';
 
 
-COMMENT ON COLUMN entity_facts.durability IS 'Fact lifespan category: permanent, long_term, short_term, ephemeral';
+COMMENT ON COLUMN entity_facts.last_confirmed IS 'Timestamp of most recent confirmation/reinforcement';
 
 
 COMMENT ON COLUMN entity_facts.source_channel_transcript_id IS 'FK to channel_transcripts row that triggered this fact extraction (#170)';
@@ -1311,16 +1315,10 @@ CREATE INDEX IF NOT EXISTS idx_entity_facts_channel_transcript ON entity_facts (
 CREATE INDEX IF NOT EXISTS idx_entity_facts_confidence ON entity_facts (confidence) WHERE (confidence < (1.0)::double precision);
 
 --
--- Name: idx_entity_facts_durability; Type: INDEX; Schema: -; Owner: -
+-- Name: idx_entity_facts_data_type; Type: INDEX; Schema: -; Owner: -
 --
 
-CREATE INDEX IF NOT EXISTS idx_entity_facts_durability ON entity_facts (durability);
-
---
--- Name: idx_entity_facts_category; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_entity_facts_category ON entity_facts (category);
+CREATE INDEX IF NOT EXISTS idx_entity_facts_data_type ON entity_facts (data_type);
 
 --
 -- Name: idx_entity_facts_entity; Type: INDEX; Schema: -; Owner: -
@@ -1341,6 +1339,12 @@ CREATE INDEX IF NOT EXISTS idx_entity_facts_key ON entity_facts (key);
 CREATE INDEX IF NOT EXISTS idx_entity_facts_privacy_scope ON entity_facts USING gin (privacy_scope);
 
 --
+-- Name: idx_entity_facts_source_entity; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_entity_facts_source_entity ON entity_facts (source_entity_id);
+
+--
 -- Name: idx_entity_facts_value_trgm; Type: INDEX; Schema: -; Owner: -
 --
 
@@ -1353,6 +1357,12 @@ CREATE INDEX IF NOT EXISTS idx_entity_facts_value_trgm ON entity_facts USING gin
 CREATE INDEX IF NOT EXISTS idx_entity_facts_visibility ON entity_facts (visibility);
 
 --
+-- Name: idx_entity_facts_vote_count; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_entity_facts_vote_count ON entity_facts (vote_count DESC);
+
+--
 -- Name: entity_facts_archive; Type: TABLE; Schema: -; Owner: -
 --
 
@@ -1362,18 +1372,20 @@ CREATE TABLE IF NOT EXISTS entity_facts_archive (
     key varchar(255),
     value text,
     data jsonb,
+    source varchar(255),
     confidence double precision,
     learned_at timestamp,
     updated_at timestamp,
     visibility varchar(20),
     privacy_scope integer[],
+    source_entity_id integer,
     visibility_reason text,
-    extraction_count INTEGER,
+    vote_count integer,
+    last_confirmed timestamp,
+    data_type varchar(20),
     last_confirmed_at timestamptz,
+    confirmation_count integer,
     decay_rate real,
-    expires timestamptz,
-    durability VARCHAR(20),
-    category TEXT,
     archived_at timestamptz DEFAULT now(),
     archive_reason varchar(50),
     archived_by varchar(50) DEFAULT 'decay_script'
@@ -1390,125 +1402,6 @@ COMMENT ON COLUMN entity_facts_archive.archive_reason IS 'Why the fact was archi
 
 
 COMMENT ON COLUMN entity_facts_archive.archived_by IS 'System or agent that archived the fact';
-
---
--- Name: entity_fact_sources; Type: TABLE; Schema: -; Owner: -
---
-
-CREATE TABLE IF NOT EXISTS entity_fact_sources (
-    id SERIAL PRIMARY KEY,
-    fact_id INTEGER NOT NULL REFERENCES entity_facts(id) ON DELETE CASCADE,
-    source_entity_id INTEGER NOT NULL REFERENCES entities(id),
-    source_citation TEXT,
-    attribution_count INTEGER DEFAULT 1,
-    first_seen TIMESTAMPTZ DEFAULT now(),
-    last_seen TIMESTAMPTZ DEFAULT now(),
-    CONSTRAINT uq_fact_source UNIQUE (fact_id, source_entity_id)
-);
-
-COMMENT ON TABLE entity_fact_sources IS 'Tracks the origin and attribution of entity facts. One row per fact-source pair.';
-
-COMMENT ON COLUMN entity_fact_sources.fact_id IS 'FK to the entity_fact this source attribution belongs to';
-
-COMMENT ON COLUMN entity_fact_sources.source_entity_id IS 'FK to the entity (person, AI, system) that provided this information';
-
-COMMENT ON COLUMN entity_fact_sources.source_citation IS 'Optional citation or reference text for the source';
-
-COMMENT ON COLUMN entity_fact_sources.attribution_count IS 'How many times this source has been observed for this fact';
-
-COMMENT ON COLUMN entity_fact_sources.first_seen IS 'First time this source was observed for this fact';
-
-COMMENT ON COLUMN entity_fact_sources.last_seen IS 'Most recent time this source was observed for this fact';
-
---
--- Name: idx_entity_fact_sources_fact; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_entity_fact_sources_fact ON entity_fact_sources (fact_id);
-
---
--- Name: idx_entity_fact_sources_entity; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_entity_fact_sources_entity ON entity_fact_sources (source_entity_id);
-
---
--- Name: merge_facts(survivor_id, absorbed_id); Type: FUNCTION; Schema: -; Owner: -
---
-
-CREATE OR REPLACE FUNCTION merge_facts(
-    survivor_id INTEGER,
-    absorbed_id INTEGER
-)
-RETURNS entity_facts
-LANGUAGE plpgsql
-AS $$
-DECLARE
-    survivor_row entity_facts%ROWTYPE;
-    absorbed_row entity_facts%ROWTYPE;
-    merged_sources INTEGER;
-    result_row entity_facts%ROWTYPE;
-BEGIN
-    -- Validate inputs
-    IF survivor_id = absorbed_id THEN
-        RAISE EXCEPTION 'cannot merge a fact with itself';
-    END IF;
-
-    SELECT * INTO survivor_row FROM entity_facts WHERE id = survivor_id;
-    IF NOT FOUND THEN
-        RAISE EXCEPTION 'survivor fact % does not exist', survivor_id;
-    END IF;
-
-    SELECT * INTO absorbed_row FROM entity_facts WHERE id = absorbed_id;
-    IF NOT FOUND THEN
-        RAISE EXCEPTION 'absorbed fact % does not exist', absorbed_id;
-    END IF;
-
-    IF survivor_row.entity_id != absorbed_row.entity_id THEN
-        RAISE EXCEPTION 'cannot merge facts from different entities';
-    END IF;
-
-    -- Merge source attributions
-    -- Shared sources: sum attribution_count, keep earliest first_seen, latest last_seen
-    UPDATE entity_fact_sources s_survivor
-    SET attribution_count = s_survivor.attribution_count + s_absorbed.attribution_count,
-        first_seen = LEAST(s_survivor.first_seen, s_absorbed.first_seen),
-        last_seen  = GREATEST(s_survivor.last_seen, s_absorbed.last_seen)
-    FROM entity_fact_sources s_absorbed
-    WHERE s_survivor.fact_id = survivor_id
-      AND s_absorbed.fact_id = absorbed_id
-      AND s_survivor.source_entity_id = s_absorbed.source_entity_id;
-
-    GET DIAGNOSTICS merged_sources = ROW_COUNT;
-
-    -- Move unique sources from absorbed to survivor
-    INSERT INTO entity_fact_sources (fact_id, source_entity_id, source_citation, attribution_count, first_seen, last_seen)
-    SELECT survivor_id, source_entity_id, source_citation, attribution_count, first_seen, last_seen
-    FROM entity_fact_sources
-    WHERE fact_id = absorbed_id
-      AND source_entity_id NOT IN (
-          SELECT source_entity_id FROM entity_fact_sources WHERE fact_id = survivor_id
-      );
-
-    -- Delete absorbed sources
-    DELETE FROM entity_fact_sources WHERE fact_id = absorbed_id;
-
-    -- Update survivor with merged values
-    UPDATE entity_facts
-    SET extraction_count = COALESCE(survivor_row.extraction_count, 1) + COALESCE(absorbed_row.extraction_count, 1),
-        last_confirmed_at = GREATEST(survivor_row.last_confirmed_at, absorbed_row.last_confirmed_at),
-        confidence = GREATEST(survivor_row.confidence, absorbed_row.confidence),
-        updated_at = NOW()
-    WHERE id = survivor_id;
-
-    -- Delete absorbed fact
-    DELETE FROM entity_facts WHERE id = absorbed_id;
-
-    -- Return updated survivor
-    SELECT * INTO result_row FROM entity_facts WHERE id = survivor_id;
-    RETURN result_row;
-END;
-$$;
 
 --
 -- Name: entity_relationships; Type: TABLE; Schema: -; Owner: -
@@ -3336,12 +3229,8 @@ CREATE TABLE IF NOT EXISTS workflows (
     tags text[] DEFAULT '{}',
     department text,
     orchestrator_domain text,
-    last_run_at timestamptz,
-    last_run_status text,
-    last_run_error text,
     CONSTRAINT workflows_pkey PRIMARY KEY (id),
     CONSTRAINT workflows_name_key UNIQUE (name),
-    CONSTRAINT workflows_last_run_status_check CHECK (last_run_status IN ('success'::text, 'partial'::text, 'failed'::text, 'skipped'::text)),
     CONSTRAINT workflows_status_check CHECK (status IN ('active'::text, 'deprecated'::text, 'archived'::text))
 );
 
@@ -3400,68 +3289,6 @@ COMMENT ON COLUMN motivation_d100.skill_name IS 'Optional SKILL.md to follow (e.
 
 
 COMMENT ON COLUMN motivation_d100.tool_name IS 'Optional tool to use (e.g., "bird-x", "gog")';
-
---
--- Name: workflow_runs; Type: TABLE; Schema: -; Owner: -
---
-
-CREATE TABLE IF NOT EXISTS workflow_runs (
-    id SERIAL,
-    workflow_id integer NOT NULL,
-    started_at timestamptz DEFAULT now() NOT NULL,
-    ended_at timestamptz,
-    status text DEFAULT 'running' NOT NULL,
-    executor text,
-    triggered_by text,
-    steps_total integer,
-    steps_completed integer DEFAULT 0,
-    current_step integer,
-    error_message text,
-    notes text,
-    created_at timestamptz DEFAULT now(),
-    CONSTRAINT workflow_runs_pkey PRIMARY KEY (id),
-    CONSTRAINT workflow_runs_workflow_id_fkey FOREIGN KEY (workflow_id) REFERENCES workflows (id) ON DELETE CASCADE,
-    CONSTRAINT workflow_runs_status_check CHECK (status IN ('running'::text, 'success'::text, 'partial'::text, 'failed'::text, 'cancelled'::text))
-);
-
-
-COMMENT ON TABLE workflow_runs IS 'Execution history for workflows. Each row = one workflow run. FK to workflows(id) pending DBA action.';
-
-
-COMMENT ON COLUMN workflow_runs.executor IS 'Agent that ran/orchestrated this execution (e.g. conductor, nova)';
-
-
-COMMENT ON COLUMN workflow_runs.triggered_by IS 'How the run was initiated: manual, cron, heartbeat, agent_chat, etc';
-
-
-COMMENT ON COLUMN workflow_runs.steps_completed IS 'Number of steps completed (0 to steps_total)';
-
-
-COMMENT ON COLUMN workflow_runs.current_step IS 'step_order of the step currently in progress (NULL when done)';
-
---
--- Name: idx_workflow_runs_executor; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_workflow_runs_executor ON workflow_runs (executor);
-
---
--- Name: idx_workflow_runs_started_at; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_workflow_runs_started_at ON workflow_runs (started_at DESC);
-
---
--- Name: idx_workflow_runs_status; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_workflow_runs_status ON workflow_runs (status);
-
---
--- Name: idx_workflow_runs_workflow_id; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_workflow_runs_workflow_id ON workflow_runs (workflow_id);
 
 --
 -- Name: workflow_steps; Type: TABLE; Schema: -; Owner: -
@@ -5726,59 +5553,6 @@ AS $$
 $$;
 
 --
--- Name: sync_workflow_last_run(); Type: FUNCTION; Schema: -; Owner: -
---
-
-CREATE OR REPLACE FUNCTION sync_workflow_last_run()
-RETURNS trigger
-LANGUAGE plpgsql
-VOLATILE
-SECURITY DEFINER
-AS $$
-BEGIN
-    IF NEW.status IN ('success', 'partial', 'failed', 'cancelled')
-       AND (OLD.status IS DISTINCT FROM NEW.status) THEN
-        UPDATE workflows SET
-            last_run_at = COALESCE(NEW.ended_at, NOW()),
-            last_run_status = CASE
-                WHEN NEW.status = 'cancelled' THEN 'skipped'
-                ELSE NEW.status
-            END,
-            last_run_error = NEW.error_message,
-            updated_at = NOW()
-        WHERE id = NEW.workflow_id;
-    END IF;
-    RETURN NEW;
-END;
-$$;
-
---
--- Name: sync_workflow_last_run_on_insert(); Type: FUNCTION; Schema: -; Owner: -
---
-
-CREATE OR REPLACE FUNCTION sync_workflow_last_run_on_insert()
-RETURNS trigger
-LANGUAGE plpgsql
-VOLATILE
-SECURITY DEFINER
-AS $$
-BEGIN
-    IF NEW.status IN ('success', 'partial', 'failed', 'cancelled') THEN
-        UPDATE workflows SET
-            last_run_at = COALESCE(NEW.ended_at, NEW.started_at, NOW()),
-            last_run_status = CASE
-                WHEN NEW.status = 'cancelled' THEN 'skipped'
-                ELSE NEW.status
-            END,
-            last_run_error = NEW.error_message,
-            updated_at = NOW()
-        WHERE id = NEW.workflow_id;
-    END IF;
-    RETURN NEW;
-END;
-$$;
-
---
 -- Name: table_comment(text); Type: FUNCTION; Schema: -; Owner: -
 --
 
@@ -6461,24 +6235,6 @@ CREATE OR REPLACE TRIGGER trg_research_tasks_search
     EXECUTE FUNCTION research_tasks_search_trigger();
 
 --
--- Name: workflow_runs_sync_insert_trigger; Type: TRIGGER; Schema: -; Owner: -
---
-
-CREATE OR REPLACE TRIGGER workflow_runs_sync_insert_trigger
-    AFTER INSERT ON workflow_runs
-    FOR EACH ROW
-    EXECUTE FUNCTION sync_workflow_last_run_on_insert();
-
---
--- Name: workflow_runs_sync_trigger; Type: TRIGGER; Schema: -; Owner: -
---
-
-CREATE OR REPLACE TRIGGER workflow_runs_sync_trigger
-    AFTER UPDATE ON workflow_runs
-    FOR EACH ROW
-    EXECUTE FUNCTION sync_workflow_last_run();
-
---
 -- Name: workflow_step_change_trigger; Type: TRIGGER; Schema: -; Owner: -
 --
 
@@ -6532,8 +6288,8 @@ CREATE OR REPLACE VIEW delegation_knowledge AS
     key,
     value,
     confidence,
-    durability,
-    category,
+    data_type,
+    source,
     learned_at,
     updated_at
    FROM entity_facts ef
@@ -6622,9 +6378,7 @@ CREATE OR REPLACE VIEW v_entity_facts AS
     ef.key,
     ef.value,
     ef.data,
-    ef.learned_at,
-    ef.durability,
-    ef.category
+    ef.learned_at
    FROM entities e
      JOIN entity_facts ef ON e.id = ef.entity_id;
 
@@ -6944,13 +6698,13 @@ CREATE OR REPLACE VIEW workflow_steps_detail AS
 -- Name: agent_actions; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_actions FROM newhart;
+REVOKE SELECT ON TABLE agent_actions FROM newhart;
 
 --
 -- Name: agent_actions; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE agent_actions FROM newhart;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_actions FROM newhart;
 
 --
 -- Name: agent_aliases; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -6992,13 +6746,13 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE agent_aliases FROM iris;
 -- Name: agent_aliases; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_aliases FROM newhart;
+REVOKE SELECT ON TABLE agent_aliases FROM newhart;
 
 --
 -- Name: agent_aliases; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE agent_aliases FROM newhart;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_aliases FROM newhart;
 
 --
 -- Name: agent_aliases; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -7088,13 +6842,13 @@ REVOKE DELETE ON TABLE agent_bootstrap_context FROM ticker;
 -- Name: agent_chat; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE agent_chat FROM newhart;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_chat FROM newhart;
 
 --
 -- Name: agent_chat; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_chat FROM newhart;
+REVOKE SELECT ON TABLE agent_chat FROM newhart;
 
 --
 -- Name: agent_chat_processed; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -7148,13 +6902,13 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE agent_domains FROM iris;
 -- Name: agent_domains; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_domains FROM newhart;
+REVOKE SELECT ON TABLE agent_domains FROM newhart;
 
 --
 -- Name: agent_domains; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE agent_domains FROM newhart;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_domains FROM newhart;
 
 --
 -- Name: agent_domains; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -7178,13 +6932,13 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE agent_domains FROM ticker;
 -- Name: agent_jobs; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE agent_jobs FROM newhart;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_jobs FROM newhart;
 
 --
 -- Name: agent_jobs; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_jobs FROM newhart;
+REVOKE SELECT ON TABLE agent_jobs FROM newhart;
 
 --
 -- Name: agent_modifications; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -7226,13 +6980,13 @@ REVOKE DELETE ON TABLE agent_modifications FROM iris;
 -- Name: agent_modifications; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_modifications FROM newhart;
+REVOKE SELECT ON TABLE agent_modifications FROM newhart;
 
 --
 -- Name: agent_modifications; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE agent_modifications FROM newhart;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_modifications FROM newhart;
 
 --
 -- Name: agent_modifications; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -7334,13 +7088,13 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE agent_system_config FROM ticker;
 -- Name: agent_turn_context; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE agent_turn_context FROM newhart;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_turn_context FROM newhart;
 
 --
 -- Name: agent_turn_context; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_turn_context FROM newhart;
+REVOKE SELECT ON TABLE agent_turn_context FROM newhart;
 
 --
 -- Name: agents; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -7448,13 +7202,13 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE ai_models FROM iris;
 -- Name: ai_models; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE ai_models FROM newhart;
+REVOKE SELECT ON TABLE ai_models FROM newhart;
 
 --
 -- Name: ai_models; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE ai_models FROM newhart;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE ai_models FROM newhart;
 
 --
 -- Name: ai_models; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -7490,13 +7244,13 @@ REVOKE SELECT ON TABLE artwork FROM iris;
 -- Name: asset_classes; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE asset_classes FROM ticker;
+REVOKE SELECT ON TABLE asset_classes FROM ticker;
 
 --
 -- Name: asset_classes; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE asset_classes FROM ticker;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE asset_classes FROM ticker;
 
 --
 -- Name: bootstrap_context_config; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -8174,13 +7928,13 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE gambling_logs FROM nova;
 -- Name: git_issue_queue; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE git_issue_queue FROM coder;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE git_issue_queue FROM coder;
 
 --
 -- Name: git_issue_queue; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE git_issue_queue FROM coder;
+REVOKE SELECT ON TABLE git_issue_queue FROM coder;
 
 --
 -- Name: job_messages; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -8204,13 +7958,13 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE lessons_archive FROM nova;
 -- Name: library_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE library_authors FROM athena;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE library_authors FROM athena;
 
 --
 -- Name: library_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE library_authors FROM athena;
+REVOKE SELECT ON TABLE library_authors FROM athena;
 
 --
 -- Name: library_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -8270,13 +8024,13 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE library_authors FROM ticker;
 -- Name: library_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE library_tags FROM athena;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE library_tags FROM athena;
 
 --
 -- Name: library_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE library_tags FROM athena;
+REVOKE SELECT ON TABLE library_tags FROM athena;
 
 --
 -- Name: library_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -8336,13 +8090,13 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE library_tags FROM ticker;
 -- Name: library_work_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE library_work_authors FROM athena;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE library_work_authors FROM athena;
 
 --
 -- Name: library_work_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE library_work_authors FROM athena;
+REVOKE SELECT ON TABLE library_work_authors FROM athena;
 
 --
 -- Name: library_work_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -8402,13 +8156,13 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE library_work_authors FROM ticker;
 -- Name: library_work_relationships; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE library_work_relationships FROM athena;
+REVOKE SELECT ON TABLE library_work_relationships FROM athena;
 
 --
 -- Name: library_work_relationships; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE library_work_relationships FROM athena;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE library_work_relationships FROM athena;
 
 --
 -- Name: library_work_relationships; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -8534,13 +8288,13 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE library_work_tags FROM ticker;
 -- Name: library_works; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE library_works FROM athena;
+REVOKE SELECT ON TABLE library_works FROM athena;
 
 --
 -- Name: library_works; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE library_works FROM athena;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE library_works FROM athena;
 
 --
 -- Name: library_works; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -8654,13 +8408,13 @@ REVOKE SELECT ON TABLE music_analysis FROM iris;
 -- Name: music_library; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_library FROM iris;
+REVOKE SELECT ON TABLE music_library FROM iris;
 
 --
 -- Name: music_library; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE music_library FROM iris;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_library FROM iris;
 
 --
 -- Name: place_properties; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -8690,13 +8444,13 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE pm_domain_portfolio_snapshots FRO
 -- Name: portfolio_history; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE portfolio_history FROM ticker;
+REVOKE SELECT ON TABLE portfolio_history FROM ticker;
 
 --
 -- Name: portfolio_history; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE portfolio_history FROM ticker;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE portfolio_history FROM ticker;
 
 --
 -- Name: portfolio_metrics; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -8738,13 +8492,13 @@ REVOKE SELECT ON TABLE portfolio_snapshots FROM ticker;
 -- Name: portfolio_updates; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE portfolio_updates FROM ticker;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE portfolio_updates FROM ticker;
 
 --
 -- Name: portfolio_updates; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE portfolio_updates FROM ticker;
+REVOKE SELECT ON TABLE portfolio_updates FROM ticker;
 
 --
 -- Name: positions; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -8768,13 +8522,13 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE preferences FROM nova;
 -- Name: price_cache_v2; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE price_cache_v2 FROM ticker;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE price_cache_v2 FROM ticker;
 
 --
 -- Name: price_cache_v2; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE price_cache_v2 FROM ticker;
+REVOKE SELECT ON TABLE price_cache_v2 FROM ticker;
 
 --
 -- Name: project_entities; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9122,13 +8876,13 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE research_provenance FROM nova;
 -- Name: research_provenance; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE research_provenance FROM scout;
+REVOKE SELECT ON TABLE research_provenance FROM scout;
 
 --
 -- Name: research_provenance; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE research_provenance FROM scout;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE research_provenance FROM scout;
 
 --
 -- Name: research_provenance; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9188,13 +8942,13 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE research_taggings FROM nova;
 -- Name: research_taggings; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE research_taggings FROM scout;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE research_taggings FROM scout;
 
 --
 -- Name: research_taggings; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE research_taggings FROM scout;
+REVOKE SELECT ON TABLE research_taggings FROM scout;
 
 --
 -- Name: research_taggings; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9392,13 +9146,13 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE tasks FROM nova;
 -- Name: ticker_portfolio; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE ticker_portfolio FROM ticker;
+REVOKE SELECT ON TABLE ticker_portfolio FROM ticker;
 
 --
 -- Name: ticker_portfolio; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE ticker_portfolio FROM ticker;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE ticker_portfolio FROM ticker;
 
 --
 -- Name: tools; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9429,108 +9183,6 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE vocabulary FROM nova;
 --
 
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE work_tags FROM nova;
-
---
--- Name: workflow_runs; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE DELETE ON TABLE workflow_runs FROM athena;
-
---
--- Name: workflow_runs; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE DELETE ON TABLE workflow_runs FROM coder;
-
---
--- Name: workflow_runs; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE SELECT ON TABLE workflow_runs FROM erato;
-
---
--- Name: workflow_runs; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE workflow_runs FROM erato;
-
---
--- Name: workflow_runs; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE SELECT ON TABLE workflow_runs FROM gem;
-
---
--- Name: workflow_runs; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE workflow_runs FROM gem;
-
---
--- Name: workflow_runs; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE DELETE ON TABLE workflow_runs FROM gidget;
-
---
--- Name: workflow_runs; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE workflow_runs FROM iris;
-
---
--- Name: workflow_runs; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE SELECT ON TABLE workflow_runs FROM iris;
-
---
--- Name: workflow_runs; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE SELECT ON TABLE workflow_runs FROM newhart;
-
---
--- Name: workflow_runs; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE workflow_runs FROM newhart;
-
---
--- Name: workflow_runs; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE DELETE ON TABLE workflow_runs FROM nova;
-
---
--- Name: workflow_runs; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE SELECT ON TABLE workflow_runs FROM "nova-staging";
-
---
--- Name: workflow_runs; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE SELECT ON TABLE workflow_runs FROM openproject_user;
-
---
--- Name: workflow_runs; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE DELETE ON TABLE workflow_runs FROM scout;
-
---
--- Name: workflow_runs; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE SELECT ON TABLE workflow_runs FROM ticker;
-
---
--- Name: workflow_runs; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE workflow_runs FROM ticker;
 
 --
 -- Name: workflow_steps; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -16493,84 +16145,6 @@ GRANT USAGE ON SEQUENCE vocabulary_id_seq TO scribe;
 GRANT USAGE ON SEQUENCE vocabulary_id_seq TO ticker;
 
 --
--- Name: workflow_runs_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT USAGE ON SEQUENCE workflow_runs_id_seq TO argus;
-
---
--- Name: workflow_runs_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT, USAGE ON SEQUENCE workflow_runs_id_seq TO athena;
-
---
--- Name: workflow_runs_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT, USAGE ON SEQUENCE workflow_runs_id_seq TO coder;
-
---
--- Name: workflow_runs_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT USAGE ON SEQUENCE workflow_runs_id_seq TO conductor;
-
---
--- Name: workflow_runs_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT USAGE ON SEQUENCE workflow_runs_id_seq TO flint;
-
---
--- Name: workflow_runs_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT, USAGE ON SEQUENCE workflow_runs_id_seq TO gidget;
-
---
--- Name: workflow_runs_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT, USAGE ON SEQUENCE workflow_runs_id_seq TO graybeard;
-
---
--- Name: workflow_runs_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT USAGE ON SEQUENCE workflow_runs_id_seq TO hermes;
-
---
--- Name: workflow_runs_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT USAGE ON SEQUENCE workflow_runs_id_seq TO marcie;
-
---
--- Name: workflow_runs_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT, USAGE ON SEQUENCE workflow_runs_id_seq TO nova;
-
---
--- Name: workflow_runs_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT USAGE ON SEQUENCE workflow_runs_id_seq TO quill;
-
---
--- Name: workflow_runs_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT SELECT, USAGE ON SEQUENCE workflow_runs_id_seq TO scout;
-
---
--- Name: workflow_runs_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT USAGE ON SEQUENCE workflow_runs_id_seq TO scribe;
-
---
 -- Name: workflow_steps_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
@@ -17277,12 +16851,6 @@ GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE vocabulary TO graybeard;
 --
 
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE work_tags TO graybeard;
-
---
--- Name: workflow_runs; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT INSERT, SELECT, UPDATE ON TABLE workflow_runs TO graybeard;
 
 --
 -- Name: workflow_steps; Type: PRIVILEGE; Schema: privileges; Owner: -

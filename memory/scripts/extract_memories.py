@@ -246,7 +246,7 @@ def find_existing_fact(entity_id: int, key: str, value: str, cur) -> Optional[di
     # Exact match
     cur.execute(
         """
-        SELECT id, vote_count, confirmation_count
+        SELECT id, extraction_count
         FROM entity_facts
         WHERE entity_id = %s AND LOWER(key) = LOWER(%s) AND LOWER(value) = LOWER(%s)
         LIMIT 1
@@ -255,13 +255,13 @@ def find_existing_fact(entity_id: int, key: str, value: str, cur) -> Optional[di
     )
     row = cur.fetchone()
     if row:
-        return {"id": row[0], "vote_count": row[1], "confirmation_count": row[2]}
+        return {"id": row[0], "extraction_count": row[1]}
 
     # Fuzzy match (pg_trgm)
     try:
         cur.execute(
             """
-            SELECT id, vote_count, confirmation_count,
+            SELECT id, extraction_count,
                    similarity(LOWER(value), LOWER(%s)) AS sim
             FROM entity_facts
             WHERE entity_id = %s AND LOWER(key) = LOWER(%s)
@@ -273,7 +273,7 @@ def find_existing_fact(entity_id: int, key: str, value: str, cur) -> Optional[di
         )
         row = cur.fetchone()
         if row:
-            return {"id": row[0], "vote_count": row[1], "confirmation_count": row[2], "fuzzy": True}
+            return {"id": row[0], "extraction_count": row[1], "fuzzy": True}
     except Exception:
         pass  # pg_trgm not installed — skip fuzzy
 
@@ -291,6 +291,10 @@ def store_or_reinforce_fact(
     conn,
     src_channel_transcript_id: str = "",
     src_channel_session_id: str = "",
+    durability: str = "long_term",
+    category: str = "observation",
+    expires: Optional[str] = None,
+    source_citation: Optional[str] = None,
 ) -> str:
     """Insert fact or reinforce if already exists. Returns 'created' or 'reinforced'."""
     with conn.cursor() as cur:
@@ -298,10 +302,8 @@ def store_or_reinforce_fact(
         if existing:
             # Reinforce
             update_parts = [
-                "vote_count = vote_count + 1",
-                "last_confirmed = NOW()",
+                "extraction_count = extraction_count + 1",
                 "last_confirmed_at = NOW()",
-                "confirmation_count = COALESCE(confirmation_count, 0) + 1",
                 "updated_at = NOW()",
             ]
             params: list = []
@@ -322,20 +324,35 @@ def store_or_reinforce_fact(
                 f"UPDATE entity_facts SET {', '.join(update_parts)} WHERE id = %s",
                 params,
             )
+
+            # Upsert source attribution in entity_fact_sources
+            if source_entity_id is not None:
+                cur.execute(
+                    """
+                    INSERT INTO entity_fact_sources (fact_id, source_entity_id, source_citation, attribution_count, first_seen, last_seen)
+                    VALUES (%s, %s, %s, 1, NOW(), NOW())
+                    ON CONFLICT (fact_id, source_entity_id)
+                    DO UPDATE SET
+                        attribution_count = entity_fact_sources.attribution_count + 1,
+                        last_seen = NOW()
+                    """,
+                    (existing["id"], source_entity_id, source_citation),
+                )
+
             return "reinforced"
         else:
             # Insert new
-            cols = ["entity_id", "key", "value", "source", "visibility"]
-            vals: list = [entity_id, key, value, source, visibility]
-            ph = ["%s"] * 5
+            cols = ["entity_id", "key", "value", "visibility", "durability", "category"]
+            vals: list = [entity_id, key, value, visibility, durability, category]
+            ph = ["%s"] * 6
 
-            if source_entity_id is not None:
-                cols.append("source_entity_id")
-                vals.append(source_entity_id)
-                ph.append("%s")
             if visibility_reason:
                 cols.append("visibility_reason")
                 vals.append(visibility_reason)
+                ph.append("%s")
+            if expires:
+                cols.append("expires")
+                vals.append(expires)
                 ph.append("%s")
             if src_channel_transcript_id and src_channel_transcript_id.isdigit():
                 cols.append("source_channel_transcript_id")
@@ -347,9 +364,26 @@ def store_or_reinforce_fact(
                 ph.append("%s")
 
             cur.execute(
-                f"INSERT INTO entity_facts ({', '.join(cols)}) VALUES ({', '.join(ph)}) ON CONFLICT DO NOTHING",
+                f"INSERT INTO entity_facts ({', '.join(cols)}) VALUES ({', '.join(ph)}) RETURNING id",
                 vals,
             )
+            row = cur.fetchone()
+            new_fact_id = row[0] if row else None
+
+            # Insert source attribution
+            if new_fact_id and source_entity_id is not None:
+                cur.execute(
+                    """
+                    INSERT INTO entity_fact_sources (fact_id, source_entity_id, source_citation, attribution_count, first_seen, last_seen)
+                    VALUES (%s, %s, %s, 1, NOW(), NOW())
+                    ON CONFLICT (fact_id, source_entity_id)
+                    DO UPDATE SET
+                        attribution_count = entity_fact_sources.attribution_count + 1,
+                        last_seen = NOW()
+                    """,
+                    (new_fact_id, source_entity_id, source_citation),
+                )
+
             return "created"
 
 
@@ -358,12 +392,26 @@ def store_or_reinforce_fact(
 def build_extraction_prompt(
     text: str,
     sender: str,
+    sender_id: str,
+    sender_provider: str,
     is_group: bool,
     default_visibility: str,
 ) -> str:
+    # Build a platform-aware sender label
+    provider_label = sender_provider.lower() if sender_provider else "unknown"
+    if provider_label == "discord":
+        sender_label = f"Discord user ID: {sender_id}"
+    elif provider_label == "signal":
+        sender_label = f"Signal phone: {sender_id}"
+    elif provider_label == "telegram":
+        sender_label = f"Telegram user: {sender_id}"
+    else:
+        sender_label = f"{provider_label.capitalize()} user: {sender_id}" if sender_id else f"User: {sender}"
+
     return f"""Extract memory data as JSON from a conversation message.
 
 SENDER: {sender}
+SENDER_ID_LABEL: {sender_label}
 IS_GROUP_CHAT: {is_group}
 USER_DEFAULT_VISIBILITY: {default_visibility}
 
@@ -378,6 +426,19 @@ IMPORTANT INSTRUCTIONS:
    - source_person: "{sender}" (who said this)
    - visibility: privacy level (see below)
    - visibility_reason: ONLY if visibility differs from user default
+   - durability: one of permanent, long_term, short_term, ephemeral (see DURABILITY GUIDANCE)
+   - category: one of observation, preference, identity, mood, decision, routine, state, obligation (or other appropriate category)
+   - expires: ISO-8601 timestamp if the statement implies a temporal boundary (e.g., "until Friday", "this week", "temporarily"), otherwise omit
+
+DURABILITY GUIDANCE:
+- permanent: Identity facts that rarely change (name, birthplace, core traits). Never auto-decays.
+- long_term: Durable preferences and observations (favorite color, career field). Slow decay.
+- short_term: Current states and moods ("feeling stressed", "working on X"). Moderate decay.
+- ephemeral: Temporary locations, travel plans, fleeting conditions. Aggressive decay.
+
+CATEGORY LIST (examples, not exhaustive):
+observation, preference, identity, mood, decision, routine, state, obligation
+The LLM may use other appropriate categories not in this list.
 
 PRIVACY DETECTION:
 The user's default visibility is "{default_visibility}".
@@ -399,6 +460,14 @@ Extract the following contact identifiers as facts when present:
 If a handle applies to both GitHub and Discord, create TWO separate facts with distinct keys.
 Only extract phone numbers if they appear complete (full country code + subscriber number). Partial or ambiguous numbers (e.g. "555" alone) must NOT be extracted.
 
+IMPORTANT: Discord snowflakes (18-19 digit numeric IDs) must NEVER be extracted as phone numbers. They are discord_id facts only.
+
+SOURCE ATTRIBUTION (for facts from publications or third parties):
+When a fact is attributed to a publication or external source, include:
+- source_person: the author name (person), NOT the publication name
+- source_citation: free-form text with publication metadata (publication, date, page, url)
+Resolution hierarchy: author > publisher > publication title.
+
 DELEGATION CONTEXT:
 NOVA frequently delegates tasks to specialized agents. Extract agent delegation facts with subject="NOVA".
 Known agents: Coder (coding), Gidget (git-ops), Scout (research), IRIS (creative), Hermes (comms), Scribe (docs), Ticker (portfolio), Athena (media), Newhart (meta/agents).
@@ -406,16 +475,18 @@ Known agents: Coder (coding), Gidget (git-ops), Scout (research), IRIS (creative
 Return JSON with these categories (only include non-empty ones):
 
 entities: [{{name, type (person|ai|organization|place), location?, source_person, visibility, visibility_reason?}}]
-facts: [{{subject, predicate, value, source_person, confidence, visibility, visibility_reason?}}]
-opinions: [{{holder, subject, opinion, source_person, confidence, visibility, visibility_reason?}}]
-preferences: [{{person, category, preference, source_person, confidence, visibility, visibility_reason?}}]
+facts: [{{subject, predicate, value, source_person, confidence, visibility, visibility_reason?, durability, category, expires?}}]
+opinions: [{{holder, subject, opinion, source_person, confidence, visibility, visibility_reason?, durability, category, expires?}}]
+preferences: [{{person, category, preference, source_person, confidence, visibility, visibility_reason?, durability, category, expires?}}]
 vocabulary: [{{word, category, misheard_as?, source_person, visibility}}]
 events: [{{description, date?, source_person, visibility, visibility_reason?}}]
-decisions: [{{subject, decision, rationale?, source_person, confidence, visibility, visibility_reason?}}]
+decisions: [{{subject, decision, rationale?, source_person, confidence, visibility, visibility_reason?, durability, category, expires?}}]
 milestones: [{{description, date?, source_person, visibility, visibility_reason?}}]
 problems: [{{description, status (open|solved), solution?, source_person, visibility, visibility_reason?}}]
 
 PHONE NUMBER RULE: ANY extracted phone number MUST have visibility="private" regardless of the user's default_visibility or any explicit override in the message. This is a hard security rule.
+
+TEMPORAL BOUNDARY RULE: When a statement implies a time limit (e.g., "I'll be in Austin until Friday", "working remotely this week"), set the "expires" field to an ISO-8601 timestamp. Do NOT set expires for permanent facts ("My name is Dustin").
 
 If the message contains NO extractable new information (casual chat, acknowledgments, etc), return: {{}}
 
@@ -509,6 +580,10 @@ def store_extracted(
         source_person: str,
         visibility: str,
         visibility_reason: Optional[str],
+        durability: str = "long_term",
+        category: str = "observation",
+        expires: Optional[str] = None,
+        source_citation: Optional[str] = None,
     ) -> None:
         """Find/create entity and store a fact."""
         entity_id = find_entity_id(subject_name, conn)
@@ -534,6 +609,10 @@ def store_extracted(
             conn=conn,
             src_channel_transcript_id=src_channel_transcript_id,
             src_channel_session_id=src_channel_session_id,
+            durability=durability,
+            category=category,
+            expires=expires,
+            source_citation=source_citation,
         )
         print(f"[extract_memories]   {action}: {subject_name}.{key} = {value[:60]}", file=sys.stderr)
 
@@ -554,6 +633,10 @@ def store_extracted(
         source_person = (fact.get("source_person") or sender_name or "").strip()
         visibility = (fact.get("visibility") or "public").strip()
         visibility_reason = (fact.get("visibility_reason") or "").strip() or None
+        durability = (fact.get("durability") or "long_term").strip()
+        category = (fact.get("category") or "observation").strip()
+        expires = (fact.get("expires") or "").strip() or None
+        source_citation = (fact.get("source_citation") or "").strip() or None
 
         # Hard rule: phone numbers are always private
         if predicate == "phone":
@@ -563,7 +646,7 @@ def store_extracted(
         if not (subject and predicate and value):
             continue
 
-        _store_fact(subject, predicate, value, source_person, visibility, visibility_reason)
+        _store_fact(subject, predicate, value, source_person, visibility, visibility_reason, durability, category, expires, source_citation)
 
     # ── opinions ──────────────────────────────────────────────────────────────
     for opinion in data.get("opinions", []) or []:
@@ -573,27 +656,35 @@ def store_extracted(
         source_person = (opinion.get("source_person") or sender_name or "").strip()
         visibility = (opinion.get("visibility") or "public").strip()
         visibility_reason = (opinion.get("visibility_reason") or "").strip() or None
+        durability = (opinion.get("durability") or "long_term").strip()
+        category = (opinion.get("category") or "observation").strip()
+        expires = (opinion.get("expires") or "").strip() or None
+        source_citation = (opinion.get("source_citation") or "").strip() or None
 
         if not (holder and subject and opinion_text):
             continue
 
         key = f"opinion_{subject}"
-        _store_fact(holder, key, opinion_text, source_person, visibility, visibility_reason)
+        _store_fact(holder, key, opinion_text, source_person, visibility, visibility_reason, durability, category, expires, source_citation)
 
     # ── preferences ───────────────────────────────────────────────────────────
     for pref in data.get("preferences", []) or []:
         person = (pref.get("person") or pref.get("holder") or sender_name or "").strip()
-        category = (pref.get("category") or "general").strip()
+        pref_category = (pref.get("category") or "general").strip()
         preference = (pref.get("preference") or pref.get("likes") or pref.get("prefers") or "").strip()
         source_person = (pref.get("source_person") or sender_name or "").strip()
         visibility = (pref.get("visibility") or "public").strip()
         visibility_reason = (pref.get("visibility_reason") or "").strip() or None
+        durability = (pref.get("durability") or "long_term").strip()
+        category = (pref.get("category") or "preference").strip()
+        expires = (pref.get("expires") or "").strip() or None
+        source_citation = (pref.get("source_citation") or "").strip() or None
 
         if not (person and preference):
             continue
 
-        key = f"preference_{category}"
-        _store_fact(person, key, preference, source_person, visibility, visibility_reason)
+        key = f"preference_{pref_category}"
+        _store_fact(person, key, preference, source_person, visibility, visibility_reason, durability, category, expires, source_citation)
 
     # ── vocabulary ────────────────────────────────────────────────────────────
     for vocab in data.get("vocabulary", []) or []:
@@ -615,7 +706,7 @@ def store_extracted(
                 row = cur.fetchone()
                 if row:
                     cur.execute(
-                        "UPDATE vocabulary SET vote_count = vote_count + 1, last_confirmed = NOW() WHERE id = %s",
+                        "UPDATE vocabulary SET confirmation_count = COALESCE(confirmation_count, 0) + 1, last_confirmed = NOW() WHERE id = %s",
                         (row[0],),
                     )
                     print(f"[extract_memories]   vocab reinforced: {word}", file=sys.stderr)
@@ -698,6 +789,11 @@ def store_extracted(
             visibility = (item.get("visibility") or "public").strip()
             visibility_reason = (item.get("visibility_reason") or "").strip() or None
 
+            durability = (item.get("durability") or "long_term").strip()
+            category = (item.get("category") or "observation").strip()
+            expires = (item.get("expires") or "").strip() or None
+            source_citation = (item.get("source_citation") or "").strip() or None
+
             if category_name == "decisions":
                 subject = (item.get("subject") or sender_name or "").strip()
                 decision_text = (item.get("decision") or "").strip()
@@ -707,14 +803,14 @@ def store_extracted(
                 value = decision_text
                 if rationale:
                     value = f"{decision_text} (rationale: {rationale})"
-                _store_fact(subject, key_prefix, value, source_person, visibility, visibility_reason)
+                _store_fact(subject, key_prefix, value, source_person, visibility, visibility_reason, durability, category, expires, source_citation)
 
             elif category_name == "milestones":
                 description = (item.get("description") or "").strip()
                 if not description:
                     continue
                 subject = sender_name
-                _store_fact(subject, key_prefix, description, source_person, visibility, visibility_reason)
+                _store_fact(subject, key_prefix, description, source_person, visibility, visibility_reason, durability, category, expires, source_citation)
 
             elif category_name == "problems":
                 description = (item.get("description") or "").strip()
@@ -728,7 +824,7 @@ def store_extracted(
                 if solution and status == "solved":
                     value = f"[solved] {description} — solution: {solution}"
                 subject = sender_name
-                _store_fact(subject, key_prefix, value, source_person, visibility, visibility_reason)
+                _store_fact(subject, key_prefix, value, source_person, visibility, visibility_reason, durability, category, expires, source_citation)
 
     conn.commit()
 
@@ -768,6 +864,7 @@ def main() -> int:
     src_timestamp = os.environ.get("SOURCE_TIMESTAMP", "").strip()
     src_channel_transcript_id = os.environ.get("SOURCE_CHANNEL_TRANSCRIPT_ID", "").strip()
     src_channel_session_id = os.environ.get("SOURCE_CHANNEL_SESSION_ID", "").strip()
+    sender_provider = os.environ.get("SENDER_PROVIDER", "").strip()
     model = os.environ.get("MEMORY_EXTRACTION_MODEL", DEFAULT_MODEL).strip() or DEFAULT_MODEL
 
     print(
@@ -808,7 +905,7 @@ def main() -> int:
                         conn.commit()
 
         # Build extraction prompt
-        prompt = build_extraction_prompt(text.strip(), sender_name, is_group, default_visibility)
+        prompt = build_extraction_prompt(text.strip(), sender_name, sender_id, sender_provider, is_group, default_visibility)
 
         # Call LLM
         extracted = call_llm(prompt, api_key, model)

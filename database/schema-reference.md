@@ -1,6 +1,6 @@
 # Database Schema Reference
 
-*Auto-generated: 2026-05-12T08:28:42.832658*
+*Auto-generated: 2026-05-13T05:58:20.896827*
 
 ## Tables
 
@@ -8,7 +8,7 @@
 |-------|-------------|---------|
 | agent_actions | Agent action definitions. READ-ONLY except Newhart. | 8 |
 | agent_aliases | Agent aliases for flexible mention matching. Supports case-insensitive routing. | 4 |
-| agent_bootstrap_context | Bootstrap context entries. READ-ONLY except Newhart (Agent Design/Management domain). | 9 |
+| agent_bootstrap_context | Bootstrap context entries. Agents may write to their own AGENT-scoped records (matching their db user). Newhart (Agent Design/Management domain) manages schema, cross-agent entries, and GLOBAL/UNIVERSAL-scoped records. | 9 |
 | agent_chat | Agent messaging. INSERT allowed for all, UPDATE/DELETE only Newhart. | 6 |
 | agent_chat_processed | Message processing state. Agents can track, Newhart manages. | 7 |
 | agent_domains | Agent domain assignments. READ-ONLY except Newhart. | 8 |

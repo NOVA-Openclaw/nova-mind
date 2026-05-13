@@ -35,118 +35,118 @@ SELECT setval('entities_id_seq', 15, true);
 -- ENTITY FACTS (75 facts with various visibility levels and edge cases)
 -- ============================================================================
 
-INSERT INTO entity_facts (entity_id, key, value, source, confidence, visibility, data_type) VALUES
+INSERT INTO entity_facts (entity_id, key, value, confidence, visibility, durability, category) VALUES
 -- Alice (person 1) - 15 facts
-(1, 'favorite_color', 'blue', 'direct_conversation', 1.0, 'public', 'preference'),
-(1, 'programming_languages', 'Python, JavaScript, Go', 'profile', 0.95, 'public', 'observation'),
-(1, 'favorite_food', 'Thai curry', 'conversation', 0.9, 'public', 'preference'),
-(1, 'email', 'alice@testuser.example', 'profile', 1.0, 'public', 'identity'),
-(1, 'phone', '+1-555-0101', 'contact_card', 1.0, 'hidden', 'identity'),
-(1, 'birthday', '1995-03-15', 'profile', 1.0, 'sensitive', 'permanent'),
-(1, 'employer', 'TechStart Inc', 'linkedin', 0.95, 'public', 'observation'),
-(1, 'job_title', 'Senior Software Engineer', 'linkedin', 0.95, 'public', 'observation'),
-(1, 'works_remotely', 'true', 'conversation', 0.85, 'public', 'observation'),
-(1, 'timezone', 'America/Los_Angeles', 'system', 0.9, 'public', 'observation'),
-(1, 'coffee_preference', 'oat milk latte, no sugar', 'observation', 0.8, 'public', 'preference'),
-(1, 'allergies', 'peanuts, shellfish', 'medical_record', 1.0, 'sensitive', 'permanent'),
-(1, 'github_username', 'alice-testuser', 'profile', 0.95, 'public', 'identity'),
-(1, 'favorite_editor', 'VS Code with vim keybindings', 'observation', 0.9, 'public', 'preference'),
-(1, 'weekend_hobby', 'rock climbing and hiking', 'conversation', 0.85, 'public', 'observation'),
+(1, 'favorite_color', 'blue', 1.0, 'public', 'long_term', 'preference'),
+(1, 'programming_languages', 'Python, JavaScript, Go', 0.95, 'public', 'long_term', 'observation'),
+(1, 'favorite_food', 'Thai curry', 0.9, 'public', 'long_term', 'preference'),
+(1, 'email', 'alice@testuser.example', 1.0, 'public', 'permanent', 'identity'),
+(1, 'phone', '+1-555-0101', 1.0, 'hidden', 'permanent', 'identity'),
+(1, 'birthday', '1995-03-15', 1.0, 'sensitive', 'permanent', 'identity'),
+(1, 'employer', 'TechStart Inc', 0.95, 'public', 'long_term', 'observation'),
+(1, 'job_title', 'Senior Software Engineer', 0.95, 'public', 'long_term', 'observation'),
+(1, 'works_remotely', 'true', 0.85, 'public', 'long_term', 'observation'),
+(1, 'timezone', 'America/Los_Angeles', 0.9, 'public', 'long_term', 'observation'),
+(1, 'coffee_preference', 'oat milk latte, no sugar', 0.8, 'public', 'long_term', 'preference'),
+(1, 'allergies', 'peanuts, shellfish', 1.0, 'sensitive', 'permanent', 'identity'),
+(1, 'github_username', 'alice-testuser', 0.95, 'public', 'permanent', 'identity'),
+(1, 'favorite_editor', 'VS Code with vim keybindings', 0.9, 'public', 'long_term', 'preference'),
+(1, 'weekend_hobby', 'rock climbing and hiking', 0.85, 'public', 'long_term', 'observation'),
 
 -- Bob (person 2) - 10 facts
-(2, 'employer', 'Acme Corp', 'linkedin', 1.0, 'public', 'observation'),
-(2, 'job_title', 'Build Engineer', 'linkedin', 0.95, 'public', 'observation'),
-(2, 'favorite_color', 'red', 'conversation', 0.7, 'public', 'preference'),
-(2, 'email', 'bob.builder@acme.example', 'business_card', 1.0, 'public', 'identity'),
-(2, 'phone', '+1-555-0202', 'business_card', 1.0, 'hidden', 'identity'),
-(2, 'years_of_experience', '12 years in DevOps', 'conversation', 0.8, 'public', 'observation'),
-(2, 'certifications', 'AWS Certified Solutions Architect', 'linkedin', 0.95, 'public', 'observation'),
-(2, 'favorite_tool', 'Docker and Kubernetes', 'tech_talk', 0.9, 'public', 'preference'),
-(2, 'location', 'Austin, Texas', 'profile', 0.9, 'public', 'observation'),
-(2, 'loves_bbq', 'true - especially brisket', 'conversation', 0.8, 'public', 'observation'),
+(2, 'employer', 'Acme Corp', 1.0, 'public', 'long_term', 'observation'),
+(2, 'job_title', 'Build Engineer', 0.95, 'public', 'long_term', 'observation'),
+(2, 'favorite_color', 'red', 0.7, 'public', 'long_term', 'preference'),
+(2, 'email', 'bob.builder@acme.example', 1.0, 'public', 'permanent', 'identity'),
+(2, 'phone', '+1-555-0202', 1.0, 'hidden', 'permanent', 'identity'),
+(2, 'years_of_experience', '12 years in DevOps', 0.8, 'public', 'long_term', 'observation'),
+(2, 'certifications', 'AWS Certified Solutions Architect', 0.95, 'public', 'long_term', 'observation'),
+(2, 'favorite_tool', 'Docker and Kubernetes', 0.9, 'public', 'long_term', 'preference'),
+(2, 'location', 'Austin, Texas', 0.9, 'public', 'long_term', 'observation'),
+(2, 'loves_bbq', 'true - especially brisket', 0.8, 'public', 'long_term', 'observation'),
 
 -- Charlie (person 3) - 8 facts
-(3, 'employer', 'DataViz Labs', 'email_signature', 0.95, 'public', 'observation'),
-(3, 'job_title', 'Senior Data Scientist', 'linkedin', 0.95, 'public', 'observation'),
-(3, 'favorite_language', 'R and Python for data science', 'tech_blog', 0.9, 'public', 'preference'),
-(3, 'coffee_obsession', 'third-wave specialty coffee only', 'conversation', 0.95, 'public', 'preference'),
-(3, 'email', 'charlie.chen@dataviz.example', 'email', 1.0, 'public', 'identity'),
-(3, 'favorite_visualization', 'scatter plots with proper color theory', 'presentation', 0.85, 'public', 'preference'),
-(3, 'conference_speaker', 'PyData and JupyterCon regular', 'observation', 0.9, 'public', 'observation'),
-(3, 'side_project', 'building a coffee review app', 'github', 0.8, 'public', 'observation'),
+(3, 'employer', 'DataViz Labs', 0.95, 'public', 'long_term', 'observation'),
+(3, 'job_title', 'Senior Data Scientist', 0.95, 'public', 'long_term', 'observation'),
+(3, 'favorite_language', 'R and Python for data science', 0.9, 'public', 'long_term', 'preference'),
+(3, 'coffee_obsession', 'third-wave specialty coffee only', 0.95, 'public', 'long_term', 'preference'),
+(3, 'email', 'charlie.chen@dataviz.example', 1.0, 'public', 'permanent', 'identity'),
+(3, 'favorite_visualization', 'scatter plots with proper color theory', 0.85, 'public', 'long_term', 'preference'),
+(3, 'conference_speaker', 'PyData and JupyterCon regular', 0.9, 'public', 'long_term', 'observation'),
+(3, 'side_project', 'building a coffee review app', 0.8, 'public', 'long_term', 'observation'),
 
 -- Diana (person 4) - 7 facts
-(4, 'employer', 'Acme Corp', 'business_card', 0.95, 'public', 'observation'),
-(4, 'job_title', 'Senior Project Manager', 'business_card', 0.95, 'public', 'observation'),
-(4, 'methodology_preference', 'Scrum with strict sprint boundaries', 'observation', 0.9, 'public', 'preference'),
-(4, 'email', 'diana.prince@acme.example', 'email', 1.0, 'public', 'identity'),
-(4, 'hates_meetings', 'meetings after 4pm or before 9am', 'calendar_policy', 0.95, 'public', 'preference'),
-(4, 'certification', 'PMP and Certified Scrum Master', 'linkedin', 0.9, 'public', 'observation'),
-(4, 'favorite_tool', 'Jira and Confluence', 'observation', 0.85, 'public', 'preference'),
+(4, 'employer', 'Acme Corp', 0.95, 'public', 'long_term', 'observation'),
+(4, 'job_title', 'Senior Project Manager', 0.95, 'public', 'long_term', 'observation'),
+(4, 'methodology_preference', 'Scrum with strict sprint boundaries', 0.9, 'public', 'long_term', 'preference'),
+(4, 'email', 'diana.prince@acme.example', 1.0, 'public', 'permanent', 'identity'),
+(4, 'hates_meetings', 'meetings after 4pm or before 9am', 0.95, 'public', 'long_term', 'preference'),
+(4, 'certification', 'PMP and Certified Scrum Master', 0.9, 'public', 'long_term', 'observation'),
+(4, 'favorite_tool', 'Jira and Confluence', 0.85, 'public', 'long_term', 'preference'),
 
 -- Eve (person 5) - 6 facts (privacy-focused)
-(5, 'employer', 'OpenSource Foundation', 'public_profile', 0.9, 'public', 'observation'),
-(5, 'job_title', 'Security Researcher', 'conference_bio', 0.9, 'public', 'observation'),
-(5, 'privacy_advocate', 'strong believer in data minimization', 'observation', 1.0, 'public', 'observation'),
-(5, 'email', 'eve@protonmail.example', 'pgp_key', 1.0, 'hidden', 'identity'),
-(5, 'uses_tor', 'true', 'observation', 0.7, 'sensitive', 'observation'),
-(5, 'favorite_crypto', 'Signal protocol and E2EE', 'tech_talk', 0.95, 'public', 'preference'),
+(5, 'employer', 'OpenSource Foundation', 0.9, 'public', 'long_term', 'observation'),
+(5, 'job_title', 'Security Researcher', 0.9, 'public', 'long_term', 'observation'),
+(5, 'privacy_advocate', 'strong believer in data minimization', 1.0, 'public', 'long_term', 'observation'),
+(5, 'email', 'eve@protonmail.example', 1.0, 'hidden', 'permanent', 'identity'),
+(5, 'uses_tor', 'true', 0.7, 'sensitive', 'long_term', 'observation'),
+(5, 'favorite_crypto', 'Signal protocol and E2EE', 0.95, 'public', 'long_term', 'preference'),
 
 -- Frank (person 6) - 5 facts (tests special characters)
-(6, 'employer', 'TechStart Inc', 'email_signature', 0.9, 'public', 'observation'),
-(6, 'job_title', 'Head of Marketing & Growth', 'linkedin', 0.95, 'public', 'observation'),
+(6, 'employer', 'TechStart Inc', 0.9, 'public', 'long_term', 'observation'),
+(6, 'job_title', 'Head of Marketing & Growth', 0.95, 'public', 'long_term', 'observation'),
 (6, 'favorite_quote', 'Don''t just market—tell a story!', 'conversation', 0.8, 'public', 'observation'),
-(6, 'email', 'frank.oreilly@techstart.example', 'business_card', 1.0, 'public', 'identity'),
-(6, 'loves_emojis', '🚀 Uses emojis in all communications', 'observation', 1.0, 'public', 'observation'),
+(6, 'email', 'frank.oreilly@techstart.example', 1.0, 'public', 'permanent', 'identity'),
+(6, 'loves_emojis', '🚀 Uses emojis in all communications', 1.0, 'public', 'long_term', 'observation'),
 
 -- Grace (person 7) - 5 facts
-(7, 'employer', 'OpenSource Foundation', 'gitlab_profile', 0.95, 'public', 'observation'),
-(7, 'job_title', 'DevOps Engineer', 'gitlab_profile', 0.95, 'public', 'observation'),
-(7, 'favorite_tool', 'Terraform and Ansible', 'tech_blog', 0.9, 'public', 'preference'),
-(7, 'email', 'grace@opensourcefdn.example', 'email', 1.0, 'public', 'identity'),
-(7, 'infrastructure_preference', 'infrastructure as code - everything versioned', 'philosophy', 1.0, 'public', 'observation'),
+(7, 'employer', 'OpenSource Foundation', 0.95, 'public', 'long_term', 'observation'),
+(7, 'job_title', 'DevOps Engineer', 0.95, 'public', 'long_term', 'observation'),
+(7, 'favorite_tool', 'Terraform and Ansible', 0.9, 'public', 'long_term', 'preference'),
+(7, 'email', 'grace@opensourcefdn.example', 1.0, 'public', 'permanent', 'identity'),
+(7, 'infrastructure_preference', 'infrastructure as code - everything versioned', 1.0, 'public', 'long_term', 'observation'),
 
 -- Hank (person 8) - 4 facts
-(8, 'employer', 'TechStart Inc', 'company_website', 1.0, 'public', 'observation'),
-(8, 'job_title', 'CEO and Founder', 'company_website', 1.0, 'public', 'observation'),
-(8, 'meeting_style', 'prefers 2-hour deep dives over quick syncs', 'observation', 0.85, 'public', 'preference'),
-(8, 'email', 'hank@techstart.example', 'business_card', 1.0, 'public', 'identity'),
+(8, 'employer', 'TechStart Inc', 1.0, 'public', 'long_term', 'observation'),
+(8, 'job_title', 'CEO and Founder', 1.0, 'public', 'long_term', 'observation'),
+(8, 'meeting_style', 'prefers 2-hour deep dives over quick syncs', 0.85, 'public', 'long_term', 'preference'),
+(8, 'email', 'hank@techstart.example', 1.0, 'public', 'permanent', 'identity'),
 
 -- Acme Corp (org 9) - 5 facts
-(9, 'industry', 'Manufacturing and Technology', 'website', 0.95, 'public', 'observation'),
-(9, 'headquarters', 'San Francisco, CA', 'website', 0.95, 'public', 'observation'),
-(9, 'employee_count', 'approximately 5000 employees', 'linkedin', 0.8, 'public', 'observation'),
-(9, 'founded', '1995', 'company_history', 0.95, 'public', 'permanent'),
-(9, 'known_for', 'making everything from anvils to software', 'observation', 0.9, 'public', 'observation'),
+(9, 'industry', 'Manufacturing and Technology', 0.95, 'public', 'long_term', 'observation'),
+(9, 'headquarters', 'San Francisco, CA', 0.95, 'public', 'long_term', 'observation'),
+(9, 'employee_count', 'approximately 5000 employees', 0.8, 'public', 'long_term', 'observation'),
+(9, 'founded', '1995', 0.95, 'public', 'permanent', 'identity'),
+(9, 'known_for', 'making everything from anvils to software', 0.9, 'public', 'long_term', 'observation'),
 
 -- TechStart Inc (org 10) - 5 facts
-(10, 'industry', 'Artificial Intelligence and SaaS', 'website', 1.0, 'public', 'observation'),
-(10, 'headquarters', 'Seattle, WA', 'website', 1.0, 'public', 'observation'),
-(10, 'employee_count', '50-100 employees', 'estimation', 0.7, 'public', 'observation'),
-(10, 'founded', '2022', 'press_release', 1.0, 'public', 'permanent'),
-(10, 'funding', 'Series A - $15M raised', 'crunchbase', 0.95, 'public', 'observation'),
+(10, 'industry', 'Artificial Intelligence and SaaS', 1.0, 'public', 'long_term', 'observation'),
+(10, 'headquarters', 'Seattle, WA', 1.0, 'public', 'long_term', 'observation'),
+(10, 'employee_count', '50-100 employees', 0.7, 'public', 'long_term', 'observation'),
+(10, 'founded', '2022', 1.0, 'public', 'permanent', 'identity'),
+(10, 'funding', 'Series A - $15M raised', 0.95, 'public', 'long_term', 'observation'),
 
 -- OpenSource Foundation (org 11) - 3 facts
-(11, 'type', 'Non-profit organization', 'website', 1.0, 'public', 'observation'),
-(11, 'mission', 'Supporting open source software development', 'about_page', 1.0, 'public', 'observation'),
-(11, 'founded', '2010', 'about_page', 1.0, 'public', 'permanent'),
+(11, 'type', 'Non-profit organization', 1.0, 'public', 'long_term', 'observation'),
+(11, 'mission', 'Supporting open source software development', 1.0, 'public', 'long_term', 'observation'),
+(11, 'founded', '2010', 1.0, 'public', 'permanent', 'identity'),
 
 -- DataViz Labs (org 12) - 2 facts
-(12, 'industry', 'Research and Data Visualization', 'website', 0.95, 'public', 'observation'),
-(12, 'specialization', 'Advanced visualization techniques and tools', 'research_papers', 0.9, 'public', 'observation'),
+(12, 'industry', 'Research and Data Visualization', 0.95, 'public', 'long_term', 'observation'),
+(12, 'specialization', 'Advanced visualization techniques and tools', 0.9, 'public', 'long_term', 'observation'),
 
 -- TestBot (ai 13) - 3 facts
-(13, 'capabilities', 'automated testing, CI/CD integration', 'configuration', 1.0, 'public', 'observation'),
-(13, 'uptime', '99.9% availability', 'monitoring', 0.95, 'public', 'observation'),
-(13, 'api_version', 'v2.1.0', 'system', 1.0, 'public', 'observation'),
+(13, 'capabilities', 'automated testing, CI/CD integration', 1.0, 'public', 'long_term', 'observation'),
+(13, 'uptime', '99.9% availability', 0.95, 'public', 'long_term', 'observation'),
+(13, 'api_version', 'v2.1.0', 1.0, 'public', 'long_term', 'observation'),
 
 -- AnalyticsBot (ai 14) - 2 facts
-(14, 'capabilities', 'data analysis, visualization generation', 'configuration', 1.0, 'public', 'observation'),
-(14, 'trained_on', 'statistical models and ML algorithms', 'documentation', 0.9, 'public', 'observation'),
+(14, 'capabilities', 'data analysis, visualization generation', 1.0, 'public', 'long_term', 'observation'),
+(14, 'trained_on', 'statistical models and ML algorithms', 0.9, 'public', 'long_term', 'observation'),
 
 -- SecurityBot (ai 15) - 2 facts
-(15, 'capabilities', 'threat detection, security monitoring', 'configuration', 1.0, 'public', 'observation'),
-(15, 'alert_threshold', 'medium and above', 'configuration', 1.0, 'hidden', 'observation');
+(15, 'capabilities', 'threat detection, security monitoring', 1.0, 'public', 'long_term', 'observation'),
+(15, 'alert_threshold', 'medium and above', 1.0, 'hidden', 'long_term', 'observation');
 
 -- ============================================================================
 -- EVENTS (15 events - milestones, meetings, decisions)

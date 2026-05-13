@@ -41,13 +41,12 @@ load_pg_env()
 ARCHIVE_THRESHOLD = 0.1  # Archive when confidence drops below this
 MIN_AGE_DAYS = 7         # Don't archive anything less than 7 days old
 
-# Decay rates (per day)
+# Decay rates (per day) — keyed by durability, not old data_type
 DECAY_RATES = {
     'permanent': 0,           # Never decays
-    'identity': 0.001,        # ~0.1% per day, 36% after 1 year
-    'preference': 0.005,      # ~0.5% per day, 16% after 1 year
-    'temporal': 0.05,         # ~5% per day, near zero after 2 months
-    'observation': 0.1,       # ~10% per day, near zero after 3 weeks
+    'long_term': 0.005,       # ~0.5% per day, 16% after 1 year
+    'short_term': 0.02,       # ~2% per day, moderate decay
+    'ephemeral': 0.1,         # ~10% per day, near zero after 3 weeks
 }
 
 # Table-specific decay rates
@@ -66,13 +65,13 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def calculate_decay(data_type: str, days_since_confirmed: int, custom_rate: float = None) -> float:
-    """Calculate confidence decay factor based on data type and time.
+def calculate_decay(durability: str, days_since_confirmed: int, custom_rate: float = None) -> float:
+    """Calculate confidence decay factor based on durability and time.
     
     Args:
-        data_type: Type of data (permanent, identity, preference, temporal, observation)
+        durability: Durability level (permanent, long_term, short_term, ephemeral)
         days_since_confirmed: Number of days since last confirmation
-        custom_rate: Optional custom decay rate (overrides data_type default)
+        custom_rate: Optional custom decay rate (overrides durability default)
         
     Returns:
         Decay factor (multiplier for current confidence, 0-1)
@@ -80,7 +79,7 @@ def calculate_decay(data_type: str, days_since_confirmed: int, custom_rate: floa
     if days_since_confirmed <= 0:
         return 1.0
     
-    rate = custom_rate if custom_rate is not None else DECAY_RATES.get(data_type, 0.01)
+    rate = custom_rate if custom_rate is not None else DECAY_RATES.get(durability, 0.01)
     
     # Exponential decay: confidence_new = confidence_old * e^(-rate * days)
     decay_factor = math.exp(-rate * days_since_confirmed)
@@ -107,7 +106,7 @@ def merge_duplicates(conn, dry_run=False, verbose=False):
         SELECT entity_id, key, LOWER(value) as normalized_value,
                array_agg(id ORDER BY confidence DESC, last_confirmed_at DESC) as ids,
                array_agg(confidence ORDER BY confidence DESC, last_confirmed_at DESC) as confidences,
-               array_agg(confirmation_count ORDER BY confidence DESC, last_confirmed_at DESC) as counts,
+               array_agg(extraction_count ORDER BY confidence DESC, last_confirmed_at DESC) as counts,
                array_agg(value ORDER BY confidence DESC, last_confirmed_at DESC) as values
         FROM entity_facts
         GROUP BY entity_id, key, LOWER(value)
@@ -124,7 +123,7 @@ def merge_duplicates(conn, dry_run=False, verbose=False):
                 f1.entity_id, f1.key,
                 f1.value as value1, f2.value as value2,
                 f1.confidence as conf1, f2.confidence as conf2,
-                f1.confirmation_count as count1, f2.confirmation_count as count2,
+                f1.extraction_count as count1, f2.extraction_count as count2,
                 f1.last_confirmed_at as date1, f2.last_confirmed_at as date2,
                 similarity(LOWER(f1.value), LOWER(f2.value)) as sim
             FROM entity_facts f1
@@ -244,10 +243,10 @@ def merge_duplicates(conn, dry_run=False, verbose=False):
                     exact_merge_groups[keeper] = {'ids': [keeper], 'total_count': 0}
                 exact_merge_groups[keeper]['ids'].append(m['archive_id'])
         
-        # Update keeper with summed confirmation counts for exact duplicates
+        # Update keeper with summed extraction_count for exact duplicates
         for keeper_id, group in exact_merge_groups.items():
             cur.execute("""
-                SELECT SUM(confirmation_count) 
+                SELECT SUM(extraction_count) 
                 FROM entity_facts 
                 WHERE id = ANY(%s)
             """, (group['ids'],))
@@ -255,7 +254,7 @@ def merge_duplicates(conn, dry_run=False, verbose=False):
             
             cur.execute("""
                 UPDATE entity_facts 
-                SET confirmation_count = %s, updated_at = NOW()
+                SET extraction_count = %s, updated_at = NOW()
                 WHERE id = %s
             """, (total_count, keeper_id))
         
@@ -269,12 +268,14 @@ def merge_duplicates(conn, dry_run=False, verbose=False):
                     RETURNING *
                 )
                 INSERT INTO entity_facts_archive 
-                    (id, entity_id, key, value, source, confidence, data_type,
-                     last_confirmed_at, confirmation_count, decay_rate,
+                    (id, entity_id, key, value, confidence,
+                     last_confirmed_at, extraction_count, decay_rate,
+                     durability, category, expires,
                      learned_at, updated_at, archive_reason)
                 SELECT 
-                    id, entity_id, key, value, source, confidence, data_type,
-                    last_confirmed_at, confirmation_count, decay_rate,
+                    id, entity_id, key, value, confidence,
+                    last_confirmed_at, extraction_count, decay_rate,
+                    durability, category, expires,
                     learned_at, updated_at, 'duplicate_merge'
                 FROM archived
             """, (m['archive_id'],))
@@ -288,10 +289,10 @@ def apply_decay_to_entity_facts(conn, dry_run=False, verbose=False):
     
     # Get all non-permanent facts with confidence data
     cur.execute("""
-        SELECT id, entity_id, key, data_type, confidence, 
-               last_confirmed_at, decay_rate
+        SELECT id, entity_id, key, durability, confidence, 
+               last_confirmed_at, decay_rate, expires
         FROM entity_facts
-        WHERE data_type != 'permanent'
+        WHERE durability != 'permanent'
           AND confidence > %s
     """, (ARCHIVE_THRESHOLD,))
     
@@ -303,8 +304,13 @@ def apply_decay_to_entity_facts(conn, dry_run=False, verbose=False):
         
         if days_since <= 0:
             continue
-            
-        decay_factor = calculate_decay(row['data_type'], days_since, row['decay_rate'])
+        
+        # If fact has expired, apply aggressive immediate decay
+        if row['expires'] is not None and row['expires'] < datetime.now(timezone.utc):
+            decay_factor = 0.0  # immediate archive
+        else:
+            decay_factor = calculate_decay(row['durability'], days_since, row['decay_rate'])
+        
         new_confidence = row['confidence'] * decay_factor
         
         # Only update if there's a meaningful change (>0.001)
@@ -316,14 +322,14 @@ def apply_decay_to_entity_facts(conn, dry_run=False, verbose=False):
                 'old_confidence': row['confidence'],
                 'new_confidence': new_confidence,
                 'days_since': days_since,
-                'data_type': row['data_type']
+                'durability': row['durability']
             })
     
     if verbose:
         logger.info(f"Entity facts to decay: {len(updates)}")
         if updates and len(updates) <= 10:
             for u in updates:
-                logger.info(f"  [{u['data_type']}] {u['key']}: {u['old_confidence']:.3f} → {u['new_confidence']:.3f} ({u['days_since']} days)")
+                logger.info(f"  [{u['durability']}] {u['key']}: {u['old_confidence']:.3f} → {u['new_confidence']:.3f} ({u['days_since']} days)")
     
     if not dry_run and updates:
         # Batch update
@@ -392,7 +398,7 @@ def archive_low_confidence(conn, dry_run=False, verbose=False):
             SELECT COUNT(*) FROM entity_facts
             WHERE confidence < %s
               AND learned_at < NOW() - INTERVAL '%s days'
-              AND data_type != 'permanent'
+              AND durability != 'permanent'
         """, (ARCHIVE_THRESHOLD, MIN_AGE_DAYS))
         count = cur.fetchone()[0]
         return count
@@ -403,16 +409,18 @@ def archive_low_confidence(conn, dry_run=False, verbose=False):
             DELETE FROM entity_facts
             WHERE confidence < %s
               AND learned_at < NOW() - INTERVAL '%s days'
-              AND data_type != 'permanent'
+              AND durability != 'permanent'
             RETURNING *
         )
         INSERT INTO entity_facts_archive 
-            (id, entity_id, key, value, source, confidence, data_type,
-             last_confirmed_at, confirmation_count, decay_rate,
+            (id, entity_id, key, value, confidence,
+             last_confirmed_at, extraction_count, decay_rate,
+             durability, category, expires,
              learned_at, updated_at, archive_reason)
         SELECT 
-            id, entity_id, key, value, source, confidence, data_type,
-            last_confirmed_at, confirmation_count, decay_rate,
+            id, entity_id, key, value, confidence,
+            last_confirmed_at, extraction_count, decay_rate,
+            durability, category, expires,
             learned_at, updated_at, 'low_confidence'
         FROM archived
         RETURNING id
@@ -472,12 +480,14 @@ def detect_conflicts(conn, dry_run=False, verbose=False):
                                 RETURNING *
                             )
                             INSERT INTO entity_facts_archive 
-                                (id, entity_id, key, value, source, confidence, data_type,
-                                 last_confirmed_at, confirmation_count, decay_rate,
+                                (id, entity_id, key, value, confidence,
+                                 last_confirmed_at, extraction_count, decay_rate,
+                                 durability, category, expires,
                                  learned_at, updated_at, archive_reason)
                             SELECT 
-                                id, entity_id, key, value, source, confidence, data_type,
-                                last_confirmed_at, confirmation_count, decay_rate,
+                                id, entity_id, key, value, confidence,
+                                last_confirmed_at, extraction_count, decay_rate,
+                                durability, category, expires,
                                 learned_at, updated_at, 'conflict_resolution'
                             FROM archived
                         """, (fact_id,))

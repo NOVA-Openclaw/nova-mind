@@ -342,36 +342,39 @@ ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT DELETE, INSERT
 CREATE TABLE IF NOT EXISTS agent_bootstrap_context (
     id SERIAL,
     context_type text NOT NULL,
-    domain_name text,
     file_key text NOT NULL,
     content text NOT NULL,
     description text,
     updated_at timestamptz DEFAULT now(),
     updated_by text DEFAULT 'system',
     agent_name text,
+    domain_names text[],
     CONSTRAINT agent_bootstrap_context_pkey PRIMARY KEY (id),
     CONSTRAINT agent_bootstrap_context_context_type_check CHECK (context_type IN ('UNIVERSAL'::text, 'GLOBAL'::text, 'DOMAIN'::text, 'AGENT'::text)),
     CONSTRAINT chk_domain_no_agent_name CHECK (context_type <> 'DOMAIN'::text OR agent_name IS NULL),
-    CONSTRAINT chk_universal_global_no_names CHECK ((context_type <> ALL (ARRAY['UNIVERSAL'::text, 'GLOBAL'::text])) OR agent_name IS NULL AND domain_name IS NULL)
+    CONSTRAINT chk_universal_global_no_names CHECK ((context_type <> ALL (ARRAY['UNIVERSAL'::text, 'GLOBAL'::text])) OR agent_name IS NULL AND domain_names IS NULL)
 );
 
 
-COMMENT ON TABLE agent_bootstrap_context IS 'Bootstrap context entries. READ-ONLY except Newhart (Agent Design/Management domain).';
+COMMENT ON TABLE agent_bootstrap_context IS 'Bootstrap context entries. Agents may write to their own AGENT-scoped records (matching their db user). Newhart (Agent Design/Management domain) manages schema, cross-agent entries, and GLOBAL/UNIVERSAL-scoped records.';
 
 
 COMMENT ON COLUMN agent_bootstrap_context.context_type IS 'GLOBAL (all agents) or DOMAIN (agents in specific domain)';
 
 
-COMMENT ON COLUMN agent_bootstrap_context.domain_name IS 'NULL for GLOBAL, domain name from agent_domains for DOMAIN type';
-
-
 COMMENT ON COLUMN agent_bootstrap_context.file_key IS 'Identifier for context block, becomes filename in bootstrap';
+
+--
+-- Name: agent_bootstrap_context_domain_unique_idx; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE UNIQUE INDEX IF NOT EXISTS agent_bootstrap_context_domain_unique_idx ON agent_bootstrap_context (file_key) WHERE (context_type = 'DOMAIN'::text);
 
 --
 -- Name: agent_bootstrap_context_unique_idx; Type: INDEX; Schema: -; Owner: -
 --
 
-CREATE UNIQUE INDEX IF NOT EXISTS agent_bootstrap_context_unique_idx ON agent_bootstrap_context (context_type, COALESCE(agent_name, ''::text), COALESCE(domain_name, ''::text), file_key);
+CREATE UNIQUE INDEX IF NOT EXISTS agent_bootstrap_context_unique_idx ON agent_bootstrap_context (context_type, COALESCE(agent_name, ''::text), file_key) WHERE context_type IN ('UNIVERSAL'::text, 'GLOBAL'::text, 'AGENT'::text);
 
 --
 -- Name: idx_abc_agent_name; Type: INDEX; Schema: -; Owner: -
@@ -3950,18 +3953,26 @@ BEGIN
 
         UNION ALL
 
-        -- 3. DOMAIN
-        SELECT abc.file_key || '.md' AS filename, abc.content,
-            'domain:' || abc.domain_name AS source, 3 AS priority
+        -- 3. DOMAIN — match if ANY domain_names entry overlaps agent's domains
+        SELECT
+            abc.file_key || '.md' AS filename,
+            abc.content,
+            'domain:' || (
+                SELECT string_agg(dn, ', ' ORDER BY dn)
+                FROM unnest(abc.domain_names) AS dn
+            ) AS source,
+            3 AS priority
         FROM agent_bootstrap_context abc
-        JOIN agent_domains ad ON ad.domain_topic = abc.domain_name
         WHERE abc.context_type = 'DOMAIN'
-          AND ad.agent_id = v_agent_id
+          AND EXISTS (
+              SELECT 1 FROM agent_domains ad
+              WHERE ad.agent_id = v_agent_id
+                AND ad.domain_topic = ANY(abc.domain_names)
+          )
 
         UNION ALL
 
-        -- 4. WORKFLOW — summary only (name, description, your role, query pointer)
-        -- Full step descriptions are NOT injected; agents query the DB when needed.
+        -- 4. WORKFLOW — summary only
         SELECT
             'WORKFLOW_' || upper(replace(w.name, '-', '_')) || '.md' AS filename,
             w.name || ': ' || w.description ||
@@ -3989,7 +4000,6 @@ BEGIN
             'workflow:' || w.name AS source,
             4 AS priority
         FROM workflows w
-        -- Agent's specific steps (by domain match) — just step numbers and domains
         LEFT JOIN LATERAL (
             SELECT string_agg(
                 'Step ' || ws.step_order || ' (' || ws.domain || ')',
@@ -3999,38 +4009,28 @@ BEGIN
             JOIN agent_domains ad ON ad.agent_id = v_agent_id
             WHERE ws.workflow_id = w.id
               AND (ad.domain_topic = ws.domain OR ad.domain_topic = ANY(ws.domains))
-        ) agent_steps ON true
-        -- All domains
+        ) agent_steps ON TRUE
         LEFT JOIN LATERAL (
             SELECT string_agg(DISTINCT ws.domain, ', ' ORDER BY ws.domain) AS domain_list
             FROM workflow_steps ws
             WHERE ws.workflow_id = w.id
-        ) all_domains ON true
-        -- Step count
+        ) all_domains ON TRUE
         LEFT JOIN LATERAL (
-            SELECT count(*)::int AS cnt
+            SELECT COUNT(*)::INTEGER AS cnt
             FROM workflow_steps ws
             WHERE ws.workflow_id = w.id
-        ) step_count ON true
-        WHERE w.status = 'active'
-          AND (
-            EXISTS (
-                SELECT 1 FROM agent_domains ad
-                WHERE ad.agent_id = v_agent_id
-                  AND ad.domain_topic = w.orchestrator_domain
-            )
-            OR
-            EXISTS (
-                SELECT 1 FROM workflow_steps ws
-                JOIN agent_domains ad ON ad.agent_id = v_agent_id
-                WHERE ws.workflow_id = w.id
-                  AND (ad.domain_topic = ws.domain OR ad.domain_topic = ANY(ws.domains))
-            )
-          )
+        ) step_count ON TRUE
+        WHERE EXISTS (
+            SELECT 1
+            FROM workflow_steps ws
+            JOIN agent_domains ad ON ad.agent_id = v_agent_id
+            WHERE ws.workflow_id = w.id
+              AND (ad.domain_topic = ws.domain OR ad.domain_topic = ANY(ws.domains))
+        )
 
         UNION ALL
 
-        -- 5. AGENT-specific
+        -- 5. AGENT
         SELECT abc.file_key || '.md' AS filename, abc.content,
             'agent'::TEXT AS source, 5 AS priority
         FROM agent_bootstrap_context abc
@@ -4345,49 +4345,43 @@ $$;
 --
 
 CREATE OR REPLACE FUNCTION list_agent_context(
-    p_agent_name text
+    p_agent_name text DEFAULT NULL
 )
-RETURNS TABLE(source_type text, domain_or_scope text, file_key text, content_preview text)
+RETURNS TABLE(id integer, context_type text, agent_name text, domain_names text[], file_key text, description text, content_length integer)
 LANGUAGE plpgsql
 VOLATILE
 AS $$
-DECLARE
-    v_agent_id INTEGER;
 BEGIN
-    SELECT id INTO v_agent_id FROM agents WHERE name = p_agent_name;
-
     RETURN QUERY
     SELECT
-        'GLOBAL'::TEXT,
-        'all agents'::TEXT,
-        bc.file_key,
-        LEFT(bc.content, 100) || '...'
-    FROM agent_bootstrap_context bc
-    WHERE bc.context_type = 'GLOBAL'
-
-    UNION ALL
-
-    SELECT
-        'DOMAIN'::TEXT,
-        bc.domain_name,
-        bc.file_key,
-        LEFT(bc.content, 100) || '...'
-    FROM agent_bootstrap_context bc
-    JOIN agent_domains ad ON bc.domain_name = ad.domain_topic
-    WHERE bc.context_type = 'DOMAIN'
-        AND ad.agent_id = v_agent_id
-
-    UNION ALL
-
-    SELECT
-        'WORKFLOW'::TEXT,
-        w.name,
-        'WORKFLOW_CONTEXT'::TEXT,
-        LEFT(w.description, 100) || '...'
-    FROM workflow_steps ws
-    JOIN workflows w ON ws.workflow_id = w.id
-    WHERE ws.agent_id = v_agent_id
-        AND w.status = 'active';
+        abc.id,
+        abc.context_type,
+        abc.agent_name,
+        abc.domain_names,
+        abc.file_key,
+        abc.description,
+        LENGTH(abc.content)::INTEGER AS content_length
+    FROM agent_bootstrap_context abc
+    WHERE
+        CASE
+            WHEN p_agent_name IS NULL THEN TRUE
+            ELSE abc.agent_name = p_agent_name
+                 OR abc.context_type IN ('UNIVERSAL', 'GLOBAL')
+                 OR (abc.context_type = 'DOMAIN' AND EXISTS (
+                     SELECT 1 FROM agent_domains ad
+                     JOIN agents a ON a.id = ad.agent_id
+                     WHERE a.name = p_agent_name
+                       AND ad.domain_topic = ANY(abc.domain_names)
+                 ))
+        END
+    ORDER BY
+        CASE abc.context_type
+            WHEN 'UNIVERSAL' THEN 1
+            WHEN 'GLOBAL' THEN 2
+            WHEN 'DOMAIN' THEN 3
+            WHEN 'AGENT' THEN 4
+        END,
+        abc.file_key;
 END;
 $$;
 
@@ -4897,20 +4891,31 @@ LANGUAGE plpgsql
 VOLATILE
 AS $$
 DECLARE
-    obj record;
-    payload text;
+ payload text;
+ obj record;
 BEGIN
-    FOR obj IN SELECT * FROM pg_event_trigger_ddl_commands()
-    LOOP
-        payload := json_build_object(
-            'command_tag', obj.command_tag,
-            'object_type', obj.object_type,
-            'schema_name', obj.schema_name,
-            'object_identity', obj.object_identity,
-            'query', current_query()
-        )::text;
-        PERFORM pg_notify('schema_changed', payload);
-    END LOOP;
+ -- Pick one representative row per DDL statement using DISTINCT ON object_identity.
+ -- This prevents firing N notifications for a single CREATE FUNCTION
+ -- (which registers the function + argument types as separate DDL objects).
+ SELECT INTO obj
+ command_tag, object_type, schema_name, object_identity
+ FROM (
+ SELECT DISTINCT ON (object_identity)
+ command_tag, object_type, schema_name, object_identity
+ FROM pg_event_trigger_ddl_commands()
+ ) deduped
+ LIMIT 1;
+
+ IF obj IS NOT NULL THEN
+ payload := json_build_object(
+ 'command_tag', obj.command_tag,
+ 'object_type', obj.object_type,
+ 'schema_name', obj.schema_name,
+ 'object_identity', obj.object_identity,
+ 'query', current_query()
+ )::text;
+ PERFORM pg_notify('schema_changed', payload);
+ END IF;
 END;
 $$;
 
@@ -5798,11 +5803,11 @@ BEGIN NEW.updated_at = now(); RETURN NEW; END;
 $$;
 
 --
--- Name: upsert_domain_context(text, text, text, text, text); Type: FUNCTION; Schema: -; Owner: -
+-- Name: upsert_domain_context(text[], text, text, text, text); Type: FUNCTION; Schema: -; Owner: -
 --
 
 CREATE OR REPLACE FUNCTION upsert_domain_context(
-    p_domain_name text,
+    p_domain_names text[],
     p_file_key text,
     p_content text,
     p_description text DEFAULT NULL,
@@ -5815,10 +5820,11 @@ AS $$
 DECLARE
     v_id INTEGER;
 BEGIN
-    INSERT INTO agent_bootstrap_context (context_type, domain_name, file_key, content, description, updated_by, updated_at)
-    VALUES ('DOMAIN', p_domain_name, p_file_key, p_content, p_description, p_updated_by, NOW())
-    ON CONFLICT (context_type, COALESCE(domain_name, ''), file_key)
+    INSERT INTO agent_bootstrap_context (context_type, domain_names, file_key, content, description, updated_by, updated_at)
+    VALUES ('DOMAIN', p_domain_names, p_file_key, p_content, p_description, p_updated_by, NOW())
+    ON CONFLICT (file_key) WHERE context_type = 'DOMAIN'
     DO UPDATE SET
+        domain_names = EXCLUDED.domain_names,
         content = EXCLUDED.content,
         description = COALESCE(EXCLUDED.description, agent_bootstrap_context.description),
         updated_by = EXCLUDED.updated_by,
@@ -5846,9 +5852,10 @@ AS $$
 DECLARE
     v_id INTEGER;
 BEGIN
-    INSERT INTO agent_bootstrap_context (context_type, domain_name, file_key, content, description, updated_by, updated_at)
-    VALUES ('GLOBAL', NULL, p_file_key, p_content, p_description, p_updated_by, NOW())
-    ON CONFLICT (context_type, COALESCE(domain_name, ''), file_key)
+    INSERT INTO agent_bootstrap_context (context_type, file_key, content, description, updated_by, updated_at)
+    VALUES ('GLOBAL', p_file_key, p_content, p_description, p_updated_by, NOW())
+    ON CONFLICT (context_type, COALESCE(agent_name, ''), file_key)
+        WHERE context_type IN ('UNIVERSAL', 'GLOBAL', 'AGENT')
     DO UPDATE SET
         content = EXCLUDED.content,
         description = COALESCE(EXCLUDED.description, agent_bootstrap_context.description),
@@ -6972,13 +6979,13 @@ REVOKE DELETE ON TABLE agent_bootstrap_context FROM ticker;
 -- Name: agent_chat; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_chat FROM newhart;
+REVOKE SELECT ON TABLE agent_chat FROM newhart;
 
 --
 -- Name: agent_chat; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE agent_chat FROM newhart;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_chat FROM newhart;
 
 --
 -- Name: agent_chat_processed; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -7062,13 +7069,13 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE agent_domains FROM ticker;
 -- Name: agent_jobs; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_jobs FROM newhart;
+REVOKE SELECT ON TABLE agent_jobs FROM newhart;
 
 --
 -- Name: agent_jobs; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE agent_jobs FROM newhart;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_jobs FROM newhart;
 
 --
 -- Name: agent_modifications; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -7110,13 +7117,13 @@ REVOKE DELETE ON TABLE agent_modifications FROM iris;
 -- Name: agent_modifications; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE agent_modifications FROM newhart;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_modifications FROM newhart;
 
 --
 -- Name: agent_modifications; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_modifications FROM newhart;
+REVOKE SELECT ON TABLE agent_modifications FROM newhart;
 
 --
 -- Name: agent_modifications; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -7140,13 +7147,13 @@ REVOKE DELETE ON TABLE agent_modifications FROM ticker;
 -- Name: agent_spawns; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_spawns FROM newhart;
+REVOKE SELECT ON TABLE agent_spawns FROM newhart;
 
 --
 -- Name: agent_spawns; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE agent_spawns FROM newhart;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_spawns FROM newhart;
 
 --
 -- Name: agent_system_config; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -7266,13 +7273,13 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE agents FROM iris;
 -- Name: agents; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agents FROM newhart;
+REVOKE SELECT ON TABLE agents FROM newhart;
 
 --
 -- Name: agents; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE agents FROM newhart;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agents FROM newhart;
 
 --
 -- Name: agents; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -7332,13 +7339,13 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE ai_models FROM iris;
 -- Name: ai_models; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE ai_models FROM newhart;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE ai_models FROM newhart;
 
 --
 -- Name: ai_models; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE ai_models FROM newhart;
+REVOKE SELECT ON TABLE ai_models FROM newhart;
 
 --
 -- Name: ai_models; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -7362,25 +7369,25 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE ai_models FROM ticker;
 -- Name: artwork; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE artwork FROM iris;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE artwork FROM iris;
 
 --
 -- Name: artwork; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE artwork FROM iris;
-
---
--- Name: asset_classes; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE SELECT ON TABLE asset_classes FROM ticker;
+REVOKE SELECT ON TABLE artwork FROM iris;
 
 --
 -- Name: asset_classes; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE asset_classes FROM ticker;
+
+--
+-- Name: asset_classes; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE asset_classes FROM ticker;
 
 --
 -- Name: bootstrap_context_config; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -7422,13 +7429,13 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE bootstrap_context_config FROM iris;
 -- Name: bootstrap_context_config; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE bootstrap_context_config FROM newhart;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE bootstrap_context_config FROM newhart;
 
 --
 -- Name: bootstrap_context_config; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE bootstrap_context_config FROM newhart;
+REVOKE SELECT ON TABLE bootstrap_context_config FROM newhart;
 
 --
 -- Name: bootstrap_context_config; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -8088,13 +8095,13 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE lessons_archive FROM nova;
 -- Name: library_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE library_authors FROM athena;
+REVOKE SELECT ON TABLE library_authors FROM athena;
 
 --
 -- Name: library_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE library_authors FROM athena;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE library_authors FROM athena;
 
 --
 -- Name: library_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -8418,13 +8425,13 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE library_work_tags FROM ticker;
 -- Name: library_works; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE library_works FROM athena;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE library_works FROM athena;
 
 --
 -- Name: library_works; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE library_works FROM athena;
+REVOKE SELECT ON TABLE library_works FROM athena;
 
 --
 -- Name: library_works; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -8586,25 +8593,25 @@ REVOKE SELECT ON TABLE portfolio_history FROM ticker;
 -- Name: portfolio_metrics; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE portfolio_metrics FROM ticker;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE portfolio_metrics FROM ticker;
 
 --
 -- Name: portfolio_metrics; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE portfolio_metrics FROM ticker;
-
---
--- Name: portfolio_positions; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE SELECT ON TABLE portfolio_positions FROM ticker;
+REVOKE SELECT ON TABLE portfolio_metrics FROM ticker;
 
 --
 -- Name: portfolio_positions; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE portfolio_positions FROM ticker;
+
+--
+-- Name: portfolio_positions; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE portfolio_positions FROM ticker;
 
 --
 -- Name: portfolio_snapshots; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -8622,25 +8629,25 @@ REVOKE SELECT ON TABLE portfolio_snapshots FROM ticker;
 -- Name: portfolio_updates; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE portfolio_updates FROM ticker;
+REVOKE SELECT ON TABLE portfolio_updates FROM ticker;
 
 --
 -- Name: portfolio_updates; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE portfolio_updates FROM ticker;
-
---
--- Name: positions; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE positions FROM ticker;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE portfolio_updates FROM ticker;
 
 --
 -- Name: positions; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
 REVOKE SELECT ON TABLE positions FROM ticker;
+
+--
+-- Name: positions; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE positions FROM ticker;
 
 --
 -- Name: preferences; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -8652,13 +8659,13 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE preferences FROM nova;
 -- Name: price_cache_v2; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE price_cache_v2 FROM ticker;
+REVOKE SELECT ON TABLE price_cache_v2 FROM ticker;
 
 --
 -- Name: price_cache_v2; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE price_cache_v2 FROM ticker;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE price_cache_v2 FROM ticker;
 
 --
 -- Name: project_entities; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -8808,13 +8815,13 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE research_conclusions FROM nova;
 -- Name: research_conclusions; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE research_conclusions FROM scout;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE research_conclusions FROM scout;
 
 --
 -- Name: research_conclusions; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE research_conclusions FROM scout;
+REVOKE SELECT ON TABLE research_conclusions FROM scout;
 
 --
 -- Name: research_conclusions; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -8874,13 +8881,13 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE research_findings FROM nova;
 -- Name: research_findings; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE research_findings FROM scout;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE research_findings FROM scout;
 
 --
 -- Name: research_findings; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE research_findings FROM scout;
+REVOKE SELECT ON TABLE research_findings FROM scout;
 
 --
 -- Name: research_findings; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -8940,13 +8947,13 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE research_projects FROM nova;
 -- Name: research_projects; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE research_projects FROM scout;
+REVOKE SELECT ON TABLE research_projects FROM scout;
 
 --
 -- Name: research_projects; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE research_projects FROM scout;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE research_projects FROM scout;
 
 --
 -- Name: research_projects; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9360,25 +9367,25 @@ REVOKE DELETE ON TABLE workflow_runs FROM gidget;
 -- Name: workflow_runs; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE workflow_runs FROM iris;
-
---
--- Name: workflow_runs; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE workflow_runs FROM iris;
 
 --
 -- Name: workflow_runs; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE workflow_runs FROM newhart;
+REVOKE SELECT ON TABLE workflow_runs FROM iris;
 
 --
 -- Name: workflow_runs; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
 REVOKE SELECT ON TABLE workflow_runs FROM newhart;
+
+--
+-- Name: workflow_runs; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE workflow_runs FROM newhart;
 
 --
 -- Name: workflow_runs; Type: PRIVILEGE; Schema: privileges; Owner: -

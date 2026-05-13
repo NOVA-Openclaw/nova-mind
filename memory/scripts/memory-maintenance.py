@@ -88,199 +88,120 @@ def calculate_decay(durability: str, days_since_confirmed: int, custom_rate: flo
 
 
 def merge_duplicates(conn, dry_run=False, verbose=False):
-    """Find and merge duplicate entity_facts.
+    """Find and merge/categorize duplicate entity_facts using three-tier confidence system.
     
-    Finds duplicates using:
-    - Exact matches: same entity_id + key + LOWER(value)
-    - Fuzzy matches: similarity > 0.85 via pg_trgm
-    
-    Merges by:
-    - Keeping record with highest confidence (or newest if tied)
-    - Summing confirmation_counts
-    - Archiving redundant records with reason='duplicate_merge'
+    Uses pg_trgm similarity() for text comparison. Three tiers:
+    - High (similarity >= 0.80): auto-merge via merge_facts(survivor_id, absorbed_id)
+        survivor = higher confidence fact; extraction_counts are summed by merge_facts
+    - Medium (0.50-0.79 similarity): add to daily report for manual review
+    - Low (< 0.50): skip entirely
     """
     cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
     
-    # Find exact duplicates (same entity_id + key + LOWER(value))
+    # Find all candidate pairs with similarity >= 0.50
     cur.execute("""
-        SELECT entity_id, key, LOWER(value) as normalized_value,
-               array_agg(id ORDER BY confidence DESC, last_confirmed_at DESC) as ids,
-               array_agg(confidence ORDER BY confidence DESC, last_confirmed_at DESC) as confidences,
-               array_agg(extraction_count ORDER BY confidence DESC, last_confirmed_at DESC) as counts,
-               array_agg(value ORDER BY confidence DESC, last_confirmed_at DESC) as values
-        FROM entity_facts
-        GROUP BY entity_id, key, LOWER(value)
-        HAVING COUNT(*) > 1
+        SELECT 
+            f1.id as id1, f2.id as id2,
+            f1.entity_id, f1.key,
+            f1.value as value1, f2.value as value2,
+            f1.confidence as conf1, f2.confidence as conf2,
+            f1.last_confirmed_at as date1, f2.last_confirmed_at as date2,
+            similarity(LOWER(f1.value), LOWER(f2.value)) as sim
+        FROM entity_facts f1
+        JOIN entity_facts f2 ON 
+            f1.entity_id = f2.entity_id 
+            AND f1.key = f2.key 
+            AND f1.id < f2.id
+        WHERE similarity(LOWER(f1.value), LOWER(f2.value)) >= 0.50
+        ORDER BY sim DESC, f1.id, f2.id
     """)
     
-    exact_dupes = cur.fetchall()
+    pairs = cur.fetchall()
     
-    # Find fuzzy duplicates (similarity > 0.85)
-    cur.execute("""
-        WITH pairs AS (
-            SELECT 
-                f1.id as id1, f2.id as id2,
-                f1.entity_id, f1.key,
-                f1.value as value1, f2.value as value2,
-                f1.confidence as conf1, f2.confidence as conf2,
-                f1.extraction_count as count1, f2.extraction_count as count2,
-                f1.last_confirmed_at as date1, f2.last_confirmed_at as date2,
-                similarity(LOWER(f1.value), LOWER(f2.value)) as sim
-            FROM entity_facts f1
-            JOIN entity_facts f2 ON 
-                f1.entity_id = f2.entity_id 
-                AND f1.key = f2.key 
-                AND f1.id < f2.id
-            WHERE similarity(LOWER(f1.value), LOWER(f2.value)) > 0.85
-                AND LOWER(f1.value) != LOWER(f2.value)
-        )
-        SELECT * FROM pairs
-        ORDER BY entity_id, key, id1
-    """)
+    absorbed_ids = set()
+    high_merges = 0
+    medium_candidates = []
     
-    fuzzy_dupes = cur.fetchall()
-    
-    merges = []
-    archived_ids = set()
-    
-    # Process exact duplicates
-    for row in exact_dupes:
-        ids = row['ids']
-        confidences = row['confidences']
-        counts = row['counts']
-        values = row['values']
-        
-        # Keep first (highest confidence or newest)
-        keeper_id = ids[0]
-        keeper_confidence = confidences[0]
-        keeper_value = values[0]
-        total_count = sum(counts)
-        
-        # Archive the rest
-        for i in range(1, len(ids)):
-            if ids[i] not in archived_ids:
-                merges.append({
-                    'keeper_id': keeper_id,
-                    'archive_id': ids[i],
-                    'entity_id': row['entity_id'],
-                    'key': row['key'],
-                    'keeper_value': keeper_value,
-                    'archive_value': values[i],
-                    'total_count': total_count,
-                    'type': 'exact'
-                })
-                archived_ids.add(ids[i])
-    
-    # Process fuzzy duplicates (group by connected components)
-    fuzzy_groups = {}  # Map id to group representative
-    
-    for row in fuzzy_dupes:
+    for row in pairs:
         id1, id2 = row['id1'], row['id2']
         
-        # Skip if either was already archived in exact matches
-        if id1 in archived_ids or id2 in archived_ids:
+        # Skip if either fact was already absorbed in a previous high-confidence merge
+        if id1 in absorbed_ids or id2 in absorbed_ids:
             continue
         
-        # Determine keeper (higher confidence, or newer if tied)
-        if row['conf1'] > row['conf2']:
-            keeper, archive = id1, id2
-        elif row['conf2'] > row['conf1']:
-            keeper, archive = id2, id1
-        elif row['date1'] > row['date2']:
-            keeper, archive = id1, id2
-        else:
-            keeper, archive = id2, id1
+        sim = row['sim']
         
-        # If neither is in a group, create new group
-        if keeper not in fuzzy_groups and archive not in fuzzy_groups:
-            fuzzy_groups[keeper] = keeper
-            fuzzy_groups[archive] = keeper
+        if sim >= 0.80:
+            # High confidence: auto-merge
+            if row['conf1'] > row['conf2']:
+                survivor, absorbed = id1, id2
+            elif row['conf2'] > row['conf1']:
+                survivor, absorbed = id2, id1
+            elif row['date1'] > row['date2']:
+                survivor, absorbed = id1, id2
+            elif row['date2'] > row['date1']:
+                survivor, absorbed = id2, id1
+            else:
+                # Perfect tie — use lower ID as survivor for determinism
+                survivor, absorbed = (id1, id2) if id1 < id2 else (id2, id1)
             
-            merges.append({
-                'keeper_id': keeper,
-                'archive_id': archive,
+            if not dry_run:
+                cur.execute("SELECT merge_facts(%s, %s)", (survivor, absorbed))
+            
+            absorbed_ids.add(absorbed)
+            high_merges += 1
+            
+            if verbose:
+                logger.info(f"  [high, sim={sim:.2f}] {row['key']}: auto-merged ID {absorbed} into ID {survivor}")
+        
+        elif sim >= 0.50:
+            # Medium confidence: flag for manual review
+            medium_candidates.append({
+                'id1': id1,
+                'id2': id2,
                 'entity_id': row['entity_id'],
                 'key': row['key'],
-                'keeper_value': row['value1'] if keeper == id1 else row['value2'],
-                'archive_value': row['value2'] if keeper == id1 else row['value1'],
-                'similarity': row['sim'],
-                'type': 'fuzzy'
+                'value1': row['value1'],
+                'value2': row['value2'],
+                'similarity': sim
             })
-            archived_ids.add(archive)
-        
-        # If keeper is already a group representative
-        elif keeper in fuzzy_groups and fuzzy_groups[keeper] == keeper:
-            if archive not in fuzzy_groups:
-                fuzzy_groups[archive] = keeper
-                merges.append({
-                    'keeper_id': keeper,
-                    'archive_id': archive,
-                    'entity_id': row['entity_id'],
-                    'key': row['key'],
-                    'keeper_value': row['value1'] if keeper == id1 else row['value2'],
-                    'archive_value': row['value2'] if keeper == id1 else row['value1'],
-                    'similarity': row['sim'],
-                    'type': 'fuzzy'
-                })
-                archived_ids.add(archive)
+            
+            if verbose:
+                logger.info(f"  [medium, sim={sim:.2f}] {row['key']}: '{row['value1']}' vs '{row['value2']}' — flagged for review")
     
     if verbose:
-        logger.info(f"Found {len(merges)} duplicates to merge ({len(exact_dupes)} exact groups, {len([m for m in merges if m['type'] == 'fuzzy'])} fuzzy matches)")
-        if merges and len(merges) <= 10:
-            for m in merges:
-                if m['type'] == 'exact':
-                    logger.info(f"  [exact] {m['key']}: keeping ID {m['keeper_id']}, archiving ID {m['archive_id']}")
-                else:
-                    logger.info(f"  [fuzzy, sim={m['similarity']:.2f}] {m['key']}: '{m['keeper_value']}' vs '{m['archive_value']}'")
+        logger.info(f"Found {high_merges} high-confidence merges, {len(medium_candidates)} medium-confidence candidates")
     
-    if not dry_run and merges:
-        # For exact duplicates, sum confirmation counts
-        exact_merge_groups = {}
-        for m in merges:
-            if m['type'] == 'exact':
-                keeper = m['keeper_id']
-                if keeper not in exact_merge_groups:
-                    exact_merge_groups[keeper] = {'ids': [keeper], 'total_count': 0}
-                exact_merge_groups[keeper]['ids'].append(m['archive_id'])
-        
-        # Update keeper with summed extraction_count for exact duplicates
-        for keeper_id, group in exact_merge_groups.items():
-            cur.execute("""
-                SELECT SUM(extraction_count) 
-                FROM entity_facts 
-                WHERE id = ANY(%s)
-            """, (group['ids'],))
-            total_count = cur.fetchone()[0]
-            
-            cur.execute("""
-                UPDATE entity_facts 
-                SET extraction_count = %s, updated_at = NOW()
-                WHERE id = %s
-            """, (total_count, keeper_id))
-        
-        # Archive all duplicates
-        for m in merges:
-            # Archive the redundant record
-            cur.execute("""
-                WITH archived AS (
-                    DELETE FROM entity_facts
-                    WHERE id = %s
-                    RETURNING *
-                )
-                INSERT INTO entity_facts_archive 
-                    (id, entity_id, key, value, confidence,
-                     last_confirmed_at, extraction_count, decay_rate,
-                     durability, category, expires,
-                     learned_at, updated_at, archive_reason)
-                SELECT 
-                    id, entity_id, key, value, confidence,
-                    last_confirmed_at, extraction_count, decay_rate,
-                    durability, category, expires,
-                    learned_at, updated_at, 'duplicate_merge'
-                FROM archived
-            """, (m['archive_id'],))
+    return {
+        'high_merges': high_merges,
+        'medium_count': len(medium_candidates),
+        'medium_candidates': medium_candidates
+    }
+
+
+def write_dedup_report(candidates, dry_run=False):
+    """Write medium-confidence dedup candidates to daily report file."""
+    if not candidates:
+        return
     
-    return len(merges)
+    logs_dir = Path.home() / '.openclaw' / 'logs'
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    
+    today = datetime.now().strftime('%Y-%m-%d')
+    report_path = logs_dir / f'dedup-report-{today}.md'
+    
+    mode_str = " (DRY RUN)" if dry_run else ""
+    
+    with open(report_path, 'w') as f:
+        f.write(f"# Duplicate Detection Report — {today}{mode_str}\n\n")
+        f.write("Medium-confidence candidates (0.50–0.79 similarity) for manual review:\n\n")
+        f.write("| fact_id_1 | fact_id_2 | entity_id | key | value_1 | value_2 | similarity_score | recommended_action |\n")
+        f.write("|-----------|-----------|-----------|-----|---------|---------|------------------|-------------------|\n")
+        for c in candidates:
+            f.write(f"| {c['id1']} | {c['id2']} | {c['entity_id']} | {c['key']} | {c['value1']} | {c['value2']} | {c['similarity']:.3f} | Manual review: potential duplicate |\n")
+        f.write("\n")
+    
+    logger.info(f"Wrote dedup report with {len(candidates)} medium-confidence candidates to {report_path}")
 
 
 def apply_decay_to_entity_facts(conn, dry_run=False, verbose=False):
@@ -572,7 +493,7 @@ def purge_old_archives(conn, dry_run=False, verbose=False):
 
 def log_summary(duplicates_merged: int, decayed_facts: int, decayed_events: int, 
                 decayed_lessons: int, decayed_embeddings: int, archived: int, purged: int, 
-                conflicts_archived: int, conflicts_pending: int, dry_run=False):
+                conflicts_archived: int, conflicts_pending: int, medium_report_count: int = 0, dry_run=False):
     """Log summary to daily memory file."""
     
     total_decayed = decayed_facts + decayed_events + decayed_lessons + decayed_embeddings
@@ -580,6 +501,8 @@ def log_summary(duplicates_merged: int, decayed_facts: int, decayed_events: int,
     mode = " (DRY RUN)" if dry_run else ""
     logger.info(f"Memory decay complete{mode}: {duplicates_merged} duplicates merged, {total_decayed} decayed, {archived} archived, {purged} purged, "
                f"{conflicts_archived} conflicts resolved, {conflicts_pending} pending review")
+    if medium_report_count > 0:
+        logger.info(f"Medium-confidence dedup candidates: {medium_report_count} (see dedup report)")
     
     # Write to daily memory file
     memory_dir = Path.home() / '.openclaw' / 'workspace' / 'memory'
@@ -591,6 +514,8 @@ def log_summary(duplicates_merged: int, decayed_facts: int, decayed_events: int,
         f.write(f"\n### Memory Decay Script ({datetime.now():%H:%M UTC}){mode}\n")
         if duplicates_merged > 0:
             f.write(f"- Duplicates merged: {duplicates_merged}\n")
+        if medium_report_count > 0:
+            f.write(f"- Medium-confidence dedup candidates: {medium_report_count} (see dedup report)\n")
         f.write(f"- Decayed: {total_decayed} total ({decayed_facts} facts, {decayed_events} events, {decayed_lessons} lessons, {decayed_embeddings} embeddings)\n")
         f.write(f"- Archived: {archived} facts (confidence < {ARCHIVE_THRESHOLD})\n")
         if purged > 0:
@@ -615,9 +540,14 @@ def main():
         if skip_dedup:
             logger.info("Skipping duplicate merge (--skip-dedup)")
             duplicates_merged = 0
+            medium_report_count = 0
         else:
             logger.info("Merging duplicates...")
-            duplicates_merged = merge_duplicates(conn, dry_run, verbose)
+            dedup_result = merge_duplicates(conn, dry_run, verbose)
+            duplicates_merged = dedup_result['high_merges']
+            medium_report_count = dedup_result['medium_count']
+            if medium_report_count > 0:
+                write_dedup_report(dedup_result['medium_candidates'], dry_run)
             if dry_run and duplicates_merged > 0:
                 logger.info(f"{duplicates_merged} duplicates would be merged")
         
@@ -642,7 +572,7 @@ def main():
         
         # 6. Log summary
         log_summary(duplicates_merged, decayed_facts, decayed_events, decayed_lessons, decayed_embeddings, 
-                   archived, purged, conflicts_archived, conflicts_pending, dry_run)
+                   archived, purged, conflicts_archived, conflicts_pending, medium_report_count, dry_run)
         
         if not dry_run:
             conn.commit()

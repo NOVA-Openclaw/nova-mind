@@ -80,7 +80,7 @@ def get_db_connection():
     return psycopg2.connect()
 
 
-def lookup_default_visibility(sender_id: str, conn) -> str:
+def lookup_default_visibility(sender_id: str, sender_provider: str, conn) -> str:
     """
     Look up the sender's default_visibility preference by matching
     their SENDER_ID (phone / UUID) to an entity_fact.
@@ -90,11 +90,22 @@ def lookup_default_visibility(sender_id: str, conn) -> str:
     if not sender_id or sender_id == "unknown":
         return "public"
 
-    # Normalise to digits only for phone matching
-    digits_only = re.sub(r"[^0-9]", "", sender_id)
-
     try:
         with conn.cursor() as cur:
+            # Platform-specific ID lookup (highest priority)
+            if sender_provider:
+                platform_match = _platform_id_lookup(sender_id, sender_provider, cur)
+                if platform_match is not None:
+                    cur.execute(
+                        "SELECT value FROM entity_facts WHERE entity_id = %s AND key = 'default_visibility' LIMIT 1",
+                        (platform_match,),
+                    )
+                    row = cur.fetchone()
+                    if row and row[0]:
+                        return row[0]
+
+            # Normalise to digits only for phone matching
+            digits_only = re.sub(r"[^0-9]", "", sender_id)
             if digits_only:
                 cur.execute(
                     """
@@ -134,14 +145,75 @@ def lookup_default_visibility(sender_id: str, conn) -> str:
     return "public"
 
 
-def resolve_source_entity_id(source_name: str, sender_id: str, conn) -> Optional[int]:
+def _platform_id_lookup(sender_id: str, sender_provider: str, cur) -> Optional[int]:
+    """Look up entity by platform-specific ID. Returns entity_id or None."""
+    if not sender_id or sender_id in ("", "unknown") or not sender_provider:
+        return None
+
+    provider = sender_provider.lower().strip()
+
+    # Map provider to the entity_fact key(s) to check
+    if provider == "discord":
+        keys = ("discord_id",)
+    elif provider == "telegram":
+        keys = ("telegram_id",)
+    elif provider == "signal":
+        keys = ("signal_id", "phone", "has_phone_number")
+    elif provider == "whatsapp":
+        keys = ("whatsapp_id", "phone")
+    else:
+        # Unknown provider — fall through
+        return None
+
+    # For signal/whatsapp, also try digits-only match on phone-style keys
+    if provider in ("signal", "whatsapp"):
+        digits_only = re.sub(r"[^0-9]", "", sender_id)
+        if digits_only:
+            cur.execute(
+                """
+                SELECT DISTINCT entity_id FROM entity_facts
+                WHERE key = ANY(%s)
+                  AND REGEXP_REPLACE(value, '[^0-9]', '', 'g') = %s
+                LIMIT 1
+                """,
+                (list(keys), digits_only),
+            )
+            row = cur.fetchone()
+            if row:
+                return row[0]
+
+    # Exact match on platform-specific ID keys
+    cur.execute(
+        """
+        SELECT DISTINCT entity_id FROM entity_facts
+        WHERE key = ANY(%s) AND value = %s
+        LIMIT 1
+        """,
+        (list(keys), sender_id),
+    )
+    row = cur.fetchone()
+    if row:
+        return row[0]
+
+    return None
+
+
+def resolve_source_entity_id(
+    source_name: str, sender_id: str, sender_provider: str, conn
+) -> Optional[int]:
     """Resolve a name/sender_id to a DB entity ID."""
     if not source_name or source_name in ("null", "unknown"):
         return None
 
     try:
         with conn.cursor() as cur:
-            # Try phone/UUID match first
+            # 1. Platform-specific ID lookup (highest priority)
+            if sender_provider:
+                platform_match = _platform_id_lookup(sender_id, sender_provider, cur)
+                if platform_match is not None:
+                    return platform_match
+
+            # 2. Legacy phone/UUID match (fallback)
             if sender_id and sender_id not in ("", "unknown"):
                 digits_only = re.sub(r"[^0-9]", "", sender_id)
                 if digits_only:
@@ -158,7 +230,7 @@ def resolve_source_entity_id(source_name: str, sender_id: str, conn) -> Optional
                     if row:
                         return row[0]
 
-            # Name / nickname match
+            # 3. Name / nickname match (lowest priority)
             cur.execute(
                 """
                 SELECT id FROM entities
@@ -178,12 +250,30 @@ def resolve_source_entity_id(source_name: str, sender_id: str, conn) -> Optional
     return None
 
 
-def find_entity_id(subject_name: str, conn) -> Optional[int]:
-    """Look up entity ID by name/full_name/nickname."""
+def find_entity_id(
+    subject_name: str,
+    conn,
+    sender_id: str = "",
+    sender_provider: str = "",
+    sender_name: str = "",
+) -> Optional[int]:
+    """Look up entity ID by name/full_name/nickname, with optional platform-ID priority."""
     if not subject_name or subject_name in ("null", "unknown"):
         return None
     try:
         with conn.cursor() as cur:
+            # Self-reported facts: subject == sender → use platform ID lookup first
+            if (
+                sender_provider
+                and sender_id
+                and sender_name
+                and subject_name.lower() == sender_name.lower()
+            ):
+                platform_match = _platform_id_lookup(sender_id, sender_provider, cur)
+                if platform_match is not None:
+                    return platform_match
+
+            # Fallback to name matching
             cur.execute(
                 """
                 SELECT id FROM entities
@@ -215,7 +305,14 @@ def normalize_entity_type(etype: str) -> str:
     return "other"
 
 
-def ensure_entity(name: str, entity_type: str, conn) -> Optional[int]:
+def ensure_entity(
+    name: str,
+    entity_type: str,
+    conn,
+    sender_id: str = "",
+    sender_provider: str = "",
+    sender_name: str = "",
+) -> Optional[int]:
     """Insert entity if not already present; return its id."""
     entity_type = normalize_entity_type(entity_type)
     if not name or name in ("null", "unknown"):
@@ -231,7 +328,7 @@ def ensure_entity(name: str, entity_type: str, conn) -> Optional[int]:
                 (name, entity_type),
             )
             conn.commit()
-            return find_entity_id(name, conn)
+            return find_entity_id(name, conn, sender_id, sender_provider, sender_name)
     except Exception as e:
         print(f"[extract_memories] WARNING: Could not ensure entity {name!r}: {e}", file=sys.stderr)
         try:
@@ -565,13 +662,14 @@ def store_extracted(
     data: dict,
     sender_name: str,
     sender_id: str,
+    sender_provider: str,
     src_timestamp: str,
     src_channel_transcript_id: str,
     src_channel_session_id: str,
     conn,
 ) -> None:
     """Persist extracted data to nova_memory tables."""
-    source_entity_id = resolve_source_entity_id(sender_name, sender_id, conn)
+    source_entity_id = resolve_source_entity_id(sender_name, sender_id, sender_provider, conn)
 
     def _store_fact(
         subject_name: str,
@@ -586,9 +684,9 @@ def store_extracted(
         source_citation: Optional[str] = None,
     ) -> None:
         """Find/create entity and store a fact."""
-        entity_id = find_entity_id(subject_name, conn)
+        entity_id = find_entity_id(subject_name, conn, sender_id, sender_provider, sender_name)
         if entity_id is None:
-            entity_id = ensure_entity(subject_name, "person", conn)
+            entity_id = ensure_entity(subject_name, "person", conn, sender_id, sender_provider, sender_name)
         if entity_id is None:
             print(
                 f"[extract_memories] WARNING: Could not resolve entity for {subject_name!r}, skipping fact",
@@ -596,7 +694,7 @@ def store_extracted(
             )
             return
 
-        src_eid = resolve_source_entity_id(source_person, sender_id, conn) if source_person else source_entity_id
+        src_eid = resolve_source_entity_id(source_person, sender_id, sender_provider, conn) if source_person else source_entity_id
 
         action = store_or_reinforce_fact(
             entity_id=entity_id,
@@ -882,15 +980,15 @@ def main() -> int:
 
     try:
         # Look up sender's default visibility preference
-        default_visibility = lookup_default_visibility(sender_id, conn)
+        default_visibility = lookup_default_visibility(sender_id, sender_provider, conn)
 
         # Ensure sender entity exists
         if sender_name and sender_name != "unknown":
-            ensure_entity(sender_name, "person", conn)
+            ensure_entity(sender_name, "person", conn, sender_id, sender_provider, sender_name)
             # If we have a sender_id that looks like a phone number, store it
             # Skip platform IDs (Discord snowflakes, Telegram chat IDs, etc.) — only store actual phone numbers
             if sender_id and sender_id not in ("", "unknown") and sender_provider in ("signal", "whatsapp", "sms", ""):
-                entity_id = find_entity_id(sender_name, conn)
+                entity_id = find_entity_id(sender_name, conn, sender_id, sender_provider, sender_name)
                 if entity_id is not None:
                     digits = re.sub(r"[^0-9+]", "", sender_id)
                     # Only store if it looks like a real phone number (starts with + or has 10-15 digits)
@@ -924,6 +1022,7 @@ def main() -> int:
             data=extracted,
             sender_name=sender_name,
             sender_id=sender_id,
+            sender_provider=sender_provider,
             src_timestamp=src_timestamp,
             src_channel_transcript_id=src_channel_transcript_id,
             src_channel_session_id=src_channel_session_id,

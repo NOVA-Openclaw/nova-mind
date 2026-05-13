@@ -95,7 +95,7 @@ INSERT INTO entity_facts (entity_id, key, value, confidence, visibility, durabil
 -- Frank (person 6) - 5 facts (tests special characters)
 (6, 'employer', 'TechStart Inc', 0.9, 'public', 'long_term', 'observation'),
 (6, 'job_title', 'Head of Marketing & Growth', 0.95, 'public', 'long_term', 'observation'),
-(6, 'favorite_quote', 'Don''t just market—tell a story!', 'conversation', 0.8, 'public', 'observation'),
+(6, 'favorite_quote', 'Don''t just market—tell a story!', 0.8, 'public', 'long_term', 'observation'),
 (6, 'email', 'frank.oreilly@techstart.example', 1.0, 'public', 'permanent', 'identity'),
 (6, 'loves_emojis', '🚀 Uses emojis in all communications', 1.0, 'public', 'long_term', 'observation'),
 

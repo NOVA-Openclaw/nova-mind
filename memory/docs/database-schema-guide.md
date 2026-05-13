@@ -62,14 +62,22 @@ CREATE TABLE entity_facts (
     entity_id INT REFERENCES entities(id),
     key VARCHAR(255) NOT NULL,
     value TEXT NOT NULL,
+    data JSONB,
     confidence FLOAT DEFAULT 1.0,
-    source VARCHAR(255),
     learned_at TIMESTAMP DEFAULT NOW(),
-    data_type VARCHAR(20) DEFAULT 'observation', -- permanent, identity, preference, temporal, observation
-    vote_count INT DEFAULT 1,
-    last_confirmed TIMESTAMP DEFAULT NOW()
+    updated_at TIMESTAMP DEFAULT NOW(),
+    visibility VARCHAR(20) DEFAULT 'public',
+    privacy_scope INTEGER[],
+    extraction_count INTEGER DEFAULT 1,
+    last_confirmed_at TIMESTAMPTZ DEFAULT NOW(),
+    decay_rate REAL,
+    expires TIMESTAMPTZ,
+    durability VARCHAR(20) NOT NULL DEFAULT 'long_term',
+    category TEXT NOT NULL DEFAULT 'observation'
 );
 ```
+
+**Note:** Source attribution moved to `entity_fact_sources` table. See [schema-reference.md](../../database/schema-reference.md).
 
 **Fact categories:**
 - **location:** "San Francisco", "remote"  

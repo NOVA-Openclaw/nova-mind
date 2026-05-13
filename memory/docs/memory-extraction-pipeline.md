@@ -130,7 +130,7 @@ Context: [Last 20 messages for reference resolution]
 **Storage flow:**
 1. Parse and validate JSON
 2. For each category, check existing records
-3. Skip duplicates (reinforce with vote_count++), insert new records
+3. Skip duplicates (reinforce with extraction_count++), insert new records
 4. Set FK source pointers from env vars on facts/opinions/preferences
 5. Update vocabulary table for STT
 6. Log insertion results

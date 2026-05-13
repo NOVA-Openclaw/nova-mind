@@ -14,11 +14,11 @@
 
 ### Authority Rules
 
-1. **Permanent Facts**: All facts from authority entities are marked `data_type='permanent'`
+1. **Permanent Facts**: All facts from authority entities are marked `durability='permanent'`
 2. **Confidence Override**: Authority facts always have `confidence=1.0` regardless of input
 3. **Conflict Resolution**:
    - Authority fact vs. non-authority fact → Authority wins
-   - Authority fact vs. same value → Increment `vote_count`, update `last_confirmed`
+   - Authority fact vs. same value → Increment `extraction_count`, update `last_confirmed_at`
    - Authority fact vs. conflicting authority fact → Update to new value
    - Non-authority vs. authority fact → Rejected with log message
 
@@ -40,7 +40,7 @@ Calculates confidence scores based on source authority:
 
 Enforces authority rules during maintenance operations:
 
-- Permanent facts (`data_type = 'permanent'`) are excluded from confidence decay
+- Permanent facts (`durability = 'permanent'`) are excluded from confidence decay
 - Authority facts are never archived or cleaned up
 - Non-authority facts with conflicting values are evaluated against existing authority facts
 
@@ -49,19 +49,20 @@ Enforces authority rules during maintenance operations:
 Handles conflict resolution at insertion time:
 
 - Checks if the source is an authority entity via `SENDER_NAME` or entity ID lookup
-- Sets `data_type='permanent'` for authority-sourced facts
+- Sets `durability='permanent'` for authority-sourced facts
 - Rejects non-authority insertions that conflict with existing authority facts
-- Increments `vote_count` when authority confirms an existing fact
+- Increments `extraction_count` when authority confirms an existing fact
 
 ### Database Schema
 
 The following columns support authority enforcement:
 
-- `entity_facts.source_entity_id` — Tracks which entity provided the fact
-- `entity_facts.data_type` — Supports 'permanent', 'identity', 'preference', 'temporal', 'observation'
+- `entity_fact_sources.source_entity_id` — Tracks which entity provided the fact (via entity_fact_sources join)
+- `entity_facts.durability` — Supports 'permanent', 'long_term', 'short_term', 'ephemeral'
+- `entity_facts.category` — Free-form text replacing data_type (e.g., 'identity', 'preference', 'observation')
 - `entity_facts.confidence` — Authority facts set to 1.0
-- `entity_facts.vote_count` — Incremented when fact is confirmed
-- `entity_facts.last_confirmed` — Updated when fact is re-stated
+- `entity_facts.extraction_count` — Incremented when fact is confirmed
+- `entity_facts.last_confirmed_at` — Updated when fact is re-stated
 
 ### Authority Detection Flow
 
@@ -74,7 +75,7 @@ store-memories.sh
     ├── Lookup entity by SENDER_NAME → get entity_id
     ├── Compare entity_id to AUTHORITY_ENTITY_ID
     ├── If authority match:
-    │   ├── Set data_type = 'permanent'
+    │   ├── Set durability = 'permanent'
     │   ├── Set confidence = 1.0
     │   └── Override existing conflicting facts
     └── If non-authority:
@@ -128,17 +129,18 @@ cd ~/.openclaw/workspace/nova-mind
 - `[AUTHORITY]` — Authority source detected
 - `[PERMANENT]` — Fact marked as permanent
 - `⚡ AUTHORITY UPDATE` — Authority fact overriding existing fact
-- `✓ Fact confirmed` — Fact re-stated (vote_count++)
+- `✓ Fact confirmed` — Fact re-stated (extraction_count++)
 - `✗ Conflict rejected` — Non-authority attempted override
 
 ### Database Queries
 
 **Check authority facts**:
 ```sql
-SELECT e.name, ef.key, ef.value, ef.data_type, ef.source_entity_id, ef.confidence
+SELECT e.name, ef.key, ef.value, ef.category, efs.source_entity_id, ef.confidence
 FROM entity_facts ef
 JOIN entities e ON e.id = ef.entity_id
-WHERE ef.data_type = 'permanent'
+LEFT JOIN entity_fact_sources efs ON efs.fact_id = ef.id
+WHERE ef.durability = 'permanent'
 ORDER BY ef.updated_at DESC;
 ```
 
@@ -158,9 +160,9 @@ ORDER BY fcl.changed_at DESC;
 ### When to Question Facts
 
 **NEVER question** facts with:
-- `data_type='permanent'`
-- `source_entity_id=2` (I)ruid)
-- High `vote_count` and `confidence`
+- `durability='permanent'`
+- `source_entity_id=2` (I)ruid) via entity_fact_sources
+- High `extraction_count` and `confidence`
 
 **DO question** facts from:
 - Unknown or low-trust sources
@@ -172,10 +174,10 @@ ORDER BY fcl.changed_at DESC;
 ```python
 def should_question_fact(fact):
     # Never question authority facts
-    if fact['data_type'] == 'permanent':
+    if fact['durability'] == 'permanent':
         return False
     
-    if fact['source_entity_id'] == 2:  # I)ruid
+    if fact['source_entity_id'] == 2:         # I)ruid (via entity_fact_sources join)
         return False
     
     # Question low-confidence facts from others
@@ -211,15 +213,22 @@ Potential improvements for future issues:
 | `SENDER_NAME` | (auto-detected) | Name of message sender (used to lookup entity) |
 | `SENDER_ID` | — | Unique sender ID (phone number, UUID) |
 
-### Data Types
+### Durability Levels (`durability` column)
 
-| Type | Description | Decay | Authority |
-|------|-------------|-------|-----------|
+| Level | Description | Decay | Authority |
+|-------|-------------|-------|-----------|
 | `permanent` | Never decays | No | Yes (always) |
-| `identity` | Core identity facts | Slow | Maybe |
-| `preference` | User preferences | Slow | Maybe |
-| `temporal` | Time-sensitive | Fast | Rarely |
-| `observation` | General observations | Normal | No |
+| `long_term` | Core identity/preference facts | Slow | Maybe |
+| `short_term` | Time-sensitive observations | Fast | Rarely |
+| `ephemeral` | Transient, quickly forgotten | Fastest | No |
+
+### Category Usage (`category` column, free-form)
+
+Categories replace the old `data_type` enum with free-form text. Common values:
+- `identity` — Core identity facts
+- `preference` — User preferences
+- `observation` — General observations
+- `temporal` — Time-sensitive information
 
 ## Troubleshooting
 
@@ -240,7 +249,7 @@ Potential improvements for future issues:
 ### Non-Authority Override Succeeded
 
 **Check**:
-1. Was the existing fact from authority? Check `source_entity_id`
+1. Was the existing fact from authority? Check `entity_fact_sources.source_entity_id`
 2. Was confidence higher? Check `confidence` values
 3. Review the memory maintenance logs
 

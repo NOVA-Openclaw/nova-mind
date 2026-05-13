@@ -1,6 +1,6 @@
 # Database Schema Reference
 
-*Auto-generated: 2026-05-12T08:28:42.832658*
+*Auto-generated: 2026-05-13T05:58:20.896827*
 
 ## Tables
 
@@ -8,7 +8,7 @@
 |-------|-------------|---------|
 | agent_actions | Agent action definitions. READ-ONLY except Newhart. | 8 |
 | agent_aliases | Agent aliases for flexible mention matching. Supports case-insensitive routing. | 4 |
-| agent_bootstrap_context | Bootstrap context entries. READ-ONLY except Newhart (Agent Design/Management domain). | 9 |
+| agent_bootstrap_context | Bootstrap context entries. Agents may write to their own AGENT-scoped records (matching their db user). Newhart (Agent Design/Management domain) manages schema, cross-agent entries, and GLOBAL/UNIVERSAL-scoped records. | 9 |
 | agent_chat | Agent messaging. INSERT allowed for all, UPDATE/DELETE only Newhart. | 6 |
 | agent_chat_processed | Message processing state. Agents can track, Newhart manages. | 7 |
 | agent_domains | Agent domain assignments. READ-ONLY except Newhart. | 8 |
@@ -31,8 +31,9 @@
 | comms_state | Per-platform communications tracking state (seen IDs, cursors). Replaces hermes-social-state.json. Owner: Communications domain (hermes). | 5 |
 | entities | People, AIs, organizations. NOVA has full access. Use entity_facts for attributes. | 20 |
 | entity_fact_conflicts | Conflicts between entity facts requiring resolution. Part of the truth reconciliation system. | 13 |
-| entity_facts | Key-value facts about entities. Check current_timezone for I)ruid before time-based actions. | 21 |
-| entity_facts_archive | Archived entity facts from decay/cleanup processes. Historical record of previously stored knowledge. | 22 |
+| entity_facts | Key-value facts about entities. Check current_timezone for I)ruid before time-based actions. | 19 |
+| entity_fact_sources | Tracks the origin and attribution of entity facts. One row per fact-source pair. | 7 |
+| entity_facts_archive | Archived entity facts from decay/cleanup processes. Historical record of previously stored knowledge. | 20 |
 | entity_relationships | Relationships between entities (family, work, friendship, etc). | 8 |
 | event_entities | Links events to entities (people, orgs, AIs). Many-to-many relationship table. | 3 |
 | event_places | Links events to places/locations. Many-to-many relationship table. | 2 |
@@ -102,6 +103,12 @@
 | workflow_steps | Ordered steps in a workflow with agent assignments and deliverable specifications | 14 |
 | workflows | Defines multi-agent workflows with ordered steps and deliverable handoffs | 13 |
 | works | - | 14 |
+
+## Functions
+
+| Function | Description |
+|----------|-------------|
+| `merge_facts(survivor_id, absorbed_id)` | Merges two entity_fact rows into one, combining source attributions and summing extraction counts. |
 
 ## Quick Reference
 

@@ -17,7 +17,7 @@ The confidence decay system applies to the following tables with different param
 | Table | Decay Rate | Interval | Floor | Notes |
 |-------|------------|----------|-------|-------|
 | lessons | 0.95 | 30 days | 0.1 | Based on last_referenced |
-| entity_facts | 0.95 | 30 days | 0.1 | Excludes data_type='permanent' |
+| entity_facts | 0.95 | 30 days | 0.1 | Excludes durability='permanent' |
 | events | 0.98 | 60 days | 0.2 | Slower decay for historical events |
 | media_tags | 0.95 | 30 days | 0.1 | |
 | memory_embeddings | 0.95 | 30 days | 0.1 | |
@@ -34,15 +34,15 @@ The following tables and data are explicitly excluded from confidence decay:
 
 - **`agent_domains`** — Permanent role assignments that define agent capabilities
 - **`delegation_knowledge`** — VIEW on entity_facts containing permanent data
-- **`entity_facts` where `data_type = 'permanent'`** — Facts marked as permanent knowledge
+- **`entity_facts` where `durability = 'permanent'`** — Facts marked as permanent knowledge
 - **All `*_archive` tables** — Historical records preserved for audit/reference
 
 ## Reinforcement Mechanism
 
 The system includes mechanisms to prevent decay of actively used knowledge:
 
-- **vote_count increments** — When facts are reconfirmed through use or validation
-- **last_confirmed updates** — Reset the decay clock when knowledge is actively verified
+- **extraction_count increments** — When facts are reconfirmed through extraction or reinforcement
+- **last_confirmed_at updates** — Reset the decay clock when knowledge is actively verified
 - **last_referenced tracking** — Updates when information is accessed or retrieved
 
 ## Implementation Details
@@ -57,7 +57,7 @@ new_confidence = max(current_confidence * decay_rate, floor_value)
 ### Timing Logic
 
 - Decay only applies to records older than the specified interval
-- The `last_referenced` or `last_confirmed` timestamp determines eligibility
+- The `last_referenced` or `last_confirmed_at` timestamp determines eligibility
 - Daily execution ensures consistent, gradual degradation
 
 ### Safety Measures

@@ -43,7 +43,7 @@ def find_existing_fact(entity_id: int, key: str, new_value: str, conn=None) -> O
         conn: Optional database connection
     
     Returns:
-        Dict with id, value, confidence, confirmation_count if found, else None
+        Dict with id, value, confidence, extraction_count if found, else None
     """
     should_close = False
     if conn is None:
@@ -55,7 +55,7 @@ def find_existing_fact(entity_id: int, key: str, new_value: str, conn=None) -> O
         
         # First try exact match (case-insensitive)
         cur.execute("""
-            SELECT id, value, confidence, confirmation_count 
+            SELECT id, value, confidence, extraction_count 
             FROM entity_facts
             WHERE entity_id = %s 
               AND LOWER(key) = LOWER(%s) 
@@ -69,12 +69,12 @@ def find_existing_fact(entity_id: int, key: str, new_value: str, conn=None) -> O
                 'id': result[0],
                 'value': result[1],
                 'confidence': result[2],
-                'confirmation_count': result[3]
+                'extraction_count': result[3]
             }
         
         # Try fuzzy match using pg_trgm similarity (threshold > 0.85)
         cur.execute("""
-            SELECT id, value, confidence, confirmation_count,
+            SELECT id, value, confidence, extraction_count,
                    similarity(LOWER(value), LOWER(%s)) as sim
             FROM entity_facts
             WHERE entity_id = %s 
@@ -90,7 +90,7 @@ def find_existing_fact(entity_id: int, key: str, new_value: str, conn=None) -> O
                 'id': result[0],
                 'value': result[1],
                 'confidence': result[2],
-                'confirmation_count': result[3],
+                'extraction_count': result[3],
                 'similarity': result[4]
             }
         
@@ -101,20 +101,20 @@ def find_existing_fact(entity_id: int, key: str, new_value: str, conn=None) -> O
             conn.close()
 
 
-def reinforce_confidence(current: float, confirmation_count: int) -> float:
+def reinforce_confidence(current: float, extraction_count: int) -> float:
     """
-    Increase confidence when data is confirmed (another 'vote').
+    Increase confidence when data is confirmed (another extraction).
     
     Uses diminishing returns formula: boost = 0.15 / (1 + count * 0.2)
     
     Args:
         current: Current confidence score (0.0-1.0)
-        confirmation_count: Number of previous confirmations
+        extraction_count: Number of previous extractions
     
     Returns:
         New confidence score (capped at 1.0)
     """
-    boost = 0.15 / (1 + confirmation_count * 0.2)
+    boost = 0.15 / (1 + extraction_count * 0.2)
     return min(1.0, current + boost)
 
 
@@ -126,6 +126,8 @@ def store_or_reinforce_fact(
     source: str = 'direct',
     visibility: str = 'public',
     visibility_reason: Optional[str] = None,
+    durability: str = 'long_term',
+    category: str = 'observation',
     conn=None
 ) -> Dict[str, Any]:
     """
@@ -141,6 +143,8 @@ def store_or_reinforce_fact(
         source: Source type ('direct', 'inferred', 'external')
         visibility: Visibility level ('public', 'private', etc.)
         visibility_reason: Optional reason for visibility level
+        durability: Durability level ('permanent', 'long_term', 'short_term', 'ephemeral')
+        category: Fact category ('observation', 'preference', 'identity', etc.)
         conn: Optional database connection
     
     Returns:
@@ -163,18 +167,29 @@ def store_or_reinforce_fact(
             # REINFORCE existing fact
             new_confidence = reinforce_confidence(
                 existing['confidence'],
-                existing['confirmation_count']
+                existing['extraction_count']
             )
             
             cur = conn.cursor()
             cur.execute("""
                 UPDATE entity_facts SET
                     confidence = %s,
-                    confirmation_count = confirmation_count + 1,
+                    extraction_count = extraction_count + 1,
                     last_confirmed_at = NOW(),
                     updated_at = NOW()
                 WHERE id = %s
             """, (new_confidence, existing['id']))
+
+            # Upsert source attribution
+            if source_entity_id is not None:
+                cur.execute("""
+                    INSERT INTO entity_fact_sources (fact_id, source_entity_id, attribution_count, first_seen, last_seen)
+                    VALUES (%s, %s, 1, NOW(), NOW())
+                    ON CONFLICT (fact_id, source_entity_id)
+                    DO UPDATE SET
+                        attribution_count = entity_fact_sources.attribution_count + 1,
+                        last_seen = NOW()
+                """, (existing['id'], source_entity_id))
             
             conn.commit()
             
@@ -183,7 +198,7 @@ def store_or_reinforce_fact(
                 'fact_id': existing['id'],
                 'confidence': new_confidence,
                 'previous_confidence': existing['confidence'],
-                'confirmation_count': existing['confirmation_count'] + 1
+                'extraction_count': existing['extraction_count'] + 1
             }
         
         else:
@@ -193,14 +208,9 @@ def store_or_reinforce_fact(
             cur = conn.cursor()
             
             # Build INSERT query dynamically based on optional fields
-            cols = ['entity_id', 'key', 'value', 'confidence', 'confirmation_count', 'source', 'visibility']
-            vals = [entity_id, key, value, initial_confidence, 1, source, visibility]
+            cols = ['entity_id', 'key', 'value', 'confidence', 'extraction_count', 'visibility', 'durability', 'category']
+            vals = [entity_id, key, value, initial_confidence, 1, visibility, durability, category]
             placeholders = ['%s'] * len(vals)
-            
-            if source_entity_id:
-                cols.append('source_entity_id')
-                vals.append(source_entity_id)
-                placeholders.append('%s')
             
             if visibility_reason:
                 cols.append('visibility_reason')
@@ -215,6 +225,17 @@ def store_or_reinforce_fact(
             
             cur.execute(query, vals)
             fact_id = cur.fetchone()[0]
+
+            # Insert source attribution
+            if source_entity_id is not None:
+                cur.execute("""
+                    INSERT INTO entity_fact_sources (fact_id, source_entity_id, attribution_count, first_seen, last_seen)
+                    VALUES (%s, %s, 1, NOW(), NOW())
+                    ON CONFLICT (fact_id, source_entity_id)
+                    DO UPDATE SET
+                        attribution_count = entity_fact_sources.attribution_count + 1,
+                        last_seen = NOW()
+                """, (fact_id, source_entity_id))
             
             conn.commit()
             
@@ -222,7 +243,7 @@ def store_or_reinforce_fact(
                 'action': 'created',
                 'fact_id': fact_id,
                 'confidence': initial_confidence,
-                'confirmation_count': 1
+                'extraction_count': 1
             }
     
     finally:
@@ -286,6 +307,7 @@ if __name__ == '__main__':
         # Clean up test data
         print("\n4. Cleaning up test data...")
         cur = conn.cursor()
+        cur.execute("DELETE FROM entity_fact_sources WHERE fact_id = %s", (fact_id,))
         cur.execute("DELETE FROM entity_facts WHERE id = %s", (fact_id,))
         conn.commit()
         

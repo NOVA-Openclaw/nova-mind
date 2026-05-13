@@ -1,8 +1,6 @@
 # Source Authority
 
-## Overview
-
-The source authority feature ensures that facts from designated authority entities (e.g., I)ruid) are treated as permanent, authoritative, and immune to being overridden by non-authority sources.
+> **Note:** The Fact Judgement & Testimony Model (`fact-judgement-model.md`) **supersedes** the old "authority wins" approach described here for contradiction handling. Under the new model, contradictory facts are no longer rejected at write time — they persist alongside authority facts for query-time reasoning. Authority self-reports still carry the highest credibility weight, but that weight is applied at query time rather than as a write-time lock. This file remains the reference for authority detection, confidence scoring, and maintenance implementation.
 
 > **Note:** The original grammar parser (`grammar_parser/`) that implemented this feature has been removed (#174). Authority detection and conflict resolution now follow the patterns described below, implemented in `store-memories.sh`, `confidence_helper.py`, and `memory-maintenance.py`.
 

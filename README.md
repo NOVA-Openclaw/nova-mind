@@ -23,6 +23,30 @@ nova-mind is the complete agent mind stack for NOVA. It provides:
 
 All three subsystems share a single PostgreSQL database (`{username}_memory`) and a unified installer.
 
+### Memory Maintenance
+
+Memory maintenance is handled by a **unified** script `memory/scripts/memory-maintenance.py` that replaces the separate embedding scripts (`embed-full-database.py`, `embed-memories.py`, `embed-research.py`, `embed-library.py`) and the previous memory maintenance logic. It runs as a 9-phase pipeline:
+
+1. **Cooldown check** — 4-hour gate prevents redundant runs (`--force` to bypass, `--state-file` override)
+2. **Embed** — Absorbs embed-full-database.py, embed-memories.py, embed-research.py
+3. **Cross-key consolidation** — pgvector cosine similarity ≥0.92
+4. **Same-key dedup** — pg_trgm similarity, 3-tier (high/medium/low)
+5. **Confidence decay** — Exponential, durability-based rates
+6. **Ghost entity cleanup** — Pattern-based, zero-fact orphans, low-fact review
+7. **Entity-level dedup** — ≥80% auto-merge via `merge_entities()`, <80% review queue
+8. **Clean orphaned embeddings**
+9. **Archive & purge** low-confidence facts
+
+**Flags:** `--dry-run`, `--verbose`, `--force`, `--state-file`, `--skip-embed`, `--skip-consolidation`, `--skip-dedup`, `--skip-decay`, `--skip-ghost-cleanup`, `--skip-entity-dedup`
+
+**Scheduling:** Removed from crontab. Now triggered from the HEARTBEAT idle cascade as priority #2 (after peer agent messages, before pending tasks). A 4-hour cooldown gate prevents redundant runs. A unique index (`uq_memory_embeddings_source`) prevents duplicate embeddings.
+
+**New DB functions:** `merge_entities(survivor_id, absorbed_id)` dynamically discovers FK references, handles entity_facts same-key merging, transfers nicknames, and manages memory_embeddings.
+
+Closes issues: #216 (entity dedup), #202 (cross-key consolidation), #200 (ghost entity cleanup), #203 (confidence decay with archiving).
+
+---
+
 ## Structure
 
 ```

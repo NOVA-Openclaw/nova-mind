@@ -2,6 +2,9 @@
 """
 Embed full database for semantic search.
 Creates embeddings for all relevant tables in nova_memory.
+
+DEPRECATED: This script has been absorbed into memory-maintenance.py.
+Use: python3 memory-maintenance.py (embedding is Phase 2 of the unified pipeline)
 """
 
 import os

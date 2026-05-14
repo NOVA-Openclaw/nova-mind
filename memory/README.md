@@ -52,7 +52,7 @@ This is the actual installer. It:
 - Installs skills to `~/.openclaw/skills/`
 - Sets up a Python virtual environment with required dependencies
 - Patches OpenClaw config to auto-enable hooks (if `enable-hooks.sh` is present)
-- Configures a cron job for daily memory maintenance
+- Configures memory maintenance (triggered from HEARTBEAT idle cascade)
 - Verifies installation is working
 
 **Common flags:**
@@ -906,35 +906,54 @@ A centralized configuration file `embedding-config.json` is used by all embeddin
 
 The file resides in the `memory/scripts/` directory and is automatically loaded by:
 
-- `embed-memories.py`
-- `embed-library.py`
-- `embed-full-database.py`
+- `memory-maintenance.py` (unified, preferred)
 - `proactive-recall.py`
-- `embed-research.py` (new)
-
-### New Script: `embed-research.py`
-
-A new script `embed-research.py` generates embeddings for research findings in the `research_*` tables, enabling semantic search across research content.
 
 ### Migration Notes
 
 - The `memory_embeddings` table column changed from `vector(1536)` to `vector(1024)`.
-- Existing embeddings were cleared and must be regenerated using the new scripts.
+- Existing embeddings were cleared and must be regenerated.
 - The `semantic-recall` hook no longer requires an `OPENAI_API_KEY` environment variable.
 
-### Running Embedding Scripts
+### Unified Memory Maintenance
 
-To regenerate all embeddings after the migration:
+The separate embedding scripts (`embed-full-database.py`, `embed-memories.py`, `embed-research.py`, `embed-library.py`) have been **absorbed** into a single unified script `memory/scripts/memory-maintenance.py`. This script runs a full 9-phase pipeline:
+
+| Phase | Description |
+|-------|-------------|
+| 1. Cooldown check | 4-hour gate; `--force` to bypass |
+| 2. Embed | Replaces all old embedding scripts |
+| 3. Cross-key consolidation | pgvector cosine similarity ≥0.92 |
+| 4. Same-key dedup | pg_trgm similarity, 3-tier |
+| 5. Confidence decay | Exponential, durability-based rates |
+| 6. Ghost entity cleanup | Zero-fact orphans → archive |
+| 7. Entity-level dedup | ≥80% auto-merge via `merge_entities()` |
+| 8. Clean orphaned embeddings | Remove embeddings with no source |
+| 9. Archive & purge | Remove low-confidence archived facts |
+
+**Flags:** `--dry-run`, `--verbose`, `--force`, `--state-file`, `--skip-embed`, `--skip-consolidation`, `--skip-dedup`, `--skip-decay`, `--skip-ghost-cleanup`, `--skip-entity-dedup`
+
+**New DB Objects:**
+- `merge_entities(survivor_id, absorbed_id)` — dynamically discovers FK references, merges facts, transfers nicknames, handles embeddings
+- `uq_memory_embeddings_source` — unique index on `memory_embeddings(source_type, source_id)`
+
+**Scheduling:** Removed from crontab. Now triggered from the HEARTBEAT idle cascade as priority #2 (after peer agent messages, before pending tasks). The 4-hour cooldown prevents redundant runs.
+
+The old scripts remain in the repo for backward compatibility but are **deprecated** — they will not receive further updates.
+
+### Running Embedding (if you need only embedding)
+
+Run the full maintenance pipeline:
 
 ```bash
 cd memory/scripts
-./embed-full-database.py
+python3 memory-maintenance.py
 ```
 
-For incremental updates, use the cron script:
+To run only the embedding phase:
 
 ```bash
-./embed-memories-cron.sh
+python3 memory-maintenance.py --skip-consolidation --skip-dedup --skip-decay --skip-ghost-cleanup --skip-entity-dedup
 ```
 
 ## Resource Policies (1Password Integration)
@@ -1028,7 +1047,7 @@ PRs welcome! Areas that need work:
 - [x] Confidence decay over time (schema support added 2026-02-04)
 - [ ] Vector embeddings for semantic search
 - [ ] Contradiction detection
-- [ ] Automated confidence decay job (cron)
+- [x] Unified memory maintenance (merge_entities, cross-key consolidation, ghost cleanup, confidence decay with archiving)
 
 ## License
 

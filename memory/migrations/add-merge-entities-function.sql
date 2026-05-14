@@ -69,6 +69,14 @@ BEGIN
     END LOOP;
 
     -- 3. Handle memory_embeddings (not a proper FK — source_id is text)
+    -- Delete absorbed entity's embedding if survivor already has one
+    DELETE FROM memory_embeddings
+    WHERE source_type = 'entity' AND source_id = absorbed_id::text
+      AND EXISTS (
+        SELECT 1 FROM memory_embeddings
+        WHERE source_type = 'entity' AND source_id = survivor_id::text
+      );
+    -- Move any remaining (survivor didn't have one)
     UPDATE memory_embeddings
     SET source_id = survivor_id::text
     WHERE source_type = 'entity' AND source_id = absorbed_id::text;

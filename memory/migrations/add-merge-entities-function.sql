@@ -38,6 +38,8 @@ BEGIN
 
         IF FOUND THEN
             -- Both have facts with same key: merge them via merge_facts()
+            -- Move absorbed fact to survivor entity first, so merge_facts sees same entity_id
+            UPDATE entity_facts SET entity_id = survivor_id WHERE id = ef1.id;
             PERFORM merge_facts(existing_fact.id, ef1.id);
         ELSE
             -- Unique key on absorbed entity: just update the entity_id

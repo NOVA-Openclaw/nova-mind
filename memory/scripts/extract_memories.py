@@ -364,6 +364,15 @@ def store_or_reinforce_fact(
     source_citation: Optional[str] = None,
 ) -> str:
     """Insert fact or reinforce if already exists. Returns 'created' or 'reinforced'."""
+    if src_channel_transcript_id:
+        print(f"[extract_memories]   channel_transcript_id={src_channel_transcript_id}", file=sys.stderr)
+    else:
+        print(f"[extract_memories]   channel_transcript_id NOT SET", file=sys.stderr)
+    if src_channel_session_id:
+        print(f"[extract_memories]   channel_session_id={src_channel_session_id}", file=sys.stderr)
+    else:
+        print(f"[extract_memories]   channel_session_id NOT SET", file=sys.stderr)
+
     with conn.cursor() as cur:
         existing = find_existing_fact(entity_id, key, value, cur)
         if existing:
@@ -571,7 +580,10 @@ TEMPLATE:
 RULES:
 - Source attribution is handled automatically. Do NOT include source_person in your output. The sender of the message is always the source.
 - "subject" is who the fact is ABOUT (may differ from the sender for non-self-reported facts).
-- Each piece of information produces EXACTLY ONE entry in "facts". Never repeat the same information.
+- A message may contain multiple distinct facts. Create one entry per distinct fact.
+- Do NOT duplicate the same information under different keys. Each piece of information appears EXACTLY ONCE.
+- Example: "I like pizza and my favorite color is blue" → TWO facts (food_preference + favorite_color), not one.
+- Example: "I prefer Cherry Coke" → ONE fact (soda_preference), not two entries saying the same thing differently.
 - The "category" field handles classification. Preferences, opinions, decisions, moods, routines — ALL go in "facts" with the appropriate category value.
 - "key" must be a descriptive snake_case identifier (e.g., favorite_animals, current_city, opinion_on_vim, decision_package_manager). NEVER use generic keys like "preference_preference" or "observation_observation".
 - Milestones are events — put them in "events".
@@ -870,6 +882,12 @@ def main() -> int:
     src_channel_transcript_id = os.environ.get("SOURCE_CHANNEL_TRANSCRIPT_ID", "").strip()
     src_channel_session_id = os.environ.get("SOURCE_CHANNEL_SESSION_ID", "").strip()
     sender_provider = os.environ.get("SENDER_PROVIDER", "").strip()
+
+    print(
+        f"[extract_memories] Channel context: transcript_id={src_channel_transcript_id!r} "
+        f"session_id={src_channel_session_id!r}",
+        file=sys.stderr,
+    )
     model = os.environ.get("MEMORY_EXTRACTION_MODEL", DEFAULT_MODEL).strip() or DEFAULT_MODEL
 
     print(

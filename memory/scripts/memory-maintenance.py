@@ -61,6 +61,21 @@ logger = logging.getLogger("memory-maintenance")
 DEFAULT_STATE_FILE = os.path.expanduser("~/.openclaw/state/memory-maintenance-last-run.json")
 COOLDOWN_HOURS = 4
 EMBED_BATCH_SIZE = 64
+ARCHIVE_THRESHOLD = 0.1
+MIN_AGE_DAYS = 7
+
+DECAY_RATES = {
+    'permanent': 0,
+    'long_term': 0.005,
+    'short_term': 0.02,
+    'ephemeral': 0.1,
+}
+
+TABLE_DECAY_RATES = {
+    'events': 0.001,
+    'lessons': 0.001,
+    'memory_embeddings': 0.01,
+}
 
 
 def load_embedding_config():
@@ -156,10 +171,10 @@ def _store_embeddings(cur, source_type, items, embeddings):
         emb_json = json.dumps(emb)
         cur.execute(
             """
-            INSERT INTO memory_embeddings (source_type, source_id, text, embedding)
+            INSERT INTO memory_embeddings (source_type, source_id, content, embedding)
             VALUES (%s, %s, %s, %s)
             ON CONFLICT (source_type, source_id) DO UPDATE
-            SET text = EXCLUDED.text,
+            SET content = EXCLUDED.content,
                 embedding = EXCLUDED.embedding,
                 created_at = NOW()
             """,
@@ -411,77 +426,227 @@ def cross_key_consolidation(conn, dry_run=False, verbose=False):
 
 
 # ---------------------------------------------------------------------------
-# Phase 4: Same-key deduplication
+# Phase 4: Same-key deduplication (original production logic preserved)
 # ---------------------------------------------------------------------------
 def merge_duplicates(conn, dry_run=False, verbose=False):
+    """Find and merge/categorize duplicate entity_facts using three-tier confidence system.
+
+    Uses pg_trgm similarity() for text comparison. Three tiers:
+    - High (similarity >= 0.80): auto-merge via merge_facts(survivor_id, absorbed_id)
+        survivor = higher confidence fact; extraction_counts are summed by merge_facts
+    - Medium (0.50-0.79 similarity): add to daily report for manual review
+    - Low (< 0.50): skip entirely
+    """
+    cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+
+    cur.execute("""
+        SELECT
+            f1.id as id1, f2.id as id2,
+            f1.entity_id, f1.key,
+            f1.value as value1, f2.value as value2,
+            f1.confidence as conf1, f2.confidence as conf2,
+            f1.last_confirmed_at as date1, f2.last_confirmed_at as date2,
+            similarity(LOWER(f1.value), LOWER(f2.value)) as sim
+        FROM entity_facts f1
+        JOIN entity_facts f2 ON
+            f1.entity_id = f2.entity_id
+            AND f1.key = f2.key
+            AND f1.id < f2.id
+        WHERE similarity(LOWER(f1.value), LOWER(f2.value)) >= 0.50
+        ORDER BY sim DESC, f1.id, f2.id
+    """)
+
+    pairs = cur.fetchall()
+
+    absorbed_ids = set()
+    high_merges = 0
+    medium_candidates = []
+
+    for row in pairs:
+        id1, id2 = row['id1'], row['id2']
+
+        if id1 in absorbed_ids or id2 in absorbed_ids:
+            continue
+
+        sim = row['sim']
+
+        if sim >= 0.80:
+            if row['conf1'] > row['conf2']:
+                survivor, absorbed = id1, id2
+            elif row['conf2'] > row['conf1']:
+                survivor, absorbed = id2, id1
+            elif row['date1'] and row['date2'] and row['date1'] > row['date2']:
+                survivor, absorbed = id1, id2
+            elif row['date2'] and row['date1'] and row['date2'] > row['date1']:
+                survivor, absorbed = id2, id1
+            else:
+                survivor, absorbed = (id1, id2) if id1 < id2 else (id2, id1)
+
+            if not dry_run:
+                cur.execute("SELECT merge_facts(%s, %s)", (survivor, absorbed))
+
+            absorbed_ids.add(absorbed)
+            high_merges += 1
+
+            if verbose:
+                logger.info(f"  [high, sim={sim:.2f}] {row['key']}: auto-merged ID {absorbed} into ID {survivor}")
+
+        elif sim >= 0.50:
+            medium_candidates.append({
+                'id1': id1, 'id2': id2,
+                'entity_id': row['entity_id'], 'key': row['key'],
+                'value1': row['value1'], 'value2': row['value2'],
+                'similarity': sim
+            })
+            if verbose:
+                logger.info(f"  [medium, sim={sim:.2f}] {row['key']}: '{row['value1']}' vs '{row['value2']}' — flagged for review")
+
+    if verbose:
+        logger.info(f"Found {high_merges} high-confidence merges, {len(medium_candidates)} medium-confidence candidates")
+
+    if medium_candidates:
+        write_dedup_report(medium_candidates, dry_run)
+
+    return {'high_merges': high_merges, 'medium_count': len(medium_candidates), 'medium_candidates': medium_candidates}
+
+
+def write_dedup_report(candidates, dry_run=False):
+    """Write medium-confidence dedup candidates to daily report file."""
+    if not candidates:
+        return
+    logs_dir = Path.home() / '.openclaw' / 'logs'
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    today = datetime.now().strftime('%Y-%m-%d')
+    report_path = logs_dir / f'dedup-report-{today}.md'
+    mode_str = " (DRY RUN)" if dry_run else ""
+    with open(report_path, 'w') as f:
+        f.write(f"# Duplicate Detection Report — {today}{mode_str}\n\n")
+        f.write("Medium-confidence candidates (0.50–0.79 similarity) for manual review:\n\n")
+        for c in candidates:
+            f.write(f"- fact {c['id1']} vs {c['id2']} (entity {c['entity_id']}, key={c['key']}): "
+                    f"'{c['value1']}' vs '{c['value2']}' (sim={c['similarity']:.3f})\n")
+    logger.info(f"Wrote dedup report with {len(candidates)} candidates to {report_path}")
+
+
+# ---------------------------------------------------------------------------
+# Phase 5: Confidence decay (original production logic preserved)
+# ---------------------------------------------------------------------------
+import math
+
+
+def calculate_decay(durability, days_since_confirmed, custom_rate=None):
+    """Calculate confidence decay factor based on durability and time."""
+    if days_since_confirmed <= 0:
+        return 1.0
+    rate = custom_rate if custom_rate is not None else DECAY_RATES.get(durability, 0.01)
+    return math.exp(-rate * days_since_confirmed)
+
+
+def apply_decay_to_entity_facts(conn, dry_run=False, verbose=False):
+    """Apply confidence decay to entity_facts table."""
     cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
     cur.execute("""
-        SELECT key, value, entity_id, COUNT(*) AS cnt, MAX(confidence) AS max_conf, MIN(id) AS survivor_id
+        SELECT id, entity_id, key, durability, confidence,
+               last_confirmed_at, decay_rate, expires
         FROM entity_facts
-        GROUP BY key, value, entity_id
-        HAVING COUNT(*) > 1
-    """)
-    groups = cur.fetchall()
-    total_merged = 0
-    for g in groups:
-        key, value, entity_id = g["key"], g["value"], g["entity_id"]
-        survivor_id = g["survivor_id"]
-        cur.execute(
-            "SELECT id FROM entity_facts WHERE key = %s AND value = %s AND entity_id = %s AND id != %s",
-            (key, value, entity_id, survivor_id),
-        )
-        for dup in cur.fetchall():
-            if not dry_run:
-                cur.execute("SELECT merge_facts(%s, %s)", (survivor_id, dup[0]))
-            total_merged += 1
-            if verbose:
-                logger.info(f"  [same-key] merged duplicate fact {dup[0]} into {survivor_id}")
-    return total_merged
+        WHERE durability != 'permanent'
+          AND confidence > %s
+    """, (ARCHIVE_THRESHOLD,))
+    rows = cur.fetchall()
+    updates = []
+    for row in rows:
+        if row['last_confirmed_at'] is None:
+            continue
+        days_since = (datetime.now(timezone.utc) - row['last_confirmed_at']).days
+        if days_since <= 0:
+            continue
+        if row['expires'] is not None and row['expires'] < datetime.now(timezone.utc):
+            decay_factor = 0.0
+        else:
+            decay_factor = calculate_decay(row['durability'], days_since, row['decay_rate'])
+        new_confidence = row['confidence'] * decay_factor
+        if abs(new_confidence - row['confidence']) > 0.001:
+            updates.append({'id': row['id'], 'new_confidence': new_confidence})
+    if verbose:
+        logger.info(f"Entity facts to decay: {len(updates)}")
+    if not dry_run and updates:
+        psycopg2.extras.execute_batch(cur, """
+            UPDATE entity_facts SET confidence = %(new_confidence)s, updated_at = NOW() WHERE id = %(id)s
+        """, updates, page_size=100)
+    return len(updates)
 
 
-# ---------------------------------------------------------------------------
-# Phase 5: Confidence decay
-# ---------------------------------------------------------------------------
+def apply_decay_to_table(conn, table_name, decay_rate, dry_run=False, verbose=False):
+    """Apply confidence decay to a specific table."""
+    cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    cur.execute(f"""
+        SELECT id, confidence, last_confirmed_at FROM {table_name} WHERE confidence > %s
+    """, (ARCHIVE_THRESHOLD,))
+    rows = cur.fetchall()
+    updates = []
+    for row in rows:
+        if row['last_confirmed_at'] is None:
+            continue
+        days_since = (datetime.now(timezone.utc) - row['last_confirmed_at']).days
+        if days_since <= 0:
+            continue
+        decay_factor = math.exp(-decay_rate * days_since)
+        new_confidence = row['confidence'] * decay_factor
+        if abs(new_confidence - row['confidence']) > 0.001:
+            updates.append({'id': row['id'], 'new_confidence': new_confidence})
+    if verbose and updates:
+        logger.info(f"{table_name} to decay: {len(updates)}")
+    if not dry_run and updates:
+        psycopg2.extras.execute_batch(cur, f"""
+            UPDATE {table_name} SET confidence = %(new_confidence)s, updated_at = NOW() WHERE id = %(id)s
+        """, updates, page_size=100)
+    return len(updates)
+
+
 def apply_decay(conn, args):
-    cur = conn.cursor()
-    for cutoff_days, decay_factor in [(30, 0.95), (60, 0.90), (90, 0.80)]:
-        cur.execute("""
-            UPDATE entity_facts
-            SET confidence = confidence * %s
-            WHERE created_at < NOW() - INTERVAL '%s days'
-              AND confidence > %s
-        """, (decay_factor, cutoff_days, decay_factor))
-        if args.verbose:
-            logger.info(f"  Applied {decay_factor}x decay to facts older than {cutoff_days} days")
+    """Run confidence decay across all tables."""
+    decayed_facts = apply_decay_to_entity_facts(conn, args.dry_run, args.verbose)
+    decayed_events = apply_decay_to_table(conn, 'events', TABLE_DECAY_RATES['events'], args.dry_run, args.verbose)
+    decayed_lessons = apply_decay_to_table(conn, 'lessons', TABLE_DECAY_RATES['lessons'], args.dry_run, args.verbose)
+    decayed_embeddings = apply_decay_to_table(conn, 'memory_embeddings', TABLE_DECAY_RATES['memory_embeddings'], args.dry_run, args.verbose)
+    return decayed_facts, decayed_events, decayed_lessons, decayed_embeddings
 
 
 def archive_low_confidence(conn, dry_run=False, verbose=False):
+    """Move low-confidence entity_facts to archive table."""
     cur = conn.cursor()
-    cur.execute("""
-        INSERT INTO entity_facts_archive (original_id, key, value, confidence, entity_id, created_at, archived_at)
-        SELECT id, key, value, confidence, entity_id, created_at, NOW()
-        FROM entity_facts
-        WHERE confidence < 0.5
-          AND created_at < NOW() - INTERVAL '7 days'
-    """)
-    archived = cur.rowcount
-    if archived and not dry_run:
+    if dry_run:
         cur.execute("""
+            SELECT COUNT(*) FROM entity_facts
+            WHERE confidence < %s
+              AND learned_at < NOW() - INTERVAL '%s days'
+              AND durability != 'permanent'
+        """, (ARCHIVE_THRESHOLD, MIN_AGE_DAYS))
+        return cur.fetchone()[0]
+    cur.execute("""
+        WITH archived AS (
             DELETE FROM entity_facts
-            WHERE confidence < 0.5
-              AND created_at < NOW() - INTERVAL '7 days'
-        """)
+            WHERE confidence < %s
+              AND learned_at < NOW() - INTERVAL '%s days'
+              AND durability != 'permanent'
+            RETURNING *
+        )
+        INSERT INTO entity_facts_archive
+        SELECT *, NOW() as archived_at FROM archived
+    """, (ARCHIVE_THRESHOLD, MIN_AGE_DAYS))
+    archived = cur.rowcount
     if verbose:
         logger.info(f"  Archived {archived} low-confidence facts")
     return archived
 
 
 def purge_old_archives(conn, dry_run=False, verbose=False):
+    """Hard delete archives older than 1 year."""
     cur = conn.cursor()
-    cur.execute("""
-        DELETE FROM entity_facts_archive
-        WHERE archived_at < NOW() - INTERVAL '90 days'
-    """)
+    if dry_run:
+        cur.execute("SELECT COUNT(*) FROM entity_facts_archive WHERE archived_at < NOW() - INTERVAL '1 year'")
+        return cur.fetchone()[0]
+    cur.execute("DELETE FROM entity_facts_archive WHERE archived_at < NOW() - INTERVAL '1 year'")
     purged = cur.rowcount
     if verbose:
         logger.info(f"  Purged {purged} old archived facts")
@@ -719,8 +884,11 @@ def main():
             cross_merged = cross_key_consolidation(conn, args.dry_run, args.verbose)
 
         dup_merged = 0
+        medium_report_count = 0
         if not args.skip_dedup:
-            dup_merged = merge_duplicates(conn, args.dry_run, args.verbose)
+            dedup_result = merge_duplicates(conn, args.dry_run, args.verbose)
+            dup_merged = dedup_result['high_merges']
+            medium_report_count = dedup_result['medium_count']
 
         if not args.skip_decay:
             apply_decay(conn, args)
@@ -756,6 +924,7 @@ def main():
         logger.info(f"  Embedded:               {embed_count}")
         logger.info(f"  Cross-key merged:       {cross_merged}")
         logger.info(f"  Same-key merged:        {dup_merged}")
+        logger.info(f"  Dedup review queued:    {medium_report_count}")
         logger.info(f"  Ghost pattern merges:   {pattern_merges}")
         logger.info(f"  Orphan entities deleted:{deleted_orphans}")
         logger.info(f"  Low-fact entities:      {low_fact_count}")

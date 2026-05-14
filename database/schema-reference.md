@@ -1,6 +1,6 @@
 # Database Schema Reference
 
-*Auto-generated: 2026-05-14T01:48:12.818774*
+*Auto-generated: 2026-05-14T07:37:50.230773*
 
 ## Tables
 
@@ -19,7 +19,7 @@
 | agent_turn_context | - | 8 |
 | agents | Agent registry | 32 |
 | ai_models | Available AI models. NOVA maintains this; Newhart reads for agent assignments. Credentials and endpoints stored in 1Password (see credential_ref column). | 16 |
-| artwork | Archive of NOVAs Instagram artwork. Reference for future compilation. | 19 |
+| artwork | Archive of NOVAs Instagram artwork. Reference for future compilation. | 20 |
 | asset_classes | Asset class definitions for financial portfolio management. Defines tradeable asset types with pricing sources and trading characteristics. | 6 |
 | bootstrap_context_config | Configuration for bootstrap system behavior | 4 |
 | certificates | Client certificates issued by NOVA CA. Security-sensitive. Verify before modifications. | 12 |
@@ -31,7 +31,7 @@
 | comms_state | Per-platform communications tracking state (seen IDs, cursors). Replaces hermes-social-state.json. Owner: Communications domain (hermes). | 5 |
 | entities | People, AIs, organizations. NOVA has full access. Use entity_facts for attributes. | 20 |
 | entity_fact_conflicts | Conflicts between entity facts requiring resolution. Part of the truth reconciliation system. | 13 |
-| entity_fact_sources | - | 7 |
+| entity_fact_sources | - | 8 |
 | entity_facts | Key-value facts about entities. Check current_timezone for I)ruid before time-based actions. | 19 |
 | entity_facts_archive | Archived entity facts from decay/cleanup processes. Historical record of previously stored knowledge. | 20 |
 | entity_relationships | Relationships between entities (family, work, friendship, etc). | 8 |

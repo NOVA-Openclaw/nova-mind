@@ -676,6 +676,9 @@ def store_extracted(
             return
 
         src_eid = resolve_source_entity_id(source_person, sender_id, sender_provider, conn) if source_person else source_entity_id
+        # Fallback: if source_person resolution failed, use the pre-resolved sender entity
+        if src_eid is None:
+            src_eid = source_entity_id
 
         action = store_or_reinforce_fact(
             entity_id=entity_id,

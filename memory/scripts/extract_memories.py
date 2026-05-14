@@ -491,12 +491,13 @@ IMPORTANT INSTRUCTIONS:
 1. EXTRACT facts, opinions, events, decisions, and other memory-worthy information from the message above.
 
 2. FOR EVERY EXTRACTED ITEM, include:
-   - source_person: "{sender}" (who said this)
+   - subject: who the fact is ABOUT (may be the sender or someone else they're talking about)
    - visibility: privacy level (see below)
    - visibility_reason: ONLY if visibility differs from user default
    - durability: one of permanent, long_term, short_term, ephemeral (see DURABILITY GUIDANCE)
    - category: one of observation, preference, identity, mood, decision, routine, state, obligation (or other appropriate category)
    - expires: ISO-8601 timestamp if the statement implies a temporal boundary (e.g., "until Friday", "this week", "temporarily"), otherwise omit
+   NOTE: Do NOT include source_person. Source attribution (who said it) is handled automatically from the sender metadata.
 
 DURABILITY GUIDANCE:
 - permanent: Identity facts that rarely change (name, birthplace, core traits). Never auto-decays.
@@ -530,10 +531,10 @@ Only extract phone numbers if they appear complete (full country code + subscrib
 
 IMPORTANT: Discord snowflakes (18-19 digit numeric IDs) must NEVER be extracted as phone numbers. They are discord_id facts only.
 
-SOURCE ATTRIBUTION (for facts from publications or third parties):
-When a fact is attributed to a publication or external source, include:
-- source_person: the author name (person), NOT the publication name
-- source_citation: free-form text with publication metadata (publication, date, page, url)
+SOURCE CITATION (for facts from publications or external references):
+When a fact references a publication or external source, include:
+- source_citation: free-form text with publication metadata (author, publication, date, page, url)
+Note: Source attribution (who told us) is always the message sender. source_citation is extra reference metadata.
 Resolution hierarchy: author > publisher > publication title.
 
 DELEGATION CONTEXT:
@@ -551,7 +552,6 @@ TEMPLATE:
       "value": "the actual information",
       "category": "preference|observation|identity|mood|decision|routine|state|obligation",
       "durability": "permanent|long_term|short_term|ephemeral",
-      "source_person": "Name of who stated this",
       "confidence": 1.0,
       "visibility": "public|private|trusted",
       "visibility_reason": "optional",
@@ -559,21 +559,22 @@ TEMPLATE:
     }}
   ],
   "entities": [
-    {{"name": "Full name", "type": "person|ai|organization|place", "source_person": "who mentioned them", "visibility": "public"}}
+    {{"name": "Full name", "type": "person|ai|organization|place", "visibility": "public"}}
   ],
   "events": [
-    {{"description": "what happened", "date": "ISO-8601 or natural language", "source_person": "who mentioned it", "visibility": "public"}}
+    {{"description": "what happened", "date": "ISO-8601 or natural language", "visibility": "public"}}
   ],
   "vocabulary": [
-    {{"word": "the term", "category": "name|brand|technical|slang", "misheard_as": "optional", "source_person": "who used it", "visibility": "public"}}
+    {{"word": "the term", "category": "name|brand|technical|slang", "misheard_as": "optional", "visibility": "public"}}
   ]
 }}
 
 RULES:
+- Source attribution is handled automatically. Do NOT include source_person in your output. The sender of the message is always the source.
+- "subject" is who the fact is ABOUT (may differ from the sender for non-self-reported facts).
 - Each piece of information produces EXACTLY ONE entry in "facts". Never repeat the same information.
 - The "category" field handles classification. Preferences, opinions, decisions, moods, routines — ALL go in "facts" with the appropriate category value.
 - "key" must be a descriptive snake_case identifier (e.g., favorite_animals, current_city, opinion_on_vim, decision_package_manager). NEVER use generic keys like "preference_preference" or "observation_observation".
-- "source_person" is REQUIRED on every fact. It is the name of whoever stated or provided this information.
 - Milestones are events — put them in "events".
 
 PHONE NUMBER RULE: ANY extracted phone number MUST have visibility="private" regardless of the user's default_visibility or any explicit override in the message. This is a hard security rule.
@@ -670,7 +671,6 @@ def store_extracted(
         subject_name: str,
         key: str,
         value: str,
-        source_person: str,
         visibility: str,
         visibility_reason: Optional[str],
         durability: str = "long_term",
@@ -678,7 +678,12 @@ def store_extracted(
         expires: Optional[str] = None,
         source_citation: Optional[str] = None,
     ) -> None:
-        """Find/create entity and store a fact."""
+        """Find/create entity and store a fact.
+        
+        Source is ALWAYS the message sender (source_entity_id), resolved once
+        at the top of store_extracted() from the sender_id. The LLM only
+        identifies the subject (who the fact is about).
+        """
         entity_id = find_entity_id(subject_name, conn, sender_id, sender_provider, sender_name)
         if entity_id is None:
             entity_id = ensure_entity(subject_name, "person", conn, sender_id, sender_provider, sender_name)
@@ -689,24 +694,12 @@ def store_extracted(
             )
             return
 
-        # Source attribution: sender_id is the reliable identifier
-        # If source_person IS the sender (self-reported), use pre-resolved source_entity_id directly
-        # Only re-resolve if source_person is a DIFFERENT person than the sender
-        if not source_person or source_person.lower() == sender_name.lower():
-            src_eid = source_entity_id
-        else:
-            # Third-party attribution — resolve by name only (no sender_id, that's the wrong person)
-            src_eid = resolve_source_entity_id(source_person, "", "", conn)
-            if src_eid is None:
-                # Can't resolve third party, fall back to sender as source
-                src_eid = source_entity_id
-
         action = store_or_reinforce_fact(
             entity_id=entity_id,
             key=key,
             value=value,
-            source_entity_id=src_eid,
-            source=source_person or sender_name or "auto-extracted",
+            source_entity_id=source_entity_id,  # always the sender
+            source=sender_name or "auto-extracted",
             visibility=visibility,
             visibility_reason=visibility_reason,
             conn=conn,
@@ -733,7 +726,6 @@ def store_extracted(
         subject = (fact.get("subject") or sender_name or "").strip()
         key = (fact.get("key") or fact.get("predicate") or "").strip()
         value = (fact.get("value") or "").strip()
-        source_person = (fact.get("source_person") or sender_name or "").strip()
         visibility = (fact.get("visibility") or "public").strip()
         visibility_reason = (fact.get("visibility_reason") or "").strip() or None
         durability = (fact.get("durability") or "long_term").strip()
@@ -749,7 +741,7 @@ def store_extracted(
         if not (subject and key and value):
             continue
 
-        _store_fact(subject, key, value, source_person, visibility, visibility_reason, durability, category, expires, source_citation)
+        _store_fact(subject, key, value, visibility, visibility_reason, durability, category, expires, source_citation)
 
     # ── vocabulary ────────────────────────────────────────────────────────────
     for vocab in data.get("vocabulary", []) or []:
@@ -798,7 +790,6 @@ def store_extracted(
     # events table requires: title (NOT NULL), event_date (NOT NULL)
     for event in data.get("events", []) or []:
         description = (event.get("description") or "").strip()
-        source_person = (event.get("source_person") or sender_name or "").strip()
         date_val = (event.get("date") or "").strip() or None
 
         if not description:
@@ -827,7 +818,7 @@ def store_extracted(
                 else:
                     vals_list = [title, description]  # event_date uses NOW() literal
 
-                vals_list.append(source_person or sender_name or "auto-extracted")
+                vals_list.append(sender_name or "auto-extracted")
                 ph_list = ["%s", "%s", event_date_expr, "%s"]
 
                 cur.execute(

@@ -353,7 +353,6 @@ def store_or_reinforce_fact(
     key: str,
     value: str,
     source_entity_id: Optional[int],
-    source: str,
     visibility: str,
     visibility_reason: Optional[str],
     conn,
@@ -699,7 +698,6 @@ def store_extracted(
             key=key,
             value=value,
             source_entity_id=source_entity_id,  # always the sender
-            source=sender_name or "auto-extracted",
             visibility=visibility,
             visibility_reason=visibility_reason,
             conn=conn,

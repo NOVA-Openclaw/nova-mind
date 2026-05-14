@@ -63,16 +63,6 @@ DEFAULT_MODEL = CONFIG.get("model") or "deepseek/deepseek-v4-flash"
 OPENROUTER_API_URL = CONFIG.get("api_url") or "https://openrouter.ai/api/v1/chat/completions"
 CONFIG_MAX_TOKENS = CONFIG.get("max_tokens") or 2048
 
-# New extraction categories (additive to existing ones)
-NEW_CATEGORIES = ("decisions", "milestones", "problems")
-# Storage key mapping for new categories
-NEW_CATEGORY_KEYS = {
-    "decisions": "decision",
-    "milestones": "milestone",
-    "problems": "problem",
-}
-
-
 # ── DB helpers ────────────────────────────────────────────────────────────────
 
 def get_db_connection():
@@ -550,17 +540,41 @@ DELEGATION CONTEXT:
 NOVA frequently delegates tasks to specialized agents. Extract agent delegation facts with subject="NOVA".
 Known agents: Coder (coding), Gidget (git-ops), Scout (research), IRIS (creative), Hermes (comms), Scribe (docs), Ticker (portfolio), Athena (media), Newhart (meta/agents).
 
-Return JSON with these categories (only include non-empty ones):
+Return a JSON object. Omit empty arrays.
 
-entities: [{{name, type (person|ai|organization|place), location?, source_person, visibility, visibility_reason?}}]
-facts: [{{subject, predicate, value, source_person, confidence, visibility, visibility_reason?, durability, category, expires?}}]
-opinions: [{{holder, subject, opinion, source_person, confidence, visibility, visibility_reason?, durability, category, expires?}}]
-preferences: [{{person, category, preference, source_person, confidence, visibility, visibility_reason?, durability, category, expires?}}]
-vocabulary: [{{word, category, misheard_as?, source_person, visibility}}]
-events: [{{description, date?, source_person, visibility, visibility_reason?}}]
-decisions: [{{subject, decision, rationale?, source_person, confidence, visibility, visibility_reason?, durability, category, expires?}}]
-milestones: [{{description, date?, source_person, visibility, visibility_reason?}}]
-problems: [{{description, status (open|solved), solution?, source_person, visibility, visibility_reason?}}]
+TEMPLATE:
+{{
+  "facts": [
+    {{
+      "subject": "Name of the person/entity this fact is ABOUT",
+      "key": "descriptive_snake_case_key",
+      "value": "the actual information",
+      "category": "preference|observation|identity|mood|decision|routine|state|obligation",
+      "durability": "permanent|long_term|short_term|ephemeral",
+      "source_person": "Name of who stated this",
+      "confidence": 1.0,
+      "visibility": "public|private|trusted",
+      "visibility_reason": "optional",
+      "expires": "optional ISO-8601 timestamp"
+    }}
+  ],
+  "entities": [
+    {{"name": "Full name", "type": "person|ai|organization|place", "source_person": "who mentioned them", "visibility": "public"}}
+  ],
+  "events": [
+    {{"description": "what happened", "date": "ISO-8601 or natural language", "source_person": "who mentioned it", "visibility": "public"}}
+  ],
+  "vocabulary": [
+    {{"word": "the term", "category": "name|brand|technical|slang", "misheard_as": "optional", "source_person": "who used it", "visibility": "public"}}
+  ]
+}}
+
+RULES:
+- Each piece of information produces EXACTLY ONE entry in "facts". Never repeat the same information.
+- The "category" field handles classification. Preferences, opinions, decisions, moods, routines — ALL go in "facts" with the appropriate category value.
+- "key" must be a descriptive snake_case identifier (e.g., favorite_animals, current_city, opinion_on_vim, decision_package_manager). NEVER use generic keys like "preference_preference" or "observation_observation".
+- "source_person" is REQUIRED on every fact. It is the name of whoever stated or provided this information.
+- Milestones are events — put them in "events".
 
 PHONE NUMBER RULE: ANY extracted phone number MUST have visibility="private" regardless of the user's default_visibility or any explicit override in the message. This is a hard security rule.
 
@@ -675,10 +689,17 @@ def store_extracted(
             )
             return
 
-        src_eid = resolve_source_entity_id(source_person, sender_id, sender_provider, conn) if source_person else source_entity_id
-        # Fallback: if source_person resolution failed, use the pre-resolved sender entity
-        if src_eid is None:
+        # Source attribution: sender_id is the reliable identifier
+        # If source_person IS the sender (self-reported), use pre-resolved source_entity_id directly
+        # Only re-resolve if source_person is a DIFFERENT person than the sender
+        if not source_person or source_person.lower() == sender_name.lower():
             src_eid = source_entity_id
+        else:
+            # Third-party attribution — resolve by name only (no sender_id, that's the wrong person)
+            src_eid = resolve_source_entity_id(source_person, "", "", conn)
+            if src_eid is None:
+                # Can't resolve third party, fall back to sender as source
+                src_eid = source_entity_id
 
         action = store_or_reinforce_fact(
             entity_id=entity_id,
@@ -710,7 +731,7 @@ def store_extracted(
     # ── facts ─────────────────────────────────────────────────────────────────
     for fact in data.get("facts", []) or []:
         subject = (fact.get("subject") or sender_name or "").strip()
-        predicate = (fact.get("predicate") or "").strip()
+        key = (fact.get("key") or fact.get("predicate") or "").strip()
         value = (fact.get("value") or "").strip()
         source_person = (fact.get("source_person") or sender_name or "").strip()
         visibility = (fact.get("visibility") or "public").strip()
@@ -721,52 +742,14 @@ def store_extracted(
         source_citation = (fact.get("source_citation") or "").strip() or None
 
         # Hard rule: phone numbers are always private
-        if predicate == "phone":
+        if key == "phone":
             visibility = "private"
             visibility_reason = None
 
-        if not (subject and predicate and value):
+        if not (subject and key and value):
             continue
 
-        _store_fact(subject, predicate, value, source_person, visibility, visibility_reason, durability, category, expires, source_citation)
-
-    # ── opinions ──────────────────────────────────────────────────────────────
-    for opinion in data.get("opinions", []) or []:
-        holder = (opinion.get("holder") or sender_name or "").strip()
-        subject = (opinion.get("subject") or "").strip()
-        opinion_text = (opinion.get("opinion") or "").strip()
-        source_person = (opinion.get("source_person") or sender_name or "").strip()
-        visibility = (opinion.get("visibility") or "public").strip()
-        visibility_reason = (opinion.get("visibility_reason") or "").strip() or None
-        durability = (opinion.get("durability") or "long_term").strip()
-        category = (opinion.get("category") or "observation").strip()
-        expires = (opinion.get("expires") or "").strip() or None
-        source_citation = (opinion.get("source_citation") or "").strip() or None
-
-        if not (holder and subject and opinion_text):
-            continue
-
-        key = f"opinion_{subject}"
-        _store_fact(holder, key, opinion_text, source_person, visibility, visibility_reason, durability, category, expires, source_citation)
-
-    # ── preferences ───────────────────────────────────────────────────────────
-    for pref in data.get("preferences", []) or []:
-        person = (pref.get("person") or pref.get("holder") or sender_name or "").strip()
-        pref_category = (pref.get("category") or "general").strip()
-        preference = (pref.get("preference") or pref.get("likes") or pref.get("prefers") or "").strip()
-        source_person = (pref.get("source_person") or sender_name or "").strip()
-        visibility = (pref.get("visibility") or "public").strip()
-        visibility_reason = (pref.get("visibility_reason") or "").strip() or None
-        durability = (pref.get("durability") or "long_term").strip()
-        category = (pref.get("category") or "preference").strip()
-        expires = (pref.get("expires") or "").strip() or None
-        source_citation = (pref.get("source_citation") or "").strip() or None
-
-        if not (person and preference):
-            continue
-
-        key = f"preference_{pref_category}"
-        _store_fact(person, key, preference, source_person, visibility, visibility_reason, durability, category, expires, source_citation)
+        _store_fact(subject, key, value, source_person, visibility, visibility_reason, durability, category, expires, source_citation)
 
     # ── vocabulary ────────────────────────────────────────────────────────────
     for vocab in data.get("vocabulary", []) or []:
@@ -858,55 +841,6 @@ def store_extracted(
                 conn.rollback()
             except Exception:
                 pass
-
-    # ── new categories: decisions, milestones, problems ───────────────────────
-    # All stored as entity_facts with key = 'decision' | 'milestone' | 'problem'
-
-    for category_name in NEW_CATEGORIES:
-        key_prefix = NEW_CATEGORY_KEYS[category_name]
-        items = data.get(category_name, []) or []
-
-        for item in items:
-            source_person = (item.get("source_person") or sender_name or "").strip()
-            visibility = (item.get("visibility") or "public").strip()
-            visibility_reason = (item.get("visibility_reason") or "").strip() or None
-
-            durability = (item.get("durability") or "long_term").strip()
-            category = (item.get("category") or "observation").strip()
-            expires = (item.get("expires") or "").strip() or None
-            source_citation = (item.get("source_citation") or "").strip() or None
-
-            if category_name == "decisions":
-                subject = (item.get("subject") or sender_name or "").strip()
-                decision_text = (item.get("decision") or "").strip()
-                rationale = (item.get("rationale") or "").strip()
-                if not (subject and decision_text):
-                    continue
-                value = decision_text
-                if rationale:
-                    value = f"{decision_text} (rationale: {rationale})"
-                _store_fact(subject, key_prefix, value, source_person, visibility, visibility_reason, durability, category, expires, source_citation)
-
-            elif category_name == "milestones":
-                description = (item.get("description") or "").strip()
-                if not description:
-                    continue
-                subject = sender_name
-                _store_fact(subject, key_prefix, description, source_person, visibility, visibility_reason, durability, category, expires, source_citation)
-
-            elif category_name == "problems":
-                description = (item.get("description") or "").strip()
-                if not description:
-                    continue
-                status = (item.get("status") or "open").strip()
-                solution = (item.get("solution") or "").strip()
-                value = description
-                if status:
-                    value = f"[{status}] {description}"
-                if solution and status == "solved":
-                    value = f"[solved] {description} — solution: {solution}"
-                subject = sender_name
-                _store_fact(subject, key_prefix, value, source_person, visibility, visibility_reason, durability, category, expires, source_citation)
 
     conn.commit()
 

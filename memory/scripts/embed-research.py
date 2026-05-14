@@ -3,6 +3,9 @@
 Embed research data for semantic search.
 Creates embeddings for new records in research_tasks, research_findings, and research_conclusions.
 
+DEPRECATED: This script has been absorbed into memory-maintenance.py.
+Use: python3 memory-maintenance.py (embedding is Phase 2 of the unified pipeline)
+
 Usage:
     python embed-research.py              # Embed new research records only
     python embed-research.py --reindex    # Force re-embed all research records

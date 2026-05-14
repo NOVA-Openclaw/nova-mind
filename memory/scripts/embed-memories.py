@@ -8,6 +8,9 @@ Scoped to FILE sources only:
 
 Database table embeddings are handled by embed-full-database.py.
 
+DEPRECATED: This script has been absorbed into memory-maintenance.py.
+Use: python3 memory-maintenance.py (embedding is Phase 2 of the unified pipeline)
+
 Usage:
     python embed-memories.py                    # Embed all file sources
     python embed-memories.py --source daily_log # Embed only daily logs

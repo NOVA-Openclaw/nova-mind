@@ -176,7 +176,7 @@ def _store_embeddings(cur, source_type, items, embeddings):
             ON CONFLICT (source_type, source_id) DO UPDATE
             SET content = EXCLUDED.content,
                 embedding = EXCLUDED.embedding,
-                created_at = NOW()
+                updated_at = NOW()
             """,
             (source_type, str(item["id"]), item["text"], emb_json),
         )
@@ -375,30 +375,42 @@ def phase_embed(conn, args):
 # ---------------------------------------------------------------------------
 def cross_key_consolidation(conn, dry_run=False, verbose=False):
     cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-    cur.execute("""
-        SELECT DISTINCT ef.entity_id
-        FROM entity_facts ef
-        JOIN memory_embeddings me ON me.source_type = 'entity_fact' AND me.source_id = ef.id::text
-    """)
+
+    try:
+        cur.execute("""
+            SELECT DISTINCT ef.entity_id
+            FROM entity_facts ef
+            JOIN memory_embeddings me ON me.source_type = 'entity_fact' AND me.source_id = ef.id::text
+        """)
+    except psycopg2.Error as e:
+        logger.error(f"Cross-key consolidation dimension mismatch or query error: {e}")
+        return 0, set()
+
     entity_ids = [row[0] for row in cur.fetchall()]
 
     total_merged = 0
+    modified_survivor_ids = set()
+
     for entity_id in entity_ids:
-        cur.execute("""
-            SELECT ef1.id AS id1, ef2.id AS id2,
-                   ef1.key AS key1, ef2.key AS key2,
-                   ef1.value AS val1, ef2.value AS val2,
-                   ef1.confidence AS conf1, ef2.confidence AS conf2,
-                   1 - (me1.embedding <=> me2.embedding) AS cosine_sim
-            FROM entity_facts ef1
-            JOIN entity_facts ef2 ON ef1.entity_id = ef2.entity_id AND ef1.id < ef2.id
-            JOIN memory_embeddings me1 ON me1.source_type = 'entity_fact' AND me1.source_id = ef1.id::text
-            JOIN memory_embeddings me2 ON me2.source_type = 'entity_fact' AND me2.source_id = ef2.id::text
-            WHERE ef1.entity_id = %s
-              AND ef1.key != ef2.key
-              AND 1 - (me1.embedding <=> me2.embedding) >= 0.92
-            ORDER BY cosine_sim DESC
-        """, (entity_id,))
+        try:
+            cur.execute("""
+                SELECT ef1.id AS id1, ef2.id AS id2,
+                       ef1.key AS key1, ef2.key AS key2,
+                       ef1.value AS val1, ef2.value AS val2,
+                       ef1.confidence AS conf1, ef2.confidence AS conf2,
+                       1 - (me1.embedding <=> me2.embedding) AS cosine_sim
+                FROM entity_facts ef1
+                JOIN entity_facts ef2 ON ef1.entity_id = ef2.entity_id AND ef1.id < ef2.id
+                JOIN memory_embeddings me1 ON me1.source_type = 'entity_fact' AND me1.source_id = ef1.id::text
+                JOIN memory_embeddings me2 ON me2.source_type = 'entity_fact' AND me2.source_id = ef2.id::text
+                WHERE ef1.entity_id = %s
+                  AND ef1.key != ef2.key
+                  AND 1 - (me1.embedding <=> me2.embedding) >= 0.92
+                ORDER BY cosine_sim DESC
+            """, (entity_id,))
+        except psycopg2.Error as e:
+            logger.error(f"Dimension mismatch in cross-key query for entity {entity_id}: {e}")
+            continue
 
         pairs = cur.fetchall()
         absorbed_ids = set()
@@ -415,6 +427,7 @@ def cross_key_consolidation(conn, dry_run=False, verbose=False):
             if not dry_run:
                 cur.execute("SELECT merge_facts(%s, %s)", (survivor, absorbed))
             absorbed_ids.add(absorbed)
+            modified_survivor_ids.add(survivor)
             total_merged += 1
             if verbose:
                 logger.info(
@@ -422,7 +435,7 @@ def cross_key_consolidation(conn, dry_run=False, verbose=False):
                     f"merged {row['key2']}:{row['val2']} into {row['key1']}:{row['val1']}"
                 )
 
-    return total_merged
+    return total_merged, modified_survivor_ids
 
 
 # ---------------------------------------------------------------------------
@@ -459,6 +472,7 @@ def merge_duplicates(conn, dry_run=False, verbose=False):
     pairs = cur.fetchall()
 
     absorbed_ids = set()
+    modified_survivor_ids = set()
     high_merges = 0
     medium_candidates = []
 
@@ -486,6 +500,7 @@ def merge_duplicates(conn, dry_run=False, verbose=False):
                 cur.execute("SELECT merge_facts(%s, %s)", (survivor, absorbed))
 
             absorbed_ids.add(absorbed)
+            modified_survivor_ids.add(survivor)
             high_merges += 1
 
             if verbose:
@@ -507,7 +522,7 @@ def merge_duplicates(conn, dry_run=False, verbose=False):
     if medium_candidates:
         write_dedup_report(medium_candidates, dry_run)
 
-    return {'high_merges': high_merges, 'medium_count': len(medium_candidates), 'medium_candidates': medium_candidates}
+    return {'high_merges': high_merges, 'medium_count': len(medium_candidates), 'medium_candidates': medium_candidates, 'modified_ids': modified_survivor_ids}
 
 
 def write_dedup_report(candidates, dry_run=False):
@@ -629,10 +644,24 @@ def archive_low_confidence(conn, dry_run=False, verbose=False):
             WHERE confidence < %s
               AND learned_at < NOW() - INTERVAL '%s days'
               AND durability != 'permanent'
-            RETURNING *
+            RETURNING id, entity_id, key, value, data, confidence, learned_at,
+                      updated_at, visibility, privacy_scope, visibility_reason,
+                      last_confirmed_at, decay_rate, extraction_count,
+                      durability, category, expires
         )
-        INSERT INTO entity_facts_archive
-        SELECT *, NOW() as archived_at FROM archived
+        INSERT INTO entity_facts_archive (
+            id, entity_id, key, value, data, confidence, learned_at,
+            updated_at, visibility, privacy_scope, visibility_reason,
+            last_confirmed_at, decay_rate, extraction_count,
+            durability, category, expires, archived_at, archive_reason, archived_by
+        )
+        SELECT
+            id, entity_id, key, value, data, confidence, learned_at,
+            updated_at, visibility, privacy_scope, visibility_reason,
+            last_confirmed_at, decay_rate, extraction_count,
+            durability, category, expires,
+            NOW() as archived_at, 'low_confidence' as archive_reason, 'maintenance_script' as archived_by
+        FROM archived
     """, (ARCHIVE_THRESHOLD, MIN_AGE_DAYS))
     archived = cur.rowcount
     if verbose:
@@ -736,9 +765,10 @@ def entity_dedup(conn, dry_run=False, verbose=False):
     cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
     cur.execute("""
         SELECT e1.id AS id1, e2.id AS id2, e1.name AS name1, e2.name AS name2,
+               e1.type AS type1, e2.type AS type2,
                similarity(LOWER(e1.name), LOWER(e2.name)) AS name_sim
         FROM entities e1
-        JOIN entities e2 ON e1.id < e2.id
+        JOIN entities e2 ON e1.id < e2.id AND e1.type = e2.type
         WHERE similarity(LOWER(e1.name), LOWER(e2.name)) >= 0.5
     """)
     candidates = cur.fetchall()
@@ -749,6 +779,10 @@ def entity_dedup(conn, dry_run=False, verbose=False):
 
     for cand in candidates:
         if cand["id1"] in absorbed_ids or cand["id2"] in absorbed_ids:
+            continue
+
+        # Skip candidates of different types (defensive — SQL already filters)
+        if cand.get("type1") != cand.get("type2"):
             continue
 
         cur.execute("SELECT COUNT(*) FROM entity_facts WHERE entity_id = %s", (cand["id1"],))
@@ -848,6 +882,48 @@ def clean_orphaned_embeddings(conn, dry_run=False, verbose=False):
 
 
 # ---------------------------------------------------------------------------
+# Re-embed modified facts
+# ---------------------------------------------------------------------------
+def reembed_modified_facts(conn, modified_fact_ids, dry_run=False, verbose=False):
+    """Delete stale embeddings for modified facts and re-embed them."""
+    if not modified_fact_ids:
+        return 0
+    cfg = load_embedding_config()
+    cur = conn.cursor()
+    id_list = [str(fid) for fid in modified_fact_ids]
+    # Delete stale embeddings
+    if not dry_run:
+        cur.execute("""
+            DELETE FROM memory_embeddings
+            WHERE source_type = 'entity_fact'
+              AND source_id = ANY(%s)
+        """, (id_list,))
+        if verbose:
+            logger.info(f"  Deleted {cur.rowcount} stale embeddings for modified facts")
+    # Re-embed
+    cur.execute("""
+        SELECT ef.id, e.name || ' - ' || ef.key || ': ' || ef.value AS text
+        FROM entity_facts ef JOIN entities e ON e.id = ef.entity_id
+        WHERE ef.id = ANY(%s)
+    """, (list(modified_fact_ids),))
+    rows = cur.fetchall()
+    items = [{"id": r[0], "text": r[1]} for r in rows if r[1]]
+    if not items:
+        return 0
+    total = 0
+    for i in range(0, len(items), EMBED_BATCH_SIZE):
+        batch = items[i:i+EMBED_BATCH_SIZE]
+        texts = [it["text"] for it in batch]
+        embeddings = embed_texts(texts, cfg)
+        if not dry_run:
+            _store_embeddings(cur, "entity_fact", batch, embeddings)
+        total += len(batch)
+    if verbose:
+        logger.info(f"  Re-embedded {total} modified facts")
+    return total
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 def parse_args():
@@ -880,8 +956,10 @@ def main():
             embed_count = phase_embed(conn, args)
 
         cross_merged = 0
+        modified_fact_ids = set()
         if not args.skip_consolidation:
-            cross_merged = cross_key_consolidation(conn, args.dry_run, args.verbose)
+            cross_merged, xkey_modified = cross_key_consolidation(conn, args.dry_run, args.verbose)
+            modified_fact_ids.update(xkey_modified)
 
         dup_merged = 0
         medium_report_count = 0
@@ -889,6 +967,7 @@ def main():
             dedup_result = merge_duplicates(conn, args.dry_run, args.verbose)
             dup_merged = dedup_result['high_merges']
             medium_report_count = dedup_result['medium_count']
+            modified_fact_ids.update(dedup_result.get('modified_ids', set()))
 
         if not args.skip_decay:
             apply_decay(conn, args)
@@ -902,6 +981,10 @@ def main():
         auto_merged = review_count = 0
         if not args.skip_entity_dedup:
             auto_merged, review_count = entity_dedup(conn, args.dry_run, args.verbose)
+
+        reembedded = 0
+        if not args.skip_embed and modified_fact_ids:
+            reembedded = reembed_modified_facts(conn, modified_fact_ids, args.dry_run, args.verbose)
 
         cleaned = 0
         if not args.skip_embed:
@@ -930,6 +1013,7 @@ def main():
         logger.info(f"  Low-fact entities:      {low_fact_count}")
         logger.info(f"  Entity auto-merges:     {auto_merged}")
         logger.info(f"  Entity review queued:   {review_count}")
+        logger.info(f"  Re-embedded modified:   {reembedded}")
         logger.info(f"  Orphaned embeddings:    {cleaned}")
         logger.info(f"  Archived facts:         {archived}")
         logger.info(f"  Purged old archives:    {purged}")

@@ -33,17 +33,20 @@ import requests
 # Library loading pattern (backward compatible)
 # ---------------------------------------------------------------------------
 SCRIPT_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, os.path.expanduser("~/.openclaw/lib"))
 sys.path.insert(0, str(SCRIPT_DIR))
 
 try:
-    import pg_env
+    from env_loader import load_openclaw_env
+    load_openclaw_env()
 except ImportError:
-    pg_env = None  # type: ignore
+    pass
 
 try:
-    import env_loader
+    from pg_env import load_pg_env
+    load_pg_env()
 except ImportError:
-    env_loader = None  # type: ignore
+    pass
 
 # ---------------------------------------------------------------------------
 # Logging

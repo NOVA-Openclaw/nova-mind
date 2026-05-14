@@ -597,6 +597,14 @@ def apply_decay_to_entity_facts(conn, dry_run=False, verbose=False):
 def apply_decay_to_table(conn, table_name, decay_rate, dry_run=False, verbose=False):
     """Apply confidence decay to a specific table."""
     cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+
+    # Check if table has updated_at column
+    cur.execute("""
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = %s AND column_name = 'updated_at'
+    """, (table_name,))
+    has_updated_at = cur.fetchone() is not None
+
     cur.execute(f"""
         SELECT id, confidence, last_confirmed_at FROM {table_name} WHERE confidence > %s
     """, (ARCHIVE_THRESHOLD,))
@@ -615,9 +623,14 @@ def apply_decay_to_table(conn, table_name, decay_rate, dry_run=False, verbose=Fa
     if verbose and updates:
         logger.info(f"{table_name} to decay: {len(updates)}")
     if not dry_run and updates:
-        psycopg2.extras.execute_batch(cur, f"""
-            UPDATE {table_name} SET confidence = %(new_confidence)s, updated_at = NOW() WHERE id = %(id)s
-        """, updates, page_size=100)
+        if has_updated_at:
+            psycopg2.extras.execute_batch(cur, f"""
+                UPDATE {table_name} SET confidence = %(new_confidence)s, updated_at = NOW() WHERE id = %(id)s
+            """, updates, page_size=100)
+        else:
+            psycopg2.extras.execute_batch(cur, f"""
+                UPDATE {table_name} SET confidence = %(new_confidence)s WHERE id = %(id)s
+            """, updates, page_size=100)
     return len(updates)
 
 

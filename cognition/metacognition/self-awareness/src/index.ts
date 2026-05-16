@@ -20,6 +20,10 @@
  * Issue: #221
  */
 
+// REQUIRED CONFIG: openclaw.json must include:
+// "plugins": { "entries": { "self-awareness": { "hooks": { "allowConversationAccess": true } } } }
+// Without this, the message_sent hook will not receive conversation content.
+
 import { getPool } from "./shared/pg-pool.ts";
 
 // ── Ollama config ─────────────────────────────────────────────────────────────

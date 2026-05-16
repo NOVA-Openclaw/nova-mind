@@ -28,6 +28,10 @@
  * Issue: #75
  */
 
+// REQUIRED CONFIG: openclaw.json must include:
+// "plugins": { "entries": { "confidence-check": { "hooks": { "allowConversationAccess": true } } } }
+// Without this, the before_agent_finalize hook will not receive lastAssistantMessage.
+
 // ══════════════════════════════════════════════════════════════════════════════
 // Configuration
 // ══════════════════════════════════════════════════════════════════════════════
@@ -106,7 +110,14 @@ async function evaluateConfidence(
   }
 
   // ── Step 2: Check if max revisions exhausted ───────────────────────────────
-  if (priorAttempts >= CONFIG.max_revision_attempts) {
+  if (priorAttempts > CONFIG.max_revision_attempts) {
+    // Framing pass already happened, allow finalization
+    console.info("[confidence-check] Post-framing pass, allowing finalization");
+    retryAttempts.delete(idempotencyKey); // cleanup
+    return undefined;
+  }
+  if (priorAttempts === CONFIG.max_revision_attempts) {
+    // This IS the framing pass
     console.warn(`[confidence-check] Max revisions (${CONFIG.max_revision_attempts}) exhausted for ${runId}, framing response`);
     retryAttempts.set(idempotencyKey, priorAttempts + 1);
     return {

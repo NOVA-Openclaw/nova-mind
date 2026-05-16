@@ -146,10 +146,14 @@ def _resolve_by_sender_id(sender_id: str, conn) -> Optional[int]:
     
     # Only do value-scan for IDs that look like platform identifiers
     # Discord snowflakes: 17-19 digits
-    # Telegram IDs: 9-10 digits  
+    # Telegram IDs: 9-10 digits
     # Signal UUIDs: 36 chars with hyphens
     # Phone numbers: 10-15 digits with optional +
     # Skip short/ambiguous values
+    #
+    # Platform-prefixed IDs (agent:nova, discord:123456789, signal:+1...)
+    # are always >= 8 chars due to the prefix. Raw short values (< 8 chars)
+    # are blocked to prevent false positive matches.
     clean = sender_id.strip()
     if len(clean) < 8:
         return None
@@ -888,6 +892,11 @@ def main() -> int:
         f"session_id={src_channel_session_id!r}",
         file=sys.stderr,
     )
+
+    # Accept SOURCE_CONTEXT env var for attribution tracing (set by callers)
+    source_context = os.environ.get('SOURCE_CONTEXT', '')
+    if source_context:
+        print(f"[extract_memories] Source context: {source_context}", file=sys.stderr)
     model = os.environ.get("MEMORY_EXTRACTION_MODEL", DEFAULT_MODEL).strip() or DEFAULT_MODEL
 
     print(

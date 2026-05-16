@@ -60,3 +60,15 @@ load_pg_env() {
     export PGPASSWORD="$val"
   fi
 }
+
+# load_pg_superuser_env — session-only superuser credentials for DDL operations.
+# These are NOT persisted to postgres.json. Set them via environment before
+# calling agent-install.sh (e.g. shell-install.sh prompts for them).
+load_pg_superuser_env() {
+  # Resolve superuser: explicit env var → same as agent user → current unix user
+  local superuser="${PG_SUPERUSER:-${PGUSER:-$(whoami)}}"
+  local superuser_pass="${PG_SUPERUSER_PASSWORD:-${PGPASSWORD:-}}"
+
+  export PG_SUPERUSER="$superuser"
+  export PG_SUPERUSER_PASSWORD="$superuser_pass"
+}

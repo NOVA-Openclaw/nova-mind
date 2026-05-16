@@ -1,0 +1,26 @@
+{
+  "name": "@nova/self-awareness",
+  "version": "1.0.0",
+  "description": "Self-awareness plugin: monitors outbound messages for self-awareness triggers via semantic embedding similarity",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./src/index.ts"
+    ],
+    "runtimeExtensions": [
+      "./dist/index.js"
+    ]
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/pg": "^8.0.0",
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "pg": "^8.11.0"
+  }
+}

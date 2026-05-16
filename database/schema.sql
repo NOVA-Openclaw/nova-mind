@@ -576,6 +576,7 @@ CREATE TABLE IF NOT EXISTS agents (
     instantiation_sop varchar(100),
     nickname varchar(50),
     instance_type varchar(20) DEFAULT 'subagent',
+    parent_agent_id integer,
     home_dir varchar(255),
     unix_user varchar(50),
     collaborative boolean DEFAULT false,
@@ -591,6 +592,7 @@ CREATE TABLE IF NOT EXISTS agents (
     context_type text DEFAULT 'persistent' NOT NULL,
     model_rationale text,
     CONSTRAINT agents_pkey PRIMARY KEY (id),
+    CONSTRAINT agents_parent_agent_id_fkey FOREIGN KEY (parent_agent_id) REFERENCES agents (id),
     CONSTRAINT agents_name_key UNIQUE (name),
     CONSTRAINT agents_context_type_check CHECK (context_type IN ('ephemeral'::text, 'persistent'::text)),
     CONSTRAINT agents_thinking_check CHECK (thinking::text IN ('off'::character varying, 'minimal'::character varying, 'low'::character varying, 'medium'::character varying, 'high'::character varying, 'xhigh'::character varying))

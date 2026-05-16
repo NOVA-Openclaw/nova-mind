@@ -479,6 +479,17 @@ def build_extraction_prompt(
 ) -> str:
     # Build a platform-aware sender label
     provider_label = sender_provider.lower() if sender_provider else "unknown"
+    is_agent_sender = sender_provider == "openclaw" or sender_id.startswith("agent:")
+
+    agent_instructions = ""
+    if is_agent_sender:
+        agent_instructions = """IMPORTANT: The sender is an AI agent, not a human user.
+- Statements expressing the agent's own opinions, preferences, or assessments are SELF-REPORTED facts. The subject is the agent itself.
+- Statements relaying information about other entities (users, systems, etc.) that the agent is parroting from prior knowledge are NOT the agent's own facts. Attribute them to the entity they are about, or skip if already known.
+- Examples:
+  - "I find debugging satisfying" → subject=agent, key=preference_debugging, self-reported
+  - "I)ruid prefers dark mode" → subject=I)ruid, key=preference_editor_theme — this is relayed, not the agent's opinion"""
+
     if provider_label == "discord":
         sender_label = f"Discord user ID: {sender_id}"
     elif provider_label == "signal":
@@ -494,7 +505,7 @@ SENDER: {sender}
 SENDER_ID_LABEL: {sender_label}
 IS_GROUP_CHAT: {is_group}
 USER_DEFAULT_VISIBILITY: {default_visibility}
-
+{agent_instructions}
 MESSAGE:
 {text}
 

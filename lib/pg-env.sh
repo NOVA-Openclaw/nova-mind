@@ -68,7 +68,9 @@ load_pg_superuser_env() {
   # Resolve superuser: explicit env var → same as agent user → current unix user
   local superuser="${PG_SUPERUSER:-${PGUSER:-$(whoami)}}"
   local superuser_pass="${PG_SUPERUSER_PASSWORD:-${PGPASSWORD:-}}"
+  local superuser_host="${PG_SUPERUSER_HOST:-/var/run/postgresql}"
 
   export PG_SUPERUSER="$superuser"
   export PG_SUPERUSER_PASSWORD="$superuser_pass"
+  export PG_SUPERUSER_HOST="$superuser_host"
 }

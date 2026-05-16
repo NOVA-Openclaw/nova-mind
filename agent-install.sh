@@ -72,6 +72,7 @@ EXTENSIONS_DIR="$OPENCLAW_DIR/extensions"
 # Superuser connection helper for DDL operations
 PG_SUPERUSER="${PG_SUPERUSER:-$DB_USER}"
 PG_SUPERUSER_PASSWORD="${PG_SUPERUSER_PASSWORD:-${PGPASSWORD:-}}"
+PG_SUPERUSER_HOST="${PG_SUPERUSER_HOST:-/var/run/postgresql}"
 
 _superuser_psql() {
     # Runs psql as the superuser for DDL operations.
@@ -81,7 +82,7 @@ _superuser_psql() {
     if [ "$PG_SUPERUSER" = "$DB_USER" ]; then
         psql -U "$DB_USER" -d "$db" "$@"
     else
-        PGPASSWORD="$PG_SUPERUSER_PASSWORD" psql -U "$PG_SUPERUSER" -d "$db" "$@"
+        PGPASSWORD="$PG_SUPERUSER_PASSWORD" psql -U "$PG_SUPERUSER" -h "$PG_SUPERUSER_HOST" -d "$db" "$@"
     fi
 }
 
@@ -90,7 +91,7 @@ _superuser_createdb() {
     if [ "$PG_SUPERUSER" = "$DB_USER" ]; then
         createdb -U "$DB_USER" "$@"
     else
-        PGPASSWORD="$PG_SUPERUSER_PASSWORD" createdb -U "$PG_SUPERUSER" "$@"
+        PGPASSWORD="$PG_SUPERUSER_PASSWORD" createdb -U "$PG_SUPERUSER" -h "$PG_SUPERUSER_HOST" "$@"
     fi
 }
 
@@ -990,13 +991,13 @@ if [ "$SCHEMA_DIFF_SKIPPED" -eq 1 ]; then
 else
     # Build connection args using SUPERUSER for DDL operations
     PGSCHEMA_CONN_ARGS=(
-        "--host" "${PGHOST:-/var/run/postgresql}"
+        "--host" "$PG_SUPERUSER_HOST"
         "--port" "${PGPORT:-5432}"
         "--db" "$DB_NAME"
         "--user" "$PG_SUPERUSER"
     )
     PGSCHEMA_PLAN_ARGS=(
-        "--plan-host" "${PGHOST:-/var/run/postgresql}"
+        "--plan-host" "$PG_SUPERUSER_HOST"
         "--plan-port" "${PGPORT:-5432}"
         "--plan-db" "$DB_NAME"
         "--plan-user" "$PG_SUPERUSER"
@@ -1619,7 +1620,12 @@ install_metacognition_plugin() {
     if [ -f "$OPENCLAW_CONFIG" ] && command -v jq &>/dev/null; then
         jq --arg path "$plugin_target" --arg name "$plugin_name" '
             .plugins.load.paths = ((.plugins.load.paths // []) + [$path] | unique)
-            | .plugins.entries[$name] = {"enabled": true}
+            | .plugins.entries[$name] = {
+                "enabled": true,
+                "hooks": {
+                  "allowConversationAccess": true
+                }
+              }
         ' "$OPENCLAW_CONFIG" >"$OPENCLAW_CONFIG.tmp" && \
             mv "$OPENCLAW_CONFIG.tmp" "$OPENCLAW_CONFIG" && \
             echo -e "    ${CHECK_MARK} $plugin_name enabled in OpenClaw config" || \
@@ -2135,7 +2141,6 @@ fi
 if [ -f "$OPENCLAW_DIR/plugins/confidence-check/dist/index.js" ]; then
     echo "    • confidence-check plugin → $OPENCLAW_DIR/plugins/confidence-check"
 fi
-echo "    • turn-context plugin → $OPENCLAW_DIR/plugins/turn-context"
 echo "    • Bootstrap context → $OPENCLAW_DIR/hooks/db-bootstrap-context"
 echo "    • agents.json → $OPENCLAW_DIR/agents.json"
 echo "    • shell-aliases.sh → $NOVA_DIR/shell-aliases.sh"

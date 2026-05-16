@@ -139,9 +139,12 @@ if [ "$NEED_PROMPT" = true ]; then
 
     # Prompt for postgres superuser credentials (session-only, NOT persisted)
     DEFAULT_SUPERUSER="postgres"
+    DEFAULT_SUPERUSER_HOST="/var/run/postgresql"
     echo "  PostgreSQL superuser for schema operations (CREATE EXTENSION, DDL):"
     read -rp "    Superuser [$DEFAULT_SUPERUSER]: " INPUT_SUPERUSER
     read -rsp "    Superuser password []: " INPUT_SUPERUSER_PASS
+    echo ""
+    read -rp "    Superuser host (unix socket path or hostname) [$DEFAULT_SUPERUSER_HOST]: " INPUT_SUPERUSER_HOST
     echo ""
 
     DB_HOST="${INPUT_HOST:-$DEFAULT_HOST}"
@@ -151,6 +154,7 @@ if [ "$NEED_PROMPT" = true ]; then
     DB_PASS="${INPUT_PASS:-}"
     PG_SUPERUSER="${INPUT_SUPERUSER:-$DEFAULT_SUPERUSER}"
     PG_SUPERUSER_PASSWORD="${INPUT_SUPERUSER_PASS:-}"
+    PG_SUPERUSER_HOST="${INPUT_SUPERUSER_HOST:-$DEFAULT_SUPERUSER_HOST}"
 
     cat > "$PG_CONFIG" <<EOF
 {
@@ -170,7 +174,9 @@ EOF
     # Export superuser credentials for agent-install.sh (session-only)
     export PG_SUPERUSER="$PG_SUPERUSER"
     export PG_SUPERUSER_PASSWORD="$PG_SUPERUSER_PASSWORD"
+    export PG_SUPERUSER_HOST="$PG_SUPERUSER_HOST"
     echo -e "  ${GREEN}✅${NC} Superuser set to '$PG_SUPERUSER' (session-only, not persisted)"
+    echo -e "  ${GREEN}✅${NC} Superuser host set to '$PG_SUPERUSER_HOST'"
 
     echo "  Resolved: PGHOST=$PGHOST PGDATABASE=${PGDATABASE:-(not set)} PGUSER=$PGUSER"
 

@@ -82,7 +82,7 @@ _superuser_psql() {
     if [ "$PG_SUPERUSER" = "$DB_USER" ]; then
         psql -U "$DB_USER" -d "$db" "$@"
     else
-        PGPASSWORD="$PG_SUPERUSER_PASSWORD" psql -U "$PG_SUPERUSER" -h "$PG_SUPERUSER_HOST" -d "$db" "$@"
+        sudo -u "$PG_SUPERUSER" psql -d "$db" "$@"
     fi
 }
 
@@ -91,7 +91,7 @@ _superuser_createdb() {
     if [ "$PG_SUPERUSER" = "$DB_USER" ]; then
         createdb -U "$DB_USER" "$@"
     else
-        PGPASSWORD="$PG_SUPERUSER_PASSWORD" createdb -U "$PG_SUPERUSER" -h "$PG_SUPERUSER_HOST" "$@"
+        sudo -u "$PG_SUPERUSER" createdb "$@"
     fi
 }
 
@@ -100,7 +100,7 @@ _superuser_pgschema() {
     if [ "$PG_SUPERUSER" = "$DB_USER" ]; then
         "$PGSCHEMA_BIN" "$@"
     else
-        PGPASSWORD="$PG_SUPERUSER_PASSWORD" "$PGSCHEMA_BIN" "$@"
+        sudo -u "$PG_SUPERUSER" "$PGSCHEMA_BIN" "$@"
     fi
 }
 
@@ -989,23 +989,21 @@ fi
 if [ "$SCHEMA_DIFF_SKIPPED" -eq 1 ]; then
     echo -e "  ${WARNING} Skipping pgschema plan/apply (extension install failed above)"
 else
-    # Build connection args using SUPERUSER for DDL operations
+    # Build connection args for DDL operations.
+    # When superuser differs from DB_USER, _superuser_pgschema runs via sudo -u,
+    # so peer auth works with the unix socket — no password needed.
     PGSCHEMA_CONN_ARGS=(
-        "--host" "$PG_SUPERUSER_HOST"
+        "--host" "/var/run/postgresql"
         "--port" "${PGPORT:-5432}"
         "--db" "$DB_NAME"
         "--user" "$PG_SUPERUSER"
     )
     PGSCHEMA_PLAN_ARGS=(
-        "--plan-host" "$PG_SUPERUSER_HOST"
+        "--plan-host" "/var/run/postgresql"
         "--plan-port" "${PGPORT:-5432}"
         "--plan-db" "$DB_NAME"
         "--plan-user" "$PG_SUPERUSER"
     )
-    if [ -n "${PG_SUPERUSER_PASSWORD:-}" ]; then
-        PGSCHEMA_CONN_ARGS+=("--password" "$PG_SUPERUSER_PASSWORD")
-        PGSCHEMA_PLAN_ARGS+=("--plan-password" "$PG_SUPERUSER_PASSWORD")
-    fi
 
     # Optionally use .pgschemaignore from memory/
     PGSCHEMA_IGNORE_OPT=()

@@ -1014,12 +1014,19 @@ else
     PLAN_FILE=$(mktemp /tmp/pgschema-plan-XXXXXX.json)
     TMPFILES+=("$PLAN_FILE")
 
+    # Copy schema file to /tmp so the superuser process can read it
+    # (the agent's home directory may not be traversable by the superuser unix user)
+    SCHEMA_FILE_TMP=$(mktemp /tmp/pgschema-schema-XXXXXX.sql)
+    TMPFILES+=("$SCHEMA_FILE_TMP")
+    cp "$SCHEMA_FILE" "$SCHEMA_FILE_TMP"
+    chmod 644 "$SCHEMA_FILE_TMP"
+
     echo "  Running pgschema plan (as superuser $PG_SUPERUSER)..."
     PLAN_EXIT=0
     _superuser_pgschema plan \
         "${PGSCHEMA_CONN_ARGS[@]}" \
         --schema public \
-        --file "$SCHEMA_FILE" \
+        --file "$SCHEMA_FILE_TMP" \
         "${PGSCHEMA_PLAN_ARGS[@]}" \
         --output-json "$PLAN_FILE" \
         --no-color 2>&1 || PLAN_EXIT=$?

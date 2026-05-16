@@ -1,295 +1,401 @@
 /**
- * Confidence Check Plugin — index.ts
+ * Confidence-Check Plugin — index.ts
  *
- * Registers a `before_agent_finalize` hook that evaluates the confidence
- * of the assistant's last response before it is delivered.
+ * Hooks into before_agent_finalize to evaluate response confidence.
  *
  * Flow:
- *   1. Heuristic pre-screen on lastAssistantMessage
- *      - Count hedging phrases
- *      - hedging_density = hedging_count / total_words
- *      - < 0.02 → auto-pass (return undefined)
- *      - > 0.08 → auto-fail (skip to LLM eval)
- *      - Otherwise → borderline, proceed to LLM eval
- *   2. LLM evaluation via OpenRouter (deepseek/deepseek-v4-flash)
- *      - Ask for JSON: { confidence, concerns, reasoning_strategies }
- *      - Parse response, clamp confidence to [0,100]
- *      - Errors → log warning, return undefined
- *   3. If confidence < 70 → return revision instruction
- *      - Socratic questioning prompt
- *      - Idempotency key keyed by runId
- *      - maxAttempts = 3
- *   4. After maxAttempts exhausted → one final revision to frame as uncertain,
- *      then allow finalization.
+ *   1. Heuristic pre-screen: count hedging phrases, calculate density,
+ *      count unsupported assertions (factual claims without citation markers)
+ *   2. If hedging density < low_threshold AND assertion_count < threshold → PASS (return undefined)
+ *   3. If hedging density > high_threshold → FAIL → skip to LLM evaluation
+ *   4. Otherwise → borderline → proceed to LLM evaluation
+ *   5. LLM evaluation: POST to OpenRouter (or ollama) with structured JSON prompt
+ *      Ask for: { "confidence": 0-100, "concerns": [...], "reasoning_strategies": [...] }
+ *   6. If confidence < threshold:
+ *      - Return revision instruction via Socratic questioning
+ *      - Track retry count per runId (idempotencyKey)
+ *   7. If maxAttempts exhausted:
+ *      - Return framing instruction: "I'm not fully confident about this, but..."
+ *   8. After final framing pass, return undefined to allow finalization
+ *
+ * Config (hardcoded defaults):
+ *   confidence_threshold: 70
+ *   max_revision_attempts: 3
+ *   hedging_density_pass_threshold: 0.02
+ *   hedging_density_fail_threshold: 0.08
+ *   evaluation_model: deepseek/deepseek-v4-flash (cheap + fast via OpenRouter)
  *
  * Issue: #75
  */
 
-// ── Constants ───────────────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+// Configuration
+// ══════════════════════════════════════════════════════════════════════════════
 
-const OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions";
-const EVAL_MODEL = "deepseek/deepseek-v4-flash";
-
-const HEDGING_PHRASES: readonly string[] = [
-  "I think",
-  "maybe",
-  "probably",
-  "I'm not sure",
-  "I believe",
-  "might be",
-  "could be wrong",
-  "not certain",
-];
-
-// Track retry counts per idempotency key
-const retryTracker = new Map<string, number>();
-
-// ── Plugin entry ─────────────────────────────────────────────────────────────
-
-type BeforeAgentFinalizeEvent = {
-  runId?: string;
-  sessionId: string;
-  sessionKey?: string;
-  lastAssistantMessage?: string;
-  messages?: unknown[];
-  provider?: string;
-  model?: string;
+const CONFIG = {
+  confidence_threshold: 70,              // LLM confidence score threshold
+  max_revision_attempts: 3,              // Max Socratic revision attempts
+  hedging_density_pass_threshold: 0.02,  // Below this → auto-pass
+  hedging_density_fail_threshold: 0.08,  // Above this → auto-fail to LLM
+  evaluation_model: "deepseek/deepseek-v4-flash",
 };
 
-type RevisionResult = {
-  action: "revise";
-  retry: {
-    instruction: string;
-    idempotencyKey: string;
-    maxAttempts: number;
-  };
-};
+const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
+
+// Per-run retry tracking: idempotencyKey → attempt count
+const retryAttempts = new Map<string, number>();
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Plugin entry
+// ══════════════════════════════════════════════════════════════════════════════
 
 export default function register(api: PluginApi): void {
   console.info("[confidence-check] Plugin registered — hook: before_agent_finalize");
 
   api.on(
     "before_agent_finalize",
-    async (event: BeforeAgentFinalizeEvent, _ctx: PluginContext) => {
-      const result = await evaluateConfidence(event);
-      if (result) return result;
+    async (event: FinalizeEvent, ctx: PluginContext): Promise<ReviseAction | undefined> => {
+      try {
+        return await evaluateConfidence(event, ctx);
+      } catch (err) {
+        console.error(
+          "[confidence-check] Unhandled error in before_agent_finalize:",
+          err instanceof Error ? err.message : String(err)
+        );
+        // On error, allow finalization — don't block
+        return undefined;
+      }
     }
   );
 }
 
-// ── Confidence evaluation ───────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+// Confidence evaluation pipeline
+// ══════════════════════════════════════════════════════════════════════════════
 
 async function evaluateConfidence(
-  event: BeforeAgentFinalizeEvent
-): Promise<RevisionResult | undefined> {
+  event: FinalizeEvent,
+  _ctx: PluginContext
+): Promise<ReviseAction | undefined> {
   const message = event.lastAssistantMessage || "";
-  if (!message.trim()) return undefined;
+  const runId = event.runId || "unknown";
 
-  // ── Heuristic pre-screen ──────────────────────────────────────────────
-  const hedgingDensity = computeHedgingDensity(message);
-
-  if (hedgingDensity < 0.02) {
-    console.debug(
-      `[confidence-check] Auto-pass (density=${hedgingDensity.toFixed(3)})`
-    );
+  if (!message.trim()) {
+    console.debug("[confidence-check] Empty message, skipping");
     return undefined;
   }
 
-  // auto-fail (> 0.08) continues straight to LLM eval
-  const skipHeuristic = hedgingDensity > 0.08;
-  if (skipHeuristic) {
-    console.debug(
-      `[confidence-check] Auto-fail heuristic (density=${hedgingDensity.toFixed(3)}), proceeding to LLM eval`
-    );
-  }
+  // ── Track retry attempts ────────────────────────────────────────────────────
+  const idempotencyKey = `confidence-${runId}`;
+  const priorAttempts = retryAttempts.get(idempotencyKey) || 0;
 
-  // ── LLM evaluation ────────────────────────────────────────────────────
-  let evalResult: EvalResult | undefined;
-  try {
-    evalResult = await llmEvaluateConfidence(message);
-  } catch (e) {
-    console.warn(
-      "[confidence-check] LLM evaluation failed:",
-      e instanceof Error ? e.message : String(e)
-    );
-    return undefined;
-  }
-
-  if (!evalResult) return undefined;
-
-  const confidence = Math.max(0, Math.min(100, evalResult.confidence));
+  // ── Step 1: Heuristic pre-screen ────────────────────────────────────────────
+  const heuristics = runHeuristicScreen(message);
   console.info(
-    `[confidence-check] LLM confidence=${confidence}, concerns=[${evalResult.concerns.join(", ")}]`
+    `[confidence-check] Heuristics: hedging=${heuristics.hedging_count}/${heuristics.word_count} ` +
+      `density=${heuristics.hedging_density.toFixed(3)} assertions=${heuristics.unsupported_assertions}`
   );
 
-  if (confidence >= 70) {
+  // Auto-pass: very low hedging, low unsupported assertions
+  if (
+    heuristics.hedging_density < CONFIG.hedging_density_pass_threshold &&
+    heuristics.unsupported_assertions < 3
+  ) {
+    console.info("[confidence-check] Auto-pass (low hedging, few assertions)");
     return undefined;
   }
 
-  // ── Revision ──────────────────────────────────────────────────────────
-  const runId = event.runId ?? "unknown";
-  const idempotencyKey = `confidence-${runId}`;
-  const maxAttempts = 3;
-
-  const currentRetries = retryTracker.get(idempotencyKey) ?? 0;
-
-  if (currentRetries >= maxAttempts) {
-    // Final attempt: frame as uncertain, then allow finalization
-    console.info(
-      `[confidence-check] Max retries (${maxAttempts}) reached — framing as uncertain`
-    );
-
-    retryTracker.delete(idempotencyKey);
-
+  // ── Step 2: Check if max revisions exhausted ───────────────────────────────
+  if (priorAttempts >= CONFIG.max_revision_attempts) {
+    console.warn(`[confidence-check] Max revisions (${CONFIG.max_revision_attempts}) exhausted for ${runId}, framing response`);
+    retryAttempts.set(idempotencyKey, priorAttempts + 1);
     return {
-      action: "revise" as const,
+      action: "revise",
       retry: {
         instruction:
-          "Your previous response has repeatedly scored low confidence. Please restate your answer clearly framing it as uncertain or incomplete. Acknowledge what you do and do not know, and indicate where the user should seek additional verification.",
-        idempotencyKey: `${idempotencyKey}-final`,
+          "You have been unable to reach high confidence after multiple revisions. " +
+          "Frame your response to acknowledge uncertainty: start with 'I'm not fully confident about this, but...' " +
+          "and explain what you're uncertain about.",
         maxAttempts: 1,
       },
     };
   }
 
-  retryTracker.set(idempotencyKey, currentRetries + 1);
+  // ── Step 3: LLM evaluation ──────────────────────────────────────────────────
+  let llmResult: LlmEvaluation;
+  try {
+    llmResult = await evaluateViaLlm(message, heuristics);
+  } catch (err) {
+    console.warn("[confidence-check] LLM evaluation failed:", (err as Error).message);
+    // On LLM failure, use heuristics fallback
+    if (heuristics.hedging_density >= CONFIG.hedging_density_fail_threshold) {
+      llmResult = {
+        confidence: 40,
+        concerns: ["High hedging density detected"],
+        reasoning_strategies: ["Review claims and verify against sources"],
+      };
+    } else {
+      // Borderline — let it pass but log
+      console.info("[confidence-check] Borderline after LLM failure, allowing finalize");
+      return undefined;
+    }
+  }
+
+  console.info(
+    `[confidence-check] LLM confidence=${llmResult.confidence}% ` +
+      `concerns=[${llmResult.concerns.join("; ")}] ` +
+      `strategies=[${llmResult.reasoning_strategies.join("; ")}]`
+  );
+
+  // ── Step 4: Decide action ───────────────────────────────────────────────────
+  if (llmResult.confidence >= CONFIG.confidence_threshold) {
+    console.info("[confidence-check] PASS — confidence above threshold");
+    return undefined;
+  }
+
+  // Fail → trigger revision
+  retryAttempts.set(idempotencyKey, priorAttempts + 1);
+  const attemptsRemaining = CONFIG.max_revision_attempts - priorAttempts;
+
+  console.warn(
+    `[confidence-check] FAIL — confidence ${llmResult.confidence}% < threshold ${CONFIG.confidence_threshold}. ` +
+      `Triggering revision (attempt ${priorAttempts + 1}/${CONFIG.max_revision_attempts})`
+  );
+
+  const concernsBlock = llmResult.concerns.length > 0
+    ? llmResult.concerns.map((c) => `- ${c}`).join("\n")
+    : "- Unspecified concerns identified by evaluator";
 
   return {
-    action: "revise" as const,
+    action: "revise",
     retry: {
-      instruction: `Your self-assessment scored ${confidence}% confidence. Concerns: ${evalResult.concerns.join(
-        "; "
-      )}. What assumptions are you making in this response? What evidence supports or contradicts your claims?`,
+      instruction:
+        `Your self-assessment scored ${llmResult.confidence}% confidence (threshold: ${CONFIG.confidence_threshold}%).\n\n` +
+        `Concerns:\n${concernsBlock}\n\n` +
+        `What assumptions are you making in this response? What evidence supports or contradicts your claims?\n\n` +
+        `(${attemptsRemaining} revision attempt(s) available)`,
       idempotencyKey,
-      maxAttempts,
+      maxAttempts: 1,
     },
   };
 }
 
-// ── Hedging heuristic ───────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+// Heuristic pre-screen
+// ══════════════════════════════════════════════════════════════════════════════
 
-function computeHedgingDensity(text: string): number {
-  const words = text.trim().split(/\s+/).filter(Boolean);
-  if (words.length === 0) return 0;
+interface HeuristicResult {
+  hedging_count: number;
+  word_count: number;
+  hedging_density: number;
+  unsupported_assertions: number;
+}
 
+const HEDGING_PHRASES = [
+  "i think", "i believe", "maybe", "probably", "i'm not sure",
+  "i am not sure", "might be", "could be wrong", "not certain",
+  "i'm not certain", "seems like", "appears to", "as far as i know",
+  "i guess", "i suppose", "perhaps", "possibly", "i'm guessing",
+  "unclear", "not entirely", "not completely", "partially",
+];
+
+const CITATION_MARKERS = [
+  "according to", "based on", "the docs say", "the documentation states",
+  "as stated", "as mentioned", "per", "source", "in the",
+];
+
+function runHeuristicScreen(message: string): HeuristicResult {
+  const words = message.split(/\s+/).filter((w) => w.length > 0);
+  const wordCount = words.length || 1;
+
+  const lower = message.toLowerCase();
+
+  // Count hedging phrases
   let hedgingCount = 0;
-  const lower = text.toLowerCase();
-
   for (const phrase of HEDGING_PHRASES) {
-    const escaped = phrase.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const re = new RegExp(escaped, "g");
-    const matches = lower.match(re);
+    const matches = lower.match(new RegExp(phrase, "g"));
     if (matches) hedgingCount += matches.length;
   }
 
-  return hedgingCount / words.length;
+  // Count unsupported assertions (sentences without citation markers)
+  // Simple heuristic: count sentences that look like factual claims
+  // (declarative sentences without "?" at end) minus those with citation markers
+  const sentences = message
+    .split(/[.!?]+/)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 8 && !s.endsWith("?"));
+
+  let unsupported = 0;
+  for (const sentence of sentences) {
+    const hasCitation = CITATION_MARKERS.some((m) =>
+      sentence.toLowerCase().includes(m)
+    );
+    // Also check for weak indicators of unsupported claims
+    const hasHedgingInSentence = HEDGING_PHRASES.some((m) =>
+      sentence.toLowerCase().includes(m)
+    );
+    if (!hasCitation && !hasHedgingInSentence) {
+      unsupported++;
+    }
+  }
+
+  // Cap unsupported at max sentence count
+  unsupported = Math.min(unsupported, sentences.length);
+
+  return {
+    hedging_count: hedgingCount,
+    word_count: wordCount,
+    hedging_density: hedgingCount / wordCount,
+    unsupported_assertions: unsupported,
+  };
 }
 
-// ── LLM evaluation ──────────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+// LLM evaluation via OpenRouter
+// ══════════════════════════════════════════════════════════════════════════════
 
-interface EvalResult {
+interface LlmEvaluation {
   confidence: number;
   concerns: string[];
   reasoning_strategies: string[];
 }
 
-async function llmEvaluateConfidence(message: string): Promise<EvalResult | undefined> {
-  const apiKey = process.env.OPENROUTER_API_KEY?.trim();
-  if (!apiKey) {
-    console.warn("[confidence-check] OPENROUTER_API_KEY not set, skipping LLM eval");
-    return undefined;
-  }
+const EVAL_PROMPT_TEMPLATE = `Evaluate the confidence level of the following AI assistant response.
 
-  const prompt = `Evaluate the confidence of the following assistant response. Respond ONLY with a JSON object matching this exact schema:
+Respond ONLY with valid JSON. No markdown, no explanation outside the JSON.
 
 {
-  "confidence": <number 0-100>,
-  "concerns": [<concern 1>, <concern 2>, ...],
-  "reasoning_strategies": [<strategy 1>, <strategy 2>, ...]
+  "confidence": <integer 0-100>,
+  "concerns": ["list of specific concerns about accuracy, unsupported claims, or uncertainty"],
+  "reasoning_strategies": ["suggested ways to improve confidence"]
 }
 
-Rules:
-- confidence: 0 = completely uncertain/speculative, 100 = fully confident with clear evidence
-- concerns: list specific weaknesses (e.g., "relies on assumption", "lacks source citation", "overgeneralizes")
-- reasoning_strategies: suggest how the response could be improved (e.g., "cite specific source", "qualify scope", "provide concrete example")
+HEDGING PHRASES FOUND: {hedging_count} in {word_count} words (density: {hedging_density})
+UNSUPPORTED ASSERTIONS: {unsupported_assertions}
 
 ASSISTANT RESPONSE:
-${message}
+{message}
+`;
 
-Return ONLY valid JSON. No markdown fences. No extra text.`;
+async function evaluateViaLlm(
+  message: string,
+  heuristics: HeuristicResult
+): Promise<LlmEvaluation> {
+  const apiKey = process.env.OPENROUTER_API_KEY;
+  if (!apiKey) {
+    throw new Error("OPENROUTER_API_KEY not set");
+  }
 
-  const resp = await fetch(OPENROUTER_API_URL, {
+  const prompt = EVAL_PROMPT_TEMPLATE
+    .replace("{hedging_count}", String(heuristics.hedging_count))
+    .replace("{word_count}", String(heuristics.word_count))
+    .replace("{hedging_density}", heuristics.hedging_density.toFixed(4))
+    .replace("{unsupported_assertions}", String(heuristics.unsupported_assertions))
+    .replace("{message}", message);
+
+  const resp = await fetch(OPENROUTER_URL, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+      "HTTP-Referer": "https://nova.dustintrammell.com",
+      "X-Title": "NOVA Confidence Check",
     },
     body: JSON.stringify({
-      model: EVAL_MODEL,
-      max_tokens: 2048,
-      messages: [{ role: "user", content: prompt }],
+      model: CONFIG.evaluation_model,
+      messages: [
+        {
+          role: "system",
+          content:
+            "You are a strict confidence evaluator. Analyze the response for accuracy, confidence, hedging, and unsupported claims. Respond in JSON only.",
+        },
+        { role: "user", content: prompt },
+      ],
+      temperature: 0.3,
+      max_tokens: 512,
     }),
   });
 
   if (!resp.ok) {
     const body = await resp.text().catch(() => "");
-    throw new Error(`OpenRouter HTTP ${resp.status}: ${body.slice(0, 200)}`);
+    throw new Error(`OpenRouter HTTP ${resp.status}: ${body.slice(0, 500)}`);
   }
 
-  const data = (await resp.json()) as {
-    choices?: { message?: { content?: string } }[];
-  };
-
-  const content = data.choices?.[0]?.message?.content?.trim() ?? "";
-  if (!content) return undefined;
-
-  // Strip markdown fences if present
-  let jsonText = content;
-  if (jsonText.startsWith("```")) {
-    jsonText = jsonText.replace(/^```[a-zA-Z]*\n?/, "").replace(/\n?```$/, "").trim();
+  const data = (await resp.json()) as OpenRouterResponse;
+  if (!data.choices?.[0]?.message?.content) {
+    throw new Error("OpenRouter response missing content");
   }
 
-  let parsed: unknown;
+  const content = data.choices[0].message.content.trim();
+
+  // Parse JSON — handle markdown code blocks
+  let parsed: LlmEvaluation;
   try {
-    parsed = JSON.parse(jsonText);
+    const jsonContent = content
+      .replace(/^```(?:json)?\s*/, "")
+      .replace(/```$/, "")
+      .trim();
+    parsed = JSON.parse(jsonContent) as LlmEvaluation;
   } catch (e) {
-    throw new Error(`Failed to parse JSON: ${(e as Error).message}. Raw: ${jsonText.slice(0, 200)}`);
+    throw new Error(`Failed to parse LLM JSON response: ${(e as Error).message}. Raw: ${content.slice(0, 500)}`);
   }
 
-  if (!isEvalResult(parsed)) {
-    throw new Error(`Parsed JSON does not match expected shape: ${jsonText.slice(0, 200)}`);
+  // Validate and sanitize
+  if (typeof parsed.confidence !== "number" || isNaN(parsed.confidence)) {
+    throw new Error("LLM response missing valid confidence field");
   }
 
-  return parsed;
+  const confidence = Math.max(0, Math.min(100, Math.round(parsed.confidence)));
+  const concerns = Array.isArray(parsed.concerns) ? parsed.concerns.map(String) : [];
+  const strategies = Array.isArray(parsed.reasoning_strategies)
+    ? parsed.reasoning_strategies.map(String)
+    : [];
+
+  return {
+    confidence,
+    concerns,
+    reasoning_strategies: strategies,
+  };
 }
 
-function isEvalResult(v: unknown): v is EvalResult {
-  if (typeof v !== "object" || v === null) return false;
-  const o = v as Record<string, unknown>;
-  return (
-    typeof o.confidence === "number" &&
-    Array.isArray(o.concerns) &&
-    o.concerns.every((c) => typeof c === "string") &&
-    Array.isArray(o.reasoning_strategies) &&
-    o.reasoning_strategies.every((s) => typeof s === "string")
-  );
-}
-
-// ── Plugin API type stubs ───────────────────────────────────────────────────
-// Minimal type declarations for the Plugin SDK surface we use.
+// ══════════════════════════════════════════════════════════════════════════════
+// Type stubs for Plugin SDK
+// ══════════════════════════════════════════════════════════════════════════════
 
 interface PluginApi {
   on(
     hook: string,
-    handler: (event: unknown, ctx: PluginContext) => Promise<unknown | void>,
+    handler: (event: FinalizeEvent, ctx: PluginContext) => Promise<ReviseAction | undefined>,
     options?: { timeoutMs?: number }
   ): void;
+}
+
+interface FinalizeEvent {
+  lastAssistantMessage?: string;
+  runId?: string;
+  content?: string;
+  sessionKey?: string;
+  metadata?: Record<string, unknown>;
+  [key: string]: unknown;
 }
 
 interface PluginContext {
   sessionKey?: string;
   agentId?: string;
-  messageProvider?: string;
   runId?: string;
   [key: string]: unknown;
+}
+
+interface ReviseAction {
+  action: "revise";
+  retry: {
+    instruction: string;
+    idempotencyKey?: string;
+    maxAttempts: number;
+  };
+}
+
+interface OpenRouterResponse {
+  choices?: Array<{ message?: { content?: string } }>;
+  error?: { message?: string };
 }

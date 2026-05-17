@@ -51,6 +51,7 @@ source "$PG_ENV"
 PG_CONFIG="${HOME}/.openclaw/postgres.json"
 if [ -f "$PG_CONFIG" ] && [ -r "$PG_CONFIG" ]; then
     load_pg_env
+    load_pg_superuser_env
 else
     echo "ERROR: Config file not found: $PG_CONFIG" >&2
     echo "Run shell-install.sh first or create ~/.openclaw/postgres.json" >&2
@@ -67,6 +68,46 @@ WORKSPACE="${OPENCLAW_WORKSPACE:-$HOME/.openclaw/workspace-coder}"
 OPENCLAW_DIR="$HOME/.openclaw"
 OPENCLAW_PROJECTS="$OPENCLAW_DIR/projects"
 EXTENSIONS_DIR="$OPENCLAW_DIR/extensions"
+
+# Superuser connection helper for DDL operations
+PG_SUPERUSER="${PG_SUPERUSER:-$DB_USER}"
+PG_SUPERUSER_PASSWORD="${PG_SUPERUSER_PASSWORD:-${PGPASSWORD:-}}"
+PG_SUPERUSER_HOST="${PG_SUPERUSER_HOST:-/var/run/postgresql}"
+
+_superuser_psql() {
+    # Runs psql as the superuser for DDL operations.
+    # Falls back to regular DB_USER if superuser is the same.
+    local db="${1:-$DB_NAME}"
+    shift || true
+    if [ "$PG_SUPERUSER" = "$DB_USER" ]; then
+        psql -U "$DB_USER" -d "$db" "$@"
+    else
+        sudo -u "$PG_SUPERUSER" psql -d "$db" "$@"
+    fi
+}
+
+_superuser_createdb() {
+    # Runs createdb as the superuser.
+    if [ "$PG_SUPERUSER" = "$DB_USER" ]; then
+        createdb -U "$DB_USER" "$@"
+    else
+        sudo -u "$PG_SUPERUSER" createdb "$@"
+    fi
+}
+
+_superuser_pgschema() {
+    # Runs pgschema as the superuser for plan/apply.
+    if [ "$PG_SUPERUSER" = "$DB_USER" ]; then
+        "$PGSCHEMA_BIN" "$@"
+    else
+        sudo -u "$PG_SUPERUSER" "$PGSCHEMA_BIN" "$@"
+    fi
+}
+
+echo "  Agent DB user: $DB_USER"
+if [ "$PG_SUPERUSER" != "$DB_USER" ]; then
+    echo "  Superuser:     $PG_SUPERUSER (for DDL operations)"
+fi
 
 # ============================================
 # SECTION 4: Parse arguments
@@ -561,6 +602,18 @@ verify_cognition() {
         VERIFICATION_ERRORS=$((VERIFICATION_ERRORS + 1))
     fi
 
+    if [ -f "$OPENCLAW_DIR/plugins/self-awareness/dist/index.js" ]; then
+        echo -e "  ${CHECK_MARK} self-awareness plugin installed"
+    else
+        echo -e "  ${INFO} self-awareness plugin not installed"
+    fi
+
+    if [ -f "$OPENCLAW_DIR/plugins/confidence-check/dist/index.js" ]; then
+        echo -e "  ${CHECK_MARK} confidence-check plugin installed"
+    else
+        echo -e "  ${INFO} confidence-check plugin not installed"
+    fi
+
     if [ -d "$OPENCLAW_DIR/hooks/db-bootstrap-context" ]; then
         echo -e "  ${CHECK_MARK} Bootstrap context hook installed"
     else
@@ -801,7 +854,7 @@ if psql -U "$DB_USER" -lqt | cut -d \| -f 1 | grep -qw "$DB_NAME"; then
     fi
 else
     echo "  Creating database '$DB_NAME'..."
-    createdb -U "$DB_USER" "$DB_NAME" 2>/dev/null || {
+    _superuser_createdb "$DB_NAME" 2>/dev/null || {
         echo -e "  ${CROSS_MARK} Failed to create database '$DB_NAME'"
         exit 1
     }
@@ -821,15 +874,15 @@ SCHEMA_DIFF_SKIPPED=0
 echo ""
 echo "Schema management (pgschema)..."
 
-# -- Extensions --
+# -- Extensions (use superuser for CREATE EXTENSION) --
 echo "  Ensuring extensions..."
 EXTENSIONS=$(grep -E "(^|INSTALLER HANDLES: )CREATE EXTENSION IF NOT EXISTS" "$SCHEMA_FILE" | sed "s/.*CREATE EXTENSION IF NOT EXISTS //;s/ .*//;s/;//" || true)
 if [ -n "$EXTENSIONS" ]; then
     for ext in $EXTENSIONS; do
-        if psql -U "$DB_USER" -d "$DB_NAME" -tAc "SELECT 1 FROM pg_extension WHERE extname = '$ext'" | grep -q 1; then
+        if _superuser_psql "$DB_NAME" -tAc "SELECT 1 FROM pg_extension WHERE extname = '$ext'" | grep -q 1; then
             echo -e "  ${CHECK_MARK} Extension '$ext' already installed"
         else
-            if psql -U "$DB_USER" -d "$DB_NAME" -c "CREATE EXTENSION IF NOT EXISTS \"$ext\";" >/dev/null 2>&1; then
+            if _superuser_psql "$DB_NAME" -c "CREATE EXTENSION IF NOT EXISTS \"$ext\";" >/dev/null 2>&1; then
                 echo -e "  ${CHECK_MARK} Extension '$ext' installed"
             else
                 echo -e "  ${WARNING} Extension '$ext' not installed — requires superuser"
@@ -841,7 +894,7 @@ else
     echo -e "  ${INFO} No extensions defined in schema.sql"
 fi
 
-# -- Pre-migrations --
+# -- Pre-migrations (use superuser for DDL) --
 PRE_MIGRATIONS_DIR="$SCRIPT_DIR/database/pre-migrations"
 if [ -d "$PRE_MIGRATIONS_DIR" ]; then
     PRE_MIGRATION_FILES=()
@@ -853,7 +906,7 @@ if [ -d "$PRE_MIGRATIONS_DIR" ]; then
         echo "  Running pre-migrations (${#PRE_MIGRATION_FILES[@]} files)..."
         for sql_file in "${PRE_MIGRATION_FILES[@]}"; do
             local_filename=$(basename "$sql_file")
-            if psql -U "$DB_USER" -d "$DB_NAME" -f "$sql_file" >/dev/null 2>&1; then
+            if _superuser_psql "$DB_NAME" -f "$sql_file" >/dev/null 2>&1; then
                 echo -e "  ${CHECK_MARK} Pre-migration: $local_filename"
             else
                 echo -e "  ${WARNING} Pre-migration failed: $local_filename (continuing)"
@@ -879,14 +932,15 @@ if [ -f "$RENAMES_FILE" ]; then
         col_to=$(echo "$entry" | jq -r '.column.to')
         pr=$(echo "$entry" | jq -r '.pr // "unknown"')
 
-        # Check if the FROM column still exists
+        # Check if the FROM column still exists (use DB_USER for reads)
         EXISTS=$(psql -U "$DB_USER" -d "$DB_NAME" -tAc \
             "SELECT COUNT(*) FROM information_schema.columns
              WHERE table_schema = 'public' AND table_name = '$table' AND column_name = '$col_from'" \
             2>/dev/null | tr -d '[:space:]')
 
         if [ "${EXISTS:-0}" -eq 1 ]; then
-            if psql -U "$DB_USER" -d "$DB_NAME" -c \
+            # Use superuser for ALTER TABLE DDL
+            if _superuser_psql "$DB_NAME" -c \
                 "ALTER TABLE \"$table\" RENAME COLUMN \"$col_from\" TO \"$col_to\";" >/dev/null 2>&1; then
                 echo -e "  ${CHECK_MARK} Renamed $table.$col_from → $col_to ($pr)"
                 APPLIED=$((APPLIED + 1))
@@ -912,7 +966,8 @@ if [ -f "$RENAMES_FILE" ]; then
             2>/dev/null | tr -d '[:space:]')
 
         if [ "${EXISTS:-0}" -eq 1 ]; then
-            if psql -U "$DB_USER" -d "$DB_NAME" -c \
+            # Use superuser for ALTER TABLE DDL
+            if _superuser_psql "$DB_NAME" -c \
                 "ALTER TABLE \"$tbl_from\" RENAME TO \"$tbl_to\";" >/dev/null 2>&1; then
                 echo -e "  ${CHECK_MARK} Renamed table $tbl_from → $tbl_to ($pr)"
                 APPLIED=$((APPLIED + 1))
@@ -934,23 +989,21 @@ fi
 if [ "$SCHEMA_DIFF_SKIPPED" -eq 1 ]; then
     echo -e "  ${WARNING} Skipping pgschema plan/apply (extension install failed above)"
 else
-    # Build connection args
+    # Build connection args for DDL operations.
+    # When superuser differs from DB_USER, _superuser_pgschema runs via sudo -u,
+    # so peer auth works with the unix socket — no password needed.
     PGSCHEMA_CONN_ARGS=(
-        "--host" "${PGHOST:-/var/run/postgresql}"
+        "--host" "/var/run/postgresql"
         "--port" "${PGPORT:-5432}"
         "--db" "$DB_NAME"
-        "--user" "$DB_USER"
+        "--user" "$PG_SUPERUSER"
     )
     PGSCHEMA_PLAN_ARGS=(
-        "--plan-host" "${PGHOST:-/var/run/postgresql}"
+        "--plan-host" "/var/run/postgresql"
         "--plan-port" "${PGPORT:-5432}"
         "--plan-db" "$DB_NAME"
-        "--plan-user" "$DB_USER"
+        "--plan-user" "$PG_SUPERUSER"
     )
-    if [ -n "${PGPASSWORD:-}" ]; then
-        PGSCHEMA_CONN_ARGS+=("--password" "$PGPASSWORD")
-        PGSCHEMA_PLAN_ARGS+=("--plan-password" "$PGPASSWORD")
-    fi
 
     # Optionally use .pgschemaignore from memory/
     PGSCHEMA_IGNORE_OPT=()
@@ -961,12 +1014,19 @@ else
     PLAN_FILE=$(mktemp /tmp/pgschema-plan-XXXXXX.json)
     TMPFILES+=("$PLAN_FILE")
 
-    echo "  Running pgschema plan..."
+    # Copy schema file to /tmp so the superuser process can read it
+    # (the agent's home directory may not be traversable by the superuser unix user)
+    SCHEMA_FILE_TMP=$(mktemp /tmp/pgschema-schema-XXXXXX.sql)
+    TMPFILES+=("$SCHEMA_FILE_TMP")
+    cp "$SCHEMA_FILE" "$SCHEMA_FILE_TMP"
+    chmod 644 "$SCHEMA_FILE_TMP"
+
+    echo "  Running pgschema plan (as superuser $PG_SUPERUSER)..."
     PLAN_EXIT=0
-    "$PGSCHEMA_BIN" plan \
+    _superuser_pgschema plan \
         "${PGSCHEMA_CONN_ARGS[@]}" \
         --schema public \
-        --file "$SCHEMA_FILE" \
+        --file "$SCHEMA_FILE_TMP" \
         "${PGSCHEMA_PLAN_ARGS[@]}" \
         --output-json "$PLAN_FILE" \
         --no-color 2>&1 || PLAN_EXIT=$?
@@ -1022,7 +1082,7 @@ else
         else
             echo "  Applying $TOTAL_STEPS schema change(s)..."
             APPLY_EXIT=0
-            "$PGSCHEMA_BIN" apply \
+            _superuser_pgschema apply \
                 "${PGSCHEMA_CONN_ARGS[@]}" \
                 --schema public \
                 --plan "$PLAN_FILE" \
@@ -1033,6 +1093,16 @@ else
                 echo -e "  ${CHECK_MARK} Schema applied successfully"
                 TABLE_COUNT=$(psql -U "$DB_USER" -d "$DB_NAME" -tAc "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE'" | tr -d '[:space:]')
                 echo "      Total tables in database: $TABLE_COUNT"
+
+                # Reassign ownership of all objects to the agent user
+                if [ "$PG_SUPERUSER" != "$DB_USER" ]; then
+                    echo "  Reassigning ownership to '$DB_USER'..."
+                    if _superuser_psql "$DB_NAME" -c "REASSIGN OWNED BY \"$PG_SUPERUSER\" TO \"$DB_USER\";" >/dev/null 2>&1; then
+                        echo -e "  ${CHECK_MARK} Ownership reassigned to '$DB_USER'"
+                    else
+                        echo -e "  ${WARNING} Could not reassign ownership (objects may be owned by $PG_SUPERUSER)"
+                    fi
+                fi
             else
                 echo -e "  ${WARNING} Schema apply failed (exit $APPLY_EXIT) — continuing"
                 SCHEMA_DIFF_SKIPPED=1
@@ -1291,7 +1361,7 @@ if psql -U "$DB_USER" -lqt | cut -d \| -f 1 | grep -qw "$DB_NAME"; then
     echo -e "  ${CHECK_MARK} Database '$DB_NAME' exists"
 else
     echo "  Creating database '$DB_NAME'..."
-    createdb -U "$DB_USER" "$DB_NAME" || { echo -e "  ${CROSS_MARK} Failed to create database"; exit 1; }
+    _superuser_createdb "$DB_NAME" || { echo -e "  ${CROSS_MARK} Failed to create database"; exit 1; }
     echo -e "  ${CHECK_MARK} Database '$DB_NAME' created"
 fi
 
@@ -1487,6 +1557,122 @@ else
     echo -e "  ${CROSS_MARK} turn-context plugin source not found at $TURN_CONTEXT_SOURCE"
     VERIFICATION_ERRORS=$((VERIFICATION_ERRORS + 1))
 fi
+
+# --- Metacognition plugins (self-awareness, confidence-check) ---
+echo ""
+echo "Metacognition plugins installation..."
+
+# Helper: install a metacognition plugin
+install_metacognition_plugin() {
+    local plugin_name="$1"
+    local plugin_source="$2"
+    local plugin_target="$3"
+
+    if [ ! -d "$plugin_source" ]; then
+        echo -e "  ${INFO} $plugin_name source not found at $plugin_source (skipping)"
+        return 0
+    fi
+
+    echo "  Installing $plugin_name..."
+    mkdir -p "$plugin_target"
+
+    # Copy source and config files
+    for f in package.json openclaw.plugin.json tsconfig.json src; do
+        if [ -e "$plugin_source/$f" ]; then
+            if [ -d "$plugin_source/$f" ]; then
+                cp -r "$plugin_source/$f" "$plugin_target/$f"
+            else
+                cp "$plugin_source/$f" "$plugin_target/$f"
+            fi
+        fi
+    done
+    echo -e "    ${CHECK_MARK} Source files copied"
+
+    # Install dependencies and build
+    cd "$plugin_target"
+    if [ ! -d "node_modules" ] || [ "$FORCE_INSTALL" -eq 1 ]; then
+        echo "    Installing dependencies..."
+        NPM_INSTALL_LOG=$(mktemp /tmp/npm-install-${plugin_name}-XXXXXX.log)
+        TMPFILES+=("$NPM_INSTALL_LOG")
+        if npm install >"$NPM_INSTALL_LOG" 2>&1; then
+            echo -e "    ${CHECK_MARK} Dependencies installed"
+            rm -f "$NPM_INSTALL_LOG"
+        else
+            echo -e "    ${WARNING} npm install had issues"
+            tail -10 "$NPM_INSTALL_LOG"
+        fi
+    fi
+
+    # Build TypeScript
+    if [ -d "$plugin_target/src" ]; then
+        echo "    Building TypeScript..."
+        BUILD_LOG=$(mktemp /tmp/build-${plugin_name}-XXXXXX.log)
+        TMPFILES+=("$BUILD_LOG")
+        if npx tsc >"$BUILD_LOG" 2>&1; then
+            echo -e "    ${CHECK_MARK} Build completed"
+            rm -f "$BUILD_LOG"
+        else
+            echo -e "    ${CROSS_MARK} Build failed"
+            tail -10 "$BUILD_LOG"
+            VERIFICATION_ERRORS=$((VERIFICATION_ERRORS + 1))
+            cd "$SCRIPT_DIR"
+            return 1
+        fi
+    fi
+    cd "$SCRIPT_DIR"
+
+    # Enable in OpenClaw config
+    if [ -f "$OPENCLAW_CONFIG" ] && command -v jq &>/dev/null; then
+        jq --arg path "$plugin_target" --arg name "$plugin_name" '
+            .plugins.load.paths = ((.plugins.load.paths // []) + [$path] | unique)
+            | .plugins.entries[$name] = {
+                "enabled": true,
+                "hooks": {
+                  "allowConversationAccess": true
+                }
+              }
+        ' "$OPENCLAW_CONFIG" >"$OPENCLAW_CONFIG.tmp" && \
+            mv "$OPENCLAW_CONFIG.tmp" "$OPENCLAW_CONFIG" && \
+            echo -e "    ${CHECK_MARK} $plugin_name enabled in OpenClaw config" || \
+            echo -e "    ${WARNING} Could not enable $plugin_name in config"
+    fi
+
+    # Verify installation
+    if [ -f "$plugin_target/dist/index.js" ] && [ -f "$plugin_target/openclaw.plugin.json" ]; then
+        echo -e "  ${CHECK_MARK} $plugin_name installed to $plugin_target"
+    else
+        echo -e "  ${CROSS_MARK} $plugin_name installation incomplete"
+        VERIFICATION_ERRORS=$((VERIFICATION_ERRORS + 1))
+    fi
+
+    # Run any plugin migrations
+    local plugin_migrations="$plugin_source/database/migrations"
+    if [ -d "$plugin_migrations" ]; then
+        echo "    Running $plugin_name migrations..."
+        local mig_files=()
+        while IFS= read -r -d '' f; do
+            mig_files+=("$f")
+        done < <(find "$plugin_migrations" -maxdepth 1 -name "*.sql" -print0 | sort -z)
+
+        for sql_file in "${mig_files[@]}"; do
+            local mig_name
+            mig_name=$(basename "$sql_file")
+            if _superuser_psql "$DB_NAME" -f "$sql_file" >/dev/null 2>&1; then
+                echo -e "    ${CHECK_MARK} Migration: $mig_name"
+            else
+                echo -e "    ${WARNING} Migration failed: $mig_name"
+            fi
+        done
+    fi
+}
+
+install_metacognition_plugin "self-awareness" \
+    "$SCRIPT_DIR/cognition/metacognition/self-awareness" \
+    "$OPENCLAW_DIR/plugins/self-awareness"
+
+install_metacognition_plugin "confidence-check" \
+    "$SCRIPT_DIR/cognition/metacognition/confidence-check" \
+    "$OPENCLAW_DIR/plugins/confidence-check"
 
 # --- Bootstrap context system ---
 echo ""
@@ -1954,6 +2140,12 @@ echo "  [cognition]"
 echo "    • agent_chat extension → $EXTENSIONS_DIR/agent_chat"
 echo "    • agent_config_sync extension → $EXTENSIONS_DIR/agent_config_sync"
 echo "    • turn-context plugin → $OPENCLAW_DIR/plugins/turn-context"
+if [ -f "$OPENCLAW_DIR/plugins/self-awareness/dist/index.js" ]; then
+    echo "    • self-awareness plugin → $OPENCLAW_DIR/plugins/self-awareness"
+fi
+if [ -f "$OPENCLAW_DIR/plugins/confidence-check/dist/index.js" ]; then
+    echo "    • confidence-check plugin → $OPENCLAW_DIR/plugins/confidence-check"
+fi
 echo "    • Bootstrap context → $OPENCLAW_DIR/hooks/db-bootstrap-context"
 echo "    • agents.json → $OPENCLAW_DIR/agents.json"
 echo "    • shell-aliases.sh → $NOVA_DIR/shell-aliases.sh"

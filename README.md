@@ -1,9 +1,9 @@
 # nova-mind
 
-NOVA Agent Mind — unified memory, cognition, and relationships.
+NOVA Agent Mind — unified memory, cognition, relationships, and psyche.
 
-> *Memory, thought, trust—*
-> *three rivers join, flow as one*
+> *Memory, thought, trust, self—*
+> *four rivers join, flow as one*
 > *mind holds what it meets*
 >
 > — **Erato**
@@ -12,16 +12,18 @@ This repo consolidates the previously separate repos:
 - [nova-memory](https://github.com/NOVA-Openclaw/nova-memory) → `memory/`
 - [nova-cognition](https://github.com/NOVA-Openclaw/nova-cognition) → `cognition/`
 - [nova-relationships](https://github.com/NOVA-Openclaw/nova-relationships) → `relationships/`
+- [nova-psyche](https://github.com/NOVA-Openclaw/nova-psyche) → `psyche/` (archived)
 
 ## What Is nova-mind?
 
 nova-mind is the complete agent mind stack for NOVA. It provides:
 
 - **Memory** — Persistent PostgreSQL memory with semantic recall, extraction hooks, and a structured schema for entities, facts, relationships, events, and lessons
-- **Cognition** — Agent orchestration, inter-agent messaging, bootstrap context seeding, and the agent-config-sync system that keeps model configuration in sync with the database
+- **Cognition** — Agent orchestration, inter-agent messaging, bootstrap context seeding, the agent-config-sync system that keeps model configuration in sync with the database, and metacognition plugins (confidence-check, self-awareness)
 - **Relationships** — Entity resolution across platforms, session-aware caching, certificate-based agent identity (Web of Trust), and the social graph
+- **Psyche** — Agent self-awareness design: core values, agent-chat architecture, entity/user identity models, and identification protocols
 
-All three subsystems share a single PostgreSQL database (`{username}_memory`) and a unified installer.
+All four subsystems share a single PostgreSQL database (`{username}_memory`) and a unified installer.
 
 ### Memory Maintenance
 
@@ -52,8 +54,10 @@ Closes issues: #216 (entity dedup), #202 (cross-key consolidation), #200 (ghost 
 ```
 nova-mind/
 ├── memory/          # Database schema, migrations, semantic recall, library
-├── cognition/       # Hooks, workflows, agent coordination
+├── cognition/       # Hooks, workflows, agent coordination, metacognition plugins
+│   └── metacognition/  # Confidence-check and self-awareness plugins
 ├── relationships/   # Entity relationships, social graph
+├── psyche/          # Self-awareness design docs (core values, architecture)
 ├── database/        # Root-level unified schema (schema.sql, .pgschemaignore)
 ├── agent-install.sh # Unified installer (for agents with env pre-configured)
 ├── shell-install.sh # Interactive setup wrapper (for humans or SSH sessions)

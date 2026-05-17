@@ -1,7 +1,7 @@
 {
-  "name": "@nova/turn-context",
+  "name": "@nova/confidence-check",
   "version": "1.0.0",
-  "description": "Turn context plugin: injects per-turn reminders, entity identity, and semantic recall into agent prompts",
+  "description": "Confidence Check plugin: evaluates response confidence via heuristic pre-screen and LLM evaluation, triggers revision via Socratic questioning",
   "type": "module",
   "openclaw": {
     "extensions": [
@@ -17,8 +17,6 @@
   },
   "dependencies": {
     "@types/node": "^20.0.0",
-    "@types/pg": "^8.0.0",
-    "pg": "^8.11.0",
     "typescript": "^5.9.3"
   },
   "devDependencies": {}

@@ -1,7 +1,7 @@
 {
-  "name": "@nova/turn-context",
+  "name": "@nova/self-awareness",
   "version": "1.0.0",
-  "description": "Turn context plugin: injects per-turn reminders, entity identity, and semantic recall into agent prompts",
+  "description": "Self-awareness plugin: monitors outbound messages for self-awareness triggers via semantic embedding similarity",
   "type": "module",
   "openclaw": {
     "extensions": [

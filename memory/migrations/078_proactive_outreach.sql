@@ -7,10 +7,10 @@ CREATE TABLE IF NOT EXISTS proactive_outreach (
     entity_id INTEGER NOT NULL REFERENCES entities(id),
     blocker_type VARCHAR(50) NOT NULL,
     blocker_id INTEGER NOT NULL,
-    channel VARCHAR(50) NOT NULL,
+    channel_used VARCHAR(50) NOT NULL,
     channel_target TEXT,
     message_summary TEXT,
-    attempt_at TIMESTAMPTZ DEFAULT NOW(),
+    attempted_at TIMESTAMPTZ DEFAULT NOW(),
     response_received BOOLEAN DEFAULT FALSE,
     response_at TIMESTAMPTZ,
     notes TEXT
@@ -19,9 +19,11 @@ CREATE TABLE IF NOT EXISTS proactive_outreach (
 -- 2. Indexes
 CREATE INDEX IF NOT EXISTS idx_proactive_outreach_entity ON proactive_outreach(entity_id);
 CREATE INDEX IF NOT EXISTS idx_proactive_outreach_blocker ON proactive_outreach(blocker_type, blocker_id);
-CREATE INDEX IF NOT EXISTS idx_proactive_outreach_cooldown ON proactive_outreach(entity_id, blocker_type, blocker_id, attempt_at);
+CREATE INDEX IF NOT EXISTS idx_proactive_outreach_cooldown ON proactive_outreach(entity_id, blocker_type, blocker_id, attempted_at);
 
 -- 3. Tabby's email as entity_fact
-INSERT INTO entity_facts (entity_id, key, value, source)
-VALUES (3, 'email', 'yellowsubtab@gmail.com', 'I)ruid')
-ON CONFLICT (entity_id, key, source) DO NOTHING;
+INSERT INTO entity_facts (entity_id, key, value, category, durability)
+SELECT 3, 'email', 'yellowsubtab@gmail.com', 'contact', 'long_term'
+WHERE NOT EXISTS (
+    SELECT 1 FROM entity_facts WHERE entity_id = 3 AND key = 'email'
+);

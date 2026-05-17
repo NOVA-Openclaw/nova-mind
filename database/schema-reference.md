@@ -1,6 +1,6 @@
 # Database Schema Reference
 
-*Auto-generated: 2026-05-14T09:59:03.164827*
+*Auto-generated: 2026-05-17T08:31:43.598251*
 
 ## Tables
 
@@ -19,7 +19,7 @@
 | agent_turn_context | - | 8 |
 | agents | Agent registry | 32 |
 | ai_models | Available AI models. NOVA maintains this; Newhart reads for agent assignments. Credentials and endpoints stored in 1Password (see credential_ref column). | 16 |
-| artwork | Archive of NOVAs Instagram artwork. Reference for future compilation. | 20 |
+| artwork | Archive of NOVAs Instagram artwork. Reference for future compilation. | 27 |
 | asset_classes | Asset class definitions for financial portfolio management. Defines tradeable asset types with pricing sources and trading characteristics. | 6 |
 | bootstrap_context_config | Configuration for bootstrap system behavior | 4 |
 | certificates | Client certificates issued by NOVA CA. Security-sensitive. Verify before modifications. | 12 |
@@ -46,6 +46,7 @@
 | gambling_logs | High-level gambling session summaries. Groups multiple gambling_entries by session. | 8 |
 | git_issue_queue | Issue queue for git-based workflows. NOTIFY triggers dispatch work automatically. | 16 |
 | job_messages | Message log per job for conversation threading | 5 |
+| journal_entries | Personal prose journal entries for agent self-reflection. Short, introspective, written multiple times daily. Embedded into memory_embeddings with source_type=journal. Triggers: heartbeat, d100, post_workflow, daily_report, conversation, incident, manual. | 6 |
 | lessons | Lessons and insights learned. Update when learning something worth remembering. | 12 |
 | lessons_archive | Archived lessons and insights. Historical record of previously stored learnings. | 13 |
 | library_authors | Library domain: normalized author records. Managed by Athena (librarian agent). | 4 |
@@ -60,9 +61,9 @@
 | memory_embeddings | Vector embeddings for semantic memory search. Used by proactive-recall.py. | 9 |
 | memory_embeddings_archive | Archived vector embeddings from semantic memory system. Historical embeddings for backup/analysis. | 11 |
 | memory_type_priorities | Priority weights for semantic recall by source_type. Higher = more likely to surface. NOVA can modify. | 5 |
-| motivation_d100 | D100 random task table for NOVA motivation system - roll when bored! | 16 |
 | music_analysis | Deep musical analysis (harmonic, rhythmic, lyrical, spectral). Managed by Erato. | 11 |
 | music_library | Music-specific metadata extending media_consumed. Managed by Erato. | 37 |
+| music_works | Original music compositions (AI-generated or human-composed). Complements music_library which holds collected external sources. | 41 |
 | place_properties | Properties and attributes of places. Key-value storage for place characteristics. | 5 |
 | places | Locations (houses, venues, cities). Reference I)ruid houses in USER.md. | 15 |
 | pm_domain_portfolio_snapshots | - | 6 |
@@ -99,6 +100,7 @@
 | vehicles | Vehicle tracking and management. Cars, bikes, boats, planes owned or used. | 13 |
 | vocabulary | Custom vocabulary for speech recognition. Add names, terms, jargon as encountered. | 8 |
 | work_tags | - | 3 |
+| workflow_runs | Tracks individual executions of workflows. Each row is one run from opening bookend to closing bookend. Updated as the orchestrator advances through steps. | 9 |
 | workflow_steps | Ordered steps in a workflow with agent assignments and deliverable specifications | 14 |
 | workflows | Defines multi-agent workflows with ordered steps and deliverable handoffs | 10 |
 | works | - | 14 |

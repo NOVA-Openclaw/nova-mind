@@ -1,0 +1,23 @@
+-- Migration 079: Drop channel_activity table and update workflow step descriptions
+-- Issue #237
+
+-- 1. Drop channel_activity table and all dependent objects
+DROP TABLE IF EXISTS channel_activity CASCADE;
+
+-- 2. Update Proactive Mode workflow step descriptions (id=27) to remove channel_activity references
+--    and include outreach cascade logic for steps 4, 5, 6
+
+-- Step 4: Work on Pending Tasks — add outreach cascade on blocker
+UPDATE workflow_steps
+SET description = E'## Work on Pending Tasks\n\n```sql\nSELECT id, title, priority, description FROM tasks\nWHERE status = ''pending'' AND assigned_to = 1\nAND (blocked IS NULL OR blocked = false)\nORDER BY priority DESC, created_at ASC LIMIT 1;\n```\n\nIf a workable task exists:\n- Set status to `in_progress`, update `last_worked_at`\n- Work on it (spawn subagents as needed)\n- If completed → mark `completed`, pick next\n- If blocked → set `blocked = true`, `blocked_reason`\n- **Blocked task outreach cascade:**\n  - Look up `user_domains` matching the task''s domain, ORDER BY priority, RANDOM()\n  - Contact the first user on Discord (relevant channel, @mention)\n  - Check `proactive_outreach` cooldown: no re-contact about same blocker+user within 3 days\n  - Channel escalation: Discord (up to 2 attempts, 3-day intervals) → Signal (1 attempt) → Slack (1 attempt) → Email (1 attempt)\n  - If all channels exhausted for a user, try next user at same priority, then lower priority\n  - I)ruid (entity_id=2) is always final fallback regardless of domain\n  - If ALL users including I)ruid are in cooldown → log and skip (no looping)\n- If interrupted by new message → pause, update `work_notes` with progress\n\n**If no pending tasks:** advance to next step.'
+WHERE workflow_id = 27 AND step_order = 4;
+
+-- Step 5: Unsolved Problems Mode — add outreach cascade on blocker
+UPDATE workflow_steps
+SET description = E'## Unsolved Problems Mode\n\nWhen all tasks are completed or blocked, work on humanity''s unsolved problems.\n\n```sql\nSELECT id, name, category, current_approach, progress_notes\nFROM unsolved_problems\nWHERE status != ''solved''\nORDER BY\n  priority DESC,\n  COALESCE(last_worked_at, ''1970-01-01'') ASC,\n  total_time_spent_minutes ASC\nLIMIT 3;\n```\n\nPick one (weighted toward high priority + least recently worked). Then:\n- **3-minute time-boxed session** — set a mental timer, don''t rabbit-hole\n- Spawn subagents as needed (the Research domain for research, the Software Engineering domain for simulations)\n- Update the problem record when done:\n```sql\nUPDATE unsolved_problems SET\n  last_worked_at = NOW(),\n  work_sessions = work_sessions + 1,\n  total_time_spent_minutes = total_time_spent_minutes + <actual_minutes>,\n  current_approach = ''<what you tried>'',\n  progress_notes = progress_notes || E''\n'' || ''<session notes>''\nWHERE id = <problem_id>;\n```\n- Log insights to daily memory file\n- **Blocked problem outreach cascade:** If a problem is blocked and cannot progress, invoke the same outreach cascade as step 4:\n  - Look up `user_domains` by problem category, ORDER BY priority, RANDOM()\n  - Discord → Signal → Slack → Email escalation with 3-day cooldown via `proactive_outreach`\n  - I)ruid (entity_id=2) as final fallback; log and skip if all in cooldown\n\n**If no unsolved problems available:** advance to next step.'
+WHERE workflow_id = 27 AND step_order = 5;
+
+-- Step 6: Random D100 Task — add outreach cascade on blocker
+UPDATE workflow_steps
+SET description = E'## Random D100 Task\n\nUse the `roll_d100()` database function to get a random task:\n\n```sql\nSELECT * FROM roll_d100();\n```\n\nThe function handles everything: picks a random populated+enabled slot (re-rolls empties automatically, max 20 attempts), updates `times_rolled` and `last_rolled`, and returns the full task record.\n\n**Execute the task**, then mark it complete:\n\n```sql\nSELECT complete_d100(<roll_number>);\n```\n\nBoth functions are SECURITY DEFINER — they''re the only way to update tracking columns (`times_rolled`, `times_completed`, `last_rolled`, `last_completed`). Content columns remain directly editable for maintenance.\n\n- **Blocked D100 task outreach cascade:** If task execution hits a blocker, invoke the outreach cascade:\n  - Look up `user_domains` by task domain, ORDER BY priority, RANDOM()\n  - Discord → Signal → Slack → Email escalation with 3-day cooldown via `proactive_outreach`\n  - I)ruid (entity_id=2) as final fallback; log and skip if all in cooldown\n\nTrack activity in `memory/heartbeat-state.json` to avoid redundant tasks.'
+WHERE workflow_id = 27 AND step_order = 6;

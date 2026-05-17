@@ -23,7 +23,6 @@
 | asset_classes | Asset class definitions for financial portfolio management. Defines tradeable asset types with pricing sources and trading characteristics. | 6 |
 | bootstrap_context_config | Configuration for bootstrap system behavior | 4 |
 | certificates | Client certificates issued by NOVA CA. Security-sensitive. Verify before modifications. | 12 |
-| channel_activity | Tracks last message per channel for idle detection. Read/write: NOVA, Newhart. | 3 |
 | channel_sessions | - | 16 |
 | channel_transcripts | - | 14 |
 | comms_checks | Individual Hermes check run results. Each row = one social/email/digest check. Replaces memory/hermes-*.md files. Owner: Communications domain (hermes). | 11 |

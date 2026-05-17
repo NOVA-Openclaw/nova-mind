@@ -13,6 +13,7 @@ This repo consolidates the previously separate repos:
 - [nova-cognition](https://github.com/NOVA-Openclaw/nova-cognition) → `cognition/`
 - [nova-relationships](https://github.com/NOVA-Openclaw/nova-relationships) → `relationships/`
 - [nova-psyche](https://github.com/NOVA-Openclaw/nova-psyche) → `psyche/` (archived)
+- [nova-motivation](https://github.com/NOVA-Openclaw/nova-motivation) → `motivation/` (archived)
 
 ## What Is nova-mind?
 
@@ -22,6 +23,7 @@ nova-mind is the complete agent mind stack for NOVA. It provides:
 - **Cognition** — Agent orchestration, inter-agent messaging, bootstrap context seeding, the agent-config-sync system that keeps model configuration in sync with the database, and metacognition plugins (confidence-check, self-awareness)
 - **Relationships** — Entity resolution across platforms, session-aware caching, certificate-based agent identity (Web of Trust), and the social graph
 - **Psyche** — Agent self-awareness design: core values, agent-chat architecture, entity/user identity models, and identification protocols
+- **Motivation** — Drive assignment, goal tracking, reward signals, and proactive mode orchestration for agent initiative
 
 All four subsystems share a single PostgreSQL database (`{username}_memory`) and a unified installer.
 
@@ -58,6 +60,7 @@ nova-mind/
 │   └── metacognition/  # Confidence-check and self-awareness plugins
 ├── relationships/   # Entity relationships, social graph
 ├── psyche/          # Self-awareness design docs (core values, architecture)
+├── motivation/      # Motivation system — drive assignment, goal tracking, reward signals
 ├── database/        # Root-level unified schema (schema.sql, .pgschemaignore)
 ├── agent-install.sh # Unified installer (for agents with env pre-configured)
 ├── shell-install.sh # Interactive setup wrapper (for humans or SSH sessions)
@@ -99,3 +102,4 @@ See subsystem READMEs for detailed documentation:
 - [memory/README.md](memory/README.md) — Memory system, schema, hooks, and extraction pipeline
 - [cognition/README.md](cognition/README.md) — Agent orchestration, messaging, and configuration sync
 - [relationships/README.md](relationships/README.md) — Entity resolution and Web of Trust
+- [motivation/README.md](motivation/README.md) — Drive assignment, goal tracking, and proactive mode

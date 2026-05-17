@@ -1969,8 +1969,17 @@ TRIGGER_SQL
 echo ""
 echo "Shell environment setup..."
 
-NOVA_DIR="$HOME/.local/share/nova"
-SHELL_ALIASES_SOURCE="$SCRIPT_DIR/cognition/dotfiles/shell-aliases.sh"
+# Motivation system components
+MOTIVATION_DIR="$SCRIPT_DIR/motivation"
+MOTIVATION_ALIASES_SOURCE="$MOTIVATION_DIR/scripts/shell-aliases.sh"
+MOTIVATION_HOOK_SOURCE="$MOTIVATION_DIR/hooks/pre-push"
+
+# Prefer motivation/ shell-aliases.sh (newer canonical version)
+if [ -f "$MOTIVATION_ALIASES_SOURCE" ]; then
+    SHELL_ALIASES_SOURCE="$MOTIVATION_ALIASES_SOURCE"
+else
+    SHELL_ALIASES_SOURCE="$SCRIPT_DIR/cognition/dotfiles/shell-aliases.sh"
+fi
 SHELL_ALIASES_TARGET="$NOVA_DIR/shell-aliases.sh"
 BASH_ENV_FILE="$HOME/.bash_env"
 BASH_ENV_SOURCE="$SCRIPT_DIR/cognition/dotfiles/bash_env"
@@ -2140,6 +2149,11 @@ echo "  [cognition]"
 echo "    • agent_chat extension → $EXTENSIONS_DIR/agent_chat"
 echo "    • agent_config_sync extension → $EXTENSIONS_DIR/agent_config_sync"
 echo "    • turn-context plugin → $OPENCLAW_DIR/plugins/turn-context"
+echo "    • Motivation system → $MOTIVATION_DIR"
+echo "    • shell-aliases.sh → $NOVA_DIR/shell-aliases.sh"
+if [ -f "$MOTIVATION_HOOK_SOURCE" ]; then
+    echo "    • pre-push hook (motivation) → available in $MOTIVATION_DIR/hooks/pre-push"
+fi
 if [ -f "$OPENCLAW_DIR/plugins/self-awareness/dist/index.js" ]; then
     echo "    • self-awareness plugin → $OPENCLAW_DIR/plugins/self-awareness"
 fi

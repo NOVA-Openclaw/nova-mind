@@ -597,6 +597,7 @@ CREATE TABLE IF NOT EXISTS agents (
     is_default boolean DEFAULT false NOT NULL,
     context_type text DEFAULT 'persistent' NOT NULL,
     model_rationale text,
+    entity_id integer,
     CONSTRAINT agents_pkey PRIMARY KEY (id),
     CONSTRAINT agents_name_key UNIQUE (name),
     CONSTRAINT agents_context_type_check CHECK (context_type IN ('ephemeral'::text, 'persistent'::text)),
@@ -647,6 +648,22 @@ COMMENT ON COLUMN agents.decision_criteria IS 'Criteria for when to spawn this a
 
 
 COMMENT ON COLUMN agents.model_rationale IS 'Model selection goals and justification: WHY this agent uses its model, what the role requires, past issues that drove changes, tradeoffs considered. Maintained by Newhart for weekly agent review.';
+
+--
+-- Name: agents_entity_id_fkey; Type: FK CONSTRAINT; Schema: -; Owner: -
+--
+
+ALTER TABLE IF EXISTS agents
+    ADD CONSTRAINT agents_entity_id_fkey FOREIGN KEY (entity_id) REFERENCES entities(id);
+
+--
+-- Name: idx_agents_entity_id; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_agents_entity_id ON agents(entity_id);
+
+
+COMMENT ON COLUMN agents.entity_id IS 'FK to entities(id) — links agent to its canonical entity record for identity resolution';
 
 --
 -- Name: idx_agents_single_default; Type: INDEX; Schema: -; Owner: -
@@ -914,21 +931,7 @@ CREATE TABLE IF NOT EXISTS bootstrap_context_config (
 COMMENT ON TABLE bootstrap_context_config IS 'Configuration for bootstrap system behavior';
 
 --
--- Name: channel_activity; Type: TABLE; Schema: -; Owner: -
---
-
-CREATE TABLE IF NOT EXISTS channel_activity (
-    channel varchar(50),
-    last_message_at timestamptz DEFAULT now(),
-    last_message_from varchar(100),
-    CONSTRAINT channel_activity_pkey PRIMARY KEY (channel)
-);
-
-
-COMMENT ON TABLE channel_activity IS 'Tracks last message per channel for idle detection. Read/write: NOVA, Newhart.';
-
---
--- Name: channel_sessions; Type: TABLE; Schema: -; Owner: -
+-- Name: certificates; Type: TABLE; Schema: -; Owner: -
 --
 
 CREATE TABLE IF NOT EXISTS channel_sessions (
@@ -968,6 +971,72 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_channel_sessions_provider_chat ON channel_
 --
 
 CREATE INDEX IF NOT EXISTS idx_channel_sessions_session_key ON channel_sessions (session_key);
+
+--
+-- Name: user_domains; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS user_domains (
+    id SERIAL,
+    entity_id integer NOT NULL,
+    domain_topic varchar(255) NOT NULL,
+    priority integer DEFAULT 1,
+    notes text,
+    created_at timestamp DEFAULT now(),
+    CONSTRAINT user_domains_pkey PRIMARY KEY (id),
+    CONSTRAINT user_domains_entity_domain_key UNIQUE (entity_id, domain_topic),
+    CONSTRAINT user_domains_entity_id_fkey FOREIGN KEY (entity_id) REFERENCES entities (id) ON DELETE CASCADE
+);
+
+
+CREATE INDEX IF NOT EXISTS idx_user_domains_entity ON user_domains (entity_id);
+
+--
+-- Name: idx_user_domains_topic; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_user_domains_topic ON user_domains (domain_topic);
+
+--
+-- Name: proactive_outreach; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS proactive_outreach (
+    id SERIAL,
+    entity_id integer NOT NULL,
+    blocker_type varchar(50) NOT NULL,
+    blocker_id integer NOT NULL,
+    channel varchar(50) NOT NULL,
+    channel_target text,
+    message_summary text,
+    attempt_at timestamptz DEFAULT now(),
+    response_received boolean DEFAULT false,
+    response_at timestamptz,
+    notes text,
+    CONSTRAINT proactive_outreach_pkey PRIMARY KEY (id),
+    CONSTRAINT proactive_outreach_entity_id_fkey FOREIGN KEY (entity_id) REFERENCES entities (id)
+);
+
+
+CREATE INDEX IF NOT EXISTS idx_proactive_outreach_entity ON proactive_outreach (entity_id);
+
+--
+-- Name: idx_proactive_outreach_blocker; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_proactive_outreach_blocker ON proactive_outreach (blocker_type, blocker_id);
+
+--
+-- Name: idx_proactive_outreach_cooldown; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_proactive_outreach_cooldown ON proactive_outreach (entity_id, blocker_type, blocker_id, attempt_at);
+
+
+COMMENT ON TABLE user_domains IS 'User domain assignments for proactive outreach cascade. Lower priority = contact first.';
+
+
+COMMENT ON TABLE proactive_outreach IS 'Tracks outreach attempts for blocked tasks, problems, and D100 items. Enables cooldown and escalation logic.';
 
 --
 -- Name: comms_checks; Type: TABLE; Schema: -; Owner: -
@@ -1138,11 +1207,12 @@ CREATE TABLE IF NOT EXISTS agent_domains (
     domain_topic varchar(255) NOT NULL,
     source_entity_id integer,
     vote_count integer DEFAULT 1,
+    priority integer DEFAULT 1,
     created_at timestamp DEFAULT now(),
     last_confirmed timestamp DEFAULT now(),
     notes text,
     CONSTRAINT agent_domains_pkey PRIMARY KEY (id),
-    CONSTRAINT agent_domains_domain_topic_key UNIQUE (domain_topic),
+    CONSTRAINT agent_domains_agent_id_domain_topic_key UNIQUE (agent_id, domain_topic),
     CONSTRAINT agent_domains_agent_id_fkey FOREIGN KEY (agent_id) REFERENCES agents (id) ON DELETE CASCADE,
     CONSTRAINT agent_domains_source_entity_id_fkey FOREIGN KEY (source_entity_id) REFERENCES entities (id)
 );
@@ -1158,6 +1228,9 @@ COMMENT ON COLUMN agent_domains.source_entity_id IS 'Entity who assigned this do
 
 
 COMMENT ON COLUMN agent_domains.vote_count IS 'Reinforcement count - incremented when domain assignment is reconfirmed';
+
+
+COMMENT ON COLUMN agent_domains.priority IS 'Priority for domain ownership — lower number = contact first. Used by outreach cascade';
 
 --
 -- Name: idx_agent_domains_agent; Type: INDEX; Schema: -; Owner: -
@@ -7922,11 +7995,6 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE bootstrap_context_config FROM ticker;
 
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE certificates FROM nova;
 
---
--- Name: channel_activity; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE channel_activity FROM nova;
 
 --
 -- Name: channel_sessions; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -17660,11 +17728,6 @@ GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE agent_turn_context TO graybeard;
 
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE certificates TO graybeard;
 
---
--- Name: channel_activity; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE channel_activity TO graybeard;
 
 --
 -- Name: entities; Type: PRIVILEGE; Schema: privileges; Owner: -

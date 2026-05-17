@@ -1,6 +1,6 @@
 # Database Schema Reference
 
-*Auto-generated: 2026-05-17T08:31:43.598251*
+*Auto-generated: 2026-05-17T09:06:00.241422*
 
 ## Tables
 

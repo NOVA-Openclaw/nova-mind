@@ -188,37 +188,7 @@ nova-cognition/
 │   └── protocols/           # Communication and coordination protocols
 │       ├── agent-chat.md    # Inter-agent messaging protocol
 │       └── jobs-system.md   # Task tracking and handoff coordination
-├── metacognition/           # Metacognition plugins (installed to ~/.openclaw/plugins/)
-│   ├── confidence-check/    # Response confidence evaluation + Socratic revision
-│   └── self-awareness/      # Outbound message self-awareness trigger detection
 ```
-
-## Metacognition Plugins
-
-The `metacognition/` directory contains OpenClaw plugins that add metacognitive capabilities — the ability to reason about and evaluate the agent's own outputs.
-
-### Confidence-Check (`confidence-check`)
-
-Hooks into `before_agent_finalize` to evaluate response confidence before delivery.
-
-**Flow:**
-1. **Heuristic pre-screen** — Counts hedging phrases, calculates density, counts unsupported assertions
-2. **LLM evaluation** — If heuristics are borderline, sends to an LLM for structured confidence scoring (0-100)
-3. **Socratic revision** — If confidence is below threshold, injects revision instructions via Socratic questioning
-4. **Framing fallback** — After max retry attempts, adds uncertainty framing ("I'm not fully confident...")
-
-**Config requirement:** `allowConversationAccess: true` must be set in the plugin's OpenClaw config entry.
-
-### Self-Awareness (`self-awareness`)
-
-Hooks into `message_sent` to monitor outbound messages for self-awareness triggers.
-
-**How it works:**
-- Computes semantic embeddings of outbound message content
-- Compares against curated trigger phrases stored in the `self_awareness_triggers` table
-- When similarity exceeds threshold, logs the trigger event for introspection processing
-
-**Database dependency:** Requires the `self_awareness_triggers` table (created by migration).
 
 ## Protocols
 

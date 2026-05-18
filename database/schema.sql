@@ -346,7 +346,7 @@ CREATE TABLE IF NOT EXISTS agent_bootstrap_context (
     content text NOT NULL,
     description text,
     updated_at timestamptz DEFAULT now(),
-    updated_by text DEFAULT 'system',
+    updated_by text DEFAULT CURRENT_USER,
     agent_name text,
     domain_names text[],
     CONSTRAINT agent_bootstrap_context_pkey PRIMARY KEY (id),
@@ -597,7 +597,6 @@ CREATE TABLE IF NOT EXISTS agents (
     is_default boolean DEFAULT false NOT NULL,
     context_type text DEFAULT 'persistent' NOT NULL,
     model_rationale text,
-    entity_id integer,
     CONSTRAINT agents_pkey PRIMARY KEY (id),
     CONSTRAINT agents_name_key UNIQUE (name),
     CONSTRAINT agents_context_type_check CHECK (context_type IN ('ephemeral'::text, 'persistent'::text)),
@@ -648,12 +647,6 @@ COMMENT ON COLUMN agents.decision_criteria IS 'Criteria for when to spawn this a
 
 
 COMMENT ON COLUMN agents.model_rationale IS 'Model selection goals and justification: WHY this agent uses its model, what the role requires, past issues that drove changes, tradeoffs considered. Maintained by Newhart for weekly agent review.';
-
---
--- Name: idx_agents_entity_id; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_agents_entity_id ON agents (entity_id);
 
 --
 -- Name: idx_agents_single_default; Type: INDEX; Schema: -; Owner: -
@@ -921,6 +914,20 @@ CREATE TABLE IF NOT EXISTS bootstrap_context_config (
 COMMENT ON TABLE bootstrap_context_config IS 'Configuration for bootstrap system behavior';
 
 --
+-- Name: channel_activity; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS channel_activity (
+    channel varchar(50),
+    last_message_at timestamptz DEFAULT now(),
+    last_message_from varchar(100),
+    CONSTRAINT channel_activity_pkey PRIMARY KEY (channel)
+);
+
+
+COMMENT ON TABLE channel_activity IS 'Tracks last message per channel for idle detection. Read/write: NOVA, Newhart.';
+
+--
 -- Name: channel_sessions; Type: TABLE; Schema: -; Owner: -
 --
 
@@ -1131,12 +1138,11 @@ CREATE TABLE IF NOT EXISTS agent_domains (
     domain_topic varchar(255) NOT NULL,
     source_entity_id integer,
     vote_count integer DEFAULT 1,
-    priority integer DEFAULT 1,
     created_at timestamp DEFAULT now(),
     last_confirmed timestamp DEFAULT now(),
     notes text,
     CONSTRAINT agent_domains_pkey PRIMARY KEY (id),
-    CONSTRAINT agent_domains_agent_id_domain_topic_key UNIQUE (agent_id, domain_topic),
+    CONSTRAINT agent_domains_domain_topic_key UNIQUE (domain_topic),
     CONSTRAINT agent_domains_agent_id_fkey FOREIGN KEY (agent_id) REFERENCES agents (id) ON DELETE CASCADE,
     CONSTRAINT agent_domains_source_entity_id_fkey FOREIGN KEY (source_entity_id) REFERENCES entities (id)
 );
@@ -1164,33 +1170,6 @@ CREATE INDEX IF NOT EXISTS idx_agent_domains_agent ON agent_domains (agent_id);
 --
 
 CREATE INDEX IF NOT EXISTS idx_agent_domains_topic ON agent_domains (domain_topic);
-
---
--- Name: user_domains; Type: TABLE; Schema: -; Owner: -
---
-
-CREATE TABLE IF NOT EXISTS user_domains (
-    id SERIAL PRIMARY KEY,
-    entity_id integer NOT NULL,
-    domain_topic varchar(255) NOT NULL,
-    priority integer DEFAULT 1,
-    notes text,
-    created_at timestamp DEFAULT now(),
-    CONSTRAINT user_domains_entity_domain_key UNIQUE (entity_id, domain_topic),
-    CONSTRAINT user_domains_entity_id_fkey FOREIGN KEY (entity_id) REFERENCES entities (id) ON DELETE CASCADE
-);
-
---
--- Name: idx_user_domains_entity; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_user_domains_entity ON user_domains (entity_id);
-
---
--- Name: idx_user_domains_topic; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_user_domains_topic ON user_domains (domain_topic);
 
 --
 -- Name: certificates; Type: TABLE; Schema: -; Owner: -
@@ -1762,32 +1741,6 @@ CREATE TABLE IF NOT EXISTS job_messages (
 COMMENT ON TABLE job_messages IS 'Message log per job for conversation threading';
 
 --
--- Name: lessons; Type: TABLE; Schema: -; Owner: -
---
-
-CREATE TABLE IF NOT EXISTS lessons (
-    id SERIAL,
-    lesson text NOT NULL,
-    context text,
-    source varchar(255),
-    learned_at timestamp DEFAULT CURRENT_TIMESTAMP,
-    original_behavior text,
-    correction_source text,
-    reinforced_at timestamp,
-    confidence double precision DEFAULT 1.0,
-    last_referenced timestamp,
-    last_confirmed_at timestamptz DEFAULT now(),
-    updated_at timestamp DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT lessons_pkey PRIMARY KEY (id)
-);
-
-
-COMMENT ON TABLE lessons IS 'Lessons and insights learned. Update when learning something worth remembering.';
-
-
-COMMENT ON COLUMN lessons.confidence IS 'Confidence score 0-1, decays over time if not reinforced';
-
---
 -- Name: lessons_archive; Type: TABLE; Schema: -; Owner: -
 --
 
@@ -2294,113 +2247,6 @@ CREATE TABLE IF NOT EXISTS music_analysis (
 COMMENT ON TABLE music_analysis IS 'Deep musical analysis (harmonic, rhythmic, lyrical, spectral). Managed by Erato.';
 
 --
--- Name: music_works; Type: TABLE; Schema: -; Owner: -
---
-
-CREATE TABLE IF NOT EXISTS music_works (
-    id SERIAL,
-    title varchar(255) NOT NULL,
-    description text,
-    created_by integer,
-    generation_model varchar(255),
-    generation_prompt text,
-    generation_params jsonb DEFAULT '{}',
-    source_type varchar(50) DEFAULT 'ai_generated' NOT NULL,
-    key varchar(10),
-    bpm numeric,
-    time_signature varchar(10),
-    duration_ms integer,
-    genre varchar(100),
-    subgenre varchar(100),
-    mood varchar(100),
-    energy_level integer,
-    danceability integer,
-    structure text,
-    instruments text[],
-    vocal_style varchar(100),
-    file_format varchar(20),
-    sample_rate integer,
-    bit_depth integer,
-    bitrate integer,
-    version integer DEFAULT 1 NOT NULL,
-    parent_work_id integer,
-    iteration_notes text,
-    lyrics text,
-    language varchar(10),
-    status varchar(50) DEFAULT 'draft' NOT NULL,
-    tags text[],
-    rating integer,
-    notes text,
-    created_at timestamp DEFAULT now() NOT NULL,
-    updated_at timestamp DEFAULT now() NOT NULL,
-    search_vector tsvector,
-    published_platforms jsonb DEFAULT '{}',
-    audio_data bytea,
-    audio_filename text,
-    cover_image_data bytea,
-    cover_image_filename text,
-    CONSTRAINT music_works_pkey PRIMARY KEY (id),
-    CONSTRAINT music_works_parent_work_id_fkey FOREIGN KEY (parent_work_id) REFERENCES music_works (id),
-    CONSTRAINT music_works_danceability_check CHECK (danceability >= 1 AND danceability <= 10),
-    CONSTRAINT music_works_energy_level_check CHECK (energy_level >= 1 AND energy_level <= 10),
-    CONSTRAINT music_works_rating_check CHECK (rating >= 1 AND rating <= 10)
-);
-
-
-COMMENT ON TABLE music_works IS 'Original music compositions (AI-generated or human-composed). Complements music_library which holds collected external sources.';
-
-
-COMMENT ON COLUMN music_works.published_platforms IS 'Publishing record: platform URLs/IDs. Example: {"wavlake": {"url": "...", "track_id": "..."}, "nostr": {"event_id": "..."}}';
-
-
-COMMENT ON COLUMN music_works.audio_data IS 'Binary audio data for produced works. Matches artwork.image_data pattern. WIP audio stays on disk.';
-
-
-COMMENT ON COLUMN music_works.audio_filename IS 'Original filename of the audio file (e.g. midnight-drive-v3.wav)';
-
-
-COMMENT ON COLUMN music_works.cover_image_data IS 'Cover art binary blob, same pattern as artwork.image_data and audio_data.';
-
-
-COMMENT ON COLUMN music_works.cover_image_filename IS 'Original filename of cover art image.';
-
---
--- Name: idx_music_works_created_by; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_music_works_created_by ON music_works (created_by);
-
---
--- Name: idx_music_works_genre; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_music_works_genre ON music_works (genre);
-
---
--- Name: idx_music_works_parent; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_music_works_parent ON music_works (parent_work_id);
-
---
--- Name: idx_music_works_search; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_music_works_search ON music_works USING gin (search_vector);
-
---
--- Name: idx_music_works_source_type; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_music_works_source_type ON music_works (source_type);
-
---
--- Name: idx_music_works_status; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_music_works_status ON music_works (status);
-
---
 -- Name: places; Type: TABLE; Schema: -; Owner: -
 --
 
@@ -2649,46 +2495,6 @@ COMMENT ON TABLE positions IS 'Legacy or alternative positions tracking table. M
 --
 
 CREATE INDEX IF NOT EXISTS idx_positions_account ON positions (account_id) WHERE (sold_at IS NULL);
-
---
--- Name: proactive_outreach; Type: TABLE; Schema: -; Owner: -
---
-
-CREATE TABLE IF NOT EXISTS proactive_outreach (
-    id SERIAL PRIMARY KEY,
-    entity_id integer NOT NULL,
-    blocker_type varchar(50) NOT NULL,
-    blocker_id integer NOT NULL,
-    channel_used varchar(50) NOT NULL,
-    channel_target text,
-    message_summary text,
-    attempted_at timestamptz DEFAULT now(),
-    response_received boolean DEFAULT false,
-    response_at timestamptz,
-    notes text,
-    CONSTRAINT proactive_outreach_entity_id_fkey FOREIGN KEY (entity_id) REFERENCES entities (id)
-);
-
---
--- Name: idx_proactive_outreach_entity; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_proactive_outreach_entity ON proactive_outreach (entity_id);
-
---
--- Name: idx_proactive_outreach_blocker; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_proactive_outreach_blocker ON proactive_outreach (blocker_type, blocker_id);
-
---
--- Name: idx_proactive_outreach_cooldown; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_proactive_outreach_cooldown ON proactive_outreach (entity_id, blocker_type, blocker_id, attempted_at);
-
---
-COMMENT ON TABLE proactive_outreach IS 'Tracks proactive outreach attempts for blocked tasks. Channel escalation: Discord -> Signal -> Slack -> Email with 3-day cooldown.';
 
 --
 -- Name: preferences; Type: TABLE; Schema: -; Owner: -
@@ -3236,78 +3042,6 @@ CREATE TABLE IF NOT EXISTS tags (
 );
 
 --
--- Name: tasks; Type: TABLE; Schema: -; Owner: -
---
-
-CREATE TABLE IF NOT EXISTS tasks (
-    id SERIAL,
-    title varchar(255) NOT NULL,
-    description text,
-    status varchar(50) DEFAULT 'pending',
-    priority integer DEFAULT 5,
-    parent_task_id integer,
-    project_id integer,
-    assigned_to integer NOT NULL,
-    created_by integer NOT NULL,
-    due_date timestamp,
-    completed_at timestamp,
-    notes text,
-    created_at timestamp DEFAULT CURRENT_TIMESTAMP,
-    updated_at timestamp DEFAULT CURRENT_TIMESTAMP,
-    task_number integer,
-    blocked boolean DEFAULT false,
-    blocked_reason text,
-    blocked_on integer,
-    last_worked_at timestamptz,
-    work_notes text,
-    task_type varchar(20) DEFAULT 'one_off',
-    recurrence_interval interval,
-    last_completed_at timestamptz,
-    CONSTRAINT tasks_pkey PRIMARY KEY (id),
-    CONSTRAINT tasks_assigned_to_fkey FOREIGN KEY (assigned_to) REFERENCES entities (id),
-    CONSTRAINT tasks_blocked_on_fkey FOREIGN KEY (blocked_on) REFERENCES entities (id),
-    CONSTRAINT tasks_created_by_fkey FOREIGN KEY (created_by) REFERENCES entities (id),
-    CONSTRAINT tasks_parent_task_id_fkey FOREIGN KEY (parent_task_id) REFERENCES tasks (id) ON DELETE CASCADE,
-    CONSTRAINT tasks_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects (id) ON DELETE SET NULL
-);
-
-
-COMMENT ON TABLE tasks IS 'Task tracking. NOVA can create, update status, assign. Check before starting work.';
-
-
-COMMENT ON COLUMN tasks.task_type IS 'one_off = complete once, recurring = resets after completion, fallback = low-priority repeatable when idle';
-
-
-COMMENT ON COLUMN tasks.recurrence_interval IS 'How often recurring tasks reset (e.g., 1 day, 1 week)';
-
-
-COMMENT ON COLUMN tasks.last_completed_at IS 'When task was last completed (for recurring reset logic)';
-
---
--- Name: idx_tasks_parent; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_tasks_parent ON tasks (parent_task_id);
-
---
--- Name: idx_tasks_priority; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_tasks_priority ON tasks (priority);
-
---
--- Name: idx_tasks_project; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks (project_id);
-
---
--- Name: idx_tasks_status; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks (status);
-
---
 -- Name: ticker_portfolio; Type: TABLE; Schema: -; Owner: -
 --
 
@@ -3392,6 +3126,41 @@ COMMENT ON TABLE unsolved_problems IS 'Humanity''s unsolved problems for NOVA to
 --
 
 CREATE INDEX IF NOT EXISTS idx_unsolved_problems_priority ON unsolved_problems (priority DESC);
+
+--
+-- Name: user_insights; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS user_insights (
+    id SERIAL,
+    insight text NOT NULL,
+    context text,
+    contributed_by integer,
+    source varchar(100),
+    tags text[],
+    created_at timestamptz DEFAULT now(),
+    updated_at timestamptz DEFAULT now(),
+    CONSTRAINT user_insights_pkey PRIMARY KEY (id),
+    CONSTRAINT user_insights_contributed_by_fkey FOREIGN KEY (contributed_by) REFERENCES entities (id)
+);
+
+
+COMMENT ON TABLE user_insights IS 'Human-contributed insights — observations, realizations, and wisdom shared by users. Primarily for users to save important insights. Managed by any agent on behalf of the contributing user.';
+
+
+COMMENT ON COLUMN user_insights.insight IS 'The insight itself — the core observation or realization';
+
+
+COMMENT ON COLUMN user_insights.context IS 'Surrounding context — what prompted the insight, what it relates to';
+
+
+COMMENT ON COLUMN user_insights.contributed_by IS 'Entity ID of the human who shared the insight';
+
+
+COMMENT ON COLUMN user_insights.source IS 'Where/how the insight was shared (e.g., discord, conversation, etc.)';
+
+
+COMMENT ON COLUMN user_insights.tags IS 'Categorical tags for grouping and retrieval';
 
 --
 -- Name: vehicles; Type: TABLE; Schema: -; Owner: -
@@ -3508,7 +3277,7 @@ CREATE TABLE IF NOT EXISTS workflows (
     description text NOT NULL,
     created_at timestamptz DEFAULT now(),
     updated_at timestamptz DEFAULT now(),
-    created_by text DEFAULT 'newhart',
+    created_by text DEFAULT CURRENT_USER,
     status text DEFAULT 'active',
     tags text[] DEFAULT '{}',
     department text,
@@ -6270,6 +6039,21 @@ END;
 $$;
 
 --
+-- Name: update_user_insights_updated_at(); Type: FUNCTION; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE FUNCTION update_user_insights_updated_at()
+RETURNS trigger
+LANGUAGE plpgsql
+VOLATILE
+AS $$
+BEGIN
+    NEW.updated_at = NOW();
+    RETURN NEW;
+END;
+$$;
+
+--
 -- Name: update_work_status_on_publication(); Type: FUNCTION; Schema: -; Owner: -
 --
 
@@ -6401,6 +6185,243 @@ CREATE INDEX IF NOT EXISTS idx_journal_created ON journal_entries (created_at DE
 --
 
 CREATE INDEX IF NOT EXISTS idx_journal_trigger ON journal_entries (trigger);
+
+--
+-- Name: lessons; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS lessons (
+    id SERIAL,
+    lesson text NOT NULL,
+    context text,
+    source varchar(255),
+    learned_at timestamp DEFAULT CURRENT_TIMESTAMP,
+    original_behavior text,
+    correction_source text,
+    reinforced_at timestamp,
+    confidence double precision DEFAULT 1.0,
+    last_referenced timestamp,
+    last_confirmed_at timestamptz DEFAULT now(),
+    updated_at timestamp DEFAULT CURRENT_TIMESTAMP,
+    learned_by integer DEFAULT current_agent_id(),
+    CONSTRAINT lessons_pkey PRIMARY KEY (id)
+);
+
+
+COMMENT ON TABLE lessons IS 'Lessons and insights learned. Update when learning something worth remembering.';
+
+
+COMMENT ON COLUMN lessons.confidence IS 'Confidence score 0-1, decays over time if not reinforced';
+
+--
+-- Name: music_works; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS music_works (
+    id SERIAL,
+    title varchar(255) NOT NULL,
+    description text,
+    created_by integer DEFAULT current_agent_id(),
+    generation_model varchar(255),
+    generation_prompt text,
+    generation_params jsonb DEFAULT '{}',
+    source_type varchar(50) DEFAULT 'ai_generated' NOT NULL,
+    key varchar(10),
+    bpm numeric,
+    time_signature varchar(10),
+    duration_ms integer,
+    genre varchar(100),
+    subgenre varchar(100),
+    mood varchar(100),
+    energy_level integer,
+    danceability integer,
+    structure text,
+    instruments text[],
+    vocal_style varchar(100),
+    file_format varchar(20),
+    sample_rate integer,
+    bit_depth integer,
+    bitrate integer,
+    version integer DEFAULT 1 NOT NULL,
+    parent_work_id integer,
+    iteration_notes text,
+    lyrics text,
+    language varchar(10),
+    status varchar(50) DEFAULT 'draft' NOT NULL,
+    tags text[],
+    rating integer,
+    notes text,
+    created_at timestamp DEFAULT now() NOT NULL,
+    updated_at timestamp DEFAULT now() NOT NULL,
+    search_vector tsvector,
+    published_platforms jsonb DEFAULT '{}',
+    audio_data bytea,
+    audio_filename text,
+    cover_image_data bytea,
+    cover_image_filename text,
+    CONSTRAINT music_works_pkey PRIMARY KEY (id),
+    CONSTRAINT music_works_parent_work_id_fkey FOREIGN KEY (parent_work_id) REFERENCES music_works (id),
+    CONSTRAINT music_works_danceability_check CHECK (danceability >= 1 AND danceability <= 10),
+    CONSTRAINT music_works_energy_level_check CHECK (energy_level >= 1 AND energy_level <= 10),
+    CONSTRAINT music_works_rating_check CHECK (rating >= 1 AND rating <= 10)
+);
+
+
+COMMENT ON TABLE music_works IS 'Original music compositions (AI-generated or human-composed). Complements music_library which holds collected external sources.';
+
+
+COMMENT ON COLUMN music_works.published_platforms IS 'Publishing record: platform URLs/IDs. Example: {"wavlake": {"url": "...", "track_id": "..."}, "nostr": {"event_id": "..."}}';
+
+
+COMMENT ON COLUMN music_works.audio_data IS 'Binary audio data for produced works. Matches artwork.image_data pattern. WIP audio stays on disk.';
+
+
+COMMENT ON COLUMN music_works.audio_filename IS 'Original filename of the audio file (e.g. midnight-drive-v3.wav)';
+
+
+COMMENT ON COLUMN music_works.cover_image_data IS 'Cover art binary blob, same pattern as artwork.image_data and audio_data.';
+
+
+COMMENT ON COLUMN music_works.cover_image_filename IS 'Original filename of cover art image.';
+
+--
+-- Name: idx_music_works_created_by; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_music_works_created_by ON music_works (created_by);
+
+--
+-- Name: idx_music_works_genre; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_music_works_genre ON music_works (genre);
+
+--
+-- Name: idx_music_works_parent; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_music_works_parent ON music_works (parent_work_id);
+
+--
+-- Name: idx_music_works_search; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_music_works_search ON music_works USING gin (search_vector);
+
+--
+-- Name: idx_music_works_source_type; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_music_works_source_type ON music_works (source_type);
+
+--
+-- Name: idx_music_works_status; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_music_works_status ON music_works (status);
+
+--
+-- Name: tasks; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS tasks (
+    id SERIAL,
+    title varchar(255) NOT NULL,
+    description text,
+    status varchar(50) DEFAULT 'pending',
+    priority integer DEFAULT 5,
+    parent_task_id integer,
+    project_id integer,
+    assigned_to integer NOT NULL,
+    created_by integer DEFAULT current_agent_id() NOT NULL,
+    due_date timestamp,
+    completed_at timestamp,
+    notes text,
+    created_at timestamp DEFAULT CURRENT_TIMESTAMP,
+    updated_at timestamp DEFAULT CURRENT_TIMESTAMP,
+    task_number integer,
+    blocked boolean DEFAULT false,
+    blocked_reason text,
+    blocked_on integer,
+    last_worked_at timestamptz,
+    work_notes text,
+    task_type varchar(20) DEFAULT 'one_off',
+    recurrence_interval interval,
+    last_completed_at timestamptz,
+    CONSTRAINT tasks_pkey PRIMARY KEY (id),
+    CONSTRAINT tasks_parent_task_id_fkey FOREIGN KEY (parent_task_id) REFERENCES tasks (id) ON DELETE CASCADE
+);
+
+
+COMMENT ON TABLE tasks IS 'Task tracking. NOVA can create, update status, assign. Check before starting work.';
+
+
+COMMENT ON COLUMN tasks.task_type IS 'one_off = complete once, recurring = resets after completion, fallback = low-priority repeatable when idle';
+
+
+COMMENT ON COLUMN tasks.recurrence_interval IS 'How often recurring tasks reset (e.g., 1 day, 1 week)';
+
+
+COMMENT ON COLUMN tasks.last_completed_at IS 'When task was last completed (for recurring reset logic)';
+
+--
+-- Name: idx_tasks_parent; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_tasks_parent ON tasks (parent_task_id);
+
+--
+-- Name: idx_tasks_priority; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_tasks_priority ON tasks (priority);
+
+--
+-- Name: idx_tasks_project; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks (project_id);
+
+--
+-- Name: idx_tasks_status; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks (status);
+
+--
+-- Name: lessons_learned_by_fkey; Type: CONSTRAINT; Schema: -; Owner: -
+--
+
+ALTER TABLE lessons
+ADD CONSTRAINT lessons_learned_by_fkey FOREIGN KEY (learned_by) REFERENCES agents (id);
+
+--
+-- Name: tasks_assigned_to_fkey; Type: CONSTRAINT; Schema: -; Owner: -
+--
+
+ALTER TABLE tasks
+ADD CONSTRAINT tasks_assigned_to_fkey FOREIGN KEY (assigned_to) REFERENCES entities (id);
+
+--
+-- Name: tasks_blocked_on_fkey; Type: CONSTRAINT; Schema: -; Owner: -
+--
+
+ALTER TABLE tasks
+ADD CONSTRAINT tasks_blocked_on_fkey FOREIGN KEY (blocked_on) REFERENCES entities (id);
+
+--
+-- Name: tasks_created_by_fkey; Type: CONSTRAINT; Schema: -; Owner: -
+--
+
+ALTER TABLE tasks
+ADD CONSTRAINT tasks_created_by_fkey FOREIGN KEY (created_by) REFERENCES entities (id);
+
+--
+-- Name: tasks_project_id_fkey; Type: CONSTRAINT; Schema: -; Owner: -
+--
+
+ALTER TABLE tasks
+ADD CONSTRAINT tasks_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects (id) ON DELETE SET NULL;
 
 --
 -- Name: agent_config_changed; Type: TRIGGER; Schema: -; Owner: -
@@ -6907,6 +6928,15 @@ CREATE OR REPLACE TRIGGER trg_tasks_force_created_by
     EXECUTE FUNCTION tasks_force_created_by();
 
 --
+-- Name: trigger_user_insights_updated_at; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER trigger_user_insights_updated_at
+    BEFORE UPDATE ON user_insights
+    FOR EACH ROW
+    EXECUTE FUNCTION update_user_insights_updated_at();
+
+--
 -- Name: workflow_step_change_trigger; Type: TRIGGER; Schema: -; Owner: -
 --
 
@@ -7369,13 +7399,13 @@ CREATE OR REPLACE VIEW workflow_steps_detail AS
 -- Name: agent_actions; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE agent_actions FROM newhart;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_actions FROM newhart;
 
 --
 -- Name: agent_actions; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_actions FROM newhart;
+REVOKE SELECT ON TABLE agent_actions FROM newhart;
 
 --
 -- Name: agent_aliases; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -7513,13 +7543,13 @@ REVOKE DELETE ON TABLE agent_bootstrap_context FROM ticker;
 -- Name: agent_chat; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE agent_chat FROM newhart;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_chat FROM newhart;
 
 --
 -- Name: agent_chat; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_chat FROM newhart;
+REVOKE SELECT ON TABLE agent_chat FROM newhart;
 
 --
 -- Name: agent_chat_processed; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -7651,13 +7681,13 @@ REVOKE DELETE ON TABLE agent_modifications FROM iris;
 -- Name: agent_modifications; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE agent_modifications FROM newhart;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_modifications FROM newhart;
 
 --
 -- Name: agent_modifications; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_modifications FROM newhart;
+REVOKE SELECT ON TABLE agent_modifications FROM newhart;
 
 --
 -- Name: agent_modifications; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -7681,13 +7711,13 @@ REVOKE DELETE ON TABLE agent_modifications FROM ticker;
 -- Name: agent_spawns; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_spawns FROM newhart;
+REVOKE SELECT ON TABLE agent_spawns FROM newhart;
 
 --
 -- Name: agent_spawns; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE agent_spawns FROM newhart;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_spawns FROM newhart;
 
 --
 -- Name: agent_system_config; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -7807,13 +7837,13 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE agents FROM iris;
 -- Name: agents; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agents FROM newhart;
+REVOKE SELECT ON TABLE agents FROM newhart;
 
 --
 -- Name: agents; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE agents FROM newhart;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agents FROM newhart;
 
 --
 -- Name: agents; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -7903,25 +7933,25 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE ai_models FROM ticker;
 -- Name: artwork; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE artwork FROM iris;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE artwork FROM iris;
 
 --
 -- Name: artwork; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE artwork FROM iris;
-
---
--- Name: asset_classes; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE SELECT ON TABLE asset_classes FROM ticker;
+REVOKE SELECT ON TABLE artwork FROM iris;
 
 --
 -- Name: asset_classes; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE asset_classes FROM ticker;
+
+--
+-- Name: asset_classes; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE asset_classes FROM ticker;
 
 --
 -- Name: bootstrap_context_config; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -7963,13 +7993,13 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE bootstrap_context_config FROM iris;
 -- Name: bootstrap_context_config; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE bootstrap_context_config FROM newhart;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE bootstrap_context_config FROM newhart;
 
 --
 -- Name: bootstrap_context_config; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE bootstrap_context_config FROM newhart;
+REVOKE SELECT ON TABLE bootstrap_context_config FROM newhart;
 
 --
 -- Name: bootstrap_context_config; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -7994,6 +8024,12 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE bootstrap_context_config FROM ticker;
 --
 
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE certificates FROM nova;
+
+--
+-- Name: channel_activity; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE channel_activity FROM nova;
 
 --
 -- Name: channel_sessions; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -8683,7 +8719,7 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE journal_entries FROM marcie;
 -- Name: journal_entries; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, UPDATE ON TABLE journal_entries FROM newhart;
+REVOKE DELETE, UPDATE ON TABLE journal_entries FROM newhart;
 
 --
 -- Name: journal_entries; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -8731,13 +8767,13 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE lessons_archive FROM nova;
 -- Name: library_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE library_authors FROM athena;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE library_authors FROM athena;
 
 --
 -- Name: library_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE library_authors FROM athena;
+REVOKE SELECT ON TABLE library_authors FROM athena;
 
 --
 -- Name: library_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -8797,13 +8833,13 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE library_authors FROM ticker;
 -- Name: library_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE library_tags FROM athena;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE library_tags FROM athena;
 
 --
 -- Name: library_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE library_tags FROM athena;
+REVOKE SELECT ON TABLE library_tags FROM athena;
 
 --
 -- Name: library_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -8863,13 +8899,13 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE library_tags FROM ticker;
 -- Name: library_work_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE library_work_authors FROM athena;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE library_work_authors FROM athena;
 
 --
 -- Name: library_work_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE library_work_authors FROM athena;
+REVOKE SELECT ON TABLE library_work_authors FROM athena;
 
 --
 -- Name: library_work_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -8995,13 +9031,13 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE library_work_relationships FROM ticker;
 -- Name: library_work_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE library_work_tags FROM athena;
+REVOKE SELECT ON TABLE library_work_tags FROM athena;
 
 --
 -- Name: library_work_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE library_work_tags FROM athena;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE library_work_tags FROM athena;
 
 --
 -- Name: library_work_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9205,25 +9241,25 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_works FROM argus;
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE music_works FROM athena;
-
---
--- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_works FROM athena;
 
 --
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE music_works FROM coder;
+REVOKE SELECT ON TABLE music_works FROM athena;
 
 --
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_works FROM coder;
+
+--
+-- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE music_works FROM coder;
 
 --
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9331,13 +9367,13 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_works FROM marcie;
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE music_works FROM newhart;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_works FROM newhart;
 
 --
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_works FROM newhart;
+REVOKE SELECT ON TABLE music_works FROM newhart;
 
 --
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9397,13 +9433,13 @@ REVOKE SELECT ON TABLE music_works FROM scribe;
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_works FROM ticker;
+REVOKE SELECT ON TABLE music_works FROM ticker;
 
 --
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE music_works FROM ticker;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_works FROM ticker;
 
 --
 -- Name: place_properties; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9421,13 +9457,13 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE places FROM nova;
 -- Name: pm_domain_portfolio_snapshots; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE pm_domain_portfolio_snapshots FROM ticker;
+REVOKE SELECT ON TABLE pm_domain_portfolio_snapshots FROM ticker;
 
 --
 -- Name: pm_domain_portfolio_snapshots; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE pm_domain_portfolio_snapshots FROM ticker;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE pm_domain_portfolio_snapshots FROM ticker;
 
 --
 -- Name: portfolio_history; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9469,25 +9505,25 @@ REVOKE SELECT ON TABLE portfolio_positions FROM ticker;
 -- Name: portfolio_snapshots; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE portfolio_snapshots FROM ticker;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE portfolio_snapshots FROM ticker;
 
 --
 -- Name: portfolio_snapshots; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE portfolio_snapshots FROM ticker;
-
---
--- Name: portfolio_updates; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE portfolio_updates FROM ticker;
+REVOKE SELECT ON TABLE portfolio_snapshots FROM ticker;
 
 --
 -- Name: portfolio_updates; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
 REVOKE SELECT ON TABLE portfolio_updates FROM ticker;
+
+--
+-- Name: portfolio_updates; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE portfolio_updates FROM ticker;
 
 --
 -- Name: positions; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9733,13 +9769,13 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE research_findings FROM nova;
 -- Name: research_findings; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE research_findings FROM scout;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE research_findings FROM scout;
 
 --
 -- Name: research_findings; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE research_findings FROM scout;
+REVOKE SELECT ON TABLE research_findings FROM scout;
 
 --
 -- Name: research_findings; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9799,13 +9835,13 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE research_projects FROM nova;
 -- Name: research_projects; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE research_projects FROM scout;
+REVOKE SELECT ON TABLE research_projects FROM scout;
 
 --
 -- Name: research_projects; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE research_projects FROM scout;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE research_projects FROM scout;
 
 --
 -- Name: research_projects; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9865,13 +9901,13 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE research_provenance FROM nova;
 -- Name: research_provenance; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE research_provenance FROM scout;
+REVOKE SELECT ON TABLE research_provenance FROM scout;
 
 --
 -- Name: research_provenance; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE research_provenance FROM scout;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE research_provenance FROM scout;
 
 --
 -- Name: research_provenance; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10063,13 +10099,13 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE research_tasks FROM nova;
 -- Name: research_tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE research_tasks FROM scout;
+REVOKE SELECT ON TABLE research_tasks FROM scout;
 
 --
 -- Name: research_tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE research_tasks FROM scout;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE research_tasks FROM scout;
 
 --
 -- Name: research_tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10154,6 +10190,108 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE tools FROM nova;
 --
 
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE unsolved_problems FROM nova;
+
+--
+-- Name: user_insights; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, UPDATE ON TABLE user_insights FROM argus;
+
+--
+-- Name: user_insights; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, UPDATE ON TABLE user_insights FROM athena;
+
+--
+-- Name: user_insights; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, UPDATE ON TABLE user_insights FROM coder;
+
+--
+-- Name: user_insights; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, UPDATE ON TABLE user_insights FROM conductor;
+
+--
+-- Name: user_insights; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, UPDATE ON TABLE user_insights FROM erato;
+
+--
+-- Name: user_insights; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, UPDATE ON TABLE user_insights FROM flint;
+
+--
+-- Name: user_insights; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, UPDATE ON TABLE user_insights FROM gem;
+
+--
+-- Name: user_insights; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, UPDATE ON TABLE user_insights FROM gidget;
+
+--
+-- Name: user_insights; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, UPDATE ON TABLE user_insights FROM hermes;
+
+--
+-- Name: user_insights; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, UPDATE ON TABLE user_insights FROM iris;
+
+--
+-- Name: user_insights; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, UPDATE ON TABLE user_insights FROM marcie;
+
+--
+-- Name: user_insights; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, UPDATE ON TABLE user_insights FROM newhart;
+
+--
+-- Name: user_insights; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE user_insights FROM nova;
+
+--
+-- Name: user_insights; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, UPDATE ON TABLE user_insights FROM quill;
+
+--
+-- Name: user_insights; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, UPDATE ON TABLE user_insights FROM scout;
+
+--
+-- Name: user_insights; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, UPDATE ON TABLE user_insights FROM scribe;
+
+--
+-- Name: user_insights; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, UPDATE ON TABLE user_insights FROM ticker;
 
 --
 -- Name: vehicles; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10298,6 +10436,18 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE works FROM nova;
 --
 
 GRANT EXECUTE ON FUNCTION complete_d100(p_roll integer) TO nova;
+
+--
+-- Name: current_agent_id(); Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT EXECUTE ON FUNCTION current_agent_id() TO graybeard;
+
+--
+-- Name: current_agent_id(); Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT EXECUTE ON FUNCTION current_agent_id() TO newhart;
 
 --
 -- Name: roll_d100(); Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -12992,6 +13142,18 @@ GRANT USAGE ON SEQUENCE job_messages_id_seq TO scribe;
 --
 
 GRANT USAGE ON SEQUENCE job_messages_id_seq TO ticker;
+
+--
+-- Name: journal_entries_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE journal_entries_id_seq TO graybeard;
+
+--
+-- Name: journal_entries_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE journal_entries_id_seq TO newhart;
 
 --
 -- Name: lessons_archive_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -17728,6 +17890,12 @@ GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE agent_turn_context TO graybeard;
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE certificates TO graybeard;
 
 --
+-- Name: channel_activity; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE channel_activity TO graybeard;
+
+--
 -- Name: entities; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
@@ -17834,6 +18002,12 @@ GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE gambling_logs TO graybeard;
 --
 
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE job_messages TO graybeard;
+
+--
+-- Name: journal_entries; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT INSERT, SELECT ON TABLE journal_entries TO graybeard;
 
 --
 -- Name: lessons; Type: PRIVILEGE; Schema: privileges; Owner: -

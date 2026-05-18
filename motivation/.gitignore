@@ -1,0 +1,33 @@
+# Secrets
+*.pem
+*.key
+*.env
+.env*
+secrets/
+credentials/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build
+__pycache__/
+*.pyc
+node_modules/
+dist/
+build/
+
+# SE workflow temporary files
+tests/TEST-CASES-*.md
+tests/TEST-RESULTS-*.md
+IMPLEMENTATION-*.md
+*-review.md
+
+# NOVA local documentation config (untracked)
+.nova/

@@ -39,7 +39,7 @@ The `get_agent_bootstrap()` function includes workflows in an agent's bootstrap 
 SELECT 
     'WORKFLOW_CONTEXT.md' as filename,
     'Workflow: ' || w.name || E'\n\n' || w.description as content,
-    'workflow:' || w.name as source,
+    'WORKFLOW:' || w.name as source,
     4 as priority
 FROM workflow_steps ws
 JOIN workflows w ON ws.workflow_id = w.id

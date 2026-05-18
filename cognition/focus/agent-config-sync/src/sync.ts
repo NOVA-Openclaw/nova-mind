@@ -32,12 +32,12 @@ type AgentListEntry = {
 
 // ── SQL ─────────────────────────────────────────────────────────────────────
 
+// Queries get_agent_export_rows(), which scopes results to the connecting role
+// (session_user) and subagents owning that role via `parent_agents` array overlap.
+// The function lives in nova-mind/database/schema.sql and is owned by newhart.
 const AGENTS_QUERY = `
   SELECT name, model, fallback_models, thinking, instance_type, is_default, allowed_subagents
-  FROM agents
-  WHERE instance_type != 'peer'
-    AND model IS NOT NULL
-  ORDER BY name;
+  FROM get_agent_export_rows();
 `;
 
 // ── Build ───────────────────────────────────────────────────────────────────

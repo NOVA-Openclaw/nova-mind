@@ -3971,7 +3971,7 @@ BEGIN
     FROM (
         -- 1. UNIVERSAL (exclude SYSTEM records)
         SELECT abc.file_key || '.md' AS filename, abc.content,
-            'universal'::TEXT AS source, 1 AS priority
+            'UNIVERSAL'::TEXT AS source, 1 AS priority
         FROM agent_bootstrap_context abc
         WHERE abc.context_type = 'UNIVERSAL'
           AND abc.file_key != 'SYSTEM_PROMPT'
@@ -3980,7 +3980,7 @@ BEGIN
 
         -- 2. GLOBAL (exclude SYSTEM records)
         SELECT abc.file_key || '.md' AS filename, abc.content,
-            'global'::TEXT AS source, 2 AS priority
+            'GLOBAL'::TEXT AS source, 2 AS priority
         FROM agent_bootstrap_context abc
         WHERE abc.context_type = 'GLOBAL'
           AND abc.file_key != 'SYSTEM_PROMPT'
@@ -3991,7 +3991,7 @@ BEGIN
         SELECT
             abc.file_key || '.md' AS filename,
             abc.content,
-            'domain:' || (
+            'DOMAIN:' || (
                 SELECT string_agg(dn, ', ' ORDER BY dn)
                 FROM unnest(abc.domain_names) AS dn
             ) AS source,
@@ -4032,7 +4032,7 @@ BEGIN
             E'\n> FROM workflow_steps WHERE workflow_id = ' || w.id || ' ORDER BY step_order;' ||
             E'\n> ```'
             AS content,
-            'workflow:' || w.name AS source,
+            'WORKFLOW:' || w.name AS source,
             4 AS priority
         FROM workflows w
         LEFT JOIN LATERAL (
@@ -4067,7 +4067,7 @@ BEGIN
 
         -- 5. AGENT (never SYSTEM)
         SELECT abc.file_key || '.md' AS filename, abc.content,
-            'agent'::TEXT AS source, 5 AS priority
+            'AGENT'::TEXT AS source, 5 AS priority
         FROM agent_bootstrap_context abc
         WHERE abc.context_type = 'AGENT'
           AND abc.agent_name = p_agent_name

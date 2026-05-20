@@ -10,9 +10,11 @@ LISTEN/NOTIFY-driven sync that writes `~/.openclaw/agents.json`.
    config file reflects current DB state on gateway start.
 
 2. **On notification** — The `agents_config_changed` trigger fires
-   `pg_notify('agent_config_changed', ...)` whenever `model`,
-   `fallback_models`, `thinking`, or `instance_type` change on the `agents`
-   table.  The plugin queries the table and rewrites `agents.json`.
+   `pg_notify('agent_config_changed', ...)` whenever any column changes on the
+   `agents` table.  The plugin queries `get_agent_export_rows()`, which scopes
+   results to the connecting role (session_user) and subagents owning that role
+   via `parent_agents` array overlap, and rewrites `agents.json`. The function
+   lives in nova-mind/database/schema.sql and is owned by newhart.
 
 3. **Atomic writes** — The JSON is written to a temp file first, then
    `rename(2)`-d into place to prevent partial reads by the gateway.
@@ -59,7 +61,10 @@ LISTEN/NOTIFY-driven sync that writes `~/.openclaw/agents.json`.
 
 - `agents.defaults.models` is an allow-list of **all** unique models
   (primaries + every fallback).
-- Peer agents (`instance_type = 'peer'`) are **excluded**.
+- Results are scoped per-gateway: `get_agent_export_rows()` returns the connecting
+  peer's own row (as `is_default = TRUE`) plus subagents linked to that peer via
+  `parent_agents` array overlap. Peers and their own subagents both appear in their
+  respective agents.json.
 - Fallback order is preserved from the DB array.
 
 ## DB Schema Requirements
@@ -71,6 +76,7 @@ LISTEN/NOTIFY-driven sync that writes `~/.openclaw/agents.json`.
 --   fallback_models TEXT[]
 --   thinking        VARCHAR
 --   instance_type   VARCHAR   ('primary' | 'subagent' | 'peer')
+--   parent_agents   TEXT[]    (peer agent names that own this subagent)
 
 -- Trigger (already in place):
 --   agents_config_changed → pg_notify('agent_config_changed', ...)

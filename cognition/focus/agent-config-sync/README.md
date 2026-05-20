@@ -18,7 +18,7 @@ When the table changes, the plugin receives a PostgreSQL `NOTIFY` event, rebuild
 DB change
   └─► trigger fires pg_notify('agent_config_changed')
         └─► plugin receives notification (LISTEN)
-              └─► queries agents WHERE instance_type != 'peer'
+              └─► queries get_agent_export_rows() (session_user-scoped)
                     └─► builds bare JSON array
                           └─► atomic write (tmp + rename) → agents.json
                                 └─► SIGUSR1 → gateway hot-reload
@@ -98,14 +98,17 @@ The `$include` directive splices the bare array directly into `agents.list`. All
 
 ## DB Filter
 
-Only non-peer agents are synced:
+Agents are scoped per-gateway via `get_agent_export_rows()`:
 
 ```sql
-WHERE instance_type != 'peer'
-  AND model IS NOT NULL
+SELECT name, model, fallback_models, thinking, instance_type, is_default, allowed_subagents
+FROM get_agent_export_rows();
 ```
 
-Peer agents (connected remote instances) are excluded — they are managed dynamically by the gateway, not via `agents.json`.
+The function (defined in nova-mind/database/schema.sql, owned by newhart) uses `session_user`
+to scope results: it returns the connecting peer's own row (as `is_default = TRUE`) plus every
+subagent where `session_user = ANY(parent_agents)` (as `is_default = FALSE`). This ensures
+each peer gateway receives only its own agent set.
 
 ---
 
@@ -149,7 +152,7 @@ DB INSERT / UPDATE / DELETE on agents
                     │
                     └─► syncAgentsConfig()
                           │
-                          ├─► SELECT WHERE instance_type != 'peer'
+                          ├─► SELECT FROM get_agent_export_rows() (session_user-scoped)
                           │
                           └─► atomic write → agents.json
                                 │

@@ -122,7 +122,10 @@ The **`agent-config-sync`** extension plugin keeps OpenClaw's agent model config
 
 - **`defaults.models`** — Allow-list of all unique models (primaries + fallbacks).
 - **`list`** — Per-agent config. `model` is a plain string when there are no fallbacks, or an object with `primary`/`fallbacks` when fallbacks exist.
-- Agents with `instance_type = 'peer'` are excluded (peers run their own gateways).
+- Each peer gateway's `agents.json` is scoped to that gateway: the connecting peer appears as
+  `default: true`, and subagents linked to that peer via `parent_agents` appear as non-default
+  entries. Both the peer and its own subagents appear in their respective gateway's `agents.json`.
+  Agents belonging to a different peer do not appear.
 
 ### Replaces: `agent-config-db` Hook
 

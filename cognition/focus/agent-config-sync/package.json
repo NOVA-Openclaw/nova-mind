@@ -1,6 +1,6 @@
 {
   "name": "@nova-cognition/agent_config_sync",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "DB-to-Config sync for agent model configuration (LISTEN/NOTIFY)",
   "type": "module",
   "main": "dist/index.js",
@@ -8,7 +8,8 @@
   "scripts": {
     "build": "tsc",
     "watch": "tsc --watch",
-    "clean": "rm -rf dist"
+    "clean": "rm -rf dist",
+    "test": "npx tsx --test src/sync.test.ts"
   },
   "keywords": [
     "openclaw",

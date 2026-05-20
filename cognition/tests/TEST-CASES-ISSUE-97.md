@@ -1,5 +1,7 @@
 ## Test Cases for Issue #97: Add orchestrator_agent_id to workflows table
 
+> ⚠️ **Historical — partially stale as of PR #244 (2026-05).** Several test queries below match against the old lowercase source label, e.g. `source = 'workflow:test-null-orch'` and `source LIKE 'workflow%'`. After PR #244, `get_agent_bootstrap()` emits UPPERCASE source labels, so these specific assertions now return 0 rows and would need `source = 'WORKFLOW:test-null-orch'` / `source LIKE 'WORKFLOW%'` to pass. The issue this document tracks has shipped; the doc is retained as a historical artifact. Do not use it as a current test plan without re-casing the queries.
+
 **Goal:** Ensure Conductor (workflow-pm) receives ALL active workflows in her bootstrap context by adding an `orchestrator_agent_id` column to the `workflows` table and updating `get_agent_bootstrap()`.
 
 **Pre-conditions:**

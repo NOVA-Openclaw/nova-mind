@@ -151,12 +151,14 @@ Returns all context for an agent:
 SELECT source, filename, content FROM get_agent_bootstrap('coder');
 ```
 
-Sources returned:
-- `universal` — UNIVERSAL records
-- `global` — GLOBAL records
-- `domain:<name>` — DOMAIN records matched by agent_domains
-- `workflow:<name>` — dynamically generated from workflows + workflow_steps
-- `agent` — AGENT records matched by name
+Sources returned (UPPERCASE — these strings feed `db:${source}/${filename}` path emission in the hook handler, e.g. `db:UNIVERSAL/CORE.md`, `db:DOMAIN:Project Leadership/ORCHESTRATION.md`):
+- `UNIVERSAL` — UNIVERSAL records
+- `GLOBAL` — GLOBAL records
+- `DOMAIN:<name(s)>` — DOMAIN records matched by agent_domains; `<name(s)>` is a comma-joined list when a record is shared across multiple domains
+- `WORKFLOW:<name>` — dynamically generated from workflows + workflow_steps
+- `AGENT` — AGENT records matched by name
+
+The synthetic `db:<SOURCE>/<filename>` identifiers produced from these labels are preserved verbatim by the gateway's bootstrap-files sanitizer (see `nova-openclaw/src/agents/bootstrap-files.ts`, `SYNTHETIC_PATH_PREFIX`) — they are not resolved against the workspace root.
 
 ### Supporting tables
 

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Changed (#244 — per-gateway agent scoping + UPPERCASE bootstrap source labels)
+
+- **`agent-config-sync` query switched to `get_agent_export_rows()`** ([#244](https://github.com/NOVA-Openclaw/nova-mind/issues/244)) — The inline `AGENTS_QUERY` in `cognition/focus/agent-config-sync/src/sync.ts` previously used `WHERE instance_type != 'peer' AND model IS NOT NULL`, which returned the same rows regardless of which peer gateway was connecting. It now calls the DB function `get_agent_export_rows()` (lives in `database/schema.sql`, owned by newhart) which uses `session_user` to scope results: the connecting peer's own row (emitted as `is_default = TRUE`) plus subagents linked to that peer via `parent_agents` array overlap. Each peer gateway therefore receives only its own agent set in `agents.json`, fixing the default-agent confusion on Newhart/Graybeard gateways where they were previously seeing NOVA's subagents and falling back to NOVA as default. Supersedes the prior `instance_type != 'peer'` filter described below.
+- **`get_agent_bootstrap()` source literals capitalized** ([#244](https://github.com/NOVA-Openclaw/nova-mind/issues/244)) — The five tier labels emitted by `get_agent_bootstrap()` in `database/schema.sql` are now UPPERCASE: `UNIVERSAL`, `GLOBAL`, `DOMAIN:<name(s)>`, `WORKFLOW:<name>`, `AGENT` (previously lowercase). The bootstrap-context hook handler composes paths as `` `db:${row.source}/${row.filename}` ``, so callers now see `db:UNIVERSAL/CORE.md`, `db:DOMAIN:Project Leadership/ORCHESTRATION.md`, `db:AGENT/SOUL.md`, etc. The casing aligns the source field with the `agent_bootstrap_context.context_type` column (UNIVERSAL/GLOBAL/DOMAIN/AGENT/SYSTEM/WORKFLOW) and makes path tiers visually distinct from the `db:` namespace prefix.
+- **Coordinated with nova-openclaw [#243](https://github.com/NOVA-Openclaw/nova-openclaw/issues/243)** — The new UPPERCASE `db:TIER/...` synthetic identifiers are preserved verbatim by the gateway's bootstrap-files sanitizer (`sanitizeBootstrapFiles()` in nova-openclaw), so they never get corrupted into workspace-rooted filesystem paths. Both PRs must ship together — see staging deploy notes on PR #244.
+- **`notify_agent_config_changed()` trigger fires on any row change** — Was already broadened in an earlier change; documenting here for completeness because the docs for the trigger now also reflect the wider net.
+
 ### Removed (#110 — installer schema cleanup)
 
 - **Duplicate schema management removed from installer** ([#110](https://github.com/nova-openclaw/nova-mind/issues/110)) — `pgschema` is now the single source of truth for database schema. Specifically:

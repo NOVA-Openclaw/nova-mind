@@ -2323,182 +2323,145 @@ COMMENT ON TABLE place_properties IS 'Properties and attributes of places. Key-v
 CREATE INDEX IF NOT EXISTS idx_place_props_place ON place_properties (place_id);
 
 --
--- Name: pm_domain_portfolio_snapshots; Type: TABLE; Schema: -; Owner: -
---
-
-CREATE TABLE IF NOT EXISTS pm_domain_portfolio_snapshots (
-    id SERIAL,
-    timestamp timestamptz DEFAULT CURRENT_TIMESTAMP,
-    total_value numeric,
-    total_pl numeric,
-    total_pl_pct numeric,
-    prices jsonb,
-    CONSTRAINT pm_domain_portfolio_snapshots_pkey PRIMARY KEY (id)
-);
-
---
--- Name: portfolio_history; Type: TABLE; Schema: -; Owner: -
---
-
-CREATE TABLE IF NOT EXISTS portfolio_history (
-    id SERIAL,
-    timestamp timestamp,
-    total_value numeric,
-    total_pl numeric,
-    total_pl_pct numeric,
-    prices jsonb,
-    CONSTRAINT portfolio_history_pkey PRIMARY KEY (id)
-);
-
---
--- Name: portfolio_metrics; Type: TABLE; Schema: -; Owner: -
---
-
-CREATE TABLE IF NOT EXISTS portfolio_metrics (
-    id SERIAL,
-    timestamp timestamptz DEFAULT CURRENT_TIMESTAMP,
-    total_value numeric(10,2),
-    total_pl numeric(10,2),
-    total_pl_pct numeric(5,2),
-    amd_price numeric(10,2),
-    nvda_price numeric(10,2),
-    meta_price numeric(10,2),
-    smci_price numeric(10,2),
-    crwd_price numeric(10,2),
-    CONSTRAINT portfolio_metrics_pkey PRIMARY KEY (id)
-);
-
---
--- Name: portfolio_positions; Type: TABLE; Schema: -; Owner: -
---
-
-CREATE TABLE IF NOT EXISTS portfolio_positions (
-    id SERIAL,
-    symbol varchar(10) NOT NULL,
-    shares numeric(12,6) NOT NULL,
-    cost_basis numeric(12,2) NOT NULL,
-    purchased_at timestamp NOT NULL,
-    sold_at timestamp,
-    sale_proceeds numeric(12,2),
-    notes text,
-    created_at timestamp DEFAULT now(),
-    CONSTRAINT portfolio_positions_pkey PRIMARY KEY (id)
-);
-
-
-COMMENT ON TABLE portfolio_positions IS 'Individual stock/investment positions tracking purchases, sales, and P&L. Core table for portfolio management.';
-
-
-COMMENT ON COLUMN portfolio_positions.id IS 'Unique position identifier';
-
-
-COMMENT ON COLUMN portfolio_positions.symbol IS 'Ticker symbol or asset identifier';
-
-
-COMMENT ON COLUMN portfolio_positions.shares IS 'Number of shares/units held';
-
-
-COMMENT ON COLUMN portfolio_positions.cost_basis IS 'Total purchase price';
-
-
-COMMENT ON COLUMN portfolio_positions.purchased_at IS 'Date and time of purchase';
-
-
-COMMENT ON COLUMN portfolio_positions.sold_at IS 'Date and time of sale (NULL for open positions)';
-
-
-COMMENT ON COLUMN portfolio_positions.sale_proceeds IS 'Total sale proceeds (NULL for open positions)';
-
-
-COMMENT ON COLUMN portfolio_positions.notes IS 'Additional notes about the position';
-
-
-COMMENT ON COLUMN portfolio_positions.created_at IS 'Record creation timestamp';
-
---
--- Name: idx_positions_held; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_positions_held ON portfolio_positions (sold_at) WHERE (sold_at IS NULL);
-
---
 -- Name: portfolio_snapshots; Type: TABLE; Schema: -; Owner: -
 --
 
 CREATE TABLE IF NOT EXISTS portfolio_snapshots (
     id SERIAL,
-    snapshot_at timestamp DEFAULT now() NOT NULL,
+    snapshot_at timestamptz DEFAULT now() NOT NULL,
     total_value numeric(12,2) NOT NULL,
     total_cost_basis numeric(12,2) NOT NULL,
     unrealized_pl numeric(12,2),
     unrealized_pl_pct numeric(8,4),
     positions jsonb,
     benchmark_m2 numeric(8,4),
-    CONSTRAINT portfolio_snapshots_pkey PRIMARY KEY (id)
+    session_open_value numeric(12,2),
+    trading_session text,
+    CONSTRAINT portfolio_snapshots_pkey PRIMARY KEY (id),
+    CONSTRAINT portfolio_snapshots_trading_session_check CHECK (trading_session IS NULL OR trading_session IN ('pre', 'regular', 'after', 'closed')),
+    CONSTRAINT portfolio_snapshots_positions_shape CHECK (
+        positions IS NULL OR (
+            jsonb_typeof(positions) = 'object' AND
+            (
+                SELECT COALESCE(bool_and(
+                    value ? 'asset_class' AND
+                    value ? 'quantity' AND
+                    value ? 'price' AND
+                    value ? 'value' AND
+                    value ? 'cost_basis' AND
+                    value ? 'pl'
+                ), true)
+                FROM jsonb_each(positions)
+            )
+        )
+    )
 );
 
 
-COMMENT ON TABLE portfolio_snapshots IS 'Historical snapshots of portfolio values and performance metrics over time.';
+COMMENT ON TABLE portfolio_snapshots IS 'Historical snapshots of portfolio values and performance metrics over time. Supports multiple snapshots per day for intra-day P&L tracking.';
 
 --
--- Name: idx_snapshots_date; Type: INDEX; Schema: -; Owner: -
+-- Name: idx_snapshots_snapshot_at; Type: INDEX; Schema: -; Owner: -
 --
 
-CREATE INDEX IF NOT EXISTS idx_snapshots_date ON portfolio_snapshots (snapshot_at);
-
---
--- Name: idx_snapshots_day; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE UNIQUE INDEX IF NOT EXISTS idx_snapshots_day ON portfolio_snapshots ((snapshot_at::date));
-
---
--- Name: portfolio_updates; Type: TABLE; Schema: -; Owner: -
---
-
-CREATE TABLE IF NOT EXISTS portfolio_updates (
-    id SERIAL,
-    timestamp timestamp DEFAULT CURRENT_TIMESTAMP,
-    data jsonb,
-    CONSTRAINT portfolio_updates_pkey PRIMARY KEY (id)
-);
+CREATE INDEX IF NOT EXISTS idx_snapshots_snapshot_at ON portfolio_snapshots (snapshot_at);
 
 --
 -- Name: positions; Type: TABLE; Schema: -; Owner: -
+-- Canonical positions table: current portfolio state derived from trades.
 --
 
 CREATE TABLE IF NOT EXISTS positions (
     id SERIAL,
-    symbol varchar(20) NOT NULL,
-    asset_class varchar(20) NOT NULL,
-    asset_subclass varchar(50),
-    quantity numeric(18,8) NOT NULL,
-    unit varchar(20) DEFAULT 'shares',
-    cost_basis numeric(14,4) NOT NULL,
-    avg_price numeric(14,4),
-    purchased_at timestamp NOT NULL,
-    sold_at timestamp,
-    sale_proceeds numeric(14,4),
-    platform varchar(50),
-    account_id varchar(50) DEFAULT 'main',
-    notes text,
-    maturity_date date,
-    coupon_rate numeric(6,4),
-    strike_price numeric(14,4),
-    expiration_date date,
-    created_at timestamp DEFAULT now(),
-    updated_at timestamp DEFAULT now(),
-    CONSTRAINT positions_pkey PRIMARY KEY (id)
+    symbol TEXT NOT NULL,
+    asset_class TEXT NOT NULL,
+    quantity NUMERIC NOT NULL CHECK (quantity > 0),
+    cost_basis NUMERIC NOT NULL,
+    purchased_at TIMESTAMPTZ NOT NULL,
+    sold_at TIMESTAMPTZ,
+    sale_proceeds NUMERIC,
+    notes TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    created_by INTEGER DEFAULT current_agent_id(),
+    CONSTRAINT positions_pkey PRIMARY KEY (id),
+    CONSTRAINT positions_asset_class_fkey FOREIGN KEY (asset_class) REFERENCES asset_classes (code)
 );
 
 
-COMMENT ON TABLE positions IS 'Legacy or alternative positions tracking table. May be deprecated in favor of portfolio_positions.';
+COMMENT ON TABLE positions IS 'Canonical current portfolio positions. Derived from the trades event log. Open positions have sold_at IS NULL.';
 
 --
--- Name: idx_positions_account; Type: INDEX; Schema: -; Owner: -
+-- Name: idx_positions_open; Type: INDEX; Schema: -; Owner: -
 --
 
-CREATE INDEX IF NOT EXISTS idx_positions_account ON positions (account_id) WHERE (sold_at IS NULL);
+CREATE INDEX IF NOT EXISTS idx_positions_open ON positions (symbol) WHERE (sold_at IS NULL);
+
+--
+-- Name: trades; Type: TABLE; Schema: -; Owner: -
+-- Append-only trade event log.
+--
+
+CREATE TABLE IF NOT EXISTS trades (
+    id SERIAL,
+    executed_at TIMESTAMPTZ NOT NULL,
+    symbol TEXT NOT NULL,
+    asset_class TEXT NOT NULL,
+    side TEXT NOT NULL,
+    quantity NUMERIC NOT NULL,
+    price NUMERIC,
+    fees NUMERIC DEFAULT 0,
+    notes TEXT,
+    source TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    created_by INTEGER DEFAULT current_agent_id(),
+    CONSTRAINT trades_pkey PRIMARY KEY (id),
+    CONSTRAINT trades_side_check CHECK (side IN ('buy', 'sell', 'deposit', 'withdraw', 'dividend', 'split')),
+    CONSTRAINT trades_quantity_positive CHECK (quantity > 0),
+    CONSTRAINT trades_asset_class_fkey FOREIGN KEY (asset_class) REFERENCES asset_classes (code)
+);
+
+
+COMMENT ON TABLE trades IS 'Append-only trade event log. Source of truth for all portfolio transactions.';
+
+--
+-- Name: idx_trades_executed_at; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_trades_executed_at ON trades (executed_at);
+
+--
+-- Name: idx_trades_symbol; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_trades_symbol ON trades (symbol);
+
+--
+-- Name: idx_trades_no_duplicates; Type: INDEX; Schema: -; Owner: -
+-- Partial unique index: prevents duplicate trades except for migration imports.
+--
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_trades_no_duplicates
+    ON trades (executed_at, symbol, side, quantity, price)
+    WHERE source != 'migration';
+
+--
+-- Name: raise_trades_immutable; Type: FUNCTION; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE FUNCTION raise_trades_immutable()
+RETURNS TRIGGER AS $$
+BEGIN
+    RAISE EXCEPTION 'trades table is append-only: % operations are not allowed', TG_OP;
+END;
+$$ LANGUAGE plpgsql;
+
+--
+-- Name: trades_append_only; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE TRIGGER trades_append_only
+    BEFORE UPDATE OR DELETE ON trades
+    FOR EACH ROW EXECUTE FUNCTION raise_trades_immutable();
 
 --
 -- Name: preferences; Type: TABLE; Schema: -; Owner: -
@@ -3045,13 +3008,7 @@ CREATE TABLE IF NOT EXISTS tags (
     CONSTRAINT valid_category CHECK (category IS NULL OR (category::text IN ('genre'::character varying, 'mood'::character varying, 'theme'::character varying, 'style'::character varying, 'audience'::character varying, 'project'::character varying)))
 );
 
---
--- Name: ticker_portfolio; Type: TABLE; Schema: -; Owner: -
---
-
-CREATE TABLE IF NOT EXISTS ticker_portfolio (
-    data jsonb
-);
+-- ticker_portfolio table removed: deprecated. Use portfolio_snapshots and trades instead.
 
 --
 -- Name: tools; Type: TABLE; Schema: -; Owner: -
@@ -7329,11 +7286,11 @@ COMMENT ON VIEW v_pending_test_failures IS 'Test failures that need GitHub issue
 CREATE OR REPLACE VIEW v_portfolio_allocation AS
  SELECT p.asset_class,
     count(*) AS num_positions,
-    sum(p.quantity * COALESCE(pc.price, p.avg_price)) AS market_value,
+    sum(p.quantity * COALESCE(pc.price, p.cost_basis / NULLIF(p.quantity, 0))) AS market_value,
     sum(p.cost_basis) AS total_cost_basis,
-    sum(p.quantity * COALESCE(pc.price, p.avg_price)) - sum(p.cost_basis) AS unrealized_pl
+    sum(p.quantity * COALESCE(pc.price, p.cost_basis / NULLIF(p.quantity, 0))) - sum(p.cost_basis) AS unrealized_pl
    FROM positions p
-     LEFT JOIN price_cache_v2 pc ON p.symbol::text = pc.symbol::text AND p.asset_class::text = pc.asset_class::text
+     LEFT JOIN price_cache_v2 pc ON p.symbol = pc.symbol AND p.asset_class = pc.asset_class
   WHERE p.sold_at IS NULL
   GROUP BY p.asset_class;
 
@@ -9546,53 +9503,8 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE place_properties FROM nova;
 
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE places FROM nova;
 
---
--- Name: pm_domain_portfolio_snapshots; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE SELECT ON TABLE pm_domain_portfolio_snapshots FROM ticker;
-
---
--- Name: pm_domain_portfolio_snapshots; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE pm_domain_portfolio_snapshots FROM ticker;
-
---
--- Name: portfolio_history; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE SELECT ON TABLE portfolio_history FROM ticker;
-
---
--- Name: portfolio_history; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE portfolio_history FROM ticker;
-
---
--- Name: portfolio_metrics; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE portfolio_metrics FROM ticker;
-
---
--- Name: portfolio_metrics; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE SELECT ON TABLE portfolio_metrics FROM ticker;
-
---
--- Name: portfolio_positions; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE portfolio_positions FROM ticker;
-
---
--- Name: portfolio_positions; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE SELECT ON TABLE portfolio_positions FROM ticker;
+-- Privileges for pm_domain_portfolio_snapshots, portfolio_history, portfolio_metrics,
+-- portfolio_positions removed: these tables were dropped in SE Run #27 (BUG-1 fix).
 
 --
 -- Name: portfolio_snapshots; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9606,17 +9518,7 @@ REVOKE SELECT ON TABLE portfolio_snapshots FROM ticker;
 
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE portfolio_snapshots FROM ticker;
 
---
--- Name: portfolio_updates; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE portfolio_updates FROM ticker;
-
---
--- Name: portfolio_updates; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE SELECT ON TABLE portfolio_updates FROM ticker;
+-- Privileges for portfolio_updates removed: table dropped in SE Run #27 (BUG-1 fix).
 
 --
 -- Name: positions; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10260,17 +10162,7 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE tags FROM nova;
 
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE tasks FROM nova;
 
---
--- Name: ticker_portfolio; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE SELECT ON TABLE ticker_portfolio FROM ticker;
-
---
--- Name: ticker_portfolio; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE ticker_portfolio FROM ticker;
+-- Privileges for ticker_portfolio removed: table dropped in SE Run #27 (BUG-1 fix).
 
 --
 -- Name: tools; Type: PRIVILEGE; Schema: privileges; Owner: -

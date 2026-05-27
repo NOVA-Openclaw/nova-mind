@@ -2436,6 +2436,34 @@ CREATE INDEX IF NOT EXISTS idx_trades_executed_at ON trades (executed_at);
 CREATE INDEX IF NOT EXISTS idx_trades_symbol ON trades (symbol);
 
 --
+-- Name: idx_trades_no_duplicates; Type: INDEX; Schema: -; Owner: -
+-- Partial unique index: prevents duplicate trades except for migration imports.
+--
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_trades_no_duplicates
+    ON trades (executed_at, symbol, side, quantity, price)
+    WHERE source != 'migration';
+
+--
+-- Name: raise_trades_immutable; Type: FUNCTION; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE FUNCTION raise_trades_immutable()
+RETURNS TRIGGER AS $$
+BEGIN
+    RAISE EXCEPTION 'trades table is append-only: % operations are not allowed', TG_OP;
+END;
+$$ LANGUAGE plpgsql;
+
+--
+-- Name: trades_append_only; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE TRIGGER trades_append_only
+    BEFORE UPDATE OR DELETE ON trades
+    FOR EACH ROW EXECUTE FUNCTION raise_trades_immutable();
+
+--
 -- Name: preferences; Type: TABLE; Schema: -; Owner: -
 --
 
@@ -9475,53 +9503,8 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE place_properties FROM nova;
 
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE places FROM nova;
 
---
--- Name: pm_domain_portfolio_snapshots; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE pm_domain_portfolio_snapshots FROM ticker;
-
---
--- Name: pm_domain_portfolio_snapshots; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE SELECT ON TABLE pm_domain_portfolio_snapshots FROM ticker;
-
---
--- Name: portfolio_history; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE SELECT ON TABLE portfolio_history FROM ticker;
-
---
--- Name: portfolio_history; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE portfolio_history FROM ticker;
-
---
--- Name: portfolio_metrics; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE SELECT ON TABLE portfolio_metrics FROM ticker;
-
---
--- Name: portfolio_metrics; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE portfolio_metrics FROM ticker;
-
---
--- Name: portfolio_positions; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE portfolio_positions FROM ticker;
-
---
--- Name: portfolio_positions; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE SELECT ON TABLE portfolio_positions FROM ticker;
+-- Privileges for pm_domain_portfolio_snapshots, portfolio_history, portfolio_metrics,
+-- portfolio_positions removed: these tables were dropped in SE Run #27 (BUG-1 fix).
 
 --
 -- Name: portfolio_snapshots; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9535,17 +9518,7 @@ REVOKE SELECT ON TABLE portfolio_snapshots FROM ticker;
 
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE portfolio_snapshots FROM ticker;
 
---
--- Name: portfolio_updates; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE portfolio_updates FROM ticker;
-
---
--- Name: portfolio_updates; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE SELECT ON TABLE portfolio_updates FROM ticker;
+-- Privileges for portfolio_updates removed: table dropped in SE Run #27 (BUG-1 fix).
 
 --
 -- Name: positions; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10189,17 +10162,7 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE tags FROM nova;
 
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE tasks FROM nova;
 
---
--- Name: ticker_portfolio; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE ticker_portfolio FROM ticker;
-
---
--- Name: ticker_portfolio; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE SELECT ON TABLE ticker_portfolio FROM ticker;
+-- Privileges for ticker_portfolio removed: table dropped in SE Run #27 (BUG-1 fix).
 
 --
 -- Name: tools; Type: PRIVILEGE; Schema: privileges; Owner: -

@@ -43,7 +43,21 @@ echo "Installing OpenClaw hook..."
 mkdir -p "$HOOK_DIR"
 cp "$SCRIPT_DIR/hook/handler.ts" "$HOOK_DIR/"
 cp "$SCRIPT_DIR/hook/HOOK.md" "$HOOK_DIR/"
-echo "✅ Hook installed at $HOOK_DIR"
+cp "$SCRIPT_DIR/hook/package.json" "$HOOK_DIR/"
+echo "✅ Hook files installed at $HOOK_DIR"
+
+# Install hook Node.js dependencies
+echo "Installing hook dependencies..."
+if command -v npm &> /dev/null; then
+    (cd "$HOOK_DIR" && npm install --production 2>&1) || {
+        echo "❌ Error: npm install failed in $HOOK_DIR"
+        exit 1
+    }
+    echo "✅ Hook dependencies installed"
+else
+    echo "❌ Error: npm not found. Required to install hook dependencies (pg)."
+    exit 1
+fi
 echo ""
 
 # Create fallback directory

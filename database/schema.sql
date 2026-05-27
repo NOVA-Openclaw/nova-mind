@@ -5064,6 +5064,31 @@ END;
 $$;
 
 --
+-- Name: notify_heartbeat_content_changed(); Type: FUNCTION; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE FUNCTION notify_heartbeat_content_changed()
+RETURNS trigger
+LANGUAGE plpgsql
+VOLATILE
+AS $$
+BEGIN
+    -- Only notify for rows where file_key = 'HEARTBEAT'
+    IF (TG_OP = 'DELETE' AND OLD.file_key = 'HEARTBEAT') OR
+       (TG_OP != 'DELETE' AND NEW.file_key = 'HEARTBEAT') THEN
+        PERFORM pg_notify('heartbeat_content_changed', json_build_object(
+            'agent_name', COALESCE(NEW.agent_name, OLD.agent_name),
+            'operation', TG_OP
+        )::text);
+    END IF;
+    RETURN COALESCE(NEW, OLD);
+END;
+$$;
+
+COMMENT ON FUNCTION notify_heartbeat_content_changed() IS
+    'Fires heartbeat_content_changed NOTIFY when HEARTBEAT rows in agent_bootstrap_context are inserted or updated. Consumed by agent_config_sync plugin to refresh workspace HEARTBEAT.md files.';
+
+--
 -- Name: notify_coder_queue_change(); Type: FUNCTION; Schema: -; Owner: -
 --
 
@@ -6706,6 +6731,18 @@ CREATE OR REPLACE TRIGGER protect_bootstrap_context
     BEFORE INSERT OR UPDATE OR DELETE ON agent_bootstrap_context
     FOR EACH ROW
     EXECUTE FUNCTION protect_bootstrap_context_writes_v2();
+
+--
+-- Name: heartbeat_content_changed; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER heartbeat_content_changed
+    AFTER INSERT OR UPDATE OR DELETE ON agent_bootstrap_context
+    FOR EACH ROW
+    EXECUTE FUNCTION notify_heartbeat_content_changed();
+
+COMMENT ON TRIGGER heartbeat_content_changed ON agent_bootstrap_context IS
+    'Notifies heartbeat_content_changed channel when HEARTBEAT rows change. Consumed by agent_config_sync plugin.';
 
 --
 -- Name: protect_library_authors; Type: TRIGGER; Schema: -; Owner: -

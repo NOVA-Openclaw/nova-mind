@@ -4,6 +4,9 @@
  * Queries the `agents` table and builds the agents.json config as a bare JSON
  * array of non-peer agents. Writes atomically (tmp + rename) to prevent
  * partial reads.
+ *
+ * Also syncs HEARTBEAT.md files from `agent_bootstrap_context` to the correct
+ * workspace directories for each agent.
  */
 
 import fs from "node:fs";
@@ -12,6 +15,11 @@ import crypto from "node:crypto";
 import type pg from "pg";
 
 // ── Types ───────────────────────────────────────────────────────────────────
+
+export type HeartbeatRow = {
+  agent_name: string;
+  content: string;
+};
 
 export type AgentRow = {
   name: string;
@@ -38,6 +46,14 @@ type AgentListEntry = {
 const AGENTS_QUERY = `
   SELECT name, model, fallback_models, thinking, instance_type, is_default, allowed_subagents
   FROM get_agent_export_rows();
+`;
+
+// Queries HEARTBEAT records for all agents that have agent-scoped entries.
+const HEARTBEAT_QUERY = `
+  SELECT agent_name, content
+  FROM agent_bootstrap_context
+  WHERE file_key = 'HEARTBEAT'
+    AND agent_name IS NOT NULL
 `;
 
 // ── Build ───────────────────────────────────────────────────────────────────
@@ -97,6 +113,16 @@ export async function fetchAgentRows(client: pg.Client): Promise<AgentRow[]> {
   return result.rows;
 }
 
+/**
+ * Fetch HEARTBEAT records for all agents from agent_bootstrap_context.
+ */
+export async function fetchHeartbeatRecords(
+  client: pg.Client,
+): Promise<HeartbeatRow[]> {
+  const result = await client.query<HeartbeatRow>(HEARTBEAT_QUERY);
+  return result.rows;
+}
+
 // ── Write ───────────────────────────────────────────────────────────────────
 
 /**
@@ -119,6 +145,62 @@ export async function writeAgentsJsonAtomically(
 
   await fs.promises.writeFile(tmpFile, content, { encoding: "utf-8" });
   await fs.promises.rename(tmpFile, filePath);
+}
+
+// ── Heartbeat sync ─────────────────────────────────────────────────────────
+
+/**
+ * Sync HEARTBEAT.md files for all agents from agent_bootstrap_context.
+ *
+ * Workspace routing:
+ *   - defaultAgentName → <stateDir>/workspace/HEARTBEAT.md
+ *   - all others       → <stateDir>/workspace-<agent_name>/HEARTBEAT.md
+ *
+ * Uses atomic writes (tmp + rename). Skips write when content is unchanged.
+ * Creates workspace directory if it does not exist.
+ *
+ * Returns a list of agent names whose HEARTBEAT.md files were updated.
+ */
+export async function syncHeartbeatFiles(
+  client: pg.Client,
+  stateDir: string,
+  defaultAgentName: string,
+): Promise<string[]> {
+  const rows = await fetchHeartbeatRecords(client);
+  const updated: string[] = [];
+
+  for (const row of rows) {
+    const wsDir =
+      row.agent_name === defaultAgentName
+        ? path.join(stateDir, "workspace")
+        : path.join(stateDir, `workspace-${row.agent_name}`);
+
+    const filePath = path.join(wsDir, "HEARTBEAT.md");
+    const newContent = row.content;
+
+    // Skip write if content unchanged
+    try {
+      const existing = await fs.promises.readFile(filePath, "utf-8");
+      if (existing === newContent) continue;
+    } catch {
+      // File doesn't exist yet — continue to write
+    }
+
+    // Create workspace directory if needed
+    await fs.promises.mkdir(wsDir, { recursive: true });
+
+    // Atomic write: tmp file + rename
+    const tmpFile = path.join(
+      wsDir,
+      `HEARTBEAT.md.${crypto.randomUUID()}.tmp`,
+    );
+    await fs.promises.writeFile(tmpFile, newContent, { encoding: "utf-8" });
+    await fs.promises.rename(tmpFile, filePath);
+
+    updated.push(row.agent_name);
+  }
+
+  return updated;
 }
 
 // ── Full sync ───────────────────────────────────────────────────────────────

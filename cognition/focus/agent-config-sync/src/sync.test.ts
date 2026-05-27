@@ -1,20 +1,40 @@
 /**
- * Unit tests for buildAgentsList()
+ * Unit tests for buildAgentsList() and syncHeartbeatFiles()
  *
  * TC-244-U-01  NOVA session — self as default, NOVA's subagents only
  * TC-244-U-02  Newhart session — self as default, Newhart's subagents only
  * TC-244-U-03  Mutual exclusion — NOVA and Newhart never see each other
  * TC-244-U-04  Fallback model shape preserved from function rows
  * TC-244-U-05  Row with is_default = null emits no `default` key
+ * TC-269-U-01  Heartbeat sync — default agent writes to workspace/ not workspace-nova/
+ * TC-269-U-02  Heartbeat sync — subagent writes to workspace-<name>/
+ * TC-269-U-03  Heartbeat sync — skip write when content unchanged
+ * TC-269-U-04  Heartbeat sync — returns list of updated agent names
+ * TC-269-U-05  Heartbeat sync — creates workspace dir if missing
  *
  * Framework: Node built-in test runner (node:test) + tsx for TS execution.
  * Run: npx tsx --test src/sync.test.ts
  */
 
-import { describe, it } from "node:test";
+import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { buildAgentsList } from "./sync.js";
-import type { AgentRow } from "./sync.js";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { buildAgentsList, syncHeartbeatFiles } from "./sync.js";
+import type { AgentRow, HeartbeatRow } from "./sync.js";
+
+// ── Mock pg.Client helper ───────────────────────────────────────────────────
+
+/**
+ * Creates a minimal mock pg.Client whose query() returns fixed HeartbeatRow data.
+ * Only the query() method needs to be mocked for syncHeartbeatFiles tests.
+ */
+function makeMockClient(rows: HeartbeatRow[]): import("pg").Client {
+  return {
+    query: async () => ({ rows }),
+  } as unknown as import("pg").Client;
+}
 
 // ── TC-244-U-01: NOVA session ───────────────────────────────────────────────
 
@@ -391,5 +411,209 @@ describe("TC-244-U-05: Row with is_default = null emits no `default` key", () =>
       Object.prototype.hasOwnProperty.call(trueResult[0], "default"),
       "default key must be present when is_default is true",
     );
+  });
+});
+
+// ── TC-269-U-01: Default agent writes to workspace/ ─────────────────────────
+
+describe("TC-269-U-01: Heartbeat sync — default agent writes to workspace/ not workspace-nova/", () => {
+  let tmpDir: string;
+
+  before(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "heartbeat-test-"));
+  });
+
+  after(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("nova heartbeat file is written to workspace/HEARTBEAT.md", async () => {
+    const rows: HeartbeatRow[] = [
+      { agent_name: "nova", content: "# HEARTBEAT\ntest content\n" },
+    ];
+    const client = makeMockClient(rows);
+    await syncHeartbeatFiles(client, tmpDir, "nova");
+
+    const expected = path.join(tmpDir, "workspace", "HEARTBEAT.md");
+    assert.ok(fs.existsSync(expected), `Expected file at ${expected}`);
+    assert.strictEqual(
+      fs.readFileSync(expected, "utf-8"),
+      "# HEARTBEAT\ntest content\n",
+    );
+  });
+
+  it("workspace-nova/ directory is NOT created for default agent", async () => {
+    const rows: HeartbeatRow[] = [
+      { agent_name: "nova", content: "# HEARTBEAT\n" },
+    ];
+    const client = makeMockClient(rows);
+    await syncHeartbeatFiles(client, tmpDir, "nova");
+
+    const wrongDir = path.join(tmpDir, "workspace-nova");
+    assert.ok(
+      !fs.existsSync(wrongDir),
+      "workspace-nova/ must not be created for the default agent",
+    );
+  });
+});
+
+// ── TC-269-U-02: Subagent writes to workspace-<name>/ ───────────────────────
+
+describe("TC-269-U-02: Heartbeat sync — subagent writes to workspace-<name>/", () => {
+  let tmpDir: string;
+
+  before(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "heartbeat-test-"));
+  });
+
+  after(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("coder heartbeat file is written to workspace-coder/HEARTBEAT.md", async () => {
+    const rows: HeartbeatRow[] = [
+      { agent_name: "coder", content: "# CODER HEARTBEAT\n" },
+    ];
+    const client = makeMockClient(rows);
+    await syncHeartbeatFiles(client, tmpDir, "nova");
+
+    const expected = path.join(tmpDir, "workspace-coder", "HEARTBEAT.md");
+    assert.ok(fs.existsSync(expected), `Expected file at ${expected}`);
+    assert.strictEqual(
+      fs.readFileSync(expected, "utf-8"),
+      "# CODER HEARTBEAT\n",
+    );
+  });
+
+  it("multiple agents each get their own workspace-<name>/HEARTBEAT.md", async () => {
+    const rows: HeartbeatRow[] = [
+      { agent_name: "gem", content: "# GEM\n" },
+      { agent_name: "scout", content: "# SCOUT\n" },
+    ];
+    const client = makeMockClient(rows);
+    await syncHeartbeatFiles(client, tmpDir, "nova");
+
+    assert.ok(
+      fs.existsSync(path.join(tmpDir, "workspace-gem", "HEARTBEAT.md")),
+    );
+    assert.ok(
+      fs.existsSync(path.join(tmpDir, "workspace-scout", "HEARTBEAT.md")),
+    );
+    assert.strictEqual(
+      fs.readFileSync(path.join(tmpDir, "workspace-gem", "HEARTBEAT.md"), "utf-8"),
+      "# GEM\n",
+    );
+  });
+});
+
+// ── TC-269-U-03: Skip write when content unchanged ───────────────────────────
+
+describe("TC-269-U-03: Heartbeat sync — skip write when content unchanged", () => {
+  let tmpDir: string;
+
+  before(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "heartbeat-test-"));
+  });
+
+  after(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("returns empty array when content is identical to existing file", async () => {
+    const wsDir = path.join(tmpDir, "workspace-coder");
+    fs.mkdirSync(wsDir, { recursive: true });
+    const filePath = path.join(wsDir, "HEARTBEAT.md");
+    fs.writeFileSync(filePath, "unchanged content\n", "utf-8");
+
+    const rows: HeartbeatRow[] = [
+      { agent_name: "coder", content: "unchanged content\n" },
+    ];
+    const client = makeMockClient(rows);
+    const updated = await syncHeartbeatFiles(client, tmpDir, "nova");
+
+    assert.deepStrictEqual(updated, []);
+  });
+
+  it("returns agent name when content differs from existing file", async () => {
+    const wsDir = path.join(tmpDir, "workspace-gem");
+    fs.mkdirSync(wsDir, { recursive: true });
+    const filePath = path.join(wsDir, "HEARTBEAT.md");
+    fs.writeFileSync(filePath, "old content\n", "utf-8");
+
+    const rows: HeartbeatRow[] = [
+      { agent_name: "gem", content: "new content\n" },
+    ];
+    const client = makeMockClient(rows);
+    const updated = await syncHeartbeatFiles(client, tmpDir, "nova");
+
+    assert.deepStrictEqual(updated, ["gem"]);
+    assert.strictEqual(fs.readFileSync(filePath, "utf-8"), "new content\n");
+  });
+});
+
+// ── TC-269-U-04: Returns list of updated agent names ─────────────────────────
+
+describe("TC-269-U-04: Heartbeat sync — returns list of updated agent names", () => {
+  let tmpDir: string;
+
+  before(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "heartbeat-test-"));
+  });
+
+  after(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("returns names of all agents whose files changed", async () => {
+    const rows: HeartbeatRow[] = [
+      { agent_name: "nova", content: "nova heartbeat\n" },
+      { agent_name: "coder", content: "coder heartbeat\n" },
+      { agent_name: "gem", content: "gem heartbeat\n" },
+    ];
+    const client = makeMockClient(rows);
+    const updated = await syncHeartbeatFiles(client, tmpDir, "nova");
+
+    // All three are new files → all should be in updated list
+    assert.deepStrictEqual(updated.sort(), ["coder", "gem", "nova"]);
+  });
+
+  it("returns empty array when no HEARTBEAT rows exist", async () => {
+    const client = makeMockClient([]);
+    const updated = await syncHeartbeatFiles(client, tmpDir, "nova");
+    assert.deepStrictEqual(updated, []);
+  });
+});
+
+// ── TC-269-U-05: Creates workspace dir if missing ────────────────────────────
+
+describe("TC-269-U-05: Heartbeat sync — creates workspace dir if missing", () => {
+  let tmpDir: string;
+
+  before(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "heartbeat-test-"));
+  });
+
+  after(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("creates workspace/ directory for default agent if it does not exist", async () => {
+    const rows: HeartbeatRow[] = [
+      { agent_name: "nova", content: "# HEARTBEAT\n" },
+    ];
+    const client = makeMockClient(rows);
+    await syncHeartbeatFiles(client, tmpDir, "nova");
+
+    assert.ok(fs.existsSync(path.join(tmpDir, "workspace")));
+  });
+
+  it("creates workspace-<name>/ directory for subagent if it does not exist", async () => {
+    const rows: HeartbeatRow[] = [
+      { agent_name: "iris", content: "# HEARTBEAT\n" },
+    ];
+    const client = makeMockClient(rows);
+    await syncHeartbeatFiles(client, tmpDir, "nova");
+
+    assert.ok(fs.existsSync(path.join(tmpDir, "workspace-iris")));
   });
 });

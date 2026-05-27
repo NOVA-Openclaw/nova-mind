@@ -12,7 +12,7 @@ import type {
   OpenClawPluginServiceContext,
 } from "openclaw/plugin-sdk";
 import { createRequire } from "node:module";
-import { syncAgentsConfig } from "./src/sync.js";
+import { syncAgentsConfig, syncHeartbeatFiles, fetchAgentRows } from "./src/sync.js";
 import path from "node:path";
 import os from "node:os";
 
@@ -21,8 +21,10 @@ type Logger = OpenClawPluginServiceContext["logger"];
 // ── Defaults ────────────────────────────────────────────────────────────────
 
 const DEFAULT_OUTPUT_PATH = path.join(os.homedir(), ".openclaw", "agents.json");
+const STATE_DIR = path.join(os.homedir(), ".openclaw");
 const KEEPALIVE_INTERVAL_MS = 30_000;
 const NOTIFY_CHANNEL = "agent_config_changed";
+const HEARTBEAT_NOTIFY_CHANNEL = "heartbeat_content_changed";
 const RECONNECT_DELAY_MS = 5_000;
 const MAX_RECONNECT_DELAY_MS = 60_000;
 
@@ -99,7 +101,7 @@ function createConfigSyncService(api: OpenClawPluginApi) {
       // Reset reconnect delay on successful connection
       reconnectDelay = RECONNECT_DELAY_MS;
 
-      // Initial sync on startup
+      // Initial agents.json sync on startup
       const changed = await syncAgentsConfig(client, outputPath);
       if (changed) {
         log.info(`agent_config_sync: Initial sync wrote ${outputPath}`);
@@ -109,27 +111,82 @@ function createConfigSyncService(api: OpenClawPluginApi) {
         log.info(`agent_config_sync: Initial sync — config already up to date`);
       }
 
-      // Start LISTEN
+      // Determine default agent name for heartbeat workspace routing
+      const agentRows = await fetchAgentRows(client);
+      const defaultAgentName =
+        agentRows.find((r) => r.is_default === true)?.name ?? "nova";
+      log.info(
+        `agent_config_sync: Default agent for heartbeat routing: '${defaultAgentName}'`,
+      );
+
+      // Initial heartbeat sync on startup
+      const heartbeatUpdated = await syncHeartbeatFiles(
+        client,
+        STATE_DIR,
+        defaultAgentName,
+      );
+      if (heartbeatUpdated.length > 0) {
+        log.info(
+          `agent_config_sync: Initial heartbeat sync updated files for: ${heartbeatUpdated.join(", ")}`,
+        );
+      } else {
+        log.info(
+          "agent_config_sync: Initial heartbeat sync — all files up to date",
+        );
+      }
+
+      // Start LISTEN on agents config channel
       await client.query(`LISTEN ${NOTIFY_CHANNEL}`);
       log.info(`agent_config_sync: Listening on channel '${NOTIFY_CHANNEL}'`);
 
+      // Start LISTEN on heartbeat content channel
+      await client.query(`LISTEN ${HEARTBEAT_NOTIFY_CHANNEL}`);
+      log.info(
+        `agent_config_sync: Listening on channel '${HEARTBEAT_NOTIFY_CHANNEL}'`,
+      );
+
       // Handle notifications
       client.on("notification", async (msg) => {
-        if (msg.channel !== NOTIFY_CHANNEL) return;
+        if (msg.channel === NOTIFY_CHANNEL) {
+          log.info("agent_config_sync: Received agent config change notification");
 
-        log.info("agent_config_sync: Received config change notification");
-
-        try {
-          const changed = await syncAgentsConfig(client, outputPath);
-          if (changed) {
-            log.info(`agent_config_sync: Config updated → ${outputPath}`);
-            log.info("agent_config_sync: Signaling gateway to reload config (SIGUSR1)");
-            process.kill(process.pid, "SIGUSR1");
-          } else {
-            log.info("agent_config_sync: Config unchanged after notification");
+          try {
+            const changed = await syncAgentsConfig(client, outputPath);
+            if (changed) {
+              log.info(`agent_config_sync: Config updated → ${outputPath}`);
+              log.info(
+                "agent_config_sync: Signaling gateway to reload config (SIGUSR1)",
+              );
+              process.kill(process.pid, "SIGUSR1");
+            } else {
+              log.info("agent_config_sync: Config unchanged after notification");
+            }
+          } catch (err) {
+            log.error(`agent_config_sync: Agents sync failed: ${err}`);
           }
-        } catch (err) {
-          log.error(`agent_config_sync: Sync failed: ${err}`);
+        } else if (msg.channel === HEARTBEAT_NOTIFY_CHANNEL) {
+          log.info(
+            "agent_config_sync: Received heartbeat content change notification",
+          );
+
+          try {
+            const updated = await syncHeartbeatFiles(
+              client,
+              STATE_DIR,
+              defaultAgentName,
+            );
+            if (updated.length > 0) {
+              log.info(
+                `agent_config_sync: Heartbeat files updated for: ${updated.join(", ")}`,
+              );
+            } else {
+              log.info(
+                "agent_config_sync: Heartbeat files unchanged after notification",
+              );
+            }
+          } catch (err) {
+            log.error(`agent_config_sync: Heartbeat sync failed: ${err}`);
+          }
         }
       });
 

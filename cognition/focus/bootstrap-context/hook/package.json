@@ -1,5 +1,8 @@
 {
   "name": "db-bootstrap-context",
   "version": "1.0.0",
-  "type": "module"
+  "type": "module",
+  "dependencies": {
+    "pg": "^8.21.0"
+  }
 }

@@ -1032,7 +1032,7 @@ describe("TC-262-U-08: BVA — heartbeat_every boundary values", () => {
       } else {
         // Empty string: val is falsy but not null — our impl checks != null
         // Empty string should be included since it's not null
-        assert.ok(Object.prototype.hasOwnProperty.call(entry.heartbeat, "every") || true);
+        assert.strictEqual((entry.heartbeat as { every?: string }).every, "");
       }
     });
   }

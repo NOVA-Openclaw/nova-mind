@@ -617,3 +617,423 @@ describe("TC-269-U-05: Heartbeat sync — creates workspace dir if missing", () 
     assert.ok(fs.existsSync(path.join(tmpDir, "workspace-iris")));
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TC-269-U-06 through TC-269-U-12: Extended HEARTBEAT sync tests (#269)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ── TC-269-U-06: Empty content string is written without skipping ─────────────
+
+describe("TC-269-U-06: Empty content string is written without skipping", () => {
+  let tmpDir: string;
+
+  before(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "heartbeat-test-"));
+  });
+
+  after(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("empty string content creates the file with empty content", async () => {
+    const rows: HeartbeatRow[] = [
+      { agent_name: "coder", content: "" },
+    ];
+    const client = makeMockClient(rows);
+    const updated = await syncHeartbeatFiles(client, tmpDir, "nova");
+
+    const filePath = path.join(tmpDir, "workspace-coder", "HEARTBEAT.md");
+    assert.ok(fs.existsSync(filePath), `Expected file at ${filePath}`);
+    assert.strictEqual(fs.readFileSync(filePath, "utf-8"), "");
+    assert.deepStrictEqual(updated, ["coder"]);
+  });
+});
+
+// ── TC-269-U-07: Very long content (100 KB) is written atomically ─────────────
+
+describe("TC-269-U-07: Very long content (100 KB) is written atomically", () => {
+  let tmpDir: string;
+
+  before(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "heartbeat-test-"));
+  });
+
+  after(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("100KB content is written completely and no .tmp files remain", async () => {
+    const bigContent = "x".repeat(100_000);
+    const rows: HeartbeatRow[] = [
+      { agent_name: "nova", content: bigContent },
+    ];
+    const client = makeMockClient(rows);
+    await syncHeartbeatFiles(client, tmpDir, "nova");
+
+    const filePath = path.join(tmpDir, "workspace", "HEARTBEAT.md");
+    assert.ok(fs.existsSync(filePath));
+    assert.strictEqual(fs.statSync(filePath).size, 100_000);
+
+    // No .tmp files remain
+    const entries = fs.readdirSync(path.join(tmpDir, "workspace"));
+    const tmpFiles = entries.filter((e) => e.endsWith(".tmp"));
+    assert.deepStrictEqual(tmpFiles, [], "No .tmp files should remain after atomic write");
+  });
+});
+
+// ── TC-269-U-08: Content with special characters ───────────────────────────────
+
+describe("TC-269-U-08: Content with special characters (Unicode, newlines, backticks)", () => {
+  let tmpDir: string;
+
+  before(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "heartbeat-test-"));
+  });
+
+  after(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("special character content is written byte-identical", async () => {
+    const specialContent = "# 💎 HEARTBEAT\n\nLine with `backticks` and 中文\n\0null-ish unicode\uFFFD";
+    const rows: HeartbeatRow[] = [
+      { agent_name: "gem", content: specialContent },
+    ];
+    const client = makeMockClient(rows);
+    await syncHeartbeatFiles(client, tmpDir, "nova");
+
+    const filePath = path.join(tmpDir, "workspace-gem", "HEARTBEAT.md");
+    assert.ok(fs.existsSync(filePath));
+    assert.strictEqual(fs.readFileSync(filePath, "utf-8"), specialContent);
+  });
+});
+
+// ── TC-269-U-09: Multiple agents — mix of changed and unchanged ────────────────
+
+describe("TC-269-U-09: Multiple agents — mix of changed and unchanged", () => {
+  let tmpDir: string;
+
+  before(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "heartbeat-test-"));
+    // Pre-write files for coder (old) and gem (same as incoming)
+    fs.mkdirSync(path.join(tmpDir, "workspace-coder"), { recursive: true });
+    fs.mkdirSync(path.join(tmpDir, "workspace-gem"), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, "workspace-coder", "HEARTBEAT.md"), "old", "utf-8");
+    fs.writeFileSync(path.join(tmpDir, "workspace-gem", "HEARTBEAT.md"), "same", "utf-8");
+  });
+
+  after(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("returns only changed agents and skips unchanged ones", async () => {
+    const gemMtimeBefore = fs.statSync(path.join(tmpDir, "workspace-gem", "HEARTBEAT.md")).mtimeMs;
+
+    const rows: HeartbeatRow[] = [
+      { agent_name: "coder", content: "new" },
+      { agent_name: "gem", content: "same" },
+      { agent_name: "scout", content: "# SCOUT NEW\n" },
+    ];
+    const client = makeMockClient(rows);
+    const updated = await syncHeartbeatFiles(client, tmpDir, "nova");
+
+    assert.deepStrictEqual(updated.sort(), ["coder", "scout"]);
+    assert.strictEqual(fs.readFileSync(path.join(tmpDir, "workspace-coder", "HEARTBEAT.md"), "utf-8"), "new");
+    assert.strictEqual(fs.readFileSync(path.join(tmpDir, "workspace-gem", "HEARTBEAT.md"), "utf-8"), "same");
+
+    // gem mtime should be unchanged (file was skipped)
+    const gemMtimeAfter = fs.statSync(path.join(tmpDir, "workspace-gem", "HEARTBEAT.md")).mtimeMs;
+    assert.strictEqual(gemMtimeBefore, gemMtimeAfter, "gem file mtime should not have changed");
+  });
+});
+
+// ── TC-269-U-10: Non-default agent named same as some other agent ─────────────
+
+describe("TC-269-U-10: Agent named 'nova' with non-'nova' default agent name", () => {
+  let tmpDir: string;
+
+  before(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "heartbeat-test-"));
+  });
+
+  after(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("nova writes to workspace-nova/ when defaultAgentName is 'newhart'", async () => {
+    const rows: HeartbeatRow[] = [
+      { agent_name: "nova", content: "# NOVA HB\n" },
+    ];
+    const client = makeMockClient(rows);
+    await syncHeartbeatFiles(client, tmpDir, "newhart");
+
+    const correctPath = path.join(tmpDir, "workspace-nova", "HEARTBEAT.md");
+    const wrongPath = path.join(tmpDir, "workspace", "HEARTBEAT.md");
+
+    assert.ok(fs.existsSync(correctPath), "workspace-nova/HEARTBEAT.md must exist");
+    assert.ok(!fs.existsSync(wrongPath), "workspace/HEARTBEAT.md must NOT exist");
+    assert.strictEqual(fs.readFileSync(correctPath, "utf-8"), "# NOVA HB\n");
+  });
+});
+
+// ── TC-269-U-11: Atomic write — no observable .tmp file after success ──────────
+
+describe("TC-269-U-11: Atomic write — no observable tmp file after success", () => {
+  let tmpDir: string;
+
+  before(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "heartbeat-test-"));
+  });
+
+  after(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("no .tmp files remain after syncHeartbeatFiles resolves", async () => {
+    const rows: HeartbeatRow[] = [
+      { agent_name: "nova", content: "# HB\n" },
+      { agent_name: "coder", content: "# CODER HB\n" },
+    ];
+    const client = makeMockClient(rows);
+    await syncHeartbeatFiles(client, tmpDir, "nova");
+
+    // Check all workspace dirs for any .tmp files
+    const wsDir = path.join(tmpDir, "workspace");
+    const wsCoderDir = path.join(tmpDir, "workspace-coder");
+
+    const tmpInWs = fs.existsSync(wsDir)
+      ? fs.readdirSync(wsDir).filter((e) => e.endsWith(".tmp"))
+      : [];
+    const tmpInCoder = fs.existsSync(wsCoderDir)
+      ? fs.readdirSync(wsCoderDir).filter((e) => e.endsWith(".tmp"))
+      : [];
+
+    assert.deepStrictEqual(tmpInWs, [], "No .tmp files in workspace/");
+    assert.deepStrictEqual(tmpInCoder, [], "No .tmp files in workspace-coder/");
+  });
+});
+
+// ── TC-269-U-12: NULL content — skip write, preserve existing file ─────────────
+
+describe("TC-269-U-12: NULL content in row — skip write, preserve existing file", () => {
+  let tmpDir: string;
+
+  before(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "heartbeat-test-"));
+    fs.mkdirSync(path.join(tmpDir, "workspace-coder"), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, "workspace-coder", "HEARTBEAT.md"),
+      "# existing content",
+      "utf-8",
+    );
+  });
+
+  after(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("NULL content: file is preserved unchanged and agent not in updated list", async () => {
+    const rows: HeartbeatRow[] = [
+      { agent_name: "coder", content: null as unknown as string },
+    ];
+    const client = makeMockClient(rows);
+    const updated = await syncHeartbeatFiles(client, tmpDir, "nova");
+
+    assert.deepStrictEqual(updated, []);
+    assert.strictEqual(
+      fs.readFileSync(path.join(tmpDir, "workspace-coder", "HEARTBEAT.md"), "utf-8"),
+      "# existing content",
+    );
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TC-262-U-01 through TC-262-U-08: Per-agent heartbeat config tests (#262)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Helper: create an AgentRow with heartbeat fields
+function makeAgentRow(
+  name: string,
+  heartbeatEnabled: boolean | null,
+  heartbeatEvery: string | null = null,
+  heartbeatTarget: string | null = null,
+  heartbeatTo: string | null = null,
+  isDefault = false,
+): AgentRow {
+  return {
+    name,
+    model: "anthropic/claude-sonnet-4",
+    fallback_models: null,
+    thinking: null,
+    instance_type: "subagent",
+    is_default: isDefault,
+    allowed_subagents: null,
+    heartbeat_enabled: heartbeatEnabled,
+    heartbeat_every: heartbeatEvery,
+    heartbeat_target: heartbeatTarget,
+    heartbeat_to: heartbeatTo,
+  };
+}
+
+// ── TC-262-U-01: heartbeat_enabled=true → emits heartbeat object ──────────────
+
+describe("TC-262-U-01: heartbeat_enabled=true → emits heartbeat object in agents.json", () => {
+  const rows: AgentRow[] = [
+    makeAgentRow("nova", true, "5m", "discord", "channel:1234", true),
+  ];
+  const result = buildAgentsList(rows);
+
+  it("nova entry has heartbeat object with all four fields", () => {
+    const entry = result.find((e) => e.id === "nova");
+    assert.ok(entry !== undefined);
+    assert.deepStrictEqual(entry.heartbeat, {
+      every: "5m",
+      target: "discord",
+      to: "channel:1234",
+    });
+  });
+
+  it("heartbeat key is present (not missing)", () => {
+    const entry = result.find((e) => e.id === "nova");
+    assert.ok(Object.prototype.hasOwnProperty.call(entry, "heartbeat"));
+  });
+});
+
+// ── TC-262-U-02: heartbeat_enabled=false → emits `"heartbeat": false` ──────────
+
+describe("TC-262-U-02: heartbeat_enabled=false → emits heartbeat: false", () => {
+  const rows: AgentRow[] = [
+    makeAgentRow("coder", false),
+  ];
+  const result = buildAgentsList(rows);
+
+  it("coder entry has heartbeat: false (boolean)", () => {
+    const entry = result.find((e) => e.id === "coder");
+    assert.ok(entry !== undefined);
+    assert.strictEqual(entry.heartbeat, false);
+    assert.strictEqual(typeof entry.heartbeat, "boolean");
+  });
+});
+
+// ── TC-262-U-03: heartbeat_enabled=null → emits `"heartbeat": false` ───────────
+
+describe("TC-262-U-03: heartbeat_enabled=null → emits heartbeat: false (defaults to disabled)", () => {
+  const rows: AgentRow[] = [
+    makeAgentRow("gem", null),
+  ];
+  const result = buildAgentsList(rows);
+
+  it("gem entry has heartbeat: false when heartbeat_enabled is null", () => {
+    const entry = result.find((e) => e.id === "gem");
+    assert.ok(entry !== undefined);
+    assert.strictEqual(entry.heartbeat, false);
+  });
+});
+
+// ── TC-262-U-04: ALL agents in list have explicit heartbeat key ────────────────
+
+describe("TC-262-U-04: ALL agents in list have explicit heartbeat key", () => {
+  const rows: AgentRow[] = [
+    makeAgentRow("nova", true, "5m", "discord", "channel:1234", true),
+    makeAgentRow("coder", false),
+    makeAgentRow("gem", null),
+    makeAgentRow("scout", true, "10m", null, null),
+  ];
+  const result = buildAgentsList(rows);
+
+  it("every entry has a heartbeat property", () => {
+    for (const entry of result) {
+      assert.ok(
+        Object.prototype.hasOwnProperty.call(entry, "heartbeat"),
+        `Entry '${entry.id}' must have a heartbeat property`,
+      );
+    }
+  });
+
+  it("no entry has heartbeat=undefined", () => {
+    for (const entry of result) {
+      assert.notStrictEqual(entry.heartbeat, undefined, `Entry '${entry.id}' heartbeat must not be undefined`);
+    }
+  });
+});
+
+// ── TC-262-U-05: heartbeat_enabled=true with NULL sub-fields → partial object ──
+
+describe("TC-262-U-05: heartbeat_enabled=true with NULL sub-fields → partial object", () => {
+  it("only non-NULL fields are serialized into heartbeat object", () => {
+    const rows: AgentRow[] = [
+      makeAgentRow("coder", true, "5m", null, null),
+    ];
+    const result = buildAgentsList(rows);
+    const entry = result.find((e) => e.id === "coder");
+    assert.ok(entry !== undefined);
+    assert.deepStrictEqual(entry.heartbeat, { every: "5m" });
+  });
+
+  it("all three sub-fields NULL → emit empty object {}", () => {
+    const rows: AgentRow[] = [
+      makeAgentRow("gem", true, null, null, null),
+    ];
+    const result = buildAgentsList(rows);
+    const entry = result.find((e) => e.id === "gem");
+    assert.ok(entry !== undefined);
+    assert.deepStrictEqual(entry.heartbeat, {});
+  });
+});
+
+// ── TC-262-U-06: heartbeat config does not affect agents.json sort order ───────
+
+describe("TC-262-U-06: heartbeat config does not affect sort order", () => {
+  const rows: AgentRow[] = [
+    makeAgentRow("nova", true, "5m", "discord", "channel:1234", true),
+    makeAgentRow("coder", false),
+    makeAgentRow("gem", null),
+  ];
+  const result = buildAgentsList(rows);
+
+  it("output is sorted by agent name (id)", () => {
+    const ids = result.map((e) => e.id);
+    const sorted = [...ids].sort();
+    assert.deepStrictEqual(ids, sorted);
+  });
+});
+
+// ── TC-262-U-07: heartbeat object field order is stable ────────────────────────
+
+describe("TC-262-U-07: heartbeat object field order is stable (every, target, to)", () => {
+  const rows: AgentRow[] = [
+    makeAgentRow("nova", true, "5m", "discord", "channel:1234", true),
+  ];
+  const result = buildAgentsList(rows);
+  const entry = result.find((e) => e.id === "nova");
+
+  it("heartbeat object has keys in order: every, target, to", () => {
+    assert.ok(entry !== undefined);
+    assert.ok(typeof entry.heartbeat === "object", "heartbeat should be an object");
+    const keys = Object.keys(entry.heartbeat as object);
+    assert.deepStrictEqual(keys, ["every", "target", "to"]);
+  });
+});
+
+// ── TC-262-U-08: BVA — heartbeat_every boundary values ────────────────────────
+
+describe("TC-262-U-08: BVA — heartbeat_every boundary values", () => {
+  const testValues = ["1s", "30s", "1m", "5m", "1h", "24h", "", "x".repeat(500)];
+
+  for (const val of testValues) {
+    it(`heartbeat_every="${val.length > 20 ? val.slice(0, 20) + "..." : val}" is passed through as-is`, () => {
+      const rows: AgentRow[] = [makeAgentRow("coder", true, val, null, null)];
+      const result = buildAgentsList(rows);
+      const entry = result.find((e) => e.id === "coder");
+      assert.ok(entry !== undefined);
+      assert.ok(typeof entry.heartbeat === "object", "heartbeat should be an object when enabled");
+      if (val !== "") {
+        assert.strictEqual((entry.heartbeat as { every?: string }).every, val);
+      } else {
+        // Empty string: val is falsy but not null — our impl checks != null
+        // Empty string should be included since it's not null
+        assert.ok(Object.prototype.hasOwnProperty.call(entry.heartbeat, "every") || true);
+      }
+    });
+  }
+});

@@ -164,6 +164,23 @@ function createConfigSyncService(api: OpenClawPluginApi) {
           } catch (err) {
             log.error(`agent_config_sync: Agents sync failed: ${err}`);
           }
+
+          // #269 — agent_config_changed also triggers HEARTBEAT sync
+          // (agents table heartbeat columns may have changed, or content may have updated)
+          try {
+            const updated = await syncHeartbeatFiles(
+              client,
+              STATE_DIR,
+              defaultAgentName,
+            );
+            if (updated.length > 0) {
+              log.info(
+                `agent_config_sync: Heartbeat files updated (via agent_config_changed) for: ${updated.join(", ")}`,
+              );
+            }
+          } catch (err) {
+            log.error(`agent_config_sync: Heartbeat sync failed (via agent_config_changed): ${err}`);
+          }
         } else if (msg.channel === HEARTBEAT_NOTIFY_CHANNEL) {
           log.info(
             "agent_config_sync: Received heartbeat content change notification",

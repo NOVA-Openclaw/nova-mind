@@ -29,13 +29,21 @@ export type AgentRow = {
   instance_type: string;
   is_default: boolean | null;
   allowed_subagents: string[] | null;
+  // #262 — Per-agent heartbeat config (optional: present once DB migration applied)
+  heartbeat_enabled?: boolean | null;
+  heartbeat_every?: string | null;
+  heartbeat_target?: string | null;
+  heartbeat_to?: string | null;
 };
+
+type HeartbeatConfig = { every?: string; target?: string; to?: string };
 
 type AgentListEntry = {
   id: string;
   default?: true;
   model: string | { primary: string; fallbacks: string[] };
   subagents?: { allowAgents: string[] };
+  heartbeat: HeartbeatConfig | false;
 };
 
 // ── SQL ─────────────────────────────────────────────────────────────────────
@@ -44,7 +52,8 @@ type AgentListEntry = {
 // (session_user) and subagents owning that role via `parent_agents` array overlap.
 // The function lives in nova-mind/database/schema.sql and is owned by newhart.
 const AGENTS_QUERY = `
-  SELECT name, model, fallback_models, thinking, instance_type, is_default, allowed_subagents
+  SELECT name, model, fallback_models, thinking, instance_type, is_default, allowed_subagents,
+         heartbeat_enabled, heartbeat_every, heartbeat_target, heartbeat_to
   FROM get_agent_export_rows();
 `;
 
@@ -75,12 +84,13 @@ export function buildAgentsList(rows: AgentRow[]): AgentListEntry[] {
     const hasFallbacks =
       Array.isArray(row.fallback_models) && row.fallback_models.length > 0;
 
-    // Build list entry
+    // Build list entry (heartbeat defaults to false, updated below if enabled)
     const entry: AgentListEntry = {
       id: row.name,
       model: hasFallbacks
         ? { primary: row.model, fallbacks: [...row.fallback_models!] }
         : row.model,
+      heartbeat: false,
     };
 
     // Include `"default": true` ONLY when is_default is explicitly true
@@ -97,10 +107,25 @@ export function buildAgentsList(rows: AgentRow[]): AgentListEntry[] {
       entry.subagents = { allowAgents: [...row.allowed_subagents].sort() };
     }
 
+    // #262 — Per-agent heartbeat config
+    // EVERY agent gets an explicit heartbeat key — no agent omits it.
+    // heartbeat_enabled = true  → emit heartbeat object with non-NULL sub-fields only
+    // heartbeat_enabled = false | NULL → emit heartbeat: false
+    if ((row.heartbeat_enabled ?? null) === true) {
+      const hb: HeartbeatConfig = {};
+      if (row.heartbeat_every != null) hb.every = row.heartbeat_every;
+      if (row.heartbeat_target != null) hb.target = row.heartbeat_target;
+      if (row.heartbeat_to != null) hb.to = row.heartbeat_to;
+      entry.heartbeat = hb;
+    } else {
+      entry.heartbeat = false;
+    }
+
     list.push(entry);
   }
 
-  return list;
+  // Sort by agent name (id) for stable, deterministic output
+  return list.sort((a, b) => a.id.localeCompare(b.id));
 }
 
 // ── Query ───────────────────────────────────────────────────────────────────
@@ -177,6 +202,9 @@ export async function syncHeartbeatFiles(
 
     const filePath = path.join(wsDir, "HEARTBEAT.md");
     const newContent = row.content;
+
+    // Skip write if content is NULL — preserve existing file
+    if (newContent == null) continue;
 
     // Skip write if content unchanged
     try {

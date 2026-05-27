@@ -1,6 +1,6 @@
 # Database Schema Reference
 
-*Auto-generated: 2026-05-17T09:06:00.241422*
+*Auto-generated: 2026-05-20T10:21:25.848397*
 
 ## Tables
 
@@ -17,12 +17,13 @@
 | agent_spawns | Tracks all agent spawns from the general-purpose spawner daemon | 14 |
 | agent_system_config | Agent system configuration. READ-ONLY except Newhart. | 6 |
 | agent_turn_context | - | 8 |
-| agents | Agent registry | 32 |
+| agents | Agent registry | 33 |
 | ai_models | Available AI models. NOVA maintains this; Newhart reads for agent assignments. Credentials and endpoints stored in 1Password (see credential_ref column). | 16 |
 | artwork | Archive of NOVAs Instagram artwork. Reference for future compilation. | 27 |
 | asset_classes | Asset class definitions for financial portfolio management. Defines tradeable asset types with pricing sources and trading characteristics. | 6 |
 | bootstrap_context_config | Configuration for bootstrap system behavior | 4 |
 | certificates | Client certificates issued by NOVA CA. Security-sensitive. Verify before modifications. | 12 |
+| channel_activity | Tracks last message per channel for idle detection. Read/write: NOVA, Newhart. | 3 |
 | channel_sessions | - | 16 |
 | channel_transcripts | - | 14 |
 | comms_checks | Individual Hermes check run results. Each row = one social/email/digest check. Replaces memory/hermes-*.md files. Owner: Communications domain (hermes). | 11 |
@@ -46,7 +47,7 @@
 | git_issue_queue | Issue queue for git-based workflows. NOTIFY triggers dispatch work automatically. | 16 |
 | job_messages | Message log per job for conversation threading | 5 |
 | journal_entries | Personal prose journal entries for agent self-reflection. Short, introspective, written multiple times daily. Embedded into memory_embeddings with source_type=journal. Triggers: heartbeat, d100, post_workflow, daily_report, conversation, incident, manual. | 6 |
-| lessons | Lessons and insights learned. Update when learning something worth remembering. | 12 |
+| lessons | Lessons and insights learned. Update when learning something worth remembering. | 13 |
 | lessons_archive | Archived lessons and insights. Historical record of previously stored learnings. | 13 |
 | library_authors | Library domain: normalized author records. Managed by Athena (librarian agent). | 4 |
 | library_tags | Library domain: subject/genre/topic tags for works. Managed by Athena. | 3 |
@@ -65,13 +66,13 @@
 | music_works | Original music compositions (AI-generated or human-composed). Complements music_library which holds collected external sources. | 41 |
 | place_properties | Properties and attributes of places. Key-value storage for place characteristics. | 5 |
 | places | Locations (houses, venues, cities). Reference I)ruid houses in USER.md. | 15 |
-| pm_domain_portfolio_snapshots | - | 6 |
-| portfolio_history | - | 6 |
+| pm_domain_portfolio_snapshots | **DEPRECATED** — empty, pending drop. Superseded by `portfolio_snapshots`. | 6 |
+| portfolio_history | **DEPRECATED** — empty, pending drop. Data migrated to `portfolio_snapshots`. | 6 |
 | portfolio_metrics | - | 10 |
-| portfolio_positions | Individual stock/investment positions tracking purchases, sales, and P&L. Core table for portfolio management. | 9 |
-| portfolio_snapshots | Historical snapshots of portfolio values and performance metrics over time. | 8 |
-| portfolio_updates | - | 3 |
-| positions | Legacy or alternative positions tracking table. May be deprecated in favor of portfolio_positions. | 20 |
+| portfolio_positions | **DEPRECATED** — empty, pending drop. Superseded by `positions`. | 9 |
+| portfolio_snapshots | **CANONICAL** — Intra-day and daily portfolio value snapshots with P&L. Columns: `trading_session` (pre/regular/after/closed), `session_open_value`. Written by `market-review.sh`. | 8 |
+| portfolio_updates | **DEPRECATED** — empty, pending drop. | 3 |
+| positions | **CANONICAL** — Current open/closed portfolio positions. Includes `sold_at`, `sale_proceeds`, `asset_class` FK. Open positions: `sold_at IS NULL`. | 20 |
 | preferences | User preferences by entity_id. Check before making assumptions. | 6 |
 | price_cache_v2 | Cached price data for assets to reduce API calls. Version 2 of price caching system. | 12 |
 | project_entities | Links projects to entities (people, orgs, AIs). Many-to-many relationship table for project participants. | 3 |
@@ -93,9 +94,10 @@
 | skills | Skill definitions. Override precedence: WORKSPACE > DOMAIN > MANAGED > BUNDLED. See get_agent_skills(). | 24 |
 | tags | - | 5 |
 | tasks | Task tracking. NOVA can create, update status, assign. Check before starting work. | 23 |
-| ticker_portfolio | - | 1 |
+| ticker_portfolio | **DEPRECATED** — empty, pending drop. | 1 |
 | tools | Tool usage notes. Override: WORKSPACE > DOMAIN > MANAGED > BUNDLED. See get_agent_tools(). | 13 |
 | unsolved_problems | Humanity's unsolved problems for NOVA to work on during idle time. Part of the Motivation System - provides meaningful default work when task queue is empty. | 18 |
+| user_insights | Human-contributed insights — observations, realizations, and wisdom shared by users. Primarily for users to save important insights. Managed by any agent on behalf of the contributing user. | 8 |
 | vehicles | Vehicle tracking and management. Cars, bikes, boats, planes owned or used. | 13 |
 | vocabulary | Custom vocabulary for speech recognition. Add names, terms, jargon as encountered. | 8 |
 | work_tags | - | 3 |

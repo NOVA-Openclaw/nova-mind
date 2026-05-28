@@ -598,6 +598,11 @@ CREATE TABLE IF NOT EXISTS agents (
     context_type text DEFAULT 'persistent' NOT NULL,
     model_rationale text,
     parent_agents text[],
+    -- #262 Per-agent heartbeat config (synced to agents.json by agent_config_sync plugin)
+    heartbeat_enabled boolean DEFAULT false,
+    heartbeat_every text,
+    heartbeat_target text,
+    heartbeat_to text,
     CONSTRAINT agents_pkey PRIMARY KEY (id),
     CONSTRAINT agents_name_key UNIQUE (name),
     CONSTRAINT agents_context_type_check CHECK (context_type IN ('ephemeral'::text, 'persistent'::text)),
@@ -4045,7 +4050,7 @@ COMMENT ON FUNCTION get_agent_bootstrap(text) IS 'Bootstrap context: UNIVERSAL +
 --
 
 CREATE OR REPLACE FUNCTION get_agent_export_rows()
-RETURNS TABLE(name text, model text, fallback_models text[], thinking text, instance_type text, is_default boolean, allowed_subagents text[])
+RETURNS TABLE(name text, model text, fallback_models text[], thinking text, instance_type text, is_default boolean, allowed_subagents text[], heartbeat_enabled boolean, heartbeat_every text, heartbeat_target text, heartbeat_to text)
 LANGUAGE sql
 STABLE
 AS $$
@@ -4056,7 +4061,11 @@ AS $$
     a.thinking::text,
     a.instance_type::text,
     TRUE AS is_default,
-    a.allowed_subagents
+    a.allowed_subagents,
+    a.heartbeat_enabled,
+    a.heartbeat_every,
+    a.heartbeat_target,
+    a.heartbeat_to
   FROM agents a
   WHERE a.name = session_user
     AND a.status = 'active'
@@ -4071,7 +4080,11 @@ AS $$
     a.thinking::text,
     a.instance_type::text,
     FALSE AS is_default,
-    a.allowed_subagents
+    a.allowed_subagents,
+    a.heartbeat_enabled,
+    a.heartbeat_every,
+    a.heartbeat_target,
+    a.heartbeat_to
   FROM agents a
   WHERE session_user = ANY (a.parent_agents)
     AND a.status = 'active'
@@ -5062,6 +5075,31 @@ BEGIN
     RETURN COALESCE(NEW, OLD);
 END;
 $$;
+
+--
+-- Name: notify_heartbeat_content_changed(); Type: FUNCTION; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE FUNCTION notify_heartbeat_content_changed()
+RETURNS trigger
+LANGUAGE plpgsql
+VOLATILE
+AS $$
+BEGIN
+    -- Only notify for rows where file_key = 'HEARTBEAT'
+    IF (TG_OP = 'DELETE' AND OLD.file_key = 'HEARTBEAT') OR
+       (TG_OP != 'DELETE' AND NEW.file_key = 'HEARTBEAT') THEN
+        PERFORM pg_notify('heartbeat_content_changed', json_build_object(
+            'agent_name', COALESCE(NEW.agent_name, OLD.agent_name),
+            'operation', TG_OP
+        )::text);
+    END IF;
+    RETURN COALESCE(NEW, OLD);
+END;
+$$;
+
+COMMENT ON FUNCTION notify_heartbeat_content_changed() IS
+    'Fires heartbeat_content_changed NOTIFY when HEARTBEAT rows in agent_bootstrap_context are inserted or updated. Consumed by agent_config_sync plugin to refresh workspace HEARTBEAT.md files.';
 
 --
 -- Name: notify_coder_queue_change(); Type: FUNCTION; Schema: -; Owner: -
@@ -6706,6 +6744,18 @@ CREATE OR REPLACE TRIGGER protect_bootstrap_context
     BEFORE INSERT OR UPDATE OR DELETE ON agent_bootstrap_context
     FOR EACH ROW
     EXECUTE FUNCTION protect_bootstrap_context_writes_v2();
+
+--
+-- Name: heartbeat_content_changed; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER heartbeat_content_changed
+    AFTER INSERT OR UPDATE OR DELETE ON agent_bootstrap_context
+    FOR EACH ROW
+    EXECUTE FUNCTION notify_heartbeat_content_changed();
+
+COMMENT ON TRIGGER heartbeat_content_changed ON agent_bootstrap_context IS
+    'Notifies heartbeat_content_changed channel when HEARTBEAT rows change. Consumed by agent_config_sync plugin.';
 
 --
 -- Name: protect_library_authors; Type: TRIGGER; Schema: -; Owner: -
@@ -20442,3 +20492,32 @@ GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE workflow_steps_detail TO ticker;
 
 GRANT UPDATE (difficulty, enabled, energy_required, estimated_minutes, notes, skill_name, task_description, task_name, tool_name, workflow_id) ON TABLE motivation_d100 TO nova;
 
+
+--
+-- Issue #262: Per-agent heartbeat config migration
+-- Adds heartbeat columns to agents table (idempotent)
+--
+
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS heartbeat_enabled boolean DEFAULT false;
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS heartbeat_every text;
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS heartbeat_target text;
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS heartbeat_to text;
+
+-- Enable heartbeat for nova (the primary agent)
+UPDATE agents
+SET heartbeat_enabled = true,
+    heartbeat_every   = '5m',
+    heartbeat_target  = 'discord',
+    heartbeat_to      = 'channel:1504054635231445112'
+WHERE name = 'nova';
+
+-- All other agents default to heartbeat_enabled = false (column DEFAULT false handles new rows)
+-- Ensure existing rows without explicit value have heartbeat_enabled = false (not NULL)
+UPDATE agents
+SET heartbeat_enabled = false
+WHERE heartbeat_enabled IS NULL AND name != 'nova';
+
+COMMENT ON COLUMN agents.heartbeat_enabled IS 'When true, agent_config_sync emits a heartbeat config object into agents.json for this agent. When false or NULL, emits heartbeat: false.';
+COMMENT ON COLUMN agents.heartbeat_every IS 'Heartbeat interval (e.g. "5m"). Serialized as heartbeat.every in agents.json when heartbeat_enabled=true.';
+COMMENT ON COLUMN agents.heartbeat_target IS 'Heartbeat target channel type (e.g. "discord"). Serialized as heartbeat.target in agents.json when heartbeat_enabled=true.';
+COMMENT ON COLUMN agents.heartbeat_to IS 'Heartbeat destination (e.g. "channel:1234"). Serialized as heartbeat.to in agents.json when heartbeat_enabled=true.';

@@ -79,7 +79,7 @@ log "Deployment complete"
 ### nova-dashboard (Node.js Service)
 
 **Repository**: NOVA-Openclaw/nova-dashboard  
-**Live Location**: `~/clawd/nova-dashboard/`  
+**Live Location**: `~/.openclaw/workspace/nova-dashboard/`  
 **Type**: Node.js service with restart capability
 
 **Key Features**:
@@ -92,7 +92,7 @@ log "Deployment complete"
 ### nova-motivation (Documentation)
 
 **Repository**: NOVA-Openclaw/nova-motivation  
-**Live Location**: `~/clawd/nova-motivation/`  
+**Live Location**: `~/.openclaw/workspace/nova-motivation/`  
 **Type**: Documentation-only deployment
 
 **Simplified Pattern**:
@@ -217,7 +217,7 @@ fi
    # Simulate a merge
    git pull
    # Check logs
-   tail -f ~/clawd/logs/[repo-name]-deploy.log
+   tail -f ~/.openclaw/logs/[repo-name]-deploy.log
    ```
 
 ### Directory Structure
@@ -234,8 +234,8 @@ repository/
 ## Logging and Monitoring
 
 ### Log Locations
-- **Deployment logs**: `~/clawd/logs/[repo-name]-deploy.log`
-- **Service logs**: `~/clawd/logs/[service-name].log`
+- **Deployment logs**: `~/.openclaw/logs/[repo-name]-deploy.log`
+- **Service logs**: `~/.openclaw/logs/[service-name].log`
 
 ### Notification System
 All deployments notify via the `agent_chat` system:

@@ -43,7 +43,7 @@ type AgentListEntry = {
   default?: true;
   model: string | { primary: string; fallbacks: string[] };
   subagents?: { allowAgents: string[] };
-  heartbeat: HeartbeatConfig | false;
+  heartbeat?: HeartbeatConfig;
 };
 
 // ── SQL ─────────────────────────────────────────────────────────────────────
@@ -84,13 +84,12 @@ export function buildAgentsList(rows: AgentRow[]): AgentListEntry[] {
     const hasFallbacks =
       Array.isArray(row.fallback_models) && row.fallback_models.length > 0;
 
-    // Build list entry (heartbeat defaults to false, updated below if enabled)
+    // Build list entry (heartbeat omitted by default; set below only when enabled)
     const entry: AgentListEntry = {
       id: row.name,
       model: hasFallbacks
         ? { primary: row.model, fallbacks: [...row.fallback_models!] }
         : row.model,
-      heartbeat: false,
     };
 
     // Include `"default": true` ONLY when is_default is explicitly true
@@ -107,18 +106,16 @@ export function buildAgentsList(rows: AgentRow[]): AgentListEntry[] {
       entry.subagents = { allowAgents: [...row.allowed_subagents].sort() };
     }
 
-    // #262 — Per-agent heartbeat config
-    // EVERY agent gets an explicit heartbeat key — no agent omits it.
+    // #262 / #273 — Per-agent heartbeat config
     // heartbeat_enabled = true  → emit heartbeat object with non-NULL sub-fields only
-    // heartbeat_enabled = false | NULL → emit heartbeat: false
+    // heartbeat_enabled = false | NULL | undefined → omit the heartbeat key entirely
+    // OpenClaw schema requires heartbeat to be an object or absent — never a boolean.
     if ((row.heartbeat_enabled ?? null) === true) {
       const hb: HeartbeatConfig = {};
       if (row.heartbeat_every != null) hb.every = row.heartbeat_every;
       if (row.heartbeat_target != null) hb.target = row.heartbeat_target;
       if (row.heartbeat_to != null) hb.to = row.heartbeat_to;
       entry.heartbeat = hb;
-    } else {
-      entry.heartbeat = false;
     }
 
     list.push(entry);

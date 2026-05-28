@@ -212,7 +212,7 @@ TABLE_EMBED_SPECS = {
         "agent",
     ),
     "lesson": (
-        "SELECT id, content AS text FROM lessons WHERE content IS NOT NULL",
+        "SELECT id, lesson AS text FROM lessons WHERE lesson IS NOT NULL",
         "lesson",
     ),
     "event": (

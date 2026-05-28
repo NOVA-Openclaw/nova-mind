@@ -598,6 +598,11 @@ CREATE TABLE IF NOT EXISTS agents (
     context_type text DEFAULT 'persistent' NOT NULL,
     model_rationale text,
     parent_agents text[],
+    -- #262 Per-agent heartbeat config (synced to agents.json by agent_config_sync plugin)
+    heartbeat_enabled boolean DEFAULT false,
+    heartbeat_every text,
+    heartbeat_target text,
+    heartbeat_to text,
     CONSTRAINT agents_pkey PRIMARY KEY (id),
     CONSTRAINT agents_name_key UNIQUE (name),
     CONSTRAINT agents_context_type_check CHECK (context_type IN ('ephemeral'::text, 'persistent'::text)),
@@ -2323,182 +2328,145 @@ COMMENT ON TABLE place_properties IS 'Properties and attributes of places. Key-v
 CREATE INDEX IF NOT EXISTS idx_place_props_place ON place_properties (place_id);
 
 --
--- Name: pm_domain_portfolio_snapshots; Type: TABLE; Schema: -; Owner: -
---
-
-CREATE TABLE IF NOT EXISTS pm_domain_portfolio_snapshots (
-    id SERIAL,
-    timestamp timestamptz DEFAULT CURRENT_TIMESTAMP,
-    total_value numeric,
-    total_pl numeric,
-    total_pl_pct numeric,
-    prices jsonb,
-    CONSTRAINT pm_domain_portfolio_snapshots_pkey PRIMARY KEY (id)
-);
-
---
--- Name: portfolio_history; Type: TABLE; Schema: -; Owner: -
---
-
-CREATE TABLE IF NOT EXISTS portfolio_history (
-    id SERIAL,
-    timestamp timestamp,
-    total_value numeric,
-    total_pl numeric,
-    total_pl_pct numeric,
-    prices jsonb,
-    CONSTRAINT portfolio_history_pkey PRIMARY KEY (id)
-);
-
---
--- Name: portfolio_metrics; Type: TABLE; Schema: -; Owner: -
---
-
-CREATE TABLE IF NOT EXISTS portfolio_metrics (
-    id SERIAL,
-    timestamp timestamptz DEFAULT CURRENT_TIMESTAMP,
-    total_value numeric(10,2),
-    total_pl numeric(10,2),
-    total_pl_pct numeric(5,2),
-    amd_price numeric(10,2),
-    nvda_price numeric(10,2),
-    meta_price numeric(10,2),
-    smci_price numeric(10,2),
-    crwd_price numeric(10,2),
-    CONSTRAINT portfolio_metrics_pkey PRIMARY KEY (id)
-);
-
---
--- Name: portfolio_positions; Type: TABLE; Schema: -; Owner: -
---
-
-CREATE TABLE IF NOT EXISTS portfolio_positions (
-    id SERIAL,
-    symbol varchar(10) NOT NULL,
-    shares numeric(12,6) NOT NULL,
-    cost_basis numeric(12,2) NOT NULL,
-    purchased_at timestamp NOT NULL,
-    sold_at timestamp,
-    sale_proceeds numeric(12,2),
-    notes text,
-    created_at timestamp DEFAULT now(),
-    CONSTRAINT portfolio_positions_pkey PRIMARY KEY (id)
-);
-
-
-COMMENT ON TABLE portfolio_positions IS 'Individual stock/investment positions tracking purchases, sales, and P&L. Core table for portfolio management.';
-
-
-COMMENT ON COLUMN portfolio_positions.id IS 'Unique position identifier';
-
-
-COMMENT ON COLUMN portfolio_positions.symbol IS 'Ticker symbol or asset identifier';
-
-
-COMMENT ON COLUMN portfolio_positions.shares IS 'Number of shares/units held';
-
-
-COMMENT ON COLUMN portfolio_positions.cost_basis IS 'Total purchase price';
-
-
-COMMENT ON COLUMN portfolio_positions.purchased_at IS 'Date and time of purchase';
-
-
-COMMENT ON COLUMN portfolio_positions.sold_at IS 'Date and time of sale (NULL for open positions)';
-
-
-COMMENT ON COLUMN portfolio_positions.sale_proceeds IS 'Total sale proceeds (NULL for open positions)';
-
-
-COMMENT ON COLUMN portfolio_positions.notes IS 'Additional notes about the position';
-
-
-COMMENT ON COLUMN portfolio_positions.created_at IS 'Record creation timestamp';
-
---
--- Name: idx_positions_held; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_positions_held ON portfolio_positions (sold_at) WHERE (sold_at IS NULL);
-
---
 -- Name: portfolio_snapshots; Type: TABLE; Schema: -; Owner: -
 --
 
 CREATE TABLE IF NOT EXISTS portfolio_snapshots (
     id SERIAL,
-    snapshot_at timestamp DEFAULT now() NOT NULL,
+    snapshot_at timestamptz DEFAULT now() NOT NULL,
     total_value numeric(12,2) NOT NULL,
     total_cost_basis numeric(12,2) NOT NULL,
     unrealized_pl numeric(12,2),
     unrealized_pl_pct numeric(8,4),
     positions jsonb,
     benchmark_m2 numeric(8,4),
-    CONSTRAINT portfolio_snapshots_pkey PRIMARY KEY (id)
+    session_open_value numeric(12,2),
+    trading_session text,
+    CONSTRAINT portfolio_snapshots_pkey PRIMARY KEY (id),
+    CONSTRAINT portfolio_snapshots_trading_session_check CHECK (trading_session IS NULL OR trading_session IN ('pre', 'regular', 'after', 'closed')),
+    CONSTRAINT portfolio_snapshots_positions_shape CHECK (
+        positions IS NULL OR (
+            jsonb_typeof(positions) = 'object' AND
+            (
+                SELECT COALESCE(bool_and(
+                    value ? 'asset_class' AND
+                    value ? 'quantity' AND
+                    value ? 'price' AND
+                    value ? 'value' AND
+                    value ? 'cost_basis' AND
+                    value ? 'pl'
+                ), true)
+                FROM jsonb_each(positions)
+            )
+        )
+    )
 );
 
 
-COMMENT ON TABLE portfolio_snapshots IS 'Historical snapshots of portfolio values and performance metrics over time.';
+COMMENT ON TABLE portfolio_snapshots IS 'Historical snapshots of portfolio values and performance metrics over time. Supports multiple snapshots per day for intra-day P&L tracking.';
 
 --
--- Name: idx_snapshots_date; Type: INDEX; Schema: -; Owner: -
+-- Name: idx_snapshots_snapshot_at; Type: INDEX; Schema: -; Owner: -
 --
 
-CREATE INDEX IF NOT EXISTS idx_snapshots_date ON portfolio_snapshots (snapshot_at);
-
---
--- Name: idx_snapshots_day; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE UNIQUE INDEX IF NOT EXISTS idx_snapshots_day ON portfolio_snapshots ((snapshot_at::date));
-
---
--- Name: portfolio_updates; Type: TABLE; Schema: -; Owner: -
---
-
-CREATE TABLE IF NOT EXISTS portfolio_updates (
-    id SERIAL,
-    timestamp timestamp DEFAULT CURRENT_TIMESTAMP,
-    data jsonb,
-    CONSTRAINT portfolio_updates_pkey PRIMARY KEY (id)
-);
+CREATE INDEX IF NOT EXISTS idx_snapshots_snapshot_at ON portfolio_snapshots (snapshot_at);
 
 --
 -- Name: positions; Type: TABLE; Schema: -; Owner: -
+-- Canonical positions table: current portfolio state derived from trades.
 --
 
 CREATE TABLE IF NOT EXISTS positions (
     id SERIAL,
-    symbol varchar(20) NOT NULL,
-    asset_class varchar(20) NOT NULL,
-    asset_subclass varchar(50),
-    quantity numeric(18,8) NOT NULL,
-    unit varchar(20) DEFAULT 'shares',
-    cost_basis numeric(14,4) NOT NULL,
-    avg_price numeric(14,4),
-    purchased_at timestamp NOT NULL,
-    sold_at timestamp,
-    sale_proceeds numeric(14,4),
-    platform varchar(50),
-    account_id varchar(50) DEFAULT 'main',
-    notes text,
-    maturity_date date,
-    coupon_rate numeric(6,4),
-    strike_price numeric(14,4),
-    expiration_date date,
-    created_at timestamp DEFAULT now(),
-    updated_at timestamp DEFAULT now(),
-    CONSTRAINT positions_pkey PRIMARY KEY (id)
+    symbol TEXT NOT NULL,
+    asset_class TEXT NOT NULL,
+    quantity NUMERIC NOT NULL CHECK (quantity > 0),
+    cost_basis NUMERIC NOT NULL,
+    purchased_at TIMESTAMPTZ NOT NULL,
+    sold_at TIMESTAMPTZ,
+    sale_proceeds NUMERIC,
+    notes TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    created_by INTEGER DEFAULT current_agent_id(),
+    CONSTRAINT positions_pkey PRIMARY KEY (id),
+    CONSTRAINT positions_asset_class_fkey FOREIGN KEY (asset_class) REFERENCES asset_classes (code)
 );
 
 
-COMMENT ON TABLE positions IS 'Legacy or alternative positions tracking table. May be deprecated in favor of portfolio_positions.';
+COMMENT ON TABLE positions IS 'Canonical current portfolio positions. Derived from the trades event log. Open positions have sold_at IS NULL.';
 
 --
--- Name: idx_positions_account; Type: INDEX; Schema: -; Owner: -
+-- Name: idx_positions_open; Type: INDEX; Schema: -; Owner: -
 --
 
-CREATE INDEX IF NOT EXISTS idx_positions_account ON positions (account_id) WHERE (sold_at IS NULL);
+CREATE INDEX IF NOT EXISTS idx_positions_open ON positions (symbol) WHERE (sold_at IS NULL);
+
+--
+-- Name: trades; Type: TABLE; Schema: -; Owner: -
+-- Append-only trade event log.
+--
+
+CREATE TABLE IF NOT EXISTS trades (
+    id SERIAL,
+    executed_at TIMESTAMPTZ NOT NULL,
+    symbol TEXT NOT NULL,
+    asset_class TEXT NOT NULL,
+    side TEXT NOT NULL,
+    quantity NUMERIC NOT NULL,
+    price NUMERIC,
+    fees NUMERIC DEFAULT 0,
+    notes TEXT,
+    source TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    created_by INTEGER DEFAULT current_agent_id(),
+    CONSTRAINT trades_pkey PRIMARY KEY (id),
+    CONSTRAINT trades_side_check CHECK (side IN ('buy', 'sell', 'deposit', 'withdraw', 'dividend', 'split')),
+    CONSTRAINT trades_quantity_positive CHECK (quantity > 0),
+    CONSTRAINT trades_asset_class_fkey FOREIGN KEY (asset_class) REFERENCES asset_classes (code)
+);
+
+
+COMMENT ON TABLE trades IS 'Append-only trade event log. Source of truth for all portfolio transactions.';
+
+--
+-- Name: idx_trades_executed_at; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_trades_executed_at ON trades (executed_at);
+
+--
+-- Name: idx_trades_symbol; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_trades_symbol ON trades (symbol);
+
+--
+-- Name: idx_trades_no_duplicates; Type: INDEX; Schema: -; Owner: -
+-- Partial unique index: prevents duplicate trades except for migration imports.
+--
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_trades_no_duplicates
+    ON trades (executed_at, symbol, side, quantity, price)
+    WHERE source != 'migration';
+
+--
+-- Name: raise_trades_immutable; Type: FUNCTION; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE FUNCTION raise_trades_immutable()
+RETURNS TRIGGER AS $$
+BEGIN
+    RAISE EXCEPTION 'trades table is append-only: % operations are not allowed', TG_OP;
+END;
+$$ LANGUAGE plpgsql;
+
+--
+-- Name: trades_append_only; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE TRIGGER trades_append_only
+    BEFORE UPDATE OR DELETE ON trades
+    FOR EACH ROW EXECUTE FUNCTION raise_trades_immutable();
 
 --
 -- Name: preferences; Type: TABLE; Schema: -; Owner: -
@@ -3045,13 +3013,7 @@ CREATE TABLE IF NOT EXISTS tags (
     CONSTRAINT valid_category CHECK (category IS NULL OR (category::text IN ('genre'::character varying, 'mood'::character varying, 'theme'::character varying, 'style'::character varying, 'audience'::character varying, 'project'::character varying)))
 );
 
---
--- Name: ticker_portfolio; Type: TABLE; Schema: -; Owner: -
---
-
-CREATE TABLE IF NOT EXISTS ticker_portfolio (
-    data jsonb
-);
+-- ticker_portfolio table removed: deprecated. Use portfolio_snapshots and trades instead.
 
 --
 -- Name: tools; Type: TABLE; Schema: -; Owner: -
@@ -4088,7 +4050,7 @@ COMMENT ON FUNCTION get_agent_bootstrap(text) IS 'Bootstrap context: UNIVERSAL +
 --
 
 CREATE OR REPLACE FUNCTION get_agent_export_rows()
-RETURNS TABLE(name text, model text, fallback_models text[], thinking text, instance_type text, is_default boolean, allowed_subagents text[])
+RETURNS TABLE(name text, model text, fallback_models text[], thinking text, instance_type text, is_default boolean, allowed_subagents text[], heartbeat_enabled boolean, heartbeat_every text, heartbeat_target text, heartbeat_to text)
 LANGUAGE sql
 STABLE
 AS $$
@@ -4099,7 +4061,11 @@ AS $$
     a.thinking::text,
     a.instance_type::text,
     TRUE AS is_default,
-    a.allowed_subagents
+    a.allowed_subagents,
+    a.heartbeat_enabled,
+    a.heartbeat_every,
+    a.heartbeat_target,
+    a.heartbeat_to
   FROM agents a
   WHERE a.name = session_user
     AND a.status = 'active'
@@ -4114,7 +4080,11 @@ AS $$
     a.thinking::text,
     a.instance_type::text,
     FALSE AS is_default,
-    a.allowed_subagents
+    a.allowed_subagents,
+    a.heartbeat_enabled,
+    a.heartbeat_every,
+    a.heartbeat_target,
+    a.heartbeat_to
   FROM agents a
   WHERE session_user = ANY (a.parent_agents)
     AND a.status = 'active'
@@ -5105,6 +5075,31 @@ BEGIN
     RETURN COALESCE(NEW, OLD);
 END;
 $$;
+
+--
+-- Name: notify_heartbeat_content_changed(); Type: FUNCTION; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE FUNCTION notify_heartbeat_content_changed()
+RETURNS trigger
+LANGUAGE plpgsql
+VOLATILE
+AS $$
+BEGIN
+    -- Only notify for rows where file_key = 'HEARTBEAT'
+    IF (TG_OP = 'DELETE' AND OLD.file_key = 'HEARTBEAT') OR
+       (TG_OP != 'DELETE' AND NEW.file_key = 'HEARTBEAT') THEN
+        PERFORM pg_notify('heartbeat_content_changed', json_build_object(
+            'agent_name', COALESCE(NEW.agent_name, OLD.agent_name),
+            'operation', TG_OP
+        )::text);
+    END IF;
+    RETURN COALESCE(NEW, OLD);
+END;
+$$;
+
+COMMENT ON FUNCTION notify_heartbeat_content_changed() IS
+    'Fires heartbeat_content_changed NOTIFY when HEARTBEAT rows in agent_bootstrap_context are inserted or updated. Consumed by agent_config_sync plugin to refresh workspace HEARTBEAT.md files.';
 
 --
 -- Name: notify_coder_queue_change(); Type: FUNCTION; Schema: -; Owner: -
@@ -6751,6 +6746,18 @@ CREATE OR REPLACE TRIGGER protect_bootstrap_context
     EXECUTE FUNCTION protect_bootstrap_context_writes_v2();
 
 --
+-- Name: heartbeat_content_changed; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER heartbeat_content_changed
+    AFTER INSERT OR UPDATE OR DELETE ON agent_bootstrap_context
+    FOR EACH ROW
+    EXECUTE FUNCTION notify_heartbeat_content_changed();
+
+COMMENT ON TRIGGER heartbeat_content_changed ON agent_bootstrap_context IS
+    'Notifies heartbeat_content_changed channel when HEARTBEAT rows change. Consumed by agent_config_sync plugin.';
+
+--
 -- Name: protect_library_authors; Type: TRIGGER; Schema: -; Owner: -
 --
 
@@ -7329,11 +7336,11 @@ COMMENT ON VIEW v_pending_test_failures IS 'Test failures that need GitHub issue
 CREATE OR REPLACE VIEW v_portfolio_allocation AS
  SELECT p.asset_class,
     count(*) AS num_positions,
-    sum(p.quantity * COALESCE(pc.price, p.avg_price)) AS market_value,
+    sum(p.quantity * COALESCE(pc.price, p.cost_basis / NULLIF(p.quantity, 0))) AS market_value,
     sum(p.cost_basis) AS total_cost_basis,
-    sum(p.quantity * COALESCE(pc.price, p.avg_price)) - sum(p.cost_basis) AS unrealized_pl
+    sum(p.quantity * COALESCE(pc.price, p.cost_basis / NULLIF(p.quantity, 0))) - sum(p.cost_basis) AS unrealized_pl
    FROM positions p
-     LEFT JOIN price_cache_v2 pc ON p.symbol::text = pc.symbol::text AND p.asset_class::text = pc.asset_class::text
+     LEFT JOIN price_cache_v2 pc ON p.symbol = pc.symbol AND p.asset_class = pc.asset_class
   WHERE p.sold_at IS NULL
   GROUP BY p.asset_class;
 
@@ -7492,13 +7499,13 @@ CREATE OR REPLACE VIEW workflow_steps_detail AS
 -- Name: agent_actions; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_actions FROM newhart;
+REVOKE SELECT ON TABLE agent_actions FROM newhart;
 
 --
 -- Name: agent_actions; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE agent_actions FROM newhart;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_actions FROM newhart;
 
 --
 -- Name: agent_aliases; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -7636,13 +7643,13 @@ REVOKE DELETE ON TABLE agent_bootstrap_context FROM ticker;
 -- Name: agent_chat; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE agent_chat FROM newhart;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_chat FROM newhart;
 
 --
 -- Name: agent_chat; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_chat FROM newhart;
+REVOKE SELECT ON TABLE agent_chat FROM newhart;
 
 --
 -- Name: agent_chat_processed; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -7804,13 +7811,13 @@ REVOKE DELETE ON TABLE agent_modifications FROM ticker;
 -- Name: agent_spawns; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE agent_spawns FROM newhart;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_spawns FROM newhart;
 
 --
 -- Name: agent_spawns; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_spawns FROM newhart;
+REVOKE SELECT ON TABLE agent_spawns FROM newhart;
 
 --
 -- Name: agent_system_config; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -7852,13 +7859,13 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE agent_system_config FROM iris;
 -- Name: agent_system_config; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_system_config FROM newhart;
+REVOKE SELECT ON TABLE agent_system_config FROM newhart;
 
 --
 -- Name: agent_system_config; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE agent_system_config FROM newhart;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_system_config FROM newhart;
 
 --
 -- Name: agent_system_config; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -7930,13 +7937,13 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE agents FROM iris;
 -- Name: agents; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE agents FROM newhart;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agents FROM newhart;
 
 --
 -- Name: agents; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agents FROM newhart;
+REVOKE SELECT ON TABLE agents FROM newhart;
 
 --
 -- Name: agents; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -8860,13 +8867,13 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE lessons_archive FROM nova;
 -- Name: library_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE library_authors FROM athena;
+REVOKE SELECT ON TABLE library_authors FROM athena;
 
 --
 -- Name: library_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE library_authors FROM athena;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE library_authors FROM athena;
 
 --
 -- Name: library_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -8926,13 +8933,13 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE library_authors FROM ticker;
 -- Name: library_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE library_tags FROM athena;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE library_tags FROM athena;
 
 --
 -- Name: library_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE library_tags FROM athena;
+REVOKE SELECT ON TABLE library_tags FROM athena;
 
 --
 -- Name: library_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9058,13 +9065,13 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE library_work_authors FROM ticker;
 -- Name: library_work_relationships; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE library_work_relationships FROM athena;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE library_work_relationships FROM athena;
 
 --
 -- Name: library_work_relationships; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE library_work_relationships FROM athena;
+REVOKE SELECT ON TABLE library_work_relationships FROM athena;
 
 --
 -- Name: library_work_relationships; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9124,13 +9131,13 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE library_work_relationships FROM ticker;
 -- Name: library_work_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE library_work_tags FROM athena;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE library_work_tags FROM athena;
 
 --
 -- Name: library_work_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE library_work_tags FROM athena;
+REVOKE SELECT ON TABLE library_work_tags FROM athena;
 
 --
 -- Name: library_work_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9370,13 +9377,13 @@ REVOKE SELECT ON TABLE music_works FROM conductor;
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE music_works FROM erato;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_works FROM erato;
 
 --
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_works FROM erato;
+REVOKE SELECT ON TABLE music_works FROM erato;
 
 --
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9394,25 +9401,25 @@ REVOKE SELECT ON TABLE music_works FROM flint;
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE music_works FROM gem;
-
---
--- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_works FROM gem;
 
 --
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE music_works FROM gidget;
+REVOKE SELECT ON TABLE music_works FROM gem;
 
 --
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_works FROM gidget;
+
+--
+-- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE music_works FROM gidget;
 
 --
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9436,25 +9443,25 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_works FROM hermes;
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_works FROM iris;
-
---
--- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
 REVOKE SELECT ON TABLE music_works FROM iris;
 
 --
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_works FROM marcie;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_works FROM iris;
 
 --
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
 REVOKE SELECT ON TABLE music_works FROM marcie;
+
+--
+-- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_works FROM marcie;
 
 --
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9490,13 +9497,13 @@ REVOKE SELECT ON TABLE music_works FROM openproject_user;
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE music_works FROM quill;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_works FROM quill;
 
 --
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_works FROM quill;
+REVOKE SELECT ON TABLE music_works FROM quill;
 
 --
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9514,13 +9521,13 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_works FROM scout;
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_works FROM scribe;
+REVOKE SELECT ON TABLE music_works FROM scribe;
 
 --
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE music_works FROM scribe;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_works FROM scribe;
 
 --
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9546,53 +9553,8 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE place_properties FROM nova;
 
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE places FROM nova;
 
---
--- Name: pm_domain_portfolio_snapshots; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE pm_domain_portfolio_snapshots FROM ticker;
-
---
--- Name: pm_domain_portfolio_snapshots; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE SELECT ON TABLE pm_domain_portfolio_snapshots FROM ticker;
-
---
--- Name: portfolio_history; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE SELECT ON TABLE portfolio_history FROM ticker;
-
---
--- Name: portfolio_history; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE portfolio_history FROM ticker;
-
---
--- Name: portfolio_metrics; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE SELECT ON TABLE portfolio_metrics FROM ticker;
-
---
--- Name: portfolio_metrics; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE portfolio_metrics FROM ticker;
-
---
--- Name: portfolio_positions; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE portfolio_positions FROM ticker;
-
---
--- Name: portfolio_positions; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE SELECT ON TABLE portfolio_positions FROM ticker;
+-- Privileges for pm_domain_portfolio_snapshots, portfolio_history, portfolio_metrics,
+-- portfolio_positions removed: these tables were dropped in SE Run #27 (BUG-1 fix).
 
 --
 -- Name: portfolio_snapshots; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9606,17 +9568,7 @@ REVOKE SELECT ON TABLE portfolio_snapshots FROM ticker;
 
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE portfolio_snapshots FROM ticker;
 
---
--- Name: portfolio_updates; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE portfolio_updates FROM ticker;
-
---
--- Name: portfolio_updates; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE SELECT ON TABLE portfolio_updates FROM ticker;
+-- Privileges for portfolio_updates removed: table dropped in SE Run #27 (BUG-1 fix).
 
 --
 -- Name: positions; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9640,13 +9592,13 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE preferences FROM nova;
 -- Name: price_cache_v2; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE price_cache_v2 FROM ticker;
+REVOKE SELECT ON TABLE price_cache_v2 FROM ticker;
 
 --
 -- Name: price_cache_v2; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE price_cache_v2 FROM ticker;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE price_cache_v2 FROM ticker;
 
 --
 -- Name: project_entities; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9862,13 +9814,13 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE research_findings FROM nova;
 -- Name: research_findings; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE research_findings FROM scout;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE research_findings FROM scout;
 
 --
 -- Name: research_findings; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE research_findings FROM scout;
+REVOKE SELECT ON TABLE research_findings FROM scout;
 
 --
 -- Name: research_findings; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9928,13 +9880,13 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE research_projects FROM nova;
 -- Name: research_projects; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE research_projects FROM scout;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE research_projects FROM scout;
 
 --
 -- Name: research_projects; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE research_projects FROM scout;
+REVOKE SELECT ON TABLE research_projects FROM scout;
 
 --
 -- Name: research_projects; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10060,13 +10012,13 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE research_taggings FROM nova;
 -- Name: research_taggings; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE research_taggings FROM scout;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE research_taggings FROM scout;
 
 --
 -- Name: research_taggings; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE research_taggings FROM scout;
+REVOKE SELECT ON TABLE research_taggings FROM scout;
 
 --
 -- Name: research_taggings; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10126,13 +10078,13 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE research_tags FROM nova;
 -- Name: research_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE research_tags FROM scout;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE research_tags FROM scout;
 
 --
 -- Name: research_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE research_tags FROM scout;
+REVOKE SELECT ON TABLE research_tags FROM scout;
 
 --
 -- Name: research_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10260,17 +10212,7 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE tags FROM nova;
 
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE tasks FROM nova;
 
---
--- Name: ticker_portfolio; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE ticker_portfolio FROM ticker;
-
---
--- Name: ticker_portfolio; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE SELECT ON TABLE ticker_portfolio FROM ticker;
+-- Privileges for ticker_portfolio removed: table dropped in SE Run #27 (BUG-1 fix).
 
 --
 -- Name: tools; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -20550,3 +20492,32 @@ GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE workflow_steps_detail TO ticker;
 
 GRANT UPDATE (difficulty, enabled, energy_required, estimated_minutes, notes, skill_name, task_description, task_name, tool_name, workflow_id) ON TABLE motivation_d100 TO nova;
 
+
+--
+-- Issue #262: Per-agent heartbeat config migration
+-- Adds heartbeat columns to agents table (idempotent)
+--
+
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS heartbeat_enabled boolean DEFAULT false;
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS heartbeat_every text;
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS heartbeat_target text;
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS heartbeat_to text;
+
+-- Enable heartbeat for nova (the primary agent)
+UPDATE agents
+SET heartbeat_enabled = true,
+    heartbeat_every   = '5m',
+    heartbeat_target  = 'discord',
+    heartbeat_to      = 'channel:1504054635231445112'
+WHERE name = 'nova';
+
+-- All other agents default to heartbeat_enabled = false (column DEFAULT false handles new rows)
+-- Ensure existing rows without explicit value have heartbeat_enabled = false (not NULL)
+UPDATE agents
+SET heartbeat_enabled = false
+WHERE heartbeat_enabled IS NULL AND name != 'nova';
+
+COMMENT ON COLUMN agents.heartbeat_enabled IS 'When true, agent_config_sync emits a heartbeat config object into agents.json for this agent. When false or NULL, emits heartbeat: false.';
+COMMENT ON COLUMN agents.heartbeat_every IS 'Heartbeat interval (e.g. "5m"). Serialized as heartbeat.every in agents.json when heartbeat_enabled=true.';
+COMMENT ON COLUMN agents.heartbeat_target IS 'Heartbeat target channel type (e.g. "discord"). Serialized as heartbeat.target in agents.json when heartbeat_enabled=true.';
+COMMENT ON COLUMN agents.heartbeat_to IS 'Heartbeat destination (e.g. "channel:1234"). Serialized as heartbeat.to in agents.json when heartbeat_enabled=true.';

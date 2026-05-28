@@ -14,17 +14,24 @@ When the table changes, the plugin receives a PostgreSQL `NOTIFY` event, rebuild
 
 ## What It Does
 
+This plugin keeps `~/.openclaw/agents.json` and agent-specific `HEARTBEAT.md` files in sync with your PostgreSQL database in real time. It reacts to changes in both agent configuration and heartbeat content.
+
 ```
-DB change
-  └─► trigger fires pg_notify('agent_config_changed')
-        └─► plugin receives notification (LISTEN)
-              └─► queries get_agent_export_rows() (session_user-scoped)
-                    └─► builds bare JSON array
-                          └─► atomic write (tmp + rename) → agents.json
-                                └─► SIGUSR1 → gateway hot-reload
+DB change (agents, agent_bootstrap_context for HEARTBEAT)
+  ├─► trigger fires pg_notify('agent_config_changed')
+  │       └─► plugin receives notification (LISTEN)
+  │             └─► queries get_agent_export_rows() (session_user-scoped)
+  │                   └─► builds bare JSON array (including heartbeat config)
+  │                         └─► atomic write (tmp + rename) → agents.json
+  │                               └─► SIGUSR1 → gateway hot-reload
+  │
+  └─► trigger fires pg_notify('heartbeat_content_changed')
+          └─► plugin receives notification (LISTEN)
+                └─► reads HEARTBEAT content from agent_bootstrap_context
+                      └─► writes/updates agent's HEARTBEAT.md file
 ```
 
-On startup the plugin performs an **initial sync** so `agents.json` is always fresh, even before any DB change occurs.
+On startup, the plugin performs an **initial sync** for both `agents.json` and all active `HEARTBEAT.md` files, ensuring all configurations are fresh.
 
 ---
 
@@ -68,6 +75,7 @@ On startup the plugin performs an **initial sync** so `agents.json` is always fr
 | `default` | `agents.is_default` | `true` only when `is_default = true`; key **omitted** otherwise |
 | `model` | `agents.model` + `agents.fallback_models` | String when no fallbacks; object `{ primary, fallbacks }` when fallbacks present |
 | `subagents.allowAgents` | `agents.allowed_subagents` | Included when non-empty, sorted alphabetically |
+| `heartbeat` | `agents.heartbeat_enabled`, `heartbeat_every`, `heartbeat_target`, `heartbeat_to` | Object `{ every, target, to }` (non-NULL fields only) when `heartbeat_enabled = true`; `false` when disabled. **Every agent gets an explicit key — never omitted.** |
 
 **Not included in output:**
 - Models allowlist (`agents.defaults.models`) — stays in `openclaw.json`

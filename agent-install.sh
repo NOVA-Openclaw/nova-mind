@@ -116,6 +116,7 @@ VERIFY_ONLY=0
 FORCE_INSTALL=0
 NO_RESTART=0
 DB_NAME_OVERRIDE=""
+REGENERATE_AGENTS_JSON=0
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -125,6 +126,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --force)
             FORCE_INSTALL=1
+            shift
+            ;;
+        --regenerate-agents-json)
+            REGENERATE_AGENTS_JSON=1
             shift
             ;;
         --no-restart)
@@ -139,11 +144,12 @@ while [[ $# -gt 0 ]]; do
             echo "Usage: $0 [OPTIONS]"
             echo ""
             echo "Options:"
-            echo "  --verify-only         Check installation without modifying anything"
-            echo "  --force               Force overwrite existing files (skip file verification)"
-            echo "  --no-restart          Skip automatic gateway restart after install"
-            echo "  --database, -d NAME   Override database name (default: \${USER}_memory)"
-            echo "  --help                Show this help message"
+            echo "  --verify-only              Check installation without modifying anything"
+            echo "  --force                    Force overwrite existing files (skip file verification)"
+            echo "  --no-restart               Skip automatic gateway restart after install"
+            echo "  --database, -d NAME        Override database name (default: \${USER}_memory)"
+            echo "  --regenerate-agents-json   Backup and regenerate ~/.openclaw/agents.json from DB"
+            echo "  --help                     Show this help message"
             echo ""
             echo "Examples:"
             echo "  $0                              # Use default database name"
@@ -1827,54 +1833,107 @@ if [ -d "$AGENT_CONFIG_SYNC_SOURCE" ]; then
     fi
 
     # Generate initial agents.json from DB
-    echo "  Generating initial agents.json from database..."
+    # Safety rules (#252):
+    #   - If agents.json exists and is valid JSON → skip write (agent_config_sync keeps it in sync)
+    #   - If agents.json exists but is INVALID JSON → skip and warn (require --regenerate-agents-json to fix)
+    #   - If agents.json does not exist → generate from DB
+    #   - --regenerate-agents-json: backup existing file, then regenerate from DB regardless
+    #   - NEVER write '[]' on psql failure
     AGENTS_JSON="$OPENCLAW_DIR/agents.json"
     AGENTS_JSON_TMP="${AGENTS_JSON}.tmp.$$"
+    TMPFILES+=("$AGENTS_JSON_TMP")
 
-    INITIAL_SYNC_QUERY="
-        SELECT COALESCE(
-            json_agg(entry ORDER BY (entry->>'id'))::text,
-            '[]'
-        )
-        FROM (
-            SELECT
-                CASE
-                    WHEN fallback_models IS NOT NULL AND array_length(fallback_models, 1) > 0 THEN
-                        jsonb_strip_nulls(jsonb_build_object('id', name)
-                        || CASE WHEN is_default = true THEN jsonb_build_object('default', true) ELSE '{}'::jsonb END
-                        || jsonb_build_object('model', jsonb_build_object('primary', model, 'fallbacks', to_jsonb(fallback_models)))
-                        || CASE WHEN allowed_subagents IS NOT NULL AND array_length(allowed_subagents, 1) > 0
-                            THEN jsonb_build_object('subagents', jsonb_build_object('allowAgents',
-                                (SELECT jsonb_agg(s ORDER BY s) FROM unnest(allowed_subagents) s)))
-                            ELSE '{}'::jsonb END)
-                    ELSE
-                        jsonb_strip_nulls(jsonb_build_object('id', name)
-                        || CASE WHEN is_default = true THEN jsonb_build_object('default', true) ELSE '{}'::jsonb END
-                        || jsonb_build_object('model', model)
-                        || CASE WHEN allowed_subagents IS NOT NULL AND array_length(allowed_subagents, 1) > 0
-                            THEN jsonb_build_object('subagents', jsonb_build_object('allowAgents',
-                                (SELECT jsonb_agg(s ORDER BY s) FROM unnest(allowed_subagents) s)))
-                            ELSE '{}'::jsonb END)
-                END AS entry
-            FROM agents
-            WHERE instance_type != 'peer' AND model IS NOT NULL
-        ) sub
-    "
-
-    if AGENTS_DATA=$(psql -U "$DB_USER" -d "$DB_NAME" -tAc "$INITIAL_SYNC_QUERY" 2>/dev/null); then
-        if [ -n "$AGENTS_DATA" ] && [ "$AGENTS_DATA" != "null" ]; then
-            echo "$AGENTS_DATA" | jq '.' >"$AGENTS_JSON_TMP" 2>/dev/null && \
-                mv "$AGENTS_JSON_TMP" "$AGENTS_JSON" && \
-                echo -e "  ${CHECK_MARK} Generated initial agents.json from DB" || \
-                { echo -e "  ${WARNING} Could not write agents.json"; rm -f "$AGENTS_JSON_TMP"; }
+    # Helper: generate agents.json from DB into $AGENTS_JSON
+    _generate_agents_json() {
+        local INITIAL_SYNC_QUERY="
+            SELECT COALESCE(
+                json_agg(entry ORDER BY (entry->>'id'))::text,
+                NULL
+            )
+            FROM (
+                SELECT
+                    CASE
+                        WHEN fallback_models IS NOT NULL AND array_length(fallback_models, 1) > 0 THEN
+                            jsonb_strip_nulls(jsonb_build_object('id', name)
+                            || CASE WHEN is_default = true THEN jsonb_build_object('default', true) ELSE '{}'::jsonb END
+                            || jsonb_build_object('model', jsonb_build_object('primary', model, 'fallbacks', to_jsonb(fallback_models)))
+                            || CASE WHEN allowed_subagents IS NOT NULL AND array_length(allowed_subagents, 1) > 0
+                                THEN jsonb_build_object('subagents', jsonb_build_object('allowAgents',
+                                    (SELECT jsonb_agg(s ORDER BY s) FROM unnest(allowed_subagents) s)))
+                                ELSE '{}'::jsonb END)
+                        ELSE
+                            jsonb_strip_nulls(jsonb_build_object('id', name)
+                            || CASE WHEN is_default = true THEN jsonb_build_object('default', true) ELSE '{}'::jsonb END
+                            || jsonb_build_object('model', model)
+                            || CASE WHEN allowed_subagents IS NOT NULL AND array_length(allowed_subagents, 1) > 0
+                                THEN jsonb_build_object('subagents', jsonb_build_object('allowAgents',
+                                    (SELECT jsonb_agg(s ORDER BY s) FROM unnest(allowed_subagents) s)))
+                                ELSE '{}'::jsonb END)
+                    END AS entry
+                FROM agents
+                WHERE instance_type != 'peer' AND model IS NOT NULL
+            ) sub
+        "
+        local AGENTS_DATA
+        if AGENTS_DATA=$(psql -U "$DB_USER" -d "$DB_NAME" -tAc "$INITIAL_SYNC_QUERY" 2>/dev/null); then
+            if [ -n "$AGENTS_DATA" ] && [ "$AGENTS_DATA" != "null" ] && [ "$AGENTS_DATA" != "" ]; then
+                if echo "$AGENTS_DATA" | jq '.' >"$AGENTS_JSON_TMP" 2>/dev/null; then
+                    mv "$AGENTS_JSON_TMP" "$AGENTS_JSON" && \
+                        echo -e "  ${CHECK_MARK} Generated agents.json from DB" || \
+                        { echo -e "  ${WARNING} Could not write agents.json"; rm -f "$AGENTS_JSON_TMP"; return 1; }
+                else
+                    echo -e "  ${WARNING} DB returned non-JSON data for agents.json — not writing"
+                    rm -f "$AGENTS_JSON_TMP"
+                    return 1
+                fi
+            else
+                # DB returned NULL or empty — no agents found, but psql succeeded
+                # Do NOT write '[]' — log a warning instead
+                echo -e "  ${WARNING} DB query returned no agents — agents.json not written"
+                echo -e "  ${INFO} agent_config_sync will generate agents.json when gateway starts"
+                return 1
+            fi
         else
-            echo '[]' >"$AGENTS_JSON_TMP" && mv "$AGENTS_JSON_TMP" "$AGENTS_JSON" && \
-                echo -e "  ${CHECK_MARK} Generated empty agents.json (no agents in DB)" || \
-                { echo -e "  ${WARNING} Could not write agents.json"; rm -f "$AGENTS_JSON_TMP"; }
+            # psql failed — NEVER write '[]'
+            echo -e "  ${WARNING} Could not query DB for agents.json — agents.json not written"
+            echo -e "  ${INFO} agent_config_sync will generate agents.json when gateway starts"
+            return 1
+        fi
+        return 0
+    }
+
+    echo "  Checking agents.json status..."
+    if [ -f "$AGENTS_JSON" ]; then
+        if jq '.' "$AGENTS_JSON" >/dev/null 2>&1; then
+            # File exists and is valid JSON
+            if [ "$REGENERATE_AGENTS_JSON" -eq 1 ]; then
+                # --regenerate-agents-json: backup and regenerate
+                AGENTS_JSON_BAK="${AGENTS_JSON}.bak-$(date +%Y%m%d-%H%M%S)"
+                cp "$AGENTS_JSON" "$AGENTS_JSON_BAK" && \
+                    echo -e "  ${INFO} Backed up existing agents.json to $AGENTS_JSON_BAK"
+                echo "  Regenerating agents.json from database..."
+                _generate_agents_json
+            else
+                echo -e "  ${CHECK_MARK} agents.json present and valid; agent_config_sync will keep it in sync"
+            fi
+        else
+            # File exists but is INVALID JSON
+            if [ "$REGENERATE_AGENTS_JSON" -eq 1 ]; then
+                # --regenerate-agents-json: backup corrupt file and regenerate
+                AGENTS_JSON_BAK="${AGENTS_JSON}.bak-$(date +%Y%m%d-%H%M%S)"
+                cp "$AGENTS_JSON" "$AGENTS_JSON_BAK" && \
+                    echo -e "  ${WARNING} Backed up corrupt agents.json to $AGENTS_JSON_BAK"
+                echo "  Regenerating agents.json from database..."
+                _generate_agents_json
+            else
+                echo -e "  ${WARNING} agents.json exists but contains invalid JSON — skipping write."
+                echo -e "  ${INFO} Pass --regenerate-agents-json to fix it."
+            fi
         fi
     else
-        echo -e "  ${WARNING} Could not query DB for agents.json (will be generated on gateway start)"
-        echo '[]' >"$AGENTS_JSON" 2>/dev/null || true
+        # File does not exist — generate from DB
+        echo "  Generating initial agents.json from database..."
+        _generate_agents_json
     fi
 else
     echo -e "  ${WARNING} cognition/focus/agent-config-sync not found (skipping)"

@@ -44,9 +44,23 @@ interface BootstrapFile {
 const FALLBACK_DIR = join(homedir(), '.openclaw', 'bootstrap-fallback');
 
 /**
- * Query database for agent bootstrap context
+ * Result from a database bootstrap attempt.
+ * - ok=true:  query succeeded (files may be empty if something is wrong)
+ * - ok=false: query failed (connection error, missing function, etc.)
  */
-async function loadFromDatabase(agentName: string): Promise<BootstrapFile[]> {
+interface DbResult {
+  ok: boolean;
+  files: BootstrapFile[];
+}
+
+/**
+ * Query database for agent bootstrap context.
+ *
+ * Returns { ok, files } so the caller can distinguish "DB call succeeded
+ * but returned zero rows" from "DB call failed".  The fallback decision
+ * is per-call (did the query succeed?), never per-file.
+ */
+async function loadFromDatabase(agentName: string): Promise<DbResult> {
   let client;
   try {
     client = await pool.connect();
@@ -55,10 +69,11 @@ async function loadFromDatabase(agentName: string): Promise<BootstrapFile[]> {
       [agentName]
     );
     
-    return result.rows.map((row: any) => ({
+    const files = result.rows.map((row: any) => ({
       path: `db:${row.source}/${row.filename}`,
       content: row.content
     }));
+    return { ok: true, files };
   } catch (error) {
     // Gracefully handle database unavailability
     if ((error as any).code === 'ECONNREFUSED') {
@@ -68,7 +83,7 @@ async function loadFromDatabase(agentName: string): Promise<BootstrapFile[]> {
     } else {
       console.error('[bootstrap-context] Database query failed:', error);
     }
-    return [];
+    return { ok: false, files: [] };
   } finally {
     if (client) {
       client.release();
@@ -163,21 +178,32 @@ export default async function handler(event: Record<string, any>) {
   
   console.log(`[bootstrap-context] Loading context for agent: ${agentName}`);
   
-  // Try database first
-  let files = await loadFromDatabase(agentName);
+  // Fallback decision is per-call, not per-file: if the DB query succeeds
+  // we use exactly what it returns.  Zero rows from a successful call is
+  // also treated as failure — every agent should get UNIVERSAL + GLOBAL.
+  const dbResult = await loadFromDatabase(agentName);
+  let files: BootstrapFile[];
   
-  if (files.length === 0) {
-    console.warn('[bootstrap-context] No database context, trying fallback files...');
+  if (dbResult.ok && dbResult.files.length > 0) {
+    // DB call succeeded and returned content — use as-is
+    files = dbResult.files;
+  } else {
+    if (dbResult.ok) {
+      console.error(`[bootstrap-context] DB query succeeded but returned 0 rows for '${agentName}' — expected at least UNIVERSAL/GLOBAL records. Falling back.`);
+    } else {
+      console.warn(`[bootstrap-context] DB query failed for '${agentName}', trying fallback files...`);
+    }
     files = await loadFallbackFiles(agentName);
+    
+    if (files.length === 0) {
+      console.error('[bootstrap-context] No fallback files, using emergency context');
+      files = getEmergencyContext();
+    }
   }
   
-  if (files.length === 0) {
-    console.error('[bootstrap-context] No fallback files, using emergency context');
-    files = getEmergencyContext();
-  }
-  
-  // Replace the default bootstrapFiles with our database/fallback content
+  // Wholesale replacement — no per-file mixing with workspace files
   event.context.bootstrapFiles = files;
   
-  console.log(`[bootstrap-context] Loaded ${files.length} context files for ${agentName}`);
+  const source = dbResult.ok && dbResult.files.length > 0 ? 'database' : 'fallback';
+  console.log(`[bootstrap-context] Loaded ${files.length} context files for ${agentName} (source: ${source})`);
 }

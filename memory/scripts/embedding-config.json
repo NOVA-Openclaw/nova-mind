@@ -1,6 +1,6 @@
 {
   "provider": "ollama",
-  "model": "mxbai-embed-large",
+  "model": "snowflake-arctic-embed2",
   "base_url": "http://localhost:11434",
   "dimensions": 1024
 }

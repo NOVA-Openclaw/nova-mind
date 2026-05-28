@@ -59,6 +59,14 @@ logging.basicConfig(
 logger = logging.getLogger("memory-maintenance")
 
 # ---------------------------------------------------------------------------
+# Custom exceptions
+# ---------------------------------------------------------------------------
+class OllamaConnectionError(Exception):
+    """Raised when Ollama is unreachable (network-level failure, not model errors)."""
+    pass
+
+
+# ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
 DEFAULT_STATE_FILE = os.path.expanduser("~/.openclaw/state/memory-maintenance-last-run.json")
@@ -86,7 +94,7 @@ def load_embedding_config():
     if not cfg_path.exists():
         return {
             "provider": "ollama",
-            "model": "mxbai-embed-large",
+            "model": "snowflake-arctic-embed2",
             "base_url": "http://localhost:11434",
             "dimensions": 1024,
         }
@@ -139,6 +147,10 @@ def embed_batch(texts, cfg):
         resp.raise_for_status()
         data = resp.json()
         return data.get("embeddings", [])
+    except requests.exceptions.ConnectionError as e:
+        raise OllamaConnectionError(f"Cannot reach Ollama at {url}: {e}") from e
+    except requests.exceptions.Timeout as e:
+        raise OllamaConnectionError(f"Ollama connection timed out at {url}: {e}") from e
     except Exception as e:
         logger.error(f"Batch embed failed: {e}")
         return []
@@ -152,6 +164,10 @@ def embed_single(text, cfg):
         resp.raise_for_status()
         data = resp.json()
         return data.get("embedding", [])
+    except requests.exceptions.ConnectionError as e:
+        raise OllamaConnectionError(f"Cannot reach Ollama at {url}: {e}") from e
+    except requests.exceptions.Timeout as e:
+        raise OllamaConnectionError(f"Ollama connection timed out at {url}: {e}") from e
     except Exception as e:
         logger.error(f"Single embed failed: {e}")
         return []
@@ -211,22 +227,17 @@ TABLE_EMBED_SPECS = {
         "SELECT id, name AS text FROM agents WHERE name IS NOT NULL",
         "agent",
     ),
+    # #245: fixed column: lessons.lesson (not .content)
     "lesson": (
-        "SELECT id, content AS text FROM lessons WHERE content IS NOT NULL",
+        "SELECT id, lesson AS text FROM lessons WHERE lesson IS NOT NULL",
         "lesson",
     ),
     "event": (
         "SELECT id, description AS text FROM events WHERE description IS NOT NULL",
         "event",
     ),
-    "trading_signal": (
-        "SELECT id, COALESCE(signal_type, '') || ' ' || COALESCE(symbol, '') AS text FROM trading_signals",
-        "trading_signal",
-    ),
-    "position": (
-        "SELECT id, COALESCE(symbol, '') || ' @ ' || COALESCE(entry_price::text, '') AS text FROM positions",
-        "position",
-    ),
+    # #233: stale table entry removed (see GitHub issue #233)
+    # #259: stale table entry removed (see GitHub issue #259)
     "media_consumed": (
         "SELECT id, title AS text FROM media_consumed WHERE title IS NOT NULL",
         "media_consumed",
@@ -235,9 +246,28 @@ TABLE_EMBED_SPECS = {
         "SELECT id, word AS text FROM vocabulary WHERE word IS NOT NULL",
         "vocabulary",
     ),
+    # #259: table renamed library → library_works; source_type stays 'library' for backward compat
+    # (187 existing rows in memory_embeddings use source_type='library')
     "library": (
-        "SELECT id, title AS text FROM library WHERE title IS NOT NULL",
+        "SELECT id, title AS text FROM library_works WHERE title IS NOT NULL",
         "library",
+    ),
+    # #235: new tables
+    "journal_entry": (
+        "SELECT id, content AS text FROM journal_entries WHERE content IS NOT NULL",
+        "journal_entry",
+    ),
+    "music_work": (
+        "SELECT id, title || ': ' || COALESCE(description, '') AS text FROM music_works WHERE title IS NOT NULL",
+        "music_work",
+    ),
+    "workflow_run": (
+        "SELECT id, trim(COALESCE(trigger_context, '') || ' ' || COALESCE(notes, '')) AS text FROM workflow_runs",
+        "workflow_run",
+    ),
+    "income_source": (
+        "SELECT id, name || ': ' || COALESCE(description, '') AS text FROM income_sources WHERE name IS NOT NULL",
+        "income_source",
     ),
 }
 
@@ -259,58 +289,120 @@ def _embed_table(cur, query, source_type, cfg):
 
 
 def phase_embed_database(conn, cfg, dry_run=False, verbose=False):
-    cur = conn.cursor()
+    """Embed all TABLE_EMBED_SPECS tables.
+
+    Returns (total_embedded, success_count, warn_count).
+    psycopg2 errors per table are caught, logged as warnings, and the table is skipped.
+    OllamaConnectionError propagates (fatal -- Ollama is unreachable).
+    """
     total = 0
-    for name, (query, source_type) in TABLE_EMBED_SPECS.items():
-        count = _embed_table(cur, query, source_type, cfg)
-        if count:
-            total += count
-            if verbose:
-                logger.info(f"  Embedded {count} {name} records")
-    return total
+    success_count = 0
+    warn_count = 0
+    cur = conn.cursor()
+    for idx, (name, (query, source_type)) in enumerate(TABLE_EMBED_SPECS.items()):
+        sp = f"embed_sp_{idx}"
+        try:
+            cur.execute(f"SAVEPOINT {sp}")
+            count = _embed_table(cur, query, source_type, cfg)
+            cur.execute(f"RELEASE SAVEPOINT {sp}")
+            success_count += 1
+            if count:
+                total += count
+                if verbose:
+                    logger.info(f"  Embedded {count} {name} records")
+        except psycopg2.Error as e:
+            try:
+                cur.execute(f"ROLLBACK TO SAVEPOINT {sp}")
+            except psycopg2.Error:
+                pass
+            logger.warning(f"[WARN] Skipping table '{name}' ({source_type}): {e}")
+            warn_count += 1
+        # OllamaConnectionError intentionally not caught here -- propagates to phase_embed
+    return total, success_count, warn_count
 
 
 # ---- Embed research tables ----
 def phase_embed_research(conn, cfg, dry_run=False, verbose=False):
+    """Embed research tables with per-sub-query error isolation.
+
+    Returns (total_embedded, warn_count).
+    psycopg2 errors per sub-query are caught and logged as warnings.
+    OllamaConnectionError propagates (fatal).
+    """
     cur = conn.cursor()
     total = 0
+    warn_count = 0
 
     # research_task
-    cur.execute("SELECT id, query AS text FROM research_tasks WHERE query IS NOT NULL")
-    rows = cur.fetchall()
-    items = [{"id": r[0], "text": r[1]} for r in rows if not _already_embedded(cur, "research_task", r[0])]
-    if items:
-        for i in range(0, len(items), EMBED_BATCH_SIZE):
-            batch = items[i : i + EMBED_BATCH_SIZE]
-            embeddings = embed_texts([it["text"] for it in batch], cfg)
-            _store_embeddings(cur, "research_task", batch, embeddings)
-            total += len(batch)
+    try:
+        cur.execute("SAVEPOINT embed_research_task")
+        cur.execute("SELECT id, query AS text FROM research_tasks WHERE query IS NOT NULL")
+        rows = cur.fetchall()
+        items = [{"id": r[0], "text": r[1]} for r in rows if not _already_embedded(cur, "research_task", r[0])]
+        if items:
+            for i in range(0, len(items), EMBED_BATCH_SIZE):
+                batch = items[i : i + EMBED_BATCH_SIZE]
+                embeddings = embed_texts([it["text"] for it in batch], cfg)
+                _store_embeddings(cur, "research_task", batch, embeddings)
+                total += len(batch)
+        cur.execute("RELEASE SAVEPOINT embed_research_task")
+    except psycopg2.Error as e:
+        try:
+            cur.execute("ROLLBACK TO SAVEPOINT embed_research_task")
+        except psycopg2.Error:
+            pass
+        logger.warning(f"[WARN] Skipping research_task: {e}")
+        warn_count += 1
 
     # research_finding (is_current=true)
-    cur.execute("SELECT id, content AS text FROM research_findings WHERE is_current = true AND content IS NOT NULL")
-    rows = cur.fetchall()
-    items = [{"id": r[0], "text": r[1]} for r in rows if not _already_embedded(cur, "research_finding", r[0])]
-    if items:
-        for i in range(0, len(items), EMBED_BATCH_SIZE):
-            batch = items[i : i + EMBED_BATCH_SIZE]
-            embeddings = embed_texts([it["text"] for it in batch], cfg)
-            _store_embeddings(cur, "research_finding", batch, embeddings)
-            total += len(batch)
+    try:
+        cur.execute("SAVEPOINT embed_research_finding")
+        cur.execute("SELECT id, content AS text FROM research_findings WHERE is_current = true AND content IS NOT NULL")
+        rows = cur.fetchall()
+        items = [{"id": r[0], "text": r[1]} for r in rows if not _already_embedded(cur, "research_finding", r[0])]
+        if items:
+            for i in range(0, len(items), EMBED_BATCH_SIZE):
+                batch = items[i : i + EMBED_BATCH_SIZE]
+                embeddings = embed_texts([it["text"] for it in batch], cfg)
+                _store_embeddings(cur, "research_finding", batch, embeddings)
+                total += len(batch)
+        cur.execute("RELEASE SAVEPOINT embed_research_finding")
+    except psycopg2.Error as e:
+        try:
+            cur.execute("ROLLBACK TO SAVEPOINT embed_research_finding")
+        except psycopg2.Error:
+            pass
+        logger.warning(f"[WARN] Skipping research_finding: {e}")
+        warn_count += 1
 
-    # research_conclusion (is_current=true)
-    cur.execute("SELECT id, content AS text FROM research_conclusions WHERE is_current = true AND content IS NOT NULL")
-    rows = cur.fetchall()
-    items = [{"id": r[0], "text": r[1]} for r in rows if not _already_embedded(cur, "research_conclusion", r[0])]
-    if items:
-        for i in range(0, len(items), EMBED_BATCH_SIZE):
-            batch = items[i : i + EMBED_BATCH_SIZE]
-            embeddings = embed_texts([it["text"] for it in batch], cfg)
-            _store_embeddings(cur, "research_conclusion", batch, embeddings)
-            total += len(batch)
+    # #259 fix: research_conclusion uses COALESCE(title, summary) as text source -- title+summary columns only
+    try:
+        cur.execute("SAVEPOINT embed_research_conclusion")
+        cur.execute("""
+            SELECT id, trim(COALESCE(title || ' ', '') || summary) AS text
+            FROM research_conclusions
+            WHERE is_current = true AND summary IS NOT NULL
+        """)
+        rows = cur.fetchall()
+        items = [{"id": r[0], "text": r[1]} for r in rows if not _already_embedded(cur, "research_conclusion", r[0])]
+        if items:
+            for i in range(0, len(items), EMBED_BATCH_SIZE):
+                batch = items[i : i + EMBED_BATCH_SIZE]
+                embeddings = embed_texts([it["text"] for it in batch], cfg)
+                _store_embeddings(cur, "research_conclusion", batch, embeddings)
+                total += len(batch)
+        cur.execute("RELEASE SAVEPOINT embed_research_conclusion")
+    except psycopg2.Error as e:
+        try:
+            cur.execute("ROLLBACK TO SAVEPOINT embed_research_conclusion")
+        except psycopg2.Error:
+            pass
+        logger.warning(f"[WARN] Skipping research_conclusion: {e}")
+        warn_count += 1
 
     if verbose and total:
         logger.info(f"  Embedded {total} research records")
-    return total
+    return total, warn_count
 
 
 # ---- Embed memory files ----
@@ -362,15 +454,106 @@ def phase_embed_files(conn, cfg, dry_run=False, verbose=False):
     return total
 
 
+# ---------------------------------------------------------------------------
+# Lessons deduplication phase (runs BEFORE embedding to avoid wasted embed calls)
+# ---------------------------------------------------------------------------
+def phase_dedup_lessons(conn, dry_run=False, verbose=False):
+    """Deduplicate lessons before the embedding phase.
+
+    Exact duplicates (identical lesson text): keep oldest (lowest id), delete newer.
+    Near-duplicates (similarity >= 0.80 but not identical): write to review report.
+    Cleans up orphaned memory_embeddings rows for deleted lessons.
+    Returns count of exact duplicates deleted.
+    """
+    cur = conn.cursor()
+    total_deleted = 0
+
+    # --- Exact duplicate removal ---
+    cur.execute("""
+        SELECT lesson, array_agg(id ORDER BY id) AS ids, COUNT(*) AS cnt
+        FROM lessons
+        GROUP BY lesson
+        HAVING COUNT(*) > 1
+    """)
+    groups = cur.fetchall()
+
+    if not groups:
+        if verbose:
+            logger.info("Lesson dedup: no exact duplicates found")
+    else:
+        for lesson_text, ids, cnt in groups:
+            survivor_id = ids[0]  # oldest (lowest id)
+            to_delete = ids[1:]
+            if not dry_run:
+                cur.execute("DELETE FROM lessons WHERE id = ANY(%s)", (to_delete,))
+                deleted = cur.rowcount
+                # Clean orphaned embeddings for deleted lessons
+                cur.execute(
+                    "DELETE FROM memory_embeddings WHERE source_type = 'lesson' AND source_id = ANY(%s)",
+                    ([str(i) for i in to_delete],),
+                )
+                total_deleted += deleted
+            else:
+                total_deleted += len(to_delete)
+            if verbose:
+                logger.info(
+                    f"  Dedup lessons: kept id={survivor_id}, "
+                    f"removed {len(to_delete)} duplicate(s) of '{lesson_text[:60]}'"
+                )
+        logger.info(f"Lesson dedup: {total_deleted} exact duplicates removed ({len(groups)} group(s))")
+
+    # --- Near-duplicate detection (write review report, do not auto-merge) ---
+    try:
+        cur.execute("""
+            SELECT l1.id AS id1, l2.id AS id2,
+                   LEFT(l1.lesson, 80) AS lesson1_preview,
+                   LEFT(l2.lesson, 80) AS lesson2_preview,
+                   similarity(l1.lesson, l2.lesson) AS sim
+            FROM lessons l1
+            JOIN lessons l2 ON l1.id < l2.id
+            WHERE similarity(l1.lesson, l2.lesson) >= 0.80
+              AND l1.lesson != l2.lesson
+            ORDER BY sim DESC
+            LIMIT 100
+        """)
+        near_dups = cur.fetchall()
+        if near_dups:
+            logs_dir = Path.home() / ".openclaw" / "logs"
+            logs_dir.mkdir(parents=True, exist_ok=True)
+            today = datetime.now().strftime("%Y-%m-%d")
+            report_path = logs_dir / f"lesson-dedup-review-{today}.md"
+            dry_str = " (DRY RUN)" if dry_run else ""
+            with open(report_path, "w") as f:
+                f.write(f"# Lesson Near-Duplicate Review — {today}{dry_str}\n\n")
+                f.write(f"Found {len(near_dups)} near-duplicate pair(s) (similarity >= 0.80). Manual review needed.\n\n")
+                for id1, id2, p1, p2, sim in near_dups:
+                    f.write(f"- id={id1} vs id={id2} (sim={sim:.3f}): '{p1}' vs '{p2}'\n")
+            logger.info(f"Lesson dedup: {len(near_dups)} near-duplicate pair(s) written to {report_path}")
+    except psycopg2.Error as e:
+        logger.warning(f"Near-duplicate lesson detection skipped (pg_trgm unavailable?): {e}")
+
+    return total_deleted
+
+
 def phase_embed(conn, args):
+    """Run all embedding sub-phases. Returns (total_embedded, total_warns)."""
     cfg = load_embedding_config()
     total = 0
-    total += phase_embed_database(conn, cfg, args.dry_run, args.verbose)
-    total += phase_embed_research(conn, cfg, args.dry_run, args.verbose)
+    total_warns = 0
+
+    db_total, _db_success, db_warns = phase_embed_database(conn, cfg, args.dry_run, args.verbose)
+    total += db_total
+    total_warns += db_warns
+
+    research_total, research_warns = phase_embed_research(conn, cfg, args.dry_run, args.verbose)
+    total += research_total
+    total_warns += research_warns
+
     total += phase_embed_files(conn, cfg, args.dry_run, args.verbose)
+
     if args.verbose:
-        logger.info(f"Embed phase complete: {total} items embedded")
-    return total
+        logger.info(f"Embed phase complete: {total} items embedded, {total_warns} warning(s)")
+    return total, total_warns
 
 
 # ---------------------------------------------------------------------------
@@ -954,6 +1137,7 @@ def parse_args():
     parser.add_argument("--skip-decay", action="store_true", help="Skip confidence decay")
     parser.add_argument("--skip-ghost-cleanup", action="store_true", help="Skip ghost entity cleanup")
     parser.add_argument("--skip-entity-dedup", action="store_true", help="Skip entity deduplication")
+    parser.add_argument("--skip-lesson-dedup", action="store_true", help="Skip lessons deduplication phase")
     return parser.parse_args()
 
 
@@ -966,10 +1150,25 @@ def main():
     conn = psycopg2.connect("")
     conn.autocommit = False
 
+    # Tracks whether Ollama was completely unreachable during the embed phase.
+    # If True, the embed phase was skipped and we exit non-zero at the end,
+    # but all other maintenance phases (dedup, decay, cleanup) still run.
+    embed_ollama_failed = False
+
     try:
+        # Phase: Lessons deduplication (must run BEFORE embed to avoid wasted calls)
+        lessons_deduped = 0
+        if not args.skip_lesson_dedup:
+            lessons_deduped = phase_dedup_lessons(conn, args.dry_run, args.verbose)
+
         embed_count = 0
+        embed_warns = 0
         if not args.skip_embed:
-            embed_count = phase_embed(conn, args)
+            try:
+                embed_count, embed_warns = phase_embed(conn, args)
+            except OllamaConnectionError as e:
+                logger.error(f"[ERROR] Ollama unavailable -- embed phase skipped: {e}")
+                embed_ollama_failed = True
 
         cross_merged = 0
         modified_fact_ids = set()
@@ -999,7 +1198,7 @@ def main():
             auto_merged, review_count = entity_dedup(conn, args.dry_run, args.verbose)
 
         reembedded = 0
-        if not args.skip_embed and modified_fact_ids:
+        if not args.skip_embed and not embed_ollama_failed and modified_fact_ids:
             reembedded = reembed_modified_facts(conn, modified_fact_ids, args.dry_run, args.verbose)
 
         cleaned = 0
@@ -1020,7 +1219,9 @@ def main():
         logger.info("=" * 50)
         logger.info("Memory Maintenance Summary")
         logger.info("=" * 50)
+        logger.info(f"  Lessons deduped:        {lessons_deduped}")
         logger.info(f"  Embedded:               {embed_count}")
+        logger.info(f"  Embed warnings:         {embed_warns}")
         logger.info(f"  Cross-key merged:       {cross_merged}")
         logger.info(f"  Same-key merged:        {dup_merged}")
         logger.info(f"  Dedup review queued:    {medium_report_count}")
@@ -1033,6 +1234,8 @@ def main():
         logger.info(f"  Orphaned embeddings:    {cleaned}")
         logger.info(f"  Archived facts:         {archived}")
         logger.info(f"  Purged old archives:    {purged}")
+        if embed_ollama_failed:
+            logger.error("[ERROR] Embed phase failed: Ollama was unreachable. Other phases ran normally.")
     except Exception as e:
         conn.rollback()
         logger.error(f"Transaction rolled back due to error: {e}")
@@ -1040,7 +1243,10 @@ def main():
     finally:
         conn.close()
 
-    return 0
+    # Exit code contract:
+    # - 1 if Ollama was completely unreachable (entire embed pipeline broken)
+    # - 0 if all phases completed (even if some individual tables warned/skipped)
+    return 1 if embed_ollama_failed else 0
 
 
 if __name__ == "__main__":

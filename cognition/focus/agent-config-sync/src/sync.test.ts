@@ -6,11 +6,29 @@
  * TC-244-U-03  Mutual exclusion — NOVA and Newhart never see each other
  * TC-244-U-04  Fallback model shape preserved from function rows
  * TC-244-U-05  Row with is_default = null emits no `default` key
+ * TC-262-U-01  heartbeat_enabled=true → emits heartbeat object
+ * TC-262-U-02  heartbeat_enabled=false → heartbeat key ABSENT (updated #273)
+ * TC-262-U-03  heartbeat_enabled=null → heartbeat key ABSENT (updated #273)
+ * TC-262-U-04  heartbeat key present IFF enabled; absent when disabled (updated #273)
+ * TC-262-U-05  heartbeat_enabled=true with NULL sub-fields → partial object
+ * TC-262-U-06  heartbeat config does not affect sort order
+ * TC-262-U-07  heartbeat object field order is stable
+ * TC-262-U-08  BVA — heartbeat_every boundary values
  * TC-269-U-01  Heartbeat sync — default agent writes to workspace/ not workspace-nova/
  * TC-269-U-02  Heartbeat sync — subagent writes to workspace-<name>/
  * TC-269-U-03  Heartbeat sync — skip write when content unchanged
  * TC-269-U-04  Heartbeat sync — returns list of updated agent names
  * TC-269-U-05  Heartbeat sync — creates workspace dir if missing
+ * TC-273-U-01  Boolean guard — no typeof heartbeat === "boolean" ever
+ * TC-273-U-02  Schema compliance — objects or undefined, exhaustive partitions
+ * TC-273-U-03  Mixed scenario — primary regression test for #273
+ * TC-273-U-04  JSON serialization guard — no "heartbeat":false in output
+ * TC-273-U-05  TypeScript type guard — heartbeat is HeartbeatConfig?
+ * TC-273-U-06  Edge: empty input → empty output
+ * TC-273-U-07  Edge: heartbeat_enabled field entirely absent (pre-migration row)
+ * TC-273-U-08  Scenario: all agents disabled → zero heartbeat keys
+ * TC-273-U-09  Scenario: all agents enabled → all have heartbeat objects
+ * TC-273-U-10  BVA: partial heartbeat objects (each sub-field in isolation)
  *
  * Framework: Node built-in test runner (node:test) + tsx for TS execution.
  * Run: npx tsx --test src/sync.test.ts
@@ -899,40 +917,49 @@ describe("TC-262-U-01: heartbeat_enabled=true → emits heartbeat object in agen
   });
 });
 
-// ── TC-262-U-02: heartbeat_enabled=false → emits `"heartbeat": false` ──────────
+// ── TC-262-U-02: heartbeat_enabled=false → heartbeat key is ABSENT ──────────
 
-describe("TC-262-U-02: heartbeat_enabled=false → emits heartbeat: false", () => {
+describe("TC-262-U-02: heartbeat_enabled=false → heartbeat key is ABSENT from entry", () => {
   const rows: AgentRow[] = [
     makeAgentRow("coder", false),
   ];
   const result = buildAgentsList(rows);
 
-  it("coder entry has heartbeat: false (boolean)", () => {
+  it("coder entry has heartbeat: undefined (key absent)", () => {
     const entry = result.find((e) => e.id === "coder");
     assert.ok(entry !== undefined);
-    assert.strictEqual(entry.heartbeat, false);
-    assert.strictEqual(typeof entry.heartbeat, "boolean");
+    assert.strictEqual(entry.heartbeat, undefined);
+    assert.ok(
+      !Object.prototype.hasOwnProperty.call(entry, "heartbeat"),
+      "heartbeat key must not be present when disabled",
+    );
+    assert.ok(typeof entry.heartbeat !== "boolean", "heartbeat must never be a boolean");
   });
 });
 
-// ── TC-262-U-03: heartbeat_enabled=null → emits `"heartbeat": false` ───────────
+// ── TC-262-U-03: heartbeat_enabled=null → heartbeat key is ABSENT ───────────
 
-describe("TC-262-U-03: heartbeat_enabled=null → emits heartbeat: false (defaults to disabled)", () => {
+describe("TC-262-U-03: heartbeat_enabled=null → heartbeat key is ABSENT from entry", () => {
   const rows: AgentRow[] = [
     makeAgentRow("gem", null),
   ];
   const result = buildAgentsList(rows);
 
-  it("gem entry has heartbeat: false when heartbeat_enabled is null", () => {
+  it("gem entry has heartbeat: undefined (key absent) when heartbeat_enabled is null", () => {
     const entry = result.find((e) => e.id === "gem");
     assert.ok(entry !== undefined);
-    assert.strictEqual(entry.heartbeat, false);
+    assert.strictEqual(entry.heartbeat, undefined);
+    assert.ok(
+      !Object.prototype.hasOwnProperty.call(entry, "heartbeat"),
+      "heartbeat key must not be present when heartbeat_enabled is null",
+    );
+    assert.ok(typeof entry.heartbeat !== "boolean", "heartbeat must never be a boolean");
   });
 });
 
-// ── TC-262-U-04: ALL agents in list have explicit heartbeat key ────────────────
+// ── TC-262-U-04: heartbeat key present IFF enabled; absent when disabled or null ──
 
-describe("TC-262-U-04: ALL agents in list have explicit heartbeat key", () => {
+describe("TC-262-U-04: heartbeat key present IFF enabled; absent when disabled or null", () => {
   const rows: AgentRow[] = [
     makeAgentRow("nova", true, "5m", "discord", "channel:1234", true),
     makeAgentRow("coder", false),
@@ -941,19 +968,44 @@ describe("TC-262-U-04: ALL agents in list have explicit heartbeat key", () => {
   ];
   const result = buildAgentsList(rows);
 
-  it("every entry has a heartbeat property", () => {
-    for (const entry of result) {
-      assert.ok(
-        Object.prototype.hasOwnProperty.call(entry, "heartbeat"),
-        `Entry '${entry.id}' must have a heartbeat property`,
-      );
-    }
+  it("nova entry (enabled) has a heartbeat property", () => {
+    const entry = result.find((e) => e.id === "nova");
+    assert.ok(entry !== undefined);
+    assert.ok(
+      Object.prototype.hasOwnProperty.call(entry, "heartbeat"),
+      "nova: enabled agent must have heartbeat property",
+    );
+    assert.ok(typeof entry.heartbeat === "object", "nova: heartbeat must be an object (not boolean)");
   });
 
-  it("no entry has heartbeat=undefined", () => {
-    for (const entry of result) {
-      assert.notStrictEqual(entry.heartbeat, undefined, `Entry '${entry.id}' heartbeat must not be undefined`);
-    }
+  it("scout entry (enabled) has a heartbeat property", () => {
+    const entry = result.find((e) => e.id === "scout");
+    assert.ok(entry !== undefined);
+    assert.ok(
+      Object.prototype.hasOwnProperty.call(entry, "heartbeat"),
+      "scout: enabled agent must have heartbeat property",
+    );
+    assert.ok(typeof entry.heartbeat === "object", "scout: heartbeat must be an object (not boolean)");
+  });
+
+  it("coder entry (disabled) has heartbeat key ABSENT", () => {
+    const entry = result.find((e) => e.id === "coder");
+    assert.ok(entry !== undefined);
+    assert.ok(
+      !Object.prototype.hasOwnProperty.call(entry, "heartbeat"),
+      "coder: disabled agent must NOT have heartbeat property",
+    );
+    assert.strictEqual(entry.heartbeat, undefined);
+  });
+
+  it("gem entry (null) has heartbeat key ABSENT", () => {
+    const entry = result.find((e) => e.id === "gem");
+    assert.ok(entry !== undefined);
+    assert.ok(
+      !Object.prototype.hasOwnProperty.call(entry, "heartbeat"),
+      "gem: null-disabled agent must NOT have heartbeat property",
+    );
+    assert.strictEqual(entry.heartbeat, undefined);
   });
 });
 
@@ -1036,4 +1088,431 @@ describe("TC-262-U-08: BVA — heartbeat_every boundary values", () => {
       }
     });
   }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TC-273-U-01 through TC-273-U-10: Heartbeat schema fix tests (#273)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ── TC-273-U-01: Boolean guard — no agent entry ever has typeof heartbeat === "boolean" ──
+
+describe("TC-273-U-01: Boolean guard — no agent entry ever has typeof heartbeat === \"boolean\"", () => {
+  const rows: AgentRow[] = [
+    makeAgentRow("nova",  true,  "5m", "discord", "channel:1234", true),
+    makeAgentRow("coder", false),
+    makeAgentRow("gem",   null),
+    {
+      name: "iris",
+      model: "anthropic/claude-sonnet-4",
+      fallback_models: null,
+      thinking: null,
+      instance_type: "subagent",
+      is_default: false,
+      allowed_subagents: null,
+      // heartbeat_enabled field entirely absent (undefined)
+    },
+  ];
+  const result = buildAgentsList(rows);
+
+  it("returns 4 entries", () => {
+    assert.strictEqual(result.length, 4);
+  });
+
+  it("no entry has typeof heartbeat === \"boolean\"", () => {
+    for (const entry of result) {
+      assert.ok(
+        typeof entry.heartbeat !== "boolean",
+        `Entry '${entry.id}' must not have a boolean heartbeat (got ${typeof entry.heartbeat})`,
+      );
+    }
+  });
+
+  it("no entry has heartbeat === false", () => {
+    for (const entry of result) {
+      assert.notStrictEqual(entry.heartbeat, false, `Entry '${entry.id}' heartbeat must not be false`);
+    }
+  });
+
+  it("no entry has heartbeat === true", () => {
+    for (const entry of result) {
+      assert.notStrictEqual(entry.heartbeat, true, `Entry '${entry.id}' heartbeat must not be true`);
+    }
+  });
+});
+
+// ── TC-273-U-02: Schema compliance — heartbeat values are objects or undefined ──
+
+describe("TC-273-U-02: Schema compliance — heartbeat values are objects or undefined, never false/null/true", () => {
+  const rows: AgentRow[] = [
+    makeAgentRow("agent-enabled",  true,  "5m", "discord", "ch:123"),
+    makeAgentRow("agent-partial",  true,  "1m", null, null),
+    makeAgentRow("agent-min",      true,  null, null, null),
+    makeAgentRow("agent-false",    false),
+    makeAgentRow("agent-null",     null),
+  ];
+  const result = buildAgentsList(rows);
+
+  it("agent-enabled: heartbeat key present, value is object with all sub-fields", () => {
+    const entry = result.find((e) => e.id === "agent-enabled");
+    assert.ok(entry !== undefined);
+    assert.ok(Object.prototype.hasOwnProperty.call(entry, "heartbeat"), "agent-enabled must have heartbeat key");
+    assert.ok(typeof entry.heartbeat === "object" && entry.heartbeat !== null, "heartbeat must be object");
+    assert.deepStrictEqual(entry.heartbeat, { every: "5m", target: "discord", to: "ch:123" });
+  });
+
+  it("agent-partial: heartbeat key present, value is object with only 'every' field", () => {
+    const entry = result.find((e) => e.id === "agent-partial");
+    assert.ok(entry !== undefined);
+    assert.ok(Object.prototype.hasOwnProperty.call(entry, "heartbeat"), "agent-partial must have heartbeat key");
+    assert.ok(typeof entry.heartbeat === "object" && entry.heartbeat !== null, "heartbeat must be object");
+    assert.deepStrictEqual(entry.heartbeat, { every: "1m" });
+  });
+
+  it("agent-min: heartbeat key present, value is empty object {}", () => {
+    const entry = result.find((e) => e.id === "agent-min");
+    assert.ok(entry !== undefined);
+    assert.ok(Object.prototype.hasOwnProperty.call(entry, "heartbeat"), "agent-min must have heartbeat key");
+    assert.deepStrictEqual(entry.heartbeat, {});
+  });
+
+  it("agent-false: heartbeat key ABSENT, value is undefined", () => {
+    const entry = result.find((e) => e.id === "agent-false");
+    assert.ok(entry !== undefined);
+    assert.ok(!Object.prototype.hasOwnProperty.call(entry, "heartbeat"), "agent-false must NOT have heartbeat key");
+    assert.strictEqual(entry.heartbeat, undefined);
+  });
+
+  it("agent-null: heartbeat key ABSENT, value is undefined", () => {
+    const entry = result.find((e) => e.id === "agent-null");
+    assert.ok(entry !== undefined);
+    assert.ok(!Object.prototype.hasOwnProperty.call(entry, "heartbeat"), "agent-null must NOT have heartbeat key");
+    assert.strictEqual(entry.heartbeat, undefined);
+  });
+});
+
+// ── TC-273-U-03: Mixed scenario — enabled agents get objects, disabled/null omit key ──
+
+describe("TC-273-U-03: Mixed scenario — primary regression test for #273", () => {
+  const rows: AgentRow[] = [
+    makeAgentRow("nova",  true,  "5m",  "discord", "channel:1234", true),
+    makeAgentRow("coder", true,  "10m", "slack",   "channel:5678"),
+    makeAgentRow("gem",   false),
+    makeAgentRow("scout", null),
+    makeAgentRow("iris",  true,  null,  null,      null),
+  ];
+  const result = buildAgentsList(rows);
+
+  it("nova: heartbeat present with correct value", () => {
+    const entry = result.find((e) => e.id === "nova");
+    assert.ok(entry !== undefined);
+    assert.deepStrictEqual(entry.heartbeat, { every: "5m", target: "discord", to: "channel:1234" });
+  });
+
+  it("coder: heartbeat present with correct value", () => {
+    const entry = result.find((e) => e.id === "coder");
+    assert.ok(entry !== undefined);
+    assert.deepStrictEqual(entry.heartbeat, { every: "10m", target: "slack", to: "channel:5678" });
+  });
+
+  it("gem: heartbeat key ABSENT", () => {
+    const entry = result.find((e) => e.id === "gem");
+    assert.ok(entry !== undefined);
+    assert.ok(!Object.prototype.hasOwnProperty.call(entry, "heartbeat"), "gem must not have heartbeat key");
+    assert.strictEqual(entry.heartbeat, undefined);
+  });
+
+  it("scout: heartbeat key ABSENT", () => {
+    const entry = result.find((e) => e.id === "scout");
+    assert.ok(entry !== undefined);
+    assert.ok(!Object.prototype.hasOwnProperty.call(entry, "heartbeat"), "scout must not have heartbeat key");
+    assert.strictEqual(entry.heartbeat, undefined);
+  });
+
+  it("iris: heartbeat present with empty object (enabled, no sub-fields)", () => {
+    const entry = result.find((e) => e.id === "iris");
+    assert.ok(entry !== undefined);
+    assert.ok(Object.prototype.hasOwnProperty.call(entry, "heartbeat"), "iris must have heartbeat key");
+    assert.deepStrictEqual(entry.heartbeat, {});
+  });
+
+  it("all enabled agents have object heartbeat (never boolean)", () => {
+    for (const id of ["nova", "coder", "iris"]) {
+      const entry = result.find((e) => e.id === id);
+      assert.ok(entry !== undefined);
+      assert.ok(typeof entry.heartbeat === "object" && entry.heartbeat !== null,
+        `${id}: heartbeat must be an object`);
+    }
+  });
+
+  it("all disabled agents have heartbeat === undefined", () => {
+    for (const id of ["gem", "scout"]) {
+      const entry = result.find((e) => e.id === id);
+      assert.ok(entry !== undefined);
+      assert.strictEqual(entry.heartbeat, undefined, `${id}: heartbeat must be undefined`);
+    }
+  });
+
+  it("count of entries with heartbeat key is 3 (nova, coder, iris)", () => {
+    const withHeartbeat = result.filter((e) => Object.prototype.hasOwnProperty.call(e, "heartbeat"));
+    assert.strictEqual(withHeartbeat.length, 3);
+  });
+
+  it("count of entries without heartbeat key is 2 (gem, scout)", () => {
+    const withoutHeartbeat = result.filter((e) => !Object.prototype.hasOwnProperty.call(e, "heartbeat"));
+    assert.strictEqual(withoutHeartbeat.length, 2);
+  });
+});
+
+// ── TC-273-U-04: JSON serialization guard — output never contains "heartbeat":false ──
+
+describe("TC-273-U-04: JSON serialization guard — JSON output never contains \"heartbeat\":false", () => {
+  const rows: AgentRow[] = [
+    makeAgentRow("nova",  true,  "5m", "discord", "channel:1234", true),
+    makeAgentRow("coder", false),
+    makeAgentRow("gem",   null),
+  ];
+  const result = buildAgentsList(rows);
+  const jsonStr = JSON.stringify(result);
+
+  it("JSON output does not contain '\"heartbeat\":false'", () => {
+    assert.ok(!jsonStr.includes('"heartbeat":false'), `JSON must not contain "heartbeat":false`);
+  });
+
+  it("JSON output does not contain '\"heartbeat\": false'", () => {
+    assert.ok(!jsonStr.includes('"heartbeat": false'), `JSON must not contain "heartbeat": false`);
+  });
+
+  it("JSON output contains exactly one 'heartbeat' key (nova's enabled entry)", () => {
+    const matches = jsonStr.match(/"heartbeat"/g) || [];
+    assert.strictEqual(matches.length, 1, `Expected exactly 1 heartbeat key in JSON, got ${matches.length}`);
+  });
+
+  it("the heartbeat key in JSON is followed by '{' (an object), not 'false'", () => {
+    const hbIdx = jsonStr.indexOf('"heartbeat"');
+    assert.ok(hbIdx !== -1, "heartbeat key must exist in JSON");
+    // Find the character after the colon
+    const afterColon = jsonStr.slice(hbIdx + '"heartbeat":'.length).trimStart();
+    assert.ok(
+      afterColon.startsWith("{"),
+      `heartbeat value in JSON must start with '{', got: ${afterColon.slice(0, 10)}`,
+    );
+  });
+});
+
+// ── TC-273-U-05: TypeScript type guard — heartbeat is HeartbeatConfig | undefined ──
+
+describe("TC-273-U-05: TypeScript type guard — heartbeat is HeartbeatConfig | undefined, not | false", () => {
+  const rows: AgentRow[] = [
+    makeAgentRow("coder", false),
+    makeAgentRow("gem",   null),
+  ];
+  const result = buildAgentsList(rows);
+
+  it("coder: heartbeat is undefined, not false", () => {
+    const entry = result.find((e) => e.id === "coder");
+    assert.ok(entry !== undefined);
+    assert.strictEqual(entry.heartbeat, undefined);
+    assert.notStrictEqual(entry.heartbeat, false);
+  });
+
+  it("gem: heartbeat is undefined, not false", () => {
+    const entry = result.find((e) => e.id === "gem");
+    assert.ok(entry !== undefined);
+    assert.strictEqual(entry.heartbeat, undefined);
+    assert.notStrictEqual(entry.heartbeat, false);
+  });
+
+  it("no disabled agent's heartbeat is strictly false (boolean)", () => {
+    for (const entry of result) {
+      assert.ok(entry.heartbeat !== false, `Entry '${entry.id}' must not have heartbeat === false`);
+    }
+  });
+});
+
+// ── TC-273-U-06: Edge case — empty rows input produces empty output ────────────
+
+describe("TC-273-U-06: Edge case — empty rows input produces empty output", () => {
+  it("buildAgentsList([]) returns an empty array", () => {
+    const result = buildAgentsList([]);
+    assert.ok(Array.isArray(result), "result must be an array");
+    assert.strictEqual(result.length, 0);
+  });
+});
+
+// ── TC-273-U-07: Edge case — heartbeat_enabled field entirely absent (undefined) ──
+
+describe("TC-273-U-07: Edge case — heartbeat_enabled field entirely absent (pre-migration row)", () => {
+  const row: AgentRow = {
+    name: "legacy-agent",
+    model: "anthropic/claude-sonnet-4",
+    fallback_models: null,
+    thinking: null,
+    instance_type: "subagent",
+    is_default: false,
+    allowed_subagents: null,
+    // heartbeat_enabled, heartbeat_every, etc. all absent (undefined)
+  };
+  const result = buildAgentsList([row]);
+
+  it("returns 1 entry", () => {
+    assert.strictEqual(result.length, 1);
+  });
+
+  it("entry id is 'legacy-agent'", () => {
+    assert.strictEqual(result[0]!.id, "legacy-agent");
+  });
+
+  it("heartbeat key is ABSENT from legacy-agent entry", () => {
+    assert.ok(
+      !Object.prototype.hasOwnProperty.call(result[0], "heartbeat"),
+      "heartbeat key must not be present for pre-migration row",
+    );
+  });
+
+  it("legacy-agent heartbeat is undefined", () => {
+    assert.strictEqual(result[0]!.heartbeat, undefined);
+  });
+
+  it("typeof legacy-agent heartbeat is not boolean", () => {
+    assert.ok(typeof result[0]!.heartbeat !== "boolean", "heartbeat must never be a boolean");
+  });
+});
+
+// ── TC-273-U-08: All-disabled scenario — zero agents have heartbeat key ─────────
+
+describe("TC-273-U-08: All-disabled scenario — zero agents have heartbeat key", () => {
+  const rows: AgentRow[] = [
+    makeAgentRow("nova",   false, null, null, null, true),
+    makeAgentRow("coder",  false),
+    makeAgentRow("gem",    null),
+    makeAgentRow("scout",  null),
+    makeAgentRow("iris",   false),
+  ];
+  const result = buildAgentsList(rows);
+
+  it("returns 5 entries", () => {
+    assert.strictEqual(result.length, 5);
+  });
+
+  it("not a single entry has a heartbeat property", () => {
+    for (const entry of result) {
+      assert.ok(
+        !Object.prototype.hasOwnProperty.call(entry, "heartbeat"),
+        `Entry '${entry.id}' must NOT have a heartbeat property`,
+      );
+    }
+  });
+
+  it("every entry has heartbeat === undefined", () => {
+    for (const entry of result) {
+      assert.strictEqual(entry.heartbeat, undefined, `Entry '${entry.id}' heartbeat must be undefined`);
+    }
+  });
+
+  it("JSON.stringify output does not contain 'heartbeat' at all", () => {
+    const jsonStr = JSON.stringify(result);
+    assert.ok(!jsonStr.includes('"heartbeat"'), "serialized JSON must not contain any heartbeat key");
+  });
+});
+
+// ── TC-273-U-09: All-enabled scenario — every agent has heartbeat object ─────────
+
+describe("TC-273-U-09: All-enabled scenario — every agent has heartbeat object", () => {
+  const rows: AgentRow[] = [
+    makeAgentRow("nova",  true, "5m",  "discord", "ch:1", true),
+    makeAgentRow("coder", true, "10m", "slack",   "ch:2"),
+    makeAgentRow("gem",   true, null,  null,      null),
+  ];
+  const result = buildAgentsList(rows);
+
+  it("returns 3 entries", () => {
+    assert.strictEqual(result.length, 3);
+  });
+
+  it("every entry has a heartbeat property", () => {
+    for (const entry of result) {
+      assert.ok(
+        Object.prototype.hasOwnProperty.call(entry, "heartbeat"),
+        `Entry '${entry.id}' must have a heartbeat property`,
+      );
+    }
+  });
+
+  it("every entry heartbeat is typeof 'object'", () => {
+    for (const entry of result) {
+      assert.ok(
+        typeof entry.heartbeat === "object",
+        `Entry '${entry.id}' heartbeat must be an object`,
+      );
+    }
+  });
+
+  it("no entry heartbeat is null", () => {
+    for (const entry of result) {
+      assert.ok(entry.heartbeat !== null, `Entry '${entry.id}' heartbeat must not be null`);
+    }
+  });
+
+  it("no entry heartbeat is a boolean (false or true)", () => {
+    for (const entry of result) {
+      assert.ok(entry.heartbeat !== false, `Entry '${entry.id}' heartbeat must not be false`);
+      assert.ok(entry.heartbeat !== true, `Entry '${entry.id}' heartbeat must not be true`);
+    }
+  });
+});
+
+// ── TC-273-U-10: BVA — partial heartbeat objects (each sub-field in isolation) ──
+
+describe("TC-273-U-10: BVA — partial heartbeat objects (each sub-field in isolation)", () => {
+  it("Sub-test A: only 'every' set → heartbeat = {every: '5m'}", () => {
+    const rows: AgentRow[] = [makeAgentRow("a1", true, "5m", null, null)];
+    const result = buildAgentsList(rows);
+    const entry = result.find((e) => e.id === "a1");
+    assert.ok(entry !== undefined);
+    assert.ok(Object.prototype.hasOwnProperty.call(entry, "heartbeat"), "a1 must have heartbeat key");
+    assert.deepStrictEqual(entry.heartbeat, { every: "5m" });
+    // 'target' and 'to' must not be present in the object
+    assert.ok(
+      !Object.prototype.hasOwnProperty.call(entry.heartbeat, "target"),
+      "heartbeat must not have 'target' key when null",
+    );
+    assert.ok(
+      !Object.prototype.hasOwnProperty.call(entry.heartbeat, "to"),
+      "heartbeat must not have 'to' key when null",
+    );
+  });
+
+  it("Sub-test B: only 'target' set → heartbeat = {target: 'discord'}", () => {
+    const rows: AgentRow[] = [makeAgentRow("a2", true, null, "discord", null)];
+    const result = buildAgentsList(rows);
+    const entry = result.find((e) => e.id === "a2");
+    assert.ok(entry !== undefined);
+    assert.ok(Object.prototype.hasOwnProperty.call(entry, "heartbeat"), "a2 must have heartbeat key");
+    assert.deepStrictEqual(entry.heartbeat, { target: "discord" });
+    assert.ok(
+      !Object.prototype.hasOwnProperty.call(entry.heartbeat, "every"),
+      "heartbeat must not have 'every' key when null",
+    );
+    assert.ok(
+      !Object.prototype.hasOwnProperty.call(entry.heartbeat, "to"),
+      "heartbeat must not have 'to' key when null",
+    );
+  });
+
+  it("Sub-test C: only 'to' set → heartbeat = {to: 'channel:1234'}", () => {
+    const rows: AgentRow[] = [makeAgentRow("a3", true, null, null, "channel:1234")];
+    const result = buildAgentsList(rows);
+    const entry = result.find((e) => e.id === "a3");
+    assert.ok(entry !== undefined);
+    assert.ok(Object.prototype.hasOwnProperty.call(entry, "heartbeat"), "a3 must have heartbeat key");
+    assert.deepStrictEqual(entry.heartbeat, { to: "channel:1234" });
+    assert.ok(
+      !Object.prototype.hasOwnProperty.call(entry.heartbeat, "every"),
+      "heartbeat must not have 'every' key when null",
+    );
+    assert.ok(
+      !Object.prototype.hasOwnProperty.call(entry.heartbeat, "target"),
+      "heartbeat must not have 'target' key when null",
+    );
+  });
 });

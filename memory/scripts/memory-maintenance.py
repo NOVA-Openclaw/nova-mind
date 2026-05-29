@@ -26,6 +26,7 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 import psycopg2
+import psycopg2.errors
 import psycopg2.extras
 import requests
 
@@ -243,7 +244,13 @@ TABLE_EMBED_SPECS = {
 
 
 def _embed_table(cur, query, source_type, cfg):
-    cur.execute(query)
+    cur.execute("SAVEPOINT embed_check")
+    try:
+        cur.execute(query)
+    except psycopg2.errors.UndefinedTable:
+        cur.execute("ROLLBACK TO SAVEPOINT embed_check")
+        logger.warning("[WARN] Table not found, skipping: %s", source_type)
+        return 0
     rows = cur.fetchall()
     items = [{"id": r[0], "text": r[1]} for r in rows if r[1] and not _already_embedded(cur, source_type, r[0])]
     if not items:

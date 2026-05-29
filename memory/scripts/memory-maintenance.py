@@ -283,37 +283,55 @@ def phase_embed_research(conn, cfg, dry_run=False, verbose=False):
     total = 0
 
     # research_task
-    cur.execute("SELECT id, query AS text FROM research_tasks WHERE query IS NOT NULL")
-    rows = cur.fetchall()
-    items = [{"id": r[0], "text": r[1]} for r in rows if not _already_embedded(cur, "research_task", r[0])]
-    if items:
-        for i in range(0, len(items), EMBED_BATCH_SIZE):
-            batch = items[i : i + EMBED_BATCH_SIZE]
-            embeddings = embed_texts([it["text"] for it in batch], cfg)
-            _store_embeddings(cur, "research_task", batch, embeddings)
-            total += len(batch)
+    cur.execute("SAVEPOINT embed_research_task")
+    try:
+        cur.execute("SELECT id, query AS text FROM research_tasks WHERE query IS NOT NULL")
+    except (psycopg2.errors.UndefinedTable, psycopg2.errors.UndefinedColumn):
+        cur.execute("ROLLBACK TO SAVEPOINT embed_research_task")
+        logger.warning("[WARN] Table not found, skipping: research_task")
+    else:
+        rows = cur.fetchall()
+        items = [{"id": r[0], "text": r[1]} for r in rows if not _already_embedded(cur, "research_task", r[0])]
+        if items:
+            for i in range(0, len(items), EMBED_BATCH_SIZE):
+                batch = items[i : i + EMBED_BATCH_SIZE]
+                embeddings = embed_texts([it["text"] for it in batch], cfg)
+                _store_embeddings(cur, "research_task", batch, embeddings)
+                total += len(batch)
 
     # research_finding (is_current=true)
-    cur.execute("SELECT id, content AS text FROM research_findings WHERE is_current = true AND content IS NOT NULL")
-    rows = cur.fetchall()
-    items = [{"id": r[0], "text": r[1]} for r in rows if not _already_embedded(cur, "research_finding", r[0])]
-    if items:
-        for i in range(0, len(items), EMBED_BATCH_SIZE):
-            batch = items[i : i + EMBED_BATCH_SIZE]
-            embeddings = embed_texts([it["text"] for it in batch], cfg)
-            _store_embeddings(cur, "research_finding", batch, embeddings)
-            total += len(batch)
+    cur.execute("SAVEPOINT embed_research_finding")
+    try:
+        cur.execute("SELECT id, content AS text FROM research_findings WHERE is_current = true AND content IS NOT NULL")
+    except (psycopg2.errors.UndefinedTable, psycopg2.errors.UndefinedColumn):
+        cur.execute("ROLLBACK TO SAVEPOINT embed_research_finding")
+        logger.warning("[WARN] Table not found, skipping: research_finding")
+    else:
+        rows = cur.fetchall()
+        items = [{"id": r[0], "text": r[1]} for r in rows if not _already_embedded(cur, "research_finding", r[0])]
+        if items:
+            for i in range(0, len(items), EMBED_BATCH_SIZE):
+                batch = items[i : i + EMBED_BATCH_SIZE]
+                embeddings = embed_texts([it["text"] for it in batch], cfg)
+                _store_embeddings(cur, "research_finding", batch, embeddings)
+                total += len(batch)
 
     # research_conclusion (is_current=true)
-    cur.execute("SELECT id, content AS text FROM research_conclusions WHERE is_current = true AND content IS NOT NULL")
-    rows = cur.fetchall()
-    items = [{"id": r[0], "text": r[1]} for r in rows if not _already_embedded(cur, "research_conclusion", r[0])]
-    if items:
-        for i in range(0, len(items), EMBED_BATCH_SIZE):
-            batch = items[i : i + EMBED_BATCH_SIZE]
-            embeddings = embed_texts([it["text"] for it in batch], cfg)
-            _store_embeddings(cur, "research_conclusion", batch, embeddings)
-            total += len(batch)
+    cur.execute("SAVEPOINT embed_research_conclusion")
+    try:
+        cur.execute("SELECT id, full_content AS text FROM research_conclusions WHERE is_current = true AND full_content IS NOT NULL")
+    except (psycopg2.errors.UndefinedTable, psycopg2.errors.UndefinedColumn):
+        cur.execute("ROLLBACK TO SAVEPOINT embed_research_conclusion")
+        logger.warning("[WARN] Table not found, skipping: research_conclusion")
+    else:
+        rows = cur.fetchall()
+        items = [{"id": r[0], "text": r[1]} for r in rows if not _already_embedded(cur, "research_conclusion", r[0])]
+        if items:
+            for i in range(0, len(items), EMBED_BATCH_SIZE):
+                batch = items[i : i + EMBED_BATCH_SIZE]
+                embeddings = embed_texts([it["text"] for it in batch], cfg)
+                _store_embeddings(cur, "research_conclusion", batch, embeddings)
+                total += len(batch)
 
     if verbose and total:
         logger.info(f"  Embedded {total} research records")

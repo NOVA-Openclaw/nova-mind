@@ -134,7 +134,7 @@ To use in an OpenClaw installation:
 1. Copy `scripts/proactive-recall.py` to your scripts directory
 2. Install the `turn-context` plugin (`memory/plugins/turn-context/`) via the OpenClaw Plugin SDK
 3. Ensure pgvector extension and memory_embeddings table exist
-4. Ensure Ollama is running with `mxbai-embed-large` model loaded
+4. Ensure Ollama is running with `snowflake-arctic-embed2` model loaded
 
 > **Note:** The old `semantic-recall` hook has been removed. Use the `turn-context` plugin instead (see #182).
 

@@ -41,7 +41,7 @@ Memory maintenance is handled by a **unified** script `memory/scripts/memory-mai
 8. **Clean orphaned embeddings**
 9. **Archive & purge** low-confidence facts
 
-**Flags:** `--dry-run`, `--verbose`, `--force`, `--state-file`, `--skip-embed`, `--skip-consolidation`, `--skip-dedup`, `--skip-decay`, `--skip-ghost-cleanup`, `--skip-entity-dedup`
+**Flags:** `--dry-run`, `--verbose`, `--force`, `--state-file`, `--skip-embed`, `--skip-consolidation`, `--skip-dedup`, `--skip-decay`, `--skip-ghost-cleanup`, `--skip-entity-dedup`, `--skip-lesson-dedup`
 
 **Scheduling:** Removed from crontab. Now triggered from the HEARTBEAT idle cascade as priority #2 (after peer agent messages, before pending tasks). A 4-hour cooldown gate prevents redundant runs. A unique index (`uq_memory_embeddings_source`) prevents duplicate embeddings.
 
@@ -86,7 +86,7 @@ The installer is **idempotent** — safe to run multiple times. It installs all 
 - Python 3 with `python3-venv`
 - `pgschema` — `go install github.com/pgplex/pgschema@latest`
 - `jq`
-- Ollama with mxbai-embed-large model (local, for semantic recall embeddings)
+- Ollama with snowflake-arctic-embed2 model (local, for semantic recall embeddings)
 - Anthropic API key (for memory extraction)
 
 ### Flags

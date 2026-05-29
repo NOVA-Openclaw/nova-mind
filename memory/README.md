@@ -889,7 +889,7 @@ Scripts support both stdin and positional arguments for backward compatibility, 
 
 ## Embedding Configuration (Ollama)
 
-All embedding scripts now use local Ollama with the `mxbai-embed-large` model (1024 dimensions) instead of OpenAI's `text-embedding-3-small`. This eliminates the need for an OpenAI API key for semantic recall.
+All embedding scripts now use local Ollama with the `snowflake-arctic-embed2` model (1024 dimensions) instead of OpenAI's `text-embedding-3-small`. This eliminates the need for an OpenAI API key for semantic recall.
 
 ### Shared Configuration
 
@@ -898,7 +898,7 @@ A centralized configuration file `embedding-config.json` is used by all embeddin
 ```json
 {
   "provider": "ollama",
-  "model": "mxbai-embed-large",
+  "model": "snowflake-arctic-embed2",
   "base_url": "http://localhost:11434",
   "dimensions": 1024
 }

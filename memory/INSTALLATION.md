@@ -25,10 +25,10 @@ Before installing the nova-mind memory subsystem, ensure you have the following:
   - Install: `sudo apt install jq`
   - Required for config file parsing and automatic OpenClaw config patching
 
-- **Ollama with mxbai-embed-large model** - Local embedding model for semantic recall
-  - **Required for semantic recall** - generates embeddings using `mxbai-embed-large` (1024 dimensions)
+- **Ollama with snowflake-arctic-embed2 model** - Local embedding model for semantic recall
+  - **Required for semantic recall** - generates embeddings using `snowflake-arctic-embed2` (1024 dimensions)
   - Install Ollama from: [https://ollama.com/](https://ollama.com/)
-  - Pull the model: `ollama pull mxbai-embed-large`
+  - Pull the model: `ollama pull snowflake-arctic-embed2`
   - Ensure Ollama service is running: `ollama serve`
 
 ### Recommended
@@ -300,7 +300,7 @@ The installer and hooks use these environment variables:
 
 ### Required for Operation
 - `ANTHROPIC_API_KEY` - For memory extraction (Claude API)
-- **Embeddings**: Uses local Ollama with `mxbai-embed-large` model (no API key required)
+- **Embeddings**: Uses local Ollama with `snowflake-arctic-embed2` model (no API key required)
 
 ### Optional Configuration
 - `OPENCLAW_WORKSPACE` - Override default workspace path

@@ -1,5 +1,17 @@
 # Changelog
 
+### Batch: embeddings-batch (7 issues, see commit for details)
+
+#### Changed
+- **Embedding model unified** to `snowflake-arctic-embed2` (was `mxbai-embed-large`).
+- **Stale table references removed**: `trading_signals`, `positions`.
+- **New tables added** to embedding: `journal_entries`, `music_works`, `workflow_runs`, `income_sources`.
+- **Column fixes**: `lessons.content` -> `lessons.lesson`, `library` -> `library_works`, `research_conclusions.content` -> `COALESCE(title, summary)`, `vocabulary.term` -> `vocabulary.word`.
+- **New lessons dedup phase** added to `memory-maintenance.py` with `--skip-lesson-dedup` flag.
+- **Graceful error handling** — per-table try/except with SAVEPOINT, warning counts, `OllamaConnectionError`.
+
+
+
 ### Batch: agent-identity-batch (Issues #244 + nova-openclaw#243)
 
 #### Changed

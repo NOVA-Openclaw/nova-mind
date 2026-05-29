@@ -90,7 +90,7 @@ graph TB
 **Core Components:**
 - **Schema Management:** Declarative schema via `pgschema` (plan → hazard-check → apply)
 - **Extraction Pipeline:** Natural language → Claude extraction → structured JSON → PostgreSQL
-- **Embedding Engine:** Local Ollama (`mxbai-embed-large`) for semantic search over memories
+- **Embedding Engine:** Local Ollama (`snowflake-arctic-embed2`) for semantic search over memories
 - **Hook Integration:** Two managed hooks + one Plugin SDK plugin automate memory operations:
   - `memory-extract` — Extracts structured memories from incoming messages
   - `session-init` — Generates privacy-filtered context at session start
@@ -310,7 +310,7 @@ All database‑connected scripts use these loaders, ensuring consistent connecti
 
 **Why:** OpenAI embeddings API costs money and requires internet.
 
-**Outcome:** `mxbai‑embed‑large` (1024‑dim) runs locally via Ollama, eliminating API costs and enabling offline semantic recall.
+**Outcome:** `snowflake‑arctic‑embed2` (1024‑dim) runs locally via Ollama, eliminating API costs and enabling offline semantic recall.
 
 ### 6. Entity‑Based Relationship Graph
 

@@ -14,7 +14,7 @@ import urllib.request
 import urllib.error
 import psycopg2
 
-EMBEDDING_MODEL = "mxbai-embed-large"
+EMBEDDING_MODEL = "snowflake-arctic-embed2"  # #223: updated to match embedding-config.json
 DB_NAME = "nova_memory"
 BATCH_SIZE = 50
 
@@ -50,22 +50,16 @@ TABLES_TO_EMBED = {
         SELECT id, COALESCE(title, event_type, 'event') || ' (' || event_date::date || '): ' || COALESCE(description, '')
         FROM events WHERE (title IS NOT NULL OR description IS NOT NULL)
     """,
-    "trading_signal": """
-        SELECT id, signal_type || ' ' || symbol || ' (' || created_at::date || '): ' || COALESCE(reasoning, '')
-        FROM trading_signals WHERE symbol IS NOT NULL
-    """,
-    "position": """
-        SELECT id, asset_class || ': ' || symbol || ' - ' || quantity::text || ' ' || COALESCE(unit, 'units') ||
-               CASE WHEN notes IS NOT NULL THEN ' (' || notes || ')' ELSE '' END
-        FROM positions WHERE symbol IS NOT NULL AND sold_at IS NULL
-    """,
+    # #233/#259: stale table entries removed (see GitHub issues #233 and #259)
+    # #259: position removed (positions table no longer exists)
     "media_consumed": """
         SELECT id, title || ' (' || COALESCE(media_type, 'media') || '): ' || COALESCE(summary, '')
         FROM media_consumed WHERE title IS NOT NULL
     """,
+    # #259: fixed column reference -- vocabulary.word (see issue #259)
     "vocabulary": """
-        SELECT id, term || ': ' || COALESCE(definition, '')
-        FROM vocabulary WHERE term IS NOT NULL
+        SELECT id, word || ': ' || COALESCE(definition, '')
+        FROM vocabulary WHERE word IS NOT NULL
     """,
     "library": """
         SELECT w.id,
@@ -89,6 +83,23 @@ TABLES_TO_EMBED = {
             ), '')
         FROM library_works w
         WHERE w.embed = true
+    """,
+    # #235: new tables
+    "journal_entry": """
+        SELECT id, content
+        FROM journal_entries WHERE content IS NOT NULL
+    """,
+    "music_work": """
+        SELECT id, title || ': ' || COALESCE(description, '')
+        FROM music_works WHERE title IS NOT NULL
+    """,
+    "workflow_run": """
+        SELECT id, trim(COALESCE(trigger_context, '') || ' ' || COALESCE(notes, ''))
+        FROM workflow_runs
+    """,
+    "income_source": """
+        SELECT id, name || ': ' || COALESCE(description, '')
+        FROM income_sources WHERE name IS NOT NULL
     """,
 }
 

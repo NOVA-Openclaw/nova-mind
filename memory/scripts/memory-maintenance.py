@@ -247,7 +247,7 @@ def _embed_table(cur, query, source_type, cfg):
     cur.execute("SAVEPOINT embed_check")
     try:
         cur.execute(query)
-    except psycopg2.errors.UndefinedTable:
+    except (psycopg2.errors.UndefinedTable, psycopg2.errors.UndefinedColumn):
         cur.execute("ROLLBACK TO SAVEPOINT embed_check")
         logger.warning("[WARN] Table not found, skipping: %s", source_type)
         return 0

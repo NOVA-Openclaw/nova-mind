@@ -13,7 +13,8 @@ Interface:
   - Outputs extracted JSON to stdout
   - Exits 0 on success or empty extraction, non-zero on errors
 
-Issues: #184 (bug), #112 (enhancement), #175 (enhancement), #141 (enhancement)
+Issues: #184 (bug), #112 (enhancement), #175 (enhancement), #141 (enhancement),
+#        #230 (ghost entity filtering), #267 (alternate_spellings column)
 """
 
 import json
@@ -225,6 +226,144 @@ def resolve_source_entity_id(
     return None
 
 
+# ── Entity heuristics ────────────────────────────────────────────────────────
+
+# Env-var pattern: ALL_CAPS with at least one underscore
+_RE_ENV_VAR = re.compile(r'^[A-Z][A-Z0-9]*(_[A-Z0-9]+)+$')
+# File extensions that indicate a filename/path, not a person
+_FILENAME_EXTS = frozenset([
+    '.md', '.ts', '.js', '.py', '.sh', '.json', '.yaml', '.yml',
+    '.toml', '.txt', '.sql', '.html', '.css', '.rs', '.go',
+    '.jsx', '.tsx', '.mjs', '.cjs', '.env',
+])
+# DB artifact prefixes / substrings
+_RE_UNKNOWN_USER = re.compile(r'^Unknown user:', re.IGNORECASE)
+_RE_PAREN_ID = re.compile(r'\(id=\d+\)', re.IGNORECASE)
+_RE_PAREN_PROJECT = re.compile(r'\(project #\d+\)', re.IGNORECASE)
+_RE_DB_ROLE = re.compile(r'\bDB role\b', re.IGNORECASE)
+_RE_SENDER_ARTIFACT = re.compile(r'^Sender\s*\(', re.IGNORECASE)
+# Trailing word "table" (whole word, lowercase only — proper nouns like "Round Table" use capital T)
+_RE_TRAILING_TABLE = re.compile(r'\btable$')
+# Em dash in the middle — compound description artifact
+_RE_EM_DASH = re.compile(r'\u2014')
+# Generic role/collective words (exact, case-insensitive)
+_GENERIC_ROLES = frozenset([
+    'sender', 'recipient', 'system', 'user', 'plugin',
+    'the group', 'the team', 'the sender', 'the recipient',
+    'group', 'team',
+])
+# Snake_case identifier: lowercase letters/digits with underscores (no spaces, no caps)
+_RE_SNAKE_CASE = re.compile(r'^[a-z][a-z0-9]*(_[a-z0-9]+)+$')
+# Numeric-only (possibly with hyphens for snowflakes)
+_RE_NUMERIC_ONLY = re.compile(r'^[\d\-]+$')
+
+
+def is_plausible_entity(name: Optional[str]) -> bool:
+    """Return True if name is a plausible entity worth creating. False = skip.
+
+    Rejects structural artifacts: env vars, file paths, DB markers, generic
+    role words, snake_case identifiers, pure-numeric strings, single chars.
+    Passes legitimate person/org/product names, Unicode names, handles.
+    """
+    if not name:
+        return False
+
+    # Normalize whitespace
+    name = name.strip()
+    if not name:
+        return False
+
+    # Single character
+    if len(name) == 1:
+        return False
+
+    # Numeric-only (IDs, snowflakes, etc.)
+    if _RE_NUMERIC_ONLY.match(name):
+        return False
+
+    # Contains path separator → file path
+    if '/' in name or '\\' in name:
+        return False
+
+    # Extension check — ends with a known file extension
+    lower = name.lower()
+    for ext in _FILENAME_EXTS:
+        if lower.endswith(ext):
+            return False
+
+    # Env var pattern: ALL_CAPS + underscores (2+ segments)
+    if _RE_ENV_VAR.match(name):
+        return False
+
+    # DB artifact markers
+    if _RE_UNKNOWN_USER.match(name):
+        return False
+    if _RE_PAREN_ID.search(name):
+        return False
+    if _RE_PAREN_PROJECT.search(name):
+        return False
+    if _RE_DB_ROLE.search(name):
+        return False
+    if _RE_SENDER_ARTIFACT.match(name):
+        return False
+    if _RE_TRAILING_TABLE.search(name):
+        return False
+    if _RE_EM_DASH.search(name):
+        return False
+
+    # Generic role words / pronouns (case-insensitive, exact match OR prefix match
+    # for phrases like "the group (including sender)")
+    name_lower = name.lower()
+    if name_lower in _GENERIC_ROLES:
+        return False
+    # Prefix match: starts with a generic role phrase followed by space or punctuation
+    for role in _GENERIC_ROLES:
+        if name_lower.startswith(role) and len(name_lower) > len(role):
+            next_char = name_lower[len(role)]
+            if not next_char.isalpha():
+                return False
+
+    # Snake_case identifiers (all-lowercase + underscores, multi-segment)
+    if _RE_SNAKE_CASE.match(name):
+        return False
+
+    return True
+
+
+# ── Domain-to-entity normalization helpers ────────────────────────────────────
+
+_RE_TLD = re.compile(r'\.[a-z]{2,6}$', re.IGNORECASE)
+_RE_WWW = re.compile(r'^www\.', re.IGNORECASE)
+
+
+def _normalize_for_domain_match(s: str) -> str:
+    """Lowercase, strip spaces, hyphens, and underscores for fuzzy matching."""
+    return re.sub(r'[\s\-_]+', '', s.lower())
+
+
+def _extract_domain_base(name: str) -> Optional[str]:
+    """Try to extract the base name from a domain-looking string.
+
+    e.g. 'www.roguesignal.io' -> 'roguesignal'
+         'app.blockhenge.com' -> 'blockhenge'
+         'valid.ai'          -> 'valid'
+    Returns None if name doesn't look like a domain.
+    """
+    # Must contain at least one dot to be a domain
+    if '.' not in name:
+        return None
+    # Strip leading www.
+    s = _RE_WWW.sub('', name)
+    # Handle multi-part domains: strip subdomain prefix if more than 2 parts remain
+    parts = s.split('.')
+    if len(parts) > 2:
+        # e.g. ['app', 'blockhenge', 'com'] -> drop first (subdomain) and last (TLD)
+        s = parts[1] if len(parts) == 3 else '.'.join(parts[1:-1])
+    # Strip TLD
+    s = _RE_TLD.sub('', s)
+    return s if s else None
+
+
 def find_entity_id(
     subject_name: str,
     conn,
@@ -232,12 +371,20 @@ def find_entity_id(
     sender_provider: str = "",
     sender_name: str = "",
 ) -> Optional[int]:
-    """Look up entity ID by name/full_name/nickname, with optional platform-ID priority."""
+    """Look up entity ID by name/full_name/nickname, alternate_spellings,
+    domain-to-entity matching, and whole-word containment.
+
+    Priority order:
+      1. Platform-ID lookup (if subject == sender)
+      2. Exact/case-insensitive name, full_name, nicknames, alternate_spellings
+      3. Domain-to-entity normalization (strip TLD -> normalize -> match names)
+      4. Whole-word substring/containment matching
+    """
     if not subject_name or subject_name in ("null", "unknown"):
         return None
     try:
         with conn.cursor() as cur:
-            # Self-reported facts: subject == sender → use platform ID lookup first
+            # 1. Self-reported facts: subject == sender → use platform ID lookup first
             if (
                 sender_provider
                 and sender_id
@@ -248,19 +395,55 @@ def find_entity_id(
                 if value_match is not None:
                     return value_match
 
-            # Fallback to name matching
+            # 2. Exact/case-insensitive name, full_name, nicknames, alternate_spellings
             cur.execute(
                 """
                 SELECT id FROM entities
                 WHERE LOWER(name) = LOWER(%s)
                    OR LOWER(full_name) = LOWER(%s)
                    OR LOWER(%s) = ANY(SELECT LOWER(unnest(nicknames)))
+                   OR LOWER(%s) = ANY(SELECT LOWER(unnest(alternate_spellings)))
                 LIMIT 1
                 """,
-                (subject_name, subject_name, subject_name),
+                (subject_name, subject_name, subject_name, subject_name),
             )
             row = cur.fetchone()
-            return row[0] if row else None
+            if row:
+                return row[0]
+
+            # 3. Domain-to-entity normalization
+            domain_base = _extract_domain_base(subject_name)
+            if domain_base:
+                normalized_domain = _normalize_for_domain_match(domain_base)
+                cur.execute("SELECT id, name FROM entities WHERE name IS NOT NULL")
+                for eid, ename in cur.fetchall():
+                    if _normalize_for_domain_match(ename) == normalized_domain:
+                        return eid
+
+            # 4. Whole-word substring/containment matching
+            # The subject_name may contain a known entity name as a complete word/token.
+            subject_lower = subject_name.lower()
+            # Fetch candidate entity names that might appear within subject_name (>= 3 chars)
+            cur.execute(
+                """SELECT id, name FROM entities
+                   WHERE LENGTH(name) >= 3
+                     AND LOWER(%s) LIKE '%%' || LOWER(name) || '%%'""",
+                (subject_name,),
+            )
+            candidates = cur.fetchall()
+            for eid, ename in candidates:
+                ename_lower = ename.lower()
+                # Must match as a whole word (word boundary check)
+                try:
+                    if re.search(
+                        r'(?<![a-z0-9])' + re.escape(ename_lower) + r'(?![a-z0-9])',
+                        subject_lower
+                    ):
+                        return eid
+                except re.error:
+                    pass
+
+            return None
     except Exception:
         return None
 
@@ -288,11 +471,33 @@ def ensure_entity(
     sender_provider: str = "",
     sender_name: str = "",
 ) -> Optional[int]:
-    """Insert entity if not already present; return its id."""
+    """Insert entity if not already present; return its id.
+
+    Includes name-only collision detection (RC-4): checks LOWER(name) before
+    INSERT regardless of type to prevent same-name fragmentation under different
+    types (e.g., VALID as person vs organization).
+    """
     entity_type = normalize_entity_type(entity_type)
     if not name or name in ("null", "unknown"):
         return None
     try:
+        # First: try full matching logic (name, full_name, nicknames, alternate_spellings,
+        # domain normalization, whole-word containment)
+        existing_id = find_entity_id(name, conn, sender_id, sender_provider, sender_name)
+        if existing_id is not None:
+            return existing_id
+
+        # Second: name-only collision guard (RC-4) — catch type divergence before INSERT
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id FROM entities WHERE LOWER(name) = LOWER(%s) LIMIT 1",
+                (name,),
+            )
+            row = cur.fetchone()
+            if row:
+                return row[0]
+
+        # Third: INSERT
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -693,6 +898,13 @@ def store_extracted(
     """Persist extracted data to nova_memory tables."""
     source_entity_id = resolve_source_entity_id(sender_name, sender_id, sender_provider, conn)
 
+    # Build entity_type_map from data["entities"] for type-aware fact storage (RC-3)
+    entity_type_map: dict[str, str] = {
+        (ent.get("name") or "").strip().lower(): normalize_entity_type(ent.get("type") or "other")
+        for ent in (data.get("entities") or [])
+        if ent.get("name")
+    }
+
     def _store_fact(
         subject_name: str,
         key: str,
@@ -705,14 +917,27 @@ def store_extracted(
         source_citation: Optional[str] = None,
     ) -> None:
         """Find/create entity and store a fact.
-        
+
         Source is ALWAYS the message sender (source_entity_id), resolved once
         at the top of store_extracted() from the sender_id. The LLM only
         identifies the subject (who the fact is about).
+
+        Uses is_plausible_entity() to filter ghost entities (RC-1).
+        Uses entity_type_map for type-aware entity creation (RC-3).
         """
+        # Layer 1: structural heuristic filter (RC-1)
+        if not is_plausible_entity(subject_name):
+            print(
+                f"[extract_memories]   SKIP (implausible entity): {subject_name!r}",
+                file=sys.stderr,
+            )
+            return
+
         entity_id = find_entity_id(subject_name, conn, sender_id, sender_provider, sender_name)
         if entity_id is None:
-            entity_id = ensure_entity(subject_name, "person", conn, sender_id, sender_provider, sender_name)
+            # Look up type from entity_type_map (RC-3), fall back to "person"
+            entity_type = entity_type_map.get(subject_name.lower(), "person")
+            entity_id = ensure_entity(subject_name, entity_type, conn, sender_id, sender_provider, sender_name)
         if entity_id is None:
             print(
                 f"[extract_memories] WARNING: Could not resolve entity for {subject_name!r}, skipping fact",
@@ -742,6 +967,10 @@ def store_extracted(
         name = (ent.get("name") or "").strip()
         etype = (ent.get("type") or "other").strip()
         if not name:
+            continue
+        # Layer 1: structural heuristic filter (RC-1)
+        if not is_plausible_entity(name):
+            print(f"[extract_memories]   SKIP (implausible entity): {name!r}", file=sys.stderr)
             continue
         ensure_entity(name, etype, conn)
         print(f"[extract_memories]   entity: {name} ({etype})", file=sys.stderr)

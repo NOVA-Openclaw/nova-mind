@@ -26,6 +26,7 @@ export interface EntityIdentifiers {
   slackMemberId?: string;
   signalUuid?: string;
   signalUsername?: string;
+  deviceId?: string;  // OpenClaw device pairing ID (Ed25519 pubkey hash)
 }
 
 /**

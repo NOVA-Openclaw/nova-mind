@@ -84,7 +84,7 @@ export function buildAgentsList(rows: AgentRow[]): AgentListEntry[] {
     const hasFallbacks =
       Array.isArray(row.fallback_models) && row.fallback_models.length > 0;
 
-    // Build list entry (heartbeat omitted by default; set below only when enabled)
+    // Build list entry
     const entry: AgentListEntry = {
       id: row.name,
       model: hasFallbacks
@@ -106,15 +106,14 @@ export function buildAgentsList(rows: AgentRow[]): AgentListEntry[] {
       entry.subagents = { allowAgents: [...row.allowed_subagents].sort() };
     }
 
-    // #262 / #273 — Per-agent heartbeat config
+    // #262/#273 — Per-agent heartbeat config
+    // OpenClaw schema requires heartbeat to be an object, not a boolean.
     // heartbeat_enabled = true  → emit heartbeat object with non-NULL sub-fields only
-    // heartbeat_enabled = false | NULL | undefined → omit the heartbeat key entirely
-    // OpenClaw schema requires heartbeat to be an object or absent — never a boolean.
-    if ((row.heartbeat_enabled ?? null) === true) {
-      const hb: HeartbeatConfig = {};
-      if (row.heartbeat_every != null) hb.every = row.heartbeat_every;
-      if (row.heartbeat_target != null) hb.target = row.heartbeat_target;
-      if (row.heartbeat_to != null) hb.to = row.heartbeat_to;
+    // heartbeat_enabled = false | NULL → omit key (inherits agents.defaults.heartbeat)
+    if (row.heartbeat_enabled === true && row.heartbeat_every) {
+      const hb: HeartbeatConfig = { every: row.heartbeat_every };
+      if (row.heartbeat_target) hb.target = row.heartbeat_target;
+      if (row.heartbeat_to) hb.to = row.heartbeat_to;
       entry.heartbeat = hb;
     }
 

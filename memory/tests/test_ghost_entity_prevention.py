@@ -302,6 +302,45 @@ class TestFindEntityIdAlternateSpellings(unittest.TestCase):
         result = em.find_entity_id("RavenX", conn)
         self.assertIsNone(result, "B1-6: No match for 'RavenX'")
 
+    def test_B1_8_alternate_raven_title_case(self):
+        """B1-8: 'Raven' resolves to Rayven (id=6) via alternate_spellings.
+
+        Rayven's alternate_spellings=['raven', 'ravens', 'Raven']. The subject
+        'Raven' does NOT match entity name 'Rayven' on name/full_name/nicknames;
+        it resolves via LOWER(%s) = ANY(SELECT LOWER(unnest(alternate_spellings))).
+        The mock simulates the DB returning a match (as it would in reality for
+        this alternate_spellings hit). We additionally verify that the SQL
+        actually includes the alternate_spellings clause.
+        """
+        conn = self._make_conn_for_alternate(6)
+        result = em.find_entity_id("Raven", conn)
+        self.assertEqual(result, 6, "B1-8: 'Raven' -> Rayven via alternate_spellings")
+        # Confirm the SQL query included the alternate_spellings clause
+        cur = conn.cursor.return_value
+        all_sql = " ".join(str(c.args[0]) for c in cur.execute.call_args_list)
+        self.assertIn(
+            "alternate_spellings", all_sql,
+            "B1-8: SQL executed by find_entity_id must query alternate_spellings",
+        )
+
+    def test_B1_9_alternate_raven_lowercase(self):
+        """B1-9: 'raven' (all-lowercase) resolves via alternate_spellings (case-insensitive)."""
+        conn = self._make_conn_for_alternate(6)
+        result = em.find_entity_id("raven", conn)
+        self.assertEqual(result, 6, "B1-9: 'raven' -> Rayven via alternate_spellings")
+
+    def test_B1_10_alternate_ravens_plural(self):
+        """B1-10: 'ravens' (plural) resolves via alternate_spellings."""
+        conn = self._make_conn_for_alternate(6)
+        result = em.find_entity_id("ravens", conn)
+        self.assertEqual(result, 6, "B1-10: 'ravens' -> Rayven via alternate_spellings")
+
+    def test_B1_11_alternate_RAVEN_uppercase(self):
+        """B1-11: 'RAVEN' (all-caps) resolves via alternate_spellings (case-insensitive)."""
+        conn = self._make_conn_for_alternate(6)
+        result = em.find_entity_id("RAVEN", conn)
+        self.assertEqual(result, 6, "B1-11: 'RAVEN' -> Rayven via alternate_spellings")
+
 
 class TestFindEntityIdDomainMatching(unittest.TestCase):
     """B2 — Domain-name-to-entity matching"""
@@ -592,6 +631,82 @@ class TestDeduplicationLogic(unittest.TestCase):
         self.assertTrue(em.is_plausible_entity("Mark Johnson"), "F12b: Mark Johnson passes")
 
 
+class TestInBatchDeduplication(unittest.TestCase):
+    """F11 — In-batch entity deduplication: VALID and VALID.ai both route to entity 3450."""
+
+    def test_F11_valid_and_valid_ai_deduplicated_to_same_entity(self):
+        """F11: When store_extracted() receives both 'VALID' and 'VALID.ai' in the
+        entities array (with facts referencing both subjects), only one entity record
+        is used (the existing VALID entity, id=3450), and both facts route to it.
+
+        - is_plausible_entity() passes for both (domain names and ALL_CAPS without
+          underscores are legitimate).
+        - find_entity_id('VALID') returns 3450 via exact name match.
+        - find_entity_id('VALID.ai') returns 3450 via domain normalization
+          (domain base 'valid' matches entity name 'VALID').
+        - No second entity is created; both store_or_reinforce_fact calls use
+          entity_id=3450.
+        """
+        data = {
+            "entities": [
+                {"name": "VALID", "type": "organization"},
+                {"name": "VALID.ai", "type": "organization"},
+            ],
+            "facts": [
+                {
+                    "subject": "VALID",
+                    "key": "industry",
+                    "value": "technology",
+                    "visibility": "public",
+                    "durability": "long_term",
+                    "category": "observation",
+                },
+                {
+                    "subject": "VALID.ai",
+                    "key": "website",
+                    "value": "wearevalid.ai",
+                    "visibility": "public",
+                    "durability": "long_term",
+                    "category": "observation",
+                },
+            ],
+        }
+
+        with patch.object(em, "resolve_source_entity_id", return_value=1), \
+             patch.object(em, "find_entity_id", return_value=3450) as mock_find, \
+             patch.object(em, "store_or_reinforce_fact", return_value="STORED") as mock_store:
+
+            conn = MagicMock()
+            em.store_extracted(
+                data=data,
+                sender_name="I)ruid",
+                sender_id="330189773371080716",
+                sender_provider="discord",
+                src_timestamp="2026-06-01T00:00:00Z",
+                src_channel_transcript_id="t1",
+                src_channel_session_id="s1",
+                conn=conn,
+            )
+
+        # Both facts must have been stored using entity_id=3450
+        self.assertEqual(
+            mock_store.call_count, 2,
+            "F11: store_or_reinforce_fact must be called exactly twice (one fact per subject)",
+        )
+        entity_ids = [c.kwargs["entity_id"] for c in mock_store.call_args_list]
+        self.assertTrue(
+            all(eid == 3450 for eid in entity_ids),
+            f"F11: Both facts must route to entity_id=3450, got {entity_ids}",
+        )
+
+        # Verify find_entity_id was called for 'VALID.ai' (domain-matching path exercised)
+        find_subjects = [c.args[0] for c in mock_find.call_args_list]
+        self.assertIn(
+            "VALID.ai", find_subjects,
+            "F11: find_entity_id must be called with 'VALID.ai' (domain-dedup path)",
+        )
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # Section G: Edge cases for is_plausible_entity
 # ══════════════════════════════════════════════════════════════════════════════
@@ -648,6 +763,101 @@ class TestIsPlausibleEntityEdgeCases(unittest.TestCase):
 # ══════════════════════════════════════════════════════════════════════════════
 # Section H: Regression tests
 # ══════════════════════════════════════════════════════════════════════════════
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Section H (new): Phone privacy regression
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TestPhonePrivacy(unittest.TestCase):
+    """H2 — Phone facts are always stored as private, regardless of the
+    visibility value the LLM extracted."""
+
+    def _run_store_extracted_with_fact(self, fact_dict):
+        """Helper: call store_extracted with a single fact, return the mock_store
+        MagicMock so tests can inspect call args."""
+        data = {"entities": [], "facts": [fact_dict]}
+        with patch.object(em, "resolve_source_entity_id", return_value=1), \
+             patch.object(em, "find_entity_id", return_value=100), \
+             patch.object(em, "store_or_reinforce_fact", return_value="STORED") as mock_store:
+            conn = MagicMock()
+            em.store_extracted(
+                data=data,
+                sender_name="I)ruid",
+                sender_id="330189773371080716",
+                sender_provider="discord",
+                src_timestamp="2026-06-01T00:00:00Z",
+                src_channel_transcript_id="t1",
+                src_channel_session_id="s1",
+                conn=conn,
+            )
+        return mock_store
+
+    def test_H2_phone_overrides_public_visibility(self):
+        """H2-1: key='phone' with visibility='public' is stored as visibility='private'.
+
+        The hard rule in store_extracted's facts loop:
+            if key == 'phone': visibility = 'private'
+        must fire before _store_fact() and thus before store_or_reinforce_fact().
+        The LLM-extracted visibility ('public') must never reach the DB for phone facts.
+        """
+        mock_store = self._run_store_extracted_with_fact({
+            "subject": "John Smith",
+            "key": "phone",
+            "value": "+1-555-0100",
+            "visibility": "public",  # Wrong — should be overridden
+            "durability": "long_term",
+            "category": "observation",
+        })
+        mock_store.assert_called_once()
+        stored_visibility = mock_store.call_args.kwargs["visibility"]
+        self.assertEqual(
+            stored_visibility, "private",
+            "H2-1: phone fact must be stored with visibility='private', "
+            f"but got visibility={stored_visibility!r}",
+        )
+
+    def test_H2_phone_overrides_shared_visibility(self):
+        """H2-2: key='phone' with visibility='shared' is also overridden to 'private'.
+
+        The override must apply regardless of what the LLM extracted.
+        """
+        mock_store = self._run_store_extracted_with_fact({
+            "subject": "Alice",
+            "key": "phone",
+            "value": "+1-555-0200",
+            "visibility": "shared",  # Any non-private value must be overridden
+            "durability": "long_term",
+            "category": "observation",
+        })
+        mock_store.assert_called_once()
+        stored_visibility = mock_store.call_args.kwargs["visibility"]
+        self.assertEqual(
+            stored_visibility, "private",
+            "H2-2: phone fact with visibility='shared' must be stored as 'private'",
+        )
+
+    def test_H2_non_phone_key_preserves_visibility(self):
+        """H2-3: Non-phone keys are NOT affected by the phone override.
+
+        This guards against the override being too broad — only 'phone' is
+        subject to the hard-private rule.
+        """
+        mock_store = self._run_store_extracted_with_fact({
+            "subject": "Alice",
+            "key": "email",
+            "value": "alice@example.com",
+            "visibility": "public",
+            "durability": "long_term",
+            "category": "observation",
+        })
+        mock_store.assert_called_once()
+        stored_visibility = mock_store.call_args.kwargs["visibility"]
+        self.assertEqual(
+            stored_visibility, "public",
+            "H2-3: non-phone key must preserve original visibility, "
+            f"got visibility={stored_visibility!r}",
+        )
+
 
 class TestRegressionNormalizeEntityType(unittest.TestCase):
     """H15 — normalize_entity_type unchanged"""
@@ -763,7 +973,9 @@ if __name__ == "__main__":
         TestDomainMatchIntegration,
         TestTypeMapIntegration,
         TestDeduplicationLogic,
+        TestInBatchDeduplication,
         TestIsPlausibleEntityEdgeCases,
+        TestPhonePrivacy,
         TestRegressionNormalizeEntityType,
         TestRegressionFindEntityIdPlatformPriority,
         TestRegressionIsPlausibleDoesNotBreakLegitEntities,

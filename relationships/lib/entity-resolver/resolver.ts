@@ -63,6 +63,7 @@ const IDENTIFIER_TO_DB_KEY: Record<string, string> = {
   slackMemberId: 'slack_member_id',
   signalUuid: 'signal_uuid',
   signalUsername: 'signal_username',
+  deviceId: 'nova_app_device_id',
 };
 
 /**

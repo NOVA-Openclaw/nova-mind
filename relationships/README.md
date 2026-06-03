@@ -15,7 +15,7 @@ Part of the nova-mind ecosystem, providing comprehensive entity perception, prof
 The NOVA Relationships System is a unified platform that merged the original Entity Relations System with the NOVA Multiuser System. It provides:
 
 ### Core Capabilities
-- **Entity Perception**: How NOVA notices and identifies entities across all interaction channels
+- **Entity Perception**: How NOVA notices and identifies entities across all interaction channels, now with `is_plausible_entity()` heuristics to prevent ghost entities and leveraging `alternate_spellings` for more accurate matching.
 - **Entity Profiling**: Dynamic profiling of entities (people, organizations, concepts) with behavioral/trait schema
 - **Relationship Management**: Mapping and managing relationships between entities
 - **Recall Triggers**: Context-aware retrieval of relevant entity information
@@ -25,11 +25,11 @@ The NOVA Relationships System is a unified platform that merged the original Ent
 ### Key Components
 
 1. **Entity Resolver Library** (`lib/entity-resolver/`)
-   - Identity resolution across multiple identifiers (phone, email, UUID, certificates, Discord ID, Telegram ID, Slack member ID, Signal UUID/username)
+   - **Enhanced Identity Resolution**: Expanded `find_entity_id()` to include `alternate_spellings`, domain-to-entity normalization, and whole-word substring matching. Supports resolution across multiple identifiers (phone, email, UUID, certificates, Discord ID, Telegram ID, Slack member ID, Signal UUID/username, `deviceId`).
    - Conflict detection via `resolveEntityByIdentifiers()` — flags when identifiers match different entities
    - Session-aware caching for performance
    - Profile management and fact storage
-   - Cross-platform integration (Discord, Telegram, Slack, Signal, email, web, certificates)
+   - Cross-platform integration (Discord, Telegram, Slack, Signal, email, web, certificates, devices)
    - Installed to `~/.openclaw/lib/entity-resolver/` by `agent-install.sh` for runtime use by hooks
 
 2. **Certificate Authority** (`nova-ca/`)
@@ -211,6 +211,7 @@ CREATE TABLE entities (
   id SERIAL PRIMARY KEY,
   name VARCHAR(255) NOT NULL,
   full_name VARCHAR(255),
+  alternate_spellings TEXT[],
   type VARCHAR(50) DEFAULT 'person',
   created_at TIMESTAMP DEFAULT NOW(),
   updated_at TIMESTAMP DEFAULT NOW()

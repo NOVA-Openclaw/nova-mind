@@ -161,8 +161,8 @@ This system allows an AI to:
 
 The schema (`schema/schema.sql`) includes tables for:
 
-- **entities** - People, AIs, organizations, pets, stuffed animals
-- **entity_facts** - Key-value facts about entities. Includes FK source pointers (`source_channel_transcript_id`, `source_channel_session_id`) linking facts back to their source chat transcript (#170).
+- **entities** - People, AIs, organizations, pets, stuffed animals. Now includes `alternate_spellings` column for enhanced matching.
+- **entity_facts** - Key-value facts about entities. Includes FK source pointers (`source_channel_transcript_id`, `source_channel_session_id`) linking facts back to their source chat transcript (#170). Also supports `deviceId` for entity resolution.
 - **entity_relationships** - Connections between entities
 - **places** - Locations, restaurants, venues, networks
 - **projects** - Active projects with tasks, status, and Git configuration
@@ -926,7 +926,7 @@ The separate embedding scripts (`embed-full-database.py`, `embed-memories.py`, `
 | 3. Cross-key consolidation | pgvector cosine similarity ≥0.92 |
 | 4. Same-key dedup | pg_trgm similarity, 3-tier |
 | 5. Confidence decay | Exponential, durability-based rates |
-| 6. Ghost entity cleanup | Zero-fact orphans → archive |
+| 6. Ghost entity cleanup | Identifies and removes implausible or orphaned entities using `is_plausible_entity()` heuristics and zero-fact orphan detection. |
 | 7. Entity-level dedup | ≥80% auto-merge via `merge_entities()` |
 | 8. Clean orphaned embeddings | Remove embeddings with no source |
 | 9. Archive & purge | Remove low-confidence archived facts |

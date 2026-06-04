@@ -81,6 +81,10 @@ export interface RecallInput {
   channelName?: string;
   guildId?: string;
   messageId?: string;
+  /** Domain hints from classifier or domain-identifier for scoped recall (#150) */
+  domainHints?: string[];
+  /** Resolved entity ID for visibility-based filtering in group channels (#168) */
+  entityId?: number;
 }
 
 /**
@@ -98,6 +102,17 @@ export async function runSemanticRecall(
 ): Promise<string | null> {
   const messageText = input.content.substring(0, 2000);
 
+  // Determine recall tier for observability logging
+  const tier =
+    input.domainHints?.length
+      ? "domain"
+      : "full_nodomain";
+
+  console.info(
+    `[turn-context] semantic-recall: tier=${tier} isGroup=${input.isGroup ?? false}` +
+    ` domainHints=${input.domainHints?.length ?? 0} entityId=${input.entityId ?? "none"}`
+  );
+
   const stdinPayload: Record<string, unknown> = {
     content: messageText,
   };
@@ -105,10 +120,14 @@ export async function runSemanticRecall(
   if (input.senderName) stdinPayload.senderName = input.senderName;
   if (input.provider) stdinPayload.provider = input.provider;
   if (input.conversationId) stdinPayload.conversationId = input.conversationId;
-  if (input.isGroup) stdinPayload.isGroup = input.isGroup;
+  // Always pass isGroup so proactive-recall.py can apply visibility filter
+  stdinPayload.is_group = input.isGroup ?? false;
   if (input.channelName) stdinPayload.channelName = input.channelName;
   if (input.guildId) stdinPayload.guildId = input.guildId;
   if (input.messageId) stdinPayload.messageId = input.messageId;
+  // Pass domain hints and entity ID for tiered/visibility filtering
+  if (input.domainHints?.length) stdinPayload.domain_hints = input.domainHints;
+  if (input.entityId != null) stdinPayload.entity_id = input.entityId;
 
   let result: RecallResult | null = null;
   try {
@@ -137,7 +156,7 @@ export async function runSemanticRecall(
       ? ` (~${result.tokens_used}/${result.token_budget} tokens)`
       : "";
   console.log(
-    `[turn-context] Semantic recall found ${result.memories.length} memories${tokensInfo}`
+    `[turn-context] Semantic recall found ${result.memories.length} memories${tokensInfo} tier=${tier}`
   );
 
   return `🧠 **Relevant Context:**\n${memoryLines.join("\n\n")}`;

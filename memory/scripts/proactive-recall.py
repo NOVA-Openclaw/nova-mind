@@ -123,11 +123,12 @@ def truncate_content(content, similarity, result_count=5, high_threshold=HIGH_CO
     return content[:max_len].rsplit(' ', 1)[0] + suffix
 
 
-def recall(config, message, token_budget=DEFAULT_TOKEN_BUDGET, threshold=DEFAULT_THRESHOLD, 
-           max_results=DEFAULT_MAX_RESULTS, high_confidence=HIGH_CONFIDENCE_THRESHOLD):
+def recall(config, message, token_budget=DEFAULT_TOKEN_BUDGET, threshold=DEFAULT_THRESHOLD,
+           max_results=DEFAULT_MAX_RESULTS, high_confidence=HIGH_CONFIDENCE_THRESHOLD,
+           is_group=False, entity_id=None, domain_hints=None):
     """
     Get relevant memories for a message with token budget control.
-    
+
     Args:
         config: Embedding configuration dict
         message: Query text
@@ -135,27 +136,55 @@ def recall(config, message, token_budget=DEFAULT_TOKEN_BUDGET, threshold=DEFAULT
         threshold: Minimum similarity score
         max_results: Maximum results to fetch from DB
         high_confidence: Threshold for full content vs summary
+        is_group: Whether this is a group channel; gates entity_fact visibility filter (#168)
+        entity_id: Resolved entity ID for fine-grained filtering (optional)
+        domain_hints: Domain keywords from classifier for domain-scoped search (optional)
     """
     try:
         conn = psycopg2.connect()
         query_embedding = get_embedding(config, message)
-        
+
         cur = conn.cursor()
-        # Priority-weighted semantic search (#53)
-        # Joins memory_type_priorities for configurable source_type boosting
-        cur.execute("""
-            SELECT 
-                m.source_type,
-                m.source_id,
-                m.content,
-                1 - (m.embedding <=> %s::vector) AS similarity,
-                (1 - (m.embedding <=> %s::vector)) * COALESCE(p.priority, 1.0) AS weighted_score
-            FROM memory_embeddings m
-            LEFT JOIN memory_type_priorities p ON p.source_type = m.source_type
-            WHERE 1 - (m.embedding <=> %s::vector) > %s
-            ORDER BY weighted_score DESC
-            LIMIT %s
-        """, (query_embedding, query_embedding, query_embedding, threshold, max_results))
+
+        if is_group:
+            # Visibility filter for group channels: entity_facts must be public (#168)
+            print(
+                f"[proactive-recall] applying visibility filter: is_group=True entity_id={entity_id}",
+                file=sys.stderr
+            )
+            # Priority-weighted semantic search with entity_fact visibility gating
+            cur.execute("""
+                SELECT
+                    m.source_type,
+                    m.source_id,
+                    m.content,
+                    1 - (m.embedding <=> %s::vector) AS similarity,
+                    (1 - (m.embedding <=> %s::vector)) * COALESCE(p.priority, 1.0) AS weighted_score
+                FROM memory_embeddings m
+                LEFT JOIN memory_type_priorities p ON p.source_type = m.source_type
+                LEFT JOIN entity_facts ef
+                    ON m.source_type = 'entity_fact' AND m.source_id = ef.id::text
+                WHERE 1 - (m.embedding <=> %s::vector) > %s
+                  AND (m.source_type != 'entity_fact' OR ef.visibility = 'public')
+                ORDER BY weighted_score DESC
+                LIMIT %s
+            """, (query_embedding, query_embedding, query_embedding, threshold, max_results))
+        else:
+            # Standard priority-weighted semantic search (#53)
+            # Joins memory_type_priorities for configurable source_type boosting
+            cur.execute("""
+                SELECT
+                    m.source_type,
+                    m.source_id,
+                    m.content,
+                    1 - (m.embedding <=> %s::vector) AS similarity,
+                    (1 - (m.embedding <=> %s::vector)) * COALESCE(p.priority, 1.0) AS weighted_score
+                FROM memory_embeddings m
+                LEFT JOIN memory_type_priorities p ON p.source_type = m.source_type
+                WHERE 1 - (m.embedding <=> %s::vector) > %s
+                ORDER BY weighted_score DESC
+                LIMIT %s
+            """, (query_embedding, query_embedding, query_embedding, threshold, max_results))
         
         results = cur.fetchall()
         conn.close()
@@ -241,24 +270,36 @@ def main():
         sys.exit(1)
     # Try to parse as JSON first (structured input from semantic-recall hook)
     # Fall back to treating stdin as plain text for backward compatibility
+    is_group = False
+    entity_id = None
+    domain_hints = None
     try:
         parsed = json.loads(raw_stdin)
         message_text = parsed.get("content", "").strip()
+        # New fields for tiered recall and visibility filtering (#150, #140, #168)
+        is_group = bool(parsed.get("is_group", False))
+        entity_id = parsed.get("entity_id")  # int or None
+        raw_hints = parsed.get("domain_hints")
+        if isinstance(raw_hints, list):
+            domain_hints = [h for h in raw_hints if isinstance(h, str)]
     except (json.JSONDecodeError, AttributeError):
         message_text = raw_stdin
-    
+
     if not message_text:
         parser.print_help()
         sys.exit(1)
     config = load_embedding_config()
     print(f"Using Ollama config: {config['provider']} / {config['model']} ({config['dimensions']} dims)", file=sys.stderr)
-    
+
     result = recall(
         config,
-        message_text, 
+        message_text,
         token_budget=args.max_tokens,
         threshold=args.threshold,
-        high_confidence=args.high_confidence
+        high_confidence=args.high_confidence,
+        is_group=is_group,
+        entity_id=entity_id,
+        domain_hints=domain_hints,
     )
     
     if args.inject:

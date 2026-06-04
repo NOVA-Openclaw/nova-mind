@@ -113,7 +113,11 @@ export interface SenderInfo {
  * Resolve the sender entity and return formatted context text, or null if
  * no entity was found or an error occurred.
  *
- * Uses the entity-resolver library's cache keyed by sessionKey.
+ * Cache key is `sessionKey:senderId` to prevent cross-user cache collisions
+ * in group channels where multiple senders share a sessionKey.
+ *
+ * Bugfix: was keyed by sessionKey alone, causing User B to receive User A's
+ * cached entity in group channels. See nova-mind #150.
  */
 export async function resolveEntityContext(
   sessionKey: string,
@@ -126,11 +130,15 @@ export async function resolveEntityContext(
 
   if (!senderId) return null;
 
+  // Cache key includes both sessionKey AND senderId to prevent cross-user collisions
+  // in group channels where sessionKey is shared across all participants.
+  const cacheKey = `${sessionKey}:${senderId}`;
+
   let entity: Entity | null = null;
 
-  // Check library cache first
+  // Check library cache first (keyed by sessionKey:senderId)
   if (getCachedEntity) {
-    entity = getCachedEntity(sessionKey) as Entity | null;
+    entity = getCachedEntity(cacheKey) as Entity | null;
   }
 
   if (!entity) {
@@ -161,7 +169,7 @@ export async function resolveEntityContext(
       }
 
       if (entity && setCachedEntity) {
-        setCachedEntity(sessionKey, entity);
+        setCachedEntity(cacheKey, entity);
       }
     } catch (err) {
       console.error(

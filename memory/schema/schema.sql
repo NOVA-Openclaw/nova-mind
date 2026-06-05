@@ -1,0 +1,1 @@
+/home/nova/nova-mind/database/schema.sql

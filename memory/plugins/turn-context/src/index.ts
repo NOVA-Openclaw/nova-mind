@@ -284,16 +284,17 @@ export default function register(api: PluginApi): void {
       // ── Step 1: Classify message type ──────────────────────────────────────
       // Rule-based classification handles ~60-70% of cases without LLM overhead.
       // Ambiguous messages fall back to Ollama (2000ms timeout).
-      // On any failure, defaults to 'conversation'.
+      // On any failure, defaults to 'info_request' so all subsystems fire —
+      // better to over-recall than silently suppress recall on classifier error.
 
       const classifyStart = Date.now();
-      let classification: ClassifierResult = { type: "conversation", method: "default" };
+      let classification: ClassifierResult = { type: "info_request", method: "default" };
       if (cached?.content) {
         try {
           classification = await classifyMessage(cached.content);
         } catch (err) {
           console.warn(
-            "[turn-context] Classifier error (defaulting to conversation):",
+            "[turn-context] Classifier error (defaulting to info_request for safe full recall):",
             err instanceof Error ? err.message : String(err)
           );
         }
@@ -329,7 +330,32 @@ export default function register(api: PluginApi): void {
         `domain_identifier=${helperConfig.domain_identifier}`
       );
 
-      // Build recall input: pass classifier domain hints + visibility info
+      // ── Step 2.5: Resolve entity first to get entityId for recall input (#075) ───
+      // Entity resolution runs sequentially before recall so the resolved entityId
+      // can be threaded into the recall input for visibility-based filtering.
+      const entityResolveStart = Date.now();
+      let entityContextText: string | null = null;
+      let resolvedEntityId: number | null = null;
+
+      if (helperConfig.entity_resolver && sessionKey) {
+        try {
+          const entityResult = await resolveEntityContext(sessionKey, senderInfo);
+          entityContextText = entityResult.text;
+          resolvedEntityId = entityResult.entityId;
+        } catch (err) {
+          console.error(
+            "[turn-context] Entity resolution error:",
+            err instanceof Error ? err.message : String(err)
+          );
+        }
+      }
+      console.info(
+        `[turn-context] entity-resolver: ` +
+        `${resolvedEntityId != null ? `entityId=${resolvedEntityId}` : "no entity"} ` +
+        `elapsed=${Date.now() - entityResolveStart}ms`
+      );
+
+      // Build recall input: pass classifier domain hints, resolved entityId, + visibility info
       const recallInput: RecallInput = {
         content: cached?.content ?? "",
         senderId: cached?.senderId ?? "",
@@ -341,9 +367,11 @@ export default function register(api: PluginApi): void {
         guildId: "",
         messageId: "",
         domainHints: classification.domainHints,
+        entityId: resolvedEntityId ?? undefined,  // Now correctly wired (#075)
       };
 
-      // ── Step 3: Run all subsystems in parallel ────────────────────────────
+      // ── Step 3: Run remaining subsystems in parallel ─────────────────────────
+      // (Entity resolution ran above to supply entityId to recallInput.)
       // Turn reminders always fire (not gated by helperConfig).
       // Other subsystems are gated by their helperConfig flag.
       //
@@ -352,15 +380,13 @@ export default function register(api: PluginApi): void {
       console.info(
         `[turn-context] Starting parallel subsystems:` +
         ` turn-reminders=always` +
-        ` entity-resolver=${helperConfig.entity_resolver}` +
         ` domain-identifier=${helperConfig.domain_identifier}` +
         ` semantic-recall=${helperConfig.semantic_recall}`
       );
       const subsystemStart = Date.now();
 
-      const [turnRemindersResult, entityContextResult, domainIdentifierResult, recallResult] =
+      const [turnRemindersResult, domainIdentifierResult, recallResult] =
         await Promise.allSettled<[
-          Promise<string | null>,
           Promise<string | null>,
           Promise<DomainResult | null>,
           Promise<string | null>,
@@ -374,18 +400,7 @@ export default function register(api: PluginApi): void {
             return null;
           }),
 
-          // 2. Entity resolution — gated by helperConfig
-          helperConfig.entity_resolver && sessionKey
-            ? resolveEntityContext(sessionKey, senderInfo).catch((err) => {
-                console.error(
-                  "[turn-context] Entity resolution error:",
-                  err instanceof Error ? err.message : String(err)
-                );
-                return null;
-              })
-            : Promise.resolve(null),
-
-          // 3. Domain identifier — gated by helperConfig
+          // 2. Domain identifier — gated by helperConfig
           helperConfig.domain_identifier && cached?.content
             ? identifyDomain(cached.content, classification.domainHints).catch((err) => {
                 console.error(
@@ -396,10 +411,9 @@ export default function register(api: PluginApi): void {
               })
             : Promise.resolve(null as DomainResult | null),
 
-          // 4. Semantic recall — gated by helperConfig
-          // Uses classifier domain hints for domain-scoped recall (runs in parallel
-          // with domain-identifier; full domain_identifier results used for context
-          // injection only, not for scoping the recall query in this turn)
+          // 3. Semantic recall — gated by helperConfig
+          // Uses classifier domain hints and resolved entityId for domain-scoped
+          // and visibility-gated recall (#150, #075)
           helperConfig.semantic_recall && cached?.content
             ? runSemanticRecall(recallInput).catch((err) => {
                 console.error(
@@ -416,8 +430,7 @@ export default function register(api: PluginApi): void {
       // Resolve settled results
       const remindersOk =
         turnRemindersResult.status === "fulfilled" && turnRemindersResult.value != null;
-      const entityOk =
-        entityContextResult.status === "fulfilled" && entityContextResult.value != null;
+      const entityOk = entityContextText != null;
       const domainOk =
         domainIdentifierResult.status === "fulfilled" && domainIdentifierResult.value != null;
       const recallOk =
@@ -428,12 +441,13 @@ export default function register(api: PluginApi): void {
         `[turn-context] Subsystems completed in ${subsystemMs}ms:` +
         ` reminders=${turnRemindersResult.status}` +
         `${remindersOk ? `(${(turnRemindersResult as PromiseFulfilledResult<string>).value!.length}chars)` : ""}` +
-        ` entity=${helperConfig.entity_resolver ? entityContextResult.status : "skipped"}` +
-        `${entityOk ? `(${(entityContextResult as PromiseFulfilledResult<string>).value!.length}chars)` : ""}` +
+        ` entity=${helperConfig.entity_resolver ? (entityOk ? "fulfilled" : "no-entity") : "skipped"}` +
+        `${entityOk ? `(${entityContextText!.length}chars entityId=${resolvedEntityId})` : ""}` +
         ` domain=${helperConfig.domain_identifier ? domainIdentifierResult.status : "skipped"}` +
         `${domainOk ? `(${(domainIdentifierResult as PromiseFulfilledResult<DomainResult>).value!.domains.length}matches)` : ""}` +
         ` recall=${helperConfig.semantic_recall ? recallResult.status : "skipped"}` +
         `${recallOk ? `(${(recallResult as PromiseFulfilledResult<string>).value!.length}chars)` : cached?.content ? "(no results)" : "(skipped, no content)"}`
+      );
       );
 
       // ── Build prependSystemContext: entity + domain + recall ──────────────
@@ -444,7 +458,7 @@ export default function register(api: PluginApi): void {
 
       // Entity identity (who is the sender)
       if (entityOk) {
-        prependSegments.push((entityContextResult as PromiseFulfilledResult<string>).value!);
+        prependSegments.push(entityContextText!);
       }
 
       // Domain routing results

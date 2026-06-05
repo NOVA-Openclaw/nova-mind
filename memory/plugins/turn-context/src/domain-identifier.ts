@@ -205,7 +205,8 @@ function matchKeywords(
  * Returns Map<domainId, similarity>.
  */
 async function matchVectorSimilarity(
-  embedding: number[]
+  embedding: number[],
+  domains: DomainRow[]
 ): Promise<Map<number, number>> {
   const scores = new Map<number, number>();
 
@@ -231,9 +232,11 @@ async function matchVectorSimilarity(
     );
 
     for (const row of result.rows) {
-      const domainId = parseInt(row.source_id, 10);
-      if (!isNaN(domainId)) {
-        scores.set(domainId, row.similarity);
+      // source_id is the domain_topic string (set by seed-domain-embeddings.py),
+      // not a numeric id — look up the DomainRow by topic name.
+      const domain = domains.find((d) => d.domainTopic === row.source_id);
+      if (domain) {
+        scores.set(domain.id, row.similarity);
       }
     }
   } finally {
@@ -295,7 +298,7 @@ export async function identifyDomain(
   let vectorScores = new Map<number, number>();
   try {
     const embedding = await getEmbedding(message);
-    vectorScores = await matchVectorSimilarity(embedding);
+    vectorScores = await matchVectorSimilarity(embedding, domains);
   } catch (err) {
     console.warn(
       "[turn-context] domain-identifier embedding error:",

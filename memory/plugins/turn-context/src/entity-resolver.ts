@@ -122,13 +122,13 @@ export interface SenderInfo {
 export async function resolveEntityContext(
   sessionKey: string,
   info: SenderInfo
-): Promise<string | null> {
+): Promise<{ text: string | null; entityId: number | null }> {
   // Lazy-load entity resolver — graceful degradation if not installed
-  if (!(await ensureEntityResolver())) return null;
+  if (!(await ensureEntityResolver())) return { text: null, entityId: null };
 
   const { senderId, senderName, provider, senderE164 } = info;
 
-  if (!senderId) return null;
+  if (!senderId) return { text: null, entityId: null };
 
   // Cache key includes both sessionKey AND senderId to prevent cross-user collisions
   // in group channels where sessionKey is shared across all participants.
@@ -146,7 +146,7 @@ export async function resolveEntityContext(
     if (Object.keys(identifiers).length === 0) {
       // Unknown provider — no way to resolve
       console.log(`[turn-context] Unknown provider '${provider}', skipping entity resolution`);
-      return null;
+      return { text: null, entityId: null };
     }
 
     try {
@@ -164,7 +164,7 @@ export async function resolveEntityContext(
             `[turn-context] Entity conflict for sender ${senderName || senderId}: ` +
             `${resolveResult.message}`
           );
-          return null;
+          return { text: null, entityId: null };
         }
       }
 
@@ -176,7 +176,7 @@ export async function resolveEntityContext(
         "[turn-context] Entity resolution error:",
         err instanceof Error ? err.message : String(err)
       );
-      return null;
+      return { text: null, entityId: null };
     }
   }
 
@@ -184,7 +184,7 @@ export async function resolveEntityContext(
     console.log(
       `[turn-context] No entity found for sender: ${senderName || senderId}`
     );
-    return null;
+    return { text: null, entityId: null };
   }
 
   // Load entity facts with a 1s timeout
@@ -205,7 +205,7 @@ export async function resolveEntityContext(
 
   const result = formatEntityContext(entity, facts);
   console.log(
-    `[turn-context] Loaded entity context for: ${entity.name} (${senderId})`
+    `[turn-context] Loaded entity context for: ${entity.name} (entityId=${entity.id}) (${senderId})`
   );
-  return result;
+  return { text: result, entityId: entity.id as number };
 }

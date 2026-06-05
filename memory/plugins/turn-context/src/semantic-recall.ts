@@ -222,8 +222,8 @@ function spawnWithTimeout(stdinPayload: string): Promise<RecallResult> {
       reject(err);
     });
 
-    // Write JSON payload to stdin and close it
-    child.stdin.write(JSON.stringify(stdinPayload), "utf-8");
+    // Write JSON payload to stdin and close it (stdinPayload is already a JSON string)
+    child.stdin.write(stdinPayload, "utf-8");
     child.stdin.end();
   });
 }

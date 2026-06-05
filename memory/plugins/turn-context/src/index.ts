@@ -448,7 +448,6 @@ export default function register(api: PluginApi): void {
         ` recall=${helperConfig.semantic_recall ? recallResult.status : "skipped"}` +
         `${recallOk ? `(${(recallResult as PromiseFulfilledResult<string>).value!.length}chars)` : cached?.content ? "(no results)" : "(skipped, no content)"}`
       );
-      );
 
       // ── Build prependSystemContext: entity + domain + recall ──────────────
       // These go BEFORE the base system prompt so the LLM has full context

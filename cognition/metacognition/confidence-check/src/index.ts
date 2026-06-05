@@ -157,7 +157,7 @@ async function evaluateConfidence(
   );
 
   // ── Step 4: Extract prior assistant context for contradiction detection ─────
-  const contradictionCtx = extractContradictionContext(messages);
+  const contradictionCtx = extractContradictionContext(messages, message);
   if (contradictionCtx.hasContext) {
     console.info(
       `[confidence-check] Contradiction context: ${contradictionCtx.priorAssistantMessages.length} prior assistant message(s) loaded`
@@ -627,7 +627,7 @@ interface ContradictionContext {
  * Filters for role === "assistant" only — user messages are intentionally excluded
  * (we detect self-contradictions, not disagreements with user statements).
  */
-function extractContradictionContext(messages: unknown[]): ContradictionContext {
+function extractContradictionContext(messages: unknown[], lastAssistantMessage?: string): ContradictionContext {
   if (!messages || messages.length === 0) {
     return { priorAssistantMessages: [], hasContext: false };
   }
@@ -641,6 +641,8 @@ function extractContradictionContext(messages: unknown[]): ContradictionContext 
     const m = msg as Record<string, unknown>;
     // Only assistant role messages — never user role (TC-272-24)
     if (m.role === "assistant" && typeof m.content === "string" && m.content.trim()) {
+      // Skip the current response to avoid self-comparison (D2 fix)
+      if (lastAssistantMessage && m.content.trim() === lastAssistantMessage.trim()) continue;
       priorAssistantMessages.push(m.content.trim());
     }
   }

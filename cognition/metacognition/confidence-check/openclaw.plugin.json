@@ -1,9 +1,14 @@
 {
   "id": "confidence-check",
   "name": "Confidence Check",
-  "description": "Evaluates response confidence via heuristic pre-screen and LLM evaluation, triggers revision via Socratic questioning",
+  "description": "Two-phase response confidence evaluation: Phase 1 mandatory self-verification, Phase 2 external LLM evaluation with citation/contradiction checking. Triggers Socratic revision via before_agent_finalize.",
   "version": "1.0.0",
   "hooks": ["before_agent_finalize"],
   "activation": { "onStartup": true },
-  "configSchema": { "type": "object", "additionalProperties": false }
+  "configSchema": { "type": "object", "additionalProperties": true },
+  "configRequirements": {
+    "hooks.allowConversationAccess": "Required — enables event.lastAssistantMessage and event.messages",
+    "llm.allowModelOverride": "Required — allows api.runtime.llm.complete() model override",
+    "llm.allowedModels": "Required — must include evaluation model (deepseek/deepseek-v4-flash)"
+  }
 }

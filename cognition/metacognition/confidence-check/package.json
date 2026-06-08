@@ -1,7 +1,7 @@
 {
   "name": "@nova/confidence-check",
   "version": "1.0.0",
-  "description": "Confidence Check plugin: evaluates response confidence via heuristic pre-screen and LLM evaluation, triggers revision via Socratic questioning",
+  "description": "Confidence Check plugin: two-phase evaluation (Phase 1 mandatory self-verification + Phase 2 external LLM evaluation with citation/contradiction checking), triggers Socratic revision. Hooks into before_agent_finalize.",
   "type": "module",
   "openclaw": {
     "extensions": [

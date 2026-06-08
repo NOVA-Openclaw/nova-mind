@@ -112,7 +112,12 @@ async function evaluateConfidence(
   _ctx: PluginContext
 ): Promise<ReviseAction | undefined> {
   const message = event.lastAssistantMessage || "";
-  const runId = event.runId || "unknown";
+  // D2: Missing runId means broken hook context — skip to avoid cross-run state contamination
+  const runId = event.runId;
+  if (!runId) {
+    console.warn("[confidence-check] Missing runId — skipping confidence check to avoid state contamination");
+    return undefined;
+  }
   const messages = Array.isArray(event.messages) ? event.messages : [];
 
   if (!message.trim()) {
@@ -157,10 +162,12 @@ async function evaluateConfidence(
   );
 
   // ── Step 2: Check if max external revisions exhausted ─────────────────────
-  // externalAttempts counts invocations since self-verification (priorAttempts 1+)
-  const externalAttempts = priorAttempts - 1;
+  // externalAttempts counts invocations since self-verification (priorAttempts 1+).
+  // D1: Only subtract 1 for the self-verification pass if it actually ran.
+  const externalAttempts = CONFIG.self_verification_enabled ? priorAttempts - 1 : priorAttempts;
 
-  if (priorAttempts > CONFIG.max_external_revision_attempts + 1) {
+  // D1: Post-framing threshold also depends on whether self-verification ran.
+  if (priorAttempts > CONFIG.max_external_revision_attempts + (CONFIG.self_verification_enabled ? 1 : 0)) {
     // Post-framing pass: framing revision already issued, allow finalization
     console.info("[confidence-check] Post-framing pass, allowing finalization");
     retryAttempts.delete(idempotencyKey); // cleanup
@@ -180,6 +187,7 @@ async function evaluateConfidence(
           "You have been unable to reach high confidence after multiple revisions. " +
           "Frame your response to acknowledge uncertainty: start with 'I'm not fully confident about this, but...' " +
           "and explain what you're uncertain about.",
+        idempotencyKey, // D5: include idempotencyKey for consistency with Phase 1 & Phase 2
         maxAttempts: 1,
       },
     };
@@ -230,12 +238,14 @@ async function evaluateConfidence(
   // ── Step 6: Decide action ───────────────────────────────────────────────────
   if (llmResult.confidence >= CONFIG.confidence_threshold) {
     console.info("[confidence-check] PASS — confidence above threshold");
+    retryAttempts.delete(idempotencyKey); // D3: cleanup on PASS to prevent memory leak
     return undefined;
   }
 
   // Fail → trigger external revision
   retryAttempts.set(idempotencyKey, priorAttempts + 1);
-  const attemptsRemaining = CONFIG.max_external_revision_attempts - externalAttempts;
+  // D4: subtract 1 because the current attempt is being consumed; remaining = future attempts
+  const attemptsRemaining = CONFIG.max_external_revision_attempts - externalAttempts - 1;
 
   console.warn(
     `[confidence-check] FAIL — confidence ${llmResult.confidence}% < threshold ${CONFIG.confidence_threshold}. ` +
@@ -677,10 +687,24 @@ function extractContradictionContext(messages: unknown[], lastAssistantMessage?:
     if (!msg || typeof msg !== "object") continue;
     const m = msg as Record<string, unknown>;
     // Only assistant role messages — never user role (TC-272-24)
-    if (m.role === "assistant" && typeof m.content === "string" && m.content.trim()) {
-      // Skip the current response to avoid self-comparison (D2 fix)
-      if (lastAssistantMessage && m.content.trim() === lastAssistantMessage.trim()) continue;
-      priorAssistantMessages.push(m.content.trim());
+    if (m.role === "assistant") {
+      // D7: handle both string content and Claude-style content arrays
+      let text = "";
+      if (typeof m.content === "string") {
+        text = m.content.trim();
+      } else if (Array.isArray(m.content)) {
+        // Claude-style content array: [{type: "text", text: "..."}]
+        text = (m.content as any[])
+          .filter((b: any) => b && b.type === "text" && typeof b.text === "string")
+          .map((b: any) => b.text)
+          .join("\n")
+          .trim();
+      }
+      if (text) {
+        // Skip the current response to avoid self-comparison
+        if (lastAssistantMessage && text === lastAssistantMessage.trim()) continue;
+        priorAssistantMessages.push(text);
+      }
     }
   }
 
@@ -803,13 +827,16 @@ async function evaluateViaLlm(
 
   const content = rawContent.trim();
 
-  // ── Parse JSON — handle markdown code blocks ───────────────────────────────
+  // ── Parse JSON — robust extraction: find first { and last } in content ──────
+  // D6: handles prose preamble before JSON and avoids ^-anchored regex that fails on prefixed output
   let parsed: LlmEvaluation;
   try {
-    const jsonContent = content
-      .replace(/^```(?:json)?\s*/, "")
-      .replace(/```$/, "")
-      .trim();
+    const firstBrace = content.indexOf("{");
+    const lastBrace = content.lastIndexOf("}");
+    if (firstBrace === -1 || lastBrace === -1 || lastBrace <= firstBrace) {
+      throw new Error(`No JSON object found in LLM response. Raw: ${content.slice(0, 500)}`);
+    }
+    const jsonContent = content.slice(firstBrace, lastBrace + 1);
     parsed = JSON.parse(jsonContent) as LlmEvaluation;
   } catch (e) {
     throw new Error(

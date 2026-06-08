@@ -1,5 +1,50 @@
 # Changelog
 
+### Batch: confidence-check-two-phase (Issues #272, #312)
+
+#### Changed
+- **Confidence-Check Plugin** (`cognition/metacognition/confidence-check/`) — Substantially rewritten for two-phase architecture:
+  - **Two-phase architecture** (#312): Mandatory Phase 1 self-verification pass (priorAttempts=0) always fires before any external evaluation. Phase 1 returns a revision action asking the model to verify truthfulness, sources, assumptions, knowledge boundaries, and self-consistency. No LLM call at Phase 1.
+  - **SDK LLM migration** (#272): Replaced raw HTTP Anthropic API calls with `api.runtime.llm.complete()`. No API key management or raw HTTP in plugin code.
+  - **Citation verification** (#272): Extracts URLs, file paths, code references, and doc references from the response; cross-references against tool calls in `event.messages`. Unverified citations forwarded to LLM evaluator as negative confidence signals.
+  - **Self-contradiction detection** (#272): Extracts prior assistant messages and includes them in the LLM evaluation prompt. User messages are excluded — self-contradictions only.
+  - **Confidence threshold raised** (#272): From 70% to 85%.
+  - **Auto-pass shortcut removed** (#312): Heuristics (hedging density, unsupported assertions) are signals forwarded to the LLM — no longer used to bypass external evaluation.
+
+#### Bug Fixes (D1–D7, merged with #312)
+- **D1 (toggle path + off-by-one):** `self_verification_enabled=false` toggle correctly skips Phase 1; `externalAttempts` and post-framing threshold correctly account for whether Phase 1 ran.
+- **D2 (missing runId guard):** Missing `runId` in hook context causes skip to prevent cross-run state contamination.
+- **D3 (memory leak):** `retryAttempts.delete(idempotencyKey)` now called on PASS to prevent Map growth.
+- **D4 (off-by-one):** `attemptsRemaining` calculation corrected to show remaining future attempts.
+- **D5 (framing idempotencyKey):** Framing revision action now includes `idempotencyKey` for consistency with Phase 1 and Phase 2 actions.
+- **D6 (robust JSON parsing):** LLM response JSON extraction uses brace-scanning (`indexOf("{")`/`lastIndexOf("}")`) instead of a `^`-anchored regex, handling prose preambles before the JSON object.
+- **D7 (Claude content array support):** `extractContradictionContext()` now handles Claude-style assistant message content arrays (`[{type:"text", text:"..."}]`), not just plain strings.
+
+#### State Machine
+```
+priorAttempts === 0  →  Phase 1: Self-verification (always)
+priorAttempts === 1  →  Phase 2: External evaluation; revise if confidence < 85%
+priorAttempts === 2  →  Phase 2: External evaluation; revise if confidence < 85%
+priorAttempts === 3  →  Phase 3: Framing pass
+priorAttempts === 4  →  Post-framing: allow finalization, cleanup
+```
+Maximum hook invocations per run: 5.
+
+#### Config Requirements
+`plugins.entries.confidence-check` in `openclaw.json` now requires:
+- `hooks.allowConversationAccess: true` — enables `event.lastAssistantMessage` and `event.messages`
+- `llm.allowModelOverride: true` — allows `api.runtime.llm.complete()` model override
+- `llm.allowedModels: ["deepseek/deepseek-v4-flash"]` — allowlist for evaluation model
+
+#### Documentation
+- Added `cognition/metacognition/confidence-check/README.md` documenting two-phase architecture, state machine, config requirements, citation verification, and known limitations.
+
+#### Issues Closed
+- #272 — SDK LLM migration, citation verification, self-contradiction detection, threshold raised to 85%
+- #312 — Mandatory self-verification Phase 1 (two-phase architecture)
+
+---
+
 ### Batch: domain-routing-tiered-recall (Issues #150, #140, #168)
 
 #### Added

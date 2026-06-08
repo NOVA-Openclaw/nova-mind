@@ -202,15 +202,24 @@ The `metacognition/` directory contains OpenClaw plugins that add metacognitive 
 
 ### Confidence-Check (`confidence-check`)
 
-Hooks into `before_agent_finalize` to evaluate response confidence before delivery.
+Hooks into `before_agent_finalize` to evaluate response confidence before delivery via a mandatory two-phase pipeline.
 
-**Flow:**
-1. **Heuristic pre-screen** — Counts hedging phrases, calculates density, counts unsupported assertions
-2. **LLM evaluation** — If heuristics are borderline, sends to an LLM for structured confidence scoring (0-100)
-3. **Socratic revision** — If confidence is below threshold, injects revision instructions via Socratic questioning
-4. **Framing fallback** — After max retry attempts, adds uncertainty framing ("I'm not fully confident...")
+**Phase 1 — Self-Verification (always fires, priorAttempts=0):**
+Immediately triggers a revision asking the model to verify its own response for truthfulness, source validity, hidden assumptions, knowledge boundaries, and self-consistency. No LLM call at this phase.
 
-**Config requirement:** `allowConversationAccess: true` must be set in the plugin's OpenClaw config entry.
+**Phase 2 — External Evaluation (priorAttempts 1+):**
+1. Heuristic pre-screen — hedging phrase density and unsupported assertion count forwarded to LLM as signals (no auto-pass shortcut)
+2. Citation verification — URLs, file paths, and doc references cross-checked against tool calls in the message history
+3. Self-contradiction detection — prior assistant messages included in LLM prompt
+4. LLM scoring via `api.runtime.llm.complete()` (0–100 confidence, concerns, strategies)
+5. If `confidence < 85%`: Socratic revision instruction returned
+
+**Phase 3 — Framing (after max external revisions exhausted):**
+Adds uncertainty framing ("I'm not fully confident about this, but..."). Post-framing pass allows finalization.
+
+**State machine:** priorAttempts 0 (self-verify) → 1–2 (external eval) → 3 (framing) → 4 (post-framing/cleanup)
+
+**Config requirements:** `plugins.entries.confidence-check` must include `hooks.allowConversationAccess: true`, `llm.allowModelOverride: true`, and `llm.allowedModels: ["deepseek/deepseek-v4-flash"]`. See [`cognition/metacognition/confidence-check/README.md`](metacognition/confidence-check/README.md) for full configuration reference.
 
 ### Self-Awareness (`self-awareness`)
 

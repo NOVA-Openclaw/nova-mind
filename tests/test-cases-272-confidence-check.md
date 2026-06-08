@@ -4,7 +4,7 @@
 **QA Lead:** Gem  
 **Feature branch:** `feature/issue-272-confidence-check-enhancement`  
 **Commits:** 25e5514, 62f7e48, d6d3ea2  
-**Total test cases:** 52  
+**Total test cases:** 62  
 **Design patterns:** BVA, equivalence partitioning, state transition, decision table
 
 ---
@@ -20,48 +20,66 @@
 | 5 | LLM Evaluation | TC-272-37 – TC-272-43 |
 | 6 | Retry & Revision Logic | TC-272-44 – TC-272-49 |
 | 7 | Error Resilience & Edge Cases | TC-272-50 – TC-272-52 |
+| 8 | Phase 1 Self-Verification | TC-272-53 – TC-272-58 |
+| 9 | State Machine & Regression | TC-272-59 – TC-272-62 |
 
 ---
 
 ## Group 1: Heuristic Pre-Screen
 
-### TC-272-01: Auto-pass — zero hedging, zero unsupported assertions
-**Description:** A factual, confident response with no hedging phrases and all sentences cited or hedged should auto-pass without calling LLM.  
-**Preconditions:** Plugin initialized with default CONFIG.  
+### TC-272-01: Phase 1 fires for factual response; Phase 2 LLM called even with zero hedging *(updated for #312)*
+**Description:** A factual, confident response with zero hedging should still trigger Phase 1 self-verification (priorAttempts=0), then Phase 2 LLM evaluation. There is no auto-pass shortcut in #312 — heuristics are signals only.  
+**Preconditions:** Plugin initialized with default CONFIG (`self_verification_enabled: true`).  
 **Input:**
 ```
 message: "2 + 2 = 4. According to mathematics, this is definitively true."
 event.messages: []
+event.runId: "run-tc01"
 ```
-**Expected:**
+**Phase 1 invocation (priorAttempts=0):**
+- Returns `{ action: "revise", retry: { instruction: "Before finalizing your response, verify..." } }`
+- retryAttempts.set("confidence-run-tc01", 1)
+- Log: "[confidence-check] Phase 1: Mandatory self-verification pass (attempt 0)"
+
+**Phase 2 invocation (priorAttempts=1):**
 - hedging_count = 0, hedging_density = 0.000
-- unsupported_assertions < 3
-- Returns `undefined` (auto-pass, no LLM call)
-- Log: "[confidence-check] Auto-pass (low hedging, few assertions)"
+- unsupported_assertions = value based on sentence detection (signal only)
+- LLM evaluation IS called (no auto-pass path exists)
+- Log: "[confidence-check] Heuristics: hedging=0/... density=0.000..."
 
-**Pass criteria:** `undefined` returned; no LLM invocation.
-
----
-
-### TC-272-02: Auto-pass — hedging density strictly below threshold (BVA lower boundary)
-**Description:** BVA on hedging_density_pass_threshold = 0.02. At density 0.0199 → auto-pass.  
-**Input:**
-```
-message: <word sequence with hedging_density ≈ 0.019 AND unsupported_assertions ≤ 2>
-```
-**Expected:** Returns `undefined` (auto-pass).  
-**Note:** Exact density depends on phrase/word distribution. Use a controlled 100-word message with 1 hedging phrase = density 0.01.
+**Pass criteria:** Phase 1 returns ReviseAction at attempt 0; Phase 2 calls LLM (no auto-pass). `undefined` NOT returned at attempt 0.
 
 ---
 
-### TC-272-03: Not auto-pass — hedging density at pass threshold (BVA: at boundary)
-**Description:** BVA on hedging_density_pass_threshold = 0.02. At density exactly 0.020 → NOT auto-pass → proceed to LLM.  
+### TC-272-02: Phase 2 LLM called regardless of density below pass threshold (BVA — #312 updated) *(updated for #312)*
+**Description:** BVA on hedging_density_pass_threshold = 0.02. Even at density 0.0199 (strictly below the old auto-pass boundary), the LLM is still called in #312 — density is a signal only, not a routing decision.  
 **Input:**
 ```
-message: <100-word message with exactly 2 hedging phrase matches>
-unsupported_assertions ≥ 3
+message: <100-word message with 1 hedging phrase, hedging_density ≈ 0.01>
+event.runId: "run-tc02"
 ```
-**Expected:** Auto-pass NOT triggered; LLM evaluation called.
+**Expected (Phase 2 invocation, priorAttempts=1):**
+- hedging_count ≥ 1, hedging_density ≈ 0.01 (below 0.02)
+- LLM evaluation IS called (no auto-pass at density 0.01 in #312)
+- Heuristics logged but do not gate LLM call
+
+**Pass criteria:** LLM invoked at Phase 2 even with sub-0.02 density. `undefined` not returned without LLM call.
+
+---
+
+### TC-272-03: Phase 2 LLM called at density boundary — no auto-pass path exists (#312) *(updated for #312)*
+**Description:** BVA on hedging_density_pass_threshold = 0.02. At density exactly 0.020, LLM is called. The density threshold is now a signal forwarded to the LLM — no auto-pass exists at any density value. The distinction between below/at the threshold is irrelevant for routing.  
+**Input:**
+```
+message: <100-word message with exactly 2 hedging phrase matches, hedging_density = 0.02>
+event.runId: "run-tc03"
+```
+**Expected (Phase 2 invocation, priorAttempts=1):**
+- hedging_density = 0.02 (at threshold)
+- LLM evaluation IS called (threshold is a signal, not a gate)
+- Heuristic density included in LLM prompt context
+
+**Pass criteria:** LLM invoked. No special behavior at the density boundary.
 
 ---
 
@@ -83,17 +101,27 @@ LLM: throws error
 
 ---
 
-### TC-272-06: Auto-pass — unsupported_assertions exactly 2 (BVA: below 3)
-**Description:** Low hedging AND assertions=2 → auto-pass.  
-**Input:** Message where runHeuristicScreen returns unsupported_assertions=2, hedging_density<0.02.  
-**Expected:** Returns `undefined`.
+### TC-272-06: assertions=2 does NOT auto-pass; Phase 2 LLM still called (#312) *(updated for #312)*
+**Description:** Low hedging AND assertions=2 no longer auto-passes in #312. The LLM is called regardless of assertion count — heuristic values are signals only.  
+**Input:** Message where runHeuristicScreen returns unsupported_assertions=2, hedging_density<0.02. priorAttempts=1 (Phase 2).  
+**Expected:**
+- LLM evaluation IS called (assertion count does not gate the call)
+- Assertion count included in LLM prompt context
+- Result depends on LLM response (pass or revise)
+
+**Pass criteria:** LLM invoked at Phase 2 with assertions=2. No auto-pass.
 
 ---
 
-### TC-272-07: Not auto-pass — unsupported_assertions exactly 3 (BVA: at boundary)
-**Description:** assertions=3 means condition `< 3` is false → not auto-pass → proceed to LLM.  
-**Input:** Message where unsupported_assertions=3, hedging_density<0.02.  
-**Expected:** LLM evaluation called.
+### TC-272-07: assertions=3 → Phase 2 LLM called (signal only, no routing decision) *(updated for #312)*
+**Description:** In #312, the "not auto-pass" concept is obsolete — there is no auto-pass to gate on. assertions=3 is a signal forwarded to the LLM evaluator. The assertion count boundary (< 3 vs. ≥ 3) has no routing significance.  
+**Input:** Message where unsupported_assertions=3, hedging_density<0.02. priorAttempts=1 (Phase 2).  
+**Expected:**
+- LLM evaluation IS called (same as assertions=2; assertion count does not gate the call)
+- Assertion count included in LLM prompt context
+- Routing is identical at assertions=2 and assertions=3
+
+**Pass criteria:** LLM invoked. Behavior identical to TC-272-06.
 
 ---
 
@@ -308,10 +336,16 @@ LLM: throws error
 
 ---
 
-### TC-272-36: Non-string content assistant messages skipped
-**Description:** Assistant message where content is not a string (e.g., content = [{type:"text", text:"..."}]) → skipped.  
-**Input:** `{ role: "assistant", content: [{ type: "text", text: "Hello" }] }`.  
-**Expected:** Not added to priorAssistantMessages (typeof m.content !== "string").
+### TC-272-36: Claude-style content arrays in assistant messages extracted correctly (D7 fix) *(updated for #312 D7)*
+**Description:** D7 changed the behavior: assistant messages with Claude-style content arrays (`[{type:"text", text:"..."}]`) are now **parsed and extracted**, not skipped. Text blocks are concatenated and added to `priorAssistantMessages`.  
+**Input:** `{ role: "assistant", content: [{ type: "text", text: "Hello" }, { type: "text", text: " world" }] }`.  
+**Expected:**
+- Extracted text = "Hello\n world" (blocks joined with newline)
+- Entry added to priorAssistantMessages: `["Hello\n world"]`
+- hasContext = true
+
+**Note:** Non-text block types (e.g., `{ type: "tool_use", ... }`) are filtered out during concatenation — only `type === "text"` blocks contribute.  
+**Pass criteria:** priorAssistantMessages.length = 1; content extracted from array (not skipped).
 
 ---
 
@@ -327,15 +361,22 @@ LLM: throws error
 
 ---
 
-### TC-272-38: JSON in markdown code block parsed correctly
-**Description:** LLM wraps JSON in ````json ... ```` block → strip markers, parse.  
-**Input LLM response:**
+### TC-272-38: JSON in prose preamble or markdown code block parsed correctly (D6 fix) *(updated for #312 D6)*
+**Description:** D6 replaced regex-based JSON extraction with brace-scanning (`content.indexOf("{")` / `content.lastIndexOf("}")`) which handles both markdown code fences and prose preambles before the JSON object.  
+**Input LLM response A (markdown code block):**
 ```
 ```json
 {"confidence": 65, "concerns": [], "reasoning_strategies": []}
 ```
 ```
-**Expected:** { confidence: 65, concerns: [], reasoning_strategies: [] }. No parse error.
+**Input LLM response B (prose preamble, D6-specific):**
+```
+Here is my evaluation:
+{"confidence": 65, "concerns": [], "reasoning_strategies": []}
+```
+**Expected for both:** `{ confidence: 65, concerns: [], reasoning_strategies: [] }`. No parse error.  
+**Implementation note:** D6 extracts JSON by scanning for first `{` and last `}` in the response content, then parsing the substring. This handles both code fence wrappers and prose preambles.  
+**Pass criteria:** Both input variants parsed correctly; no "Failed to parse LLM JSON response" error.
 
 ---
 
@@ -376,23 +417,27 @@ LLM: throws error
 
 ## Group 6: Retry & Revision Logic
 
-### TC-272-44: Confidence < threshold → Socratic questioning instruction
-**Description:** LLM returns confidence=70 (< 85 threshold) on first attempt → Socratic revision instruction returned.  
-**Input:** priorAttempts = 0, LLM returns confidence = 70.  
+### TC-272-44: Confidence < threshold → Socratic questioning instruction (Phase 2, external attempt 1/2) *(updated for #312)*
+**Description:** LLM returns confidence=70 (< 85 threshold) at Phase 2 first external evaluation (priorAttempts=1). priorAttempts=0 now fires Phase 1 self-verification, not external LLM — external evaluation starts at priorAttempts=1.  
+**Input:** priorAttempts = 1 (retryAttempts.get() = 1, set by Phase 1), LLM returns confidence = 70.  
 **Expected:**
-- retryAttempts.get(idempotencyKey) = 1 (incremented)
-- Returns `{ action: "revise", retry: { instruction: "Your self-assessment scored 70% confidence (threshold: 85%)...\nConcerns:\n...\nWhat assumptions are you making..." } }`
-- Log: "FAIL — confidence 70% < threshold 85. Triggering revision (attempt 1/3)"
+- externalAttempts = priorAttempts - 1 = 0 (first external attempt)
+- attemptsRemaining = max_external_revision_attempts - externalAttempts - 1 = 2 - 0 - 1 = 1
+- retryAttempts.get(idempotencyKey) = 2 after this call
+- Returns `{ action: "revise", retry: { instruction: "Your self-assessment scored 70% confidence (threshold: 85%)...\nConcerns:\n...\n(1 revision attempt(s) available)" } }`
+- Log: "[confidence-check] FAIL — confidence 70% < threshold 85. Triggering external revision (external attempt 1/2)"
 
 ---
 
-### TC-272-45: Second revision attempt tracked correctly
-**Description:** On attempt 2, priorAttempts = 1 → attemptsRemaining = 2.  
-**Input:** priorAttempts = 1 (retryAttempts.get() = 1), LLM returns confidence = 60.  
+### TC-272-45: Second external revision attempt tracked correctly (Phase 2, external attempt 2/2) *(updated for #312)*
+**Description:** On Phase 2 second external evaluation (priorAttempts=2), attemptsRemaining = 0. This is the last external revision before framing.  
+**Input:** priorAttempts = 2 (retryAttempts.get() = 2, set after Phase 1 + external attempt 1), LLM returns confidence = 60.  
 **Expected:**
-- retryAttempts.get(idempotencyKey) = 2 after this call
-- Instruction mentions "(2 revision attempt(s) available)"
-- Log: "Triggering revision (attempt 2/3)"
+- externalAttempts = priorAttempts - 1 = 1 (second external attempt)
+- attemptsRemaining = max_external_revision_attempts - externalAttempts - 1 = 2 - 1 - 1 = 0
+- retryAttempts.get(idempotencyKey) = 3 after this call
+- Instruction mentions "(0 revision attempt(s) available)"
+- Log: "[confidence-check] FAIL — confidence 60% < threshold 85. Triggering external revision (external attempt 2/2)"
 
 ---
 
@@ -416,13 +461,15 @@ LLM: throws error
 
 ---
 
-### TC-272-48: Confidence ≥ threshold → PASS, return undefined
-**Description:** LLM returns confidence=90 (≥ 85) → PASS, no revision.  
-**Input:** priorAttempts = 0, LLM returns confidence = 90.  
+### TC-272-48: Confidence ≥ threshold → PASS, return undefined, retryAttempts cleaned up (D3) *(updated for D3)*
+**Description:** LLM returns confidence=90 (≥ 85) → PASS, no revision. D3 fix: `retryAttempts.delete(idempotencyKey)` IS called on PASS to prevent Map accumulation.  
+**Input:** priorAttempts = 1 (Phase 2 external eval), LLM returns confidence = 90.  
 **Expected:**
 - Returns `undefined`
-- retryAttempts NOT modified
-- Log: "[confidence-check] PASS — confidence above threshold"
+- `retryAttempts.delete(idempotencyKey)` called (D3 fix — Map entry removed)
+- Log: "[confidence-check] PASS — confidence above threshold"  
+
+**Note:** Prior to D3, retryAttempts was NOT modified on PASS, causing Map growth on successful runs. This behavior is now fixed.
 
 ---
 
@@ -464,14 +511,155 @@ LLM: throws error
 
 ---
 
+---
+
+## Group 8: Phase 1 Self-Verification *(new for #312)*
+
+### TC-272-53: Phase 1 fires at priorAttempts=0 and returns self-verification ReviseAction
+**Description:** At priorAttempts=0, the hook must always return a ReviseAction with the self-verification instruction, regardless of message content or heuristics.  
+**Preconditions:** Plugin initialized with `self_verification_enabled: true` (default). `runId` present.  
+**Input:**
+```
+message: "The capital of France is Paris."
+event.runId: "run-p1-01"
+```
+**Expected:**
+- Returns `{ action: "revise", retry: { instruction: "Before finalizing your response, verify the following:\n\n1. TRUTHFULNESS...", idempotencyKey: "confidence-run-p1-01", maxAttempts: 1 } }`
+- retryAttempts.set("confidence-run-p1-01", 1)
+- Log: "[confidence-check] Phase 1: Mandatory self-verification pass (attempt 0)"
+- `pluginLlm.complete()` NOT called
+
+**Pass criteria:** ReviseAction returned at attempt 0; LLM not invoked; state advanced to 1.
+
+---
+
+### TC-272-54: self_verification_enabled=false → Phase 1 skipped, LLM called at priorAttempts=0
+**Description:** When `self_verification_enabled=false`, the Phase 1 block is skipped and Phase 2 external evaluation runs immediately at priorAttempts=0.  
+**Preconditions:** CONFIG.self_verification_enabled = false.  
+**Input:** priorAttempts = 0, message with borderline confidence.  
+**Expected:**
+- Phase 1 block (`if (priorAttempts === 0 && CONFIG.self_verification_enabled)`) evaluates false—skipped
+- Phase 2 runs: heuristics computed, LLM called
+- `externalAttempts = priorAttempts - 0 = 0` (no self-verify offset)
+- Framing threshold: `priorAttempts > max_external_revision_attempts + 0 = 2`
+
+**Pass criteria:** LLM called at priorAttempts=0; no self-verification ReviseAction returned.
+
+---
+
+### TC-272-55: Phase 1 instruction contains all 5 verification categories
+**Description:** The self-verification instruction must contain all 5 required categories: TRUTHFULNESS, SOURCES, ASSUMPTIONS, KNOWLEDGE BOUNDARIES, SELF-CONSISTENCY.  
+**Input:** Any non-empty message, priorAttempts=0.  
+**Expected:** Returned instruction string contains all 5 numbered categories verbatim.  
+**Pass criteria:** `instruction.includes("TRUTHFULNESS")`, `instruction.includes("SOURCES")`, `instruction.includes("ASSUMPTIONS")`, `instruction.includes("KNOWLEDGE BOUNDARIES")`, `instruction.includes("SELF-CONSISTENCY")` — all true.
+
+---
+
+### TC-272-56: Phase 1 sets retryAttempts.set(key, 1) → state machine initialized correctly
+**Description:** After Phase 1, retryAttempts must be set to 1 so Phase 2 (at priorAttempts=1) proceeds correctly.  
+**Input:** priorAttempts=0 (Map empty for this key), message non-empty.  
+**Expected:**
+- Before: retryAttempts.get("confidence-${runId}") = undefined (or 0)
+- After Phase 1 invocation: retryAttempts.get("confidence-${runId}") = 1
+
+**Pass criteria:** Map entry = 1 after Phase 1 fires.
+
+---
+
+### TC-272-57: Phase 1 does NOT call pluginLlm.complete (no LLM at attempt 0)
+**Description:** Phase 1 must return a ReviseAction without making any LLM call. The LLM is reserved for Phase 2 external evaluation.  
+**Input:** priorAttempts=0, `self_verification_enabled=true`.  
+**Expected:** `pluginLlm.complete` not invoked during Phase 1 handler execution.  
+**Pass criteria:** Zero LLM calls at attempt 0. (Verify by spy/mock on pluginLlm.complete.)
+
+---
+
+### TC-272-58: Phase 1 does not fire when priorAttempts > 0 (correct Phase 1/2 gating)
+**Description:** Phase 1 fires ONLY at priorAttempts=0. At priorAttempts=1 or higher, the Phase 1 block is skipped and Phase 2 runs.  
+**Input:** priorAttempts=1, `self_verification_enabled=true`.  
+**Expected:**
+- Phase 1 block (`if (priorAttempts === 0 && ...)`) evaluates false — skipped
+- Phase 2 heuristics and LLM evaluation run normally
+- No self-verification instruction returned
+
+**Pass criteria:** Phase 2 (heuristics + LLM) runs at priorAttempts=1; no Phase 1 ReviseAction.
+
+---
+
+## Group 9: State Machine & Regression *(new for #312)*
+
+### TC-272-59: Full state machine traversal 0→1→2→3→4
+**Description:** End-to-end state machine: Phase 1 (attempt 0) → Phase 2 external 1/2 (attempt 1, LLM fails) → Phase 2 external 2/2 (attempt 2, LLM fails) → Framing (attempt 3) → Post-framing (attempt 4).  
+**Preconditions:** LLM returns confidence < 85 for both Phase 2 invocations.  
+**Sequence:**
+1. Invocation 1 (priorAttempts=0): Phase 1 self-verify → ReviseAction; retryAttempts=1
+2. Invocation 2 (priorAttempts=1): Phase 2 external 1/2; LLM → 60% → ReviseAction; retryAttempts=2
+3. Invocation 3 (priorAttempts=2): Phase 2 external 2/2; LLM → 60% → ReviseAction; retryAttempts=3
+4. Invocation 4 (priorAttempts=3): Framing → ReviseAction ("I'm not fully confident..."); retryAttempts=4
+5. Invocation 5 (priorAttempts=4): Post-framing → `undefined`; retryAttempts.delete() called
+
+**Expected:** Exact sequence above; no infinite loop; Map entry cleaned up after invocation 5.  
+**Pass criteria:** 5 invocations, correct action at each step, Map empty after step 5.
+
+---
+
+### TC-272-60: PASS path → retryAttempts.delete() called (D3 regression guard)
+**Description:** When Phase 2 LLM returns confidence ≥ 85%, `retryAttempts.delete(idempotencyKey)` must be called to prevent Map accumulation across successful runs.  
+**Input:** priorAttempts=1, LLM returns confidence=95.  
+**Expected:**
+- `retryAttempts.delete("confidence-${runId}")` called
+- Returns `undefined`
+- Map entry no longer exists for this runId  
+**Pass criteria:** Map entry absent after PASS; no memory leak on successful responses.
+
+---
+
+### TC-272-61: Claude-style content array in assistant message → extracted into contradiction context (D7)
+**Description:** D7 added support for Claude-style `content` arrays in assistant messages within `extractContradictionContext()`. Text blocks should be concatenated and added to `priorAssistantMessages`.  
+**Input:**
+```
+messages: [
+  { role: "assistant", content: [
+    { type: "text", text: "The answer is 42." },
+    { type: "tool_use", name: "web_search", input: {} },
+    { type: "text", text: " This is confirmed." }
+  ]}
+]
+```
+**Expected:**
+- Non-text blocks (`tool_use`) filtered out
+- Text blocks joined: `"The answer is 42.\n This is confirmed."`
+- priorAssistantMessages = ["The answer is 42.\n This is confirmed."]
+- hasContext = true  
+**Pass criteria:** Text extracted from content array; tool_use block not included.
+
+---
+
+### TC-272-62: Prose preamble before LLM JSON response → brace extraction succeeds (D6)
+**Description:** D6 replaced `^`-anchored regex with `indexOf("{")`/`lastIndexOf("}")` brace scanning. This handles LLM responses where prose precedes the JSON object.  
+**Input LLM response:**
+```
+I have evaluated the response carefully. Here is my assessment:
+{"confidence": 72, "concerns": ["Uncertain claim"], "reasoning_strategies": ["Add sources"]}
+```
+**Expected:** Parsed successfully: `{ confidence: 72, concerns: ["Uncertain claim"], reasoning_strategies: ["Add sources"] }`. No parse error despite prose preamble.  
+**Pass criteria:** `evaluateViaLlm()` returns parsed result; no "Failed to parse LLM JSON response" error.
+
+---
+
 ## Exit Criteria
 
-All of the following must be true before this feature is approved for merge:
+All of the following must be true before this feature is considered QA-complete:
 
-1. TC-272-01, TC-272-08, TC-272-11, TC-272-13, TC-272-20, TC-272-22: PASS (basic auto-pass + citation extraction)
-2. TC-272-33: PASS (commit 62f7e48 regression guard — current response filter)
-3. TC-272-39: PASS (commit d6d3ea2 regression guard — result.text fix)
-4. TC-272-44, TC-272-46, TC-272-47, TC-272-48: PASS (full revision lifecycle)
-5. TC-272-52: PASS (error resilience — gateway must not crash)
-6. All S1/S2 defects resolved; no open P1/P2 bugs
-7. No regression on previously passing integration tests
+1. TC-272-53: PASS (Phase 1 baseline — fires at attempt 0, returns self-verification action)
+2. TC-272-01, TC-272-08, TC-272-11, TC-272-13, TC-272-20, TC-272-22: PASS (basic Phase 1/2 flow + citation extraction)
+3. TC-272-33: PASS (commit 62f7e48 regression guard — current response filter)
+4. TC-272-39: PASS (commit d6d3ea2 regression guard — result.text fix)
+5. TC-272-44, TC-272-46, TC-272-47, TC-272-48: PASS (full revision lifecycle with updated priorAttempts model)
+6. TC-272-59: PASS (full state machine 0→4 end-to-end)
+7. TC-272-60: PASS (D3 regression guard — retryAttempts.delete on PASS)
+8. TC-272-52: PASS (error resilience — gateway must not crash)
+9. All S1/S2 defects resolved; no open P1/P2 bugs
+10. No regression on previously passing integration tests
+
+*Test case update history: TCs 01–03, 06–07, 36, 38, 44, 45, 48 updated for #312 two-phase architecture and D1–D7 fixes. Groups 8–9 (TCs 53–62) added to cover Phase 1 self-verification, full state machine, and D-series regression guards.*

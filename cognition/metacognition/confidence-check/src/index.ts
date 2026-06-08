@@ -3,33 +3,49 @@
  *
  * Hooks into before_agent_finalize to evaluate response confidence.
  *
- * Flow:
+ * Two-phase evaluation architecture:
+ *
+ * Phase 1 — Self-verification (priorAttempts === 0, always runs):
+ *   Immediately returns a revision action with explicit self-verification questions.
+ *   No heuristic pre-screen, no external LLM call — just triggers the model to
+ *   verify its own response for truthfulness, sources, assumptions, knowledge
+ *   boundaries, and self-consistency.
+ *
+ * Phase 2 — External evaluation (priorAttempts 1+):
  *   1. Heuristic pre-screen: count hedging phrases, calculate density,
- *      count unsupported assertions (factual claims without citation markers)
- *   2. If hedging density < low_threshold AND assertion_count < threshold → PASS (return undefined)
- *   3. If hedging density > high_threshold → FAIL → skip to LLM evaluation
- *   4. Otherwise → borderline → proceed to LLM evaluation
- *   5. Citation/reference verification: extract citations from response, cross-reference
- *      against tool calls in event.messages (feeds into LLM prompt as additional signal)
- *   6. Self-contradiction detection: extract prior assistant messages for LLM to evaluate
- *      (feeds into LLM prompt — only assistant-vs-assistant, not assistant-vs-user)
- *   7. LLM evaluation: use api.runtime.llm.complete() with structured JSON prompt
+ *      count unsupported assertions (kept as signal for external evaluator —
+ *      no longer used as an auto-pass shortcut)
+ *   2. Check if max external revisions exhausted → framing/post-framing
+ *   3. Citation/reference verification: extract citations from response,
+ *      cross-reference against tool calls in event.messages
+ *   4. Self-contradiction detection: extract prior assistant messages for
+ *      LLM to evaluate (assistant-vs-assistant only, not assistant-vs-user)
+ *   5. LLM evaluation: use api.runtime.llm.complete() with structured JSON prompt
  *      Ask for: { "confidence": 0-100, "concerns": [...], "reasoning_strategies": [...] }
- *   8. If confidence < threshold:
- *      - Return revision instruction via Socratic questioning
- *      - Track retry count per runId (idempotencyKey)
- *   9. If maxAttempts exhausted:
- *      - Return framing instruction: "I'm not fully confident about this, but..."
- *  10. After final framing pass, return undefined to allow finalization
+ *   6. If confidence < threshold → revision instruction via Socratic questioning
+ *
+ * Phase 3 — Framing pass (max_external_revision_attempts exhausted):
+ *   Return framing instruction: "I'm not fully confident about this, but..."
+ *   Post-framing pass allows finalization.
+ *
+ * State machine:
+ *   priorAttempts === 0  →  self-verification revise (always)
+ *   priorAttempts === 1  →  run external evaluator; revise if < threshold
+ *   priorAttempts === 2  →  run external evaluator; revise if < threshold
+ *   priorAttempts === 3  →  framing pass (max_external exhausted)
+ *   priorAttempts === 4  →  post-framing, allow finalization, cleanup
  *
  * Config (hardcoded defaults):
- *   confidence_threshold: 85    (raised from 70 in issue #272)
- *   max_revision_attempts: 3
- *   hedging_density_pass_threshold: 0.02
+ *   confidence_threshold: 85                    (raised from 70 in issue #272)
+ *   max_external_revision_attempts: 2
+ *   self_verification_enabled: true
+ *   hedging_density_pass_threshold: 0.02        (signal only, no longer an auto-pass shortcut)
  *   hedging_density_fail_threshold: 0.08
  *   evaluation_model: deepseek/deepseek-v4-flash
  *
- * Issues: #75, #272
+ * Total max hook invocations: 1 (self-verify) + 2 (external) + 1 (framing) + 1 (post-framing) = 5
+ *
+ * Issues: #75, #272, #312
  */
 
 // REQUIRED CONFIG: openclaw.json must include:
@@ -45,12 +61,13 @@
 // ══════════════════════════════════════════════════════════════════════════════
 
 const CONFIG = {
-  confidence_threshold: 85,              // LLM confidence score threshold (raised from 70, issue #272)
-  max_revision_attempts: 3,              // Max Socratic revision attempts
-  hedging_density_pass_threshold: 0.02,  // Below this → auto-pass
-  hedging_density_fail_threshold: 0.08,  // Above this → auto-fail to LLM
+  confidence_threshold: 85,                    // LLM confidence score threshold (raised from 70, issue #272)
+  max_external_revision_attempts: 2,           // Max external LLM revision attempts (after self-verification)
+  self_verification_enabled: true,             // Enable mandatory self-verification pass at attempt 0
+  hedging_density_pass_threshold: 0.02,        // Signal only (no longer an auto-pass shortcut)
+  hedging_density_fail_threshold: 0.08,        // Above this → auto-fail to LLM
   evaluation_model: "deepseek/deepseek-v4-flash",
-  max_prior_messages: 10,               // Max prior messages to check for contradictions
+  max_prior_messages: 10,                      // Max prior messages to check for contradictions
 };
 
 // Per-run retry tracking: idempotencyKey → attempt count
@@ -107,33 +124,53 @@ async function evaluateConfidence(
   const idempotencyKey = `confidence-${runId}`;
   const priorAttempts = retryAttempts.get(idempotencyKey) || 0;
 
-  // ── Step 1: Heuristic pre-screen ────────────────────────────────────────────
+  // ── Phase 1: Self-verification (attempt 0, always runs) ───────────────────
+  // No heuristic pre-screen, no external LLM call — immediately trigger a
+  // revision so the model can verify its own response before external evaluation.
+  if (priorAttempts === 0 && CONFIG.self_verification_enabled) {
+    console.info("[confidence-check] Phase 1: Mandatory self-verification pass (attempt 0)");
+    retryAttempts.set(idempotencyKey, 1);
+    return {
+      action: "revise",
+      retry: {
+        instruction:
+          "Before finalizing your response, verify the following:\n\n" +
+          "1. TRUTHFULNESS: Are all claims in your response truthful and factual? If you stated something as fact, is it actually true to the best of your knowledge?\n" +
+          "2. SOURCES: Are all cited sources, file paths, URLs, and references real? Did you actually look them up, or are you assuming they exist?\n" +
+          "3. ASSUMPTIONS: What assumptions are you making that you haven't explicitly stated? Surface any hidden assumptions.\n" +
+          "4. KNOWLEDGE BOUNDARIES: Distinguish clearly between what you actually know, what you inferred, and what you're guessing. If anything is uncertain, say so explicitly.\n" +
+          "5. SELF-CONSISTENCY: Does your response contradict anything you said earlier in this conversation?\n\n" +
+          "Revise your response to address any issues found. If everything checks out, you may restate your response with confidence.",
+        idempotencyKey,
+        maxAttempts: 1,
+      },
+    };
+  }
+
+  // ── Phase 2: External evaluation (priorAttempts >= 1) ─────────────────────
+
+  // ── Step 1: Heuristic pre-screen (signal only — no auto-pass shortcut) ────
   const heuristics = runHeuristicScreen(message);
   console.info(
     `[confidence-check] Heuristics: hedging=${heuristics.hedging_count}/${heuristics.word_count} ` +
       `density=${heuristics.hedging_density.toFixed(3)} assertions=${heuristics.unsupported_assertions}`
   );
 
-  // Auto-pass: very low hedging, low unsupported assertions
-  if (
-    heuristics.hedging_density < CONFIG.hedging_density_pass_threshold &&
-    heuristics.unsupported_assertions < 3
-  ) {
-    console.info("[confidence-check] Auto-pass (low hedging, few assertions)");
-    return undefined;
-  }
+  // ── Step 2: Check if max external revisions exhausted ─────────────────────
+  // externalAttempts counts invocations since self-verification (priorAttempts 1+)
+  const externalAttempts = priorAttempts - 1;
 
-  // ── Step 2: Check if max revisions exhausted ───────────────────────────────
-  if (priorAttempts > CONFIG.max_revision_attempts) {
-    // Framing pass already happened, allow finalization
+  if (priorAttempts > CONFIG.max_external_revision_attempts + 1) {
+    // Post-framing pass: framing revision already issued, allow finalization
     console.info("[confidence-check] Post-framing pass, allowing finalization");
     retryAttempts.delete(idempotencyKey); // cleanup
     return undefined;
   }
-  if (priorAttempts === CONFIG.max_revision_attempts) {
-    // This IS the framing pass
+
+  if (externalAttempts >= CONFIG.max_external_revision_attempts) {
+    // This IS the framing pass (priorAttempts === max_external_revision_attempts + 1 === 3)
     console.warn(
-      `[confidence-check] Max revisions (${CONFIG.max_revision_attempts}) exhausted for ${runId}, framing response`
+      `[confidence-check] Max external revisions (${CONFIG.max_external_revision_attempts}) exhausted for ${runId}, framing response`
     );
     retryAttempts.set(idempotencyKey, priorAttempts + 1);
     return {
@@ -196,13 +233,13 @@ async function evaluateConfidence(
     return undefined;
   }
 
-  // Fail → trigger revision
+  // Fail → trigger external revision
   retryAttempts.set(idempotencyKey, priorAttempts + 1);
-  const attemptsRemaining = CONFIG.max_revision_attempts - priorAttempts;
+  const attemptsRemaining = CONFIG.max_external_revision_attempts - externalAttempts;
 
   console.warn(
     `[confidence-check] FAIL — confidence ${llmResult.confidence}% < threshold ${CONFIG.confidence_threshold}. ` +
-      `Triggering revision (attempt ${priorAttempts + 1}/${CONFIG.max_revision_attempts})`
+      `Triggering external revision (external attempt ${externalAttempts + 1}/${CONFIG.max_external_revision_attempts})`
   );
 
   const concernsBlock =

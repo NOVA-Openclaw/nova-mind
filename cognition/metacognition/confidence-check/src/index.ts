@@ -758,11 +758,13 @@ async function evaluateViaLlm(
     temperature: 0.3,
   });
 
-  if (!result.content) {
+  // SDK returns result.text (not result.content)
+  const rawContent = (result as any).text ?? (result as any).content ?? "";
+  if (!rawContent) {
     throw new Error("LLM response missing content");
   }
 
-  const content = result.content.trim();
+  const content = rawContent.trim();
 
   // ── Parse JSON — handle markdown code blocks ───────────────────────────────
   let parsed: LlmEvaluation;
@@ -809,7 +811,8 @@ interface LlmCompleteOpts {
 }
 
 interface LlmCompleteResult {
-  content?: string;
+  text?: string;
+  content?: string;  // legacy compat
   provider?: string;
   model?: string;
   usage?: Record<string, unknown>;

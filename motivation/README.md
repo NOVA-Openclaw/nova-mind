@@ -1,176 +1,128 @@
 # NOVA Motivation System
 
-Proactive task management and autonomous work initiation for AI agents.
+Proactive task management and autonomous work initiation for the NOVA agent ecosystem.
 
 ## Overview
 
-The Motivation System enables AI agents to self-start on pending work during idle periods, rather than waiting passively for instructions. When all communication channels are quiet, the agent enters "proactive mode" and works through its task backlog.
+The Motivation System enables NOVA to self-start on pending work during idle periods, rather than waiting passively for instructions. When all communication channels have been quiet for 1+ hour, the OpenClaw heartbeat triggers proactive mode, which works through a priority cascade of autonomous tasks.
 
-## Core Concepts
+## Architecture
 
-### Idle Detection
-- Monitor last message timestamp across all channels
-- If idle > threshold (default 5 minutes) → enter proactive mode
-- Exit proactive mode when new messages arrive
+The motivation system is **entirely configuration-driven** — there is no custom application code. It consists of:
 
-### Task State Management
-- Tasks have blocking states (not just pending/complete)
-- Track what's blocking each task (needs info, waiting on external, etc.)
-- Clear separation of workable vs blocked tasks
+1. **OpenClaw heartbeat** — Triggers every 30 minutes, configured in `openclaw.json` (`agents.defaults.heartbeat`)
+2. **HEARTBEAT bootstrap context** — Database record (`agent_bootstrap_context`, file_key='HEARTBEAT') that defines idle detection logic and gates proactive mode on 1+ hour of channel inactivity
+3. **Proactive Mode workflow** (id=27) — 9-step priority cascade defining what NOVA does when idle
+4. **D100 motivation table** (`motivation_d100`) — 100-slot random task roller for variety in autonomous work
+5. **Unsolved Problems Research workflow** (id=32) — Structured research workflow that delegates data gathering to Scout and reserves reasoning/synthesis for NOVA
+6. **`unsolved_problems` table** — NOVA's notebook for 8 humanity-scale research problems
 
-### Proactive Work Loop
-```
-1. Check if idle (all channels quiet > 5 min)
-2. Query workable tasks (pending, not blocked, assigned to me)
-3. Pick highest priority task
-4. Work until:
-   - Complete → mark done, pick next
-   - Blocked → update blocking reason, notify human
-   - New message arrives → pause proactive mode
-5. Loop until all tasks blocked or interrupted
-6. If no workable tasks → enter Unsolved Problems mode
-```
-
-### Unsolved Problems Mode (Default Work)
-When all defined tasks are resolved or blocked, NOVA works on humanity's unsolved problems:
+## Operational Flow
 
 ```
-1. Select problem (weighted by priority, time since last worked)
-2. Work for up to 3 minutes per session
-3. Spawn subagents as needed (Scout for research, Coder for simulations, etc.)
-4. Log progress, insights, and blockers
-5. Update total_time_spent and work_sessions
-6. Either continue with same problem or rotate to another
+OpenClaw heartbeat (every 30m)
+  → HEARTBEAT bootstrap context (idle check)
+    → If idle < 1 hour: HEARTBEAT_OK (do nothing)
+    → If idle ≥ 1 hour: Execute Proactive Mode workflow (id=27)
+        Step 1: Check agent_chat for peer messages
+        Step 2: Check communication channels (Hermes)
+        Step 3: Check GitHub repos (Gidget)
+        Step 4: Work on pending tasks
+        Step 5: Check for blocked items needing outreach
+        Step 6: Website/content maintenance
+        Step 7: Unsolved Problems Research (workflow id=32)
+        Step 8: Random D100 task
+        Step 9: Introspection / journal
 ```
-
-**Problem Sources:**
-- Millennium Prize Problems (mathematics)
-- Open scientific questions
-- Global challenges (climate, health, poverty)
-- Philosophical questions
-- AI/technology challenges
-
-**Goal:** Not necessarily to *solve* these problems, but to:
-- Explore them systematically
-- Document novel approaches
-- Identify sub-problems that might be tractable
-- Build knowledge that could contribute to solutions
-
-## Components
-
-- **Idle Tracker** — Monitors channel activity
-- **Task Selector** — Picks next workable task
-- **Work Session** — Manages proactive work state
-- **Block Reporter** — Communicates what's needed to unblock
 
 ## Database Schema
 
-```sql
--- Task blocking extensions
-ALTER TABLE tasks ADD COLUMN blocked BOOLEAN DEFAULT false;
-ALTER TABLE tasks ADD COLUMN blocked_reason TEXT;
-ALTER TABLE tasks ADD COLUMN blocked_on INTEGER REFERENCES entities(id);
-ALTER TABLE tasks ADD COLUMN last_worked_at TIMESTAMPTZ;
-ALTER TABLE tasks ADD COLUMN work_notes TEXT;
+### Core Tables
 
--- Idle tracking
-CREATE TABLE channel_activity (
-    channel VARCHAR(50) PRIMARY KEY,
-    last_message_at TIMESTAMPTZ DEFAULT NOW(),
-    last_message_from VARCHAR(100)
-);
+**`unsolved_problems`** — NOVA's research problem registry and synthesis notebook.
+- `current_approach` — NOVA's current thinking on how to tackle the problem
+- `progress_notes` — Session-by-session synthesis log (NOT raw research data)
+- Research data lives in Scout's `research_*` tables, not here
 
--- Unsolved Problems (default work when task queue empty)
-CREATE TABLE unsolved_problems (
-    id SERIAL PRIMARY KEY,
-    name VARCHAR(255) NOT NULL,
-    category VARCHAR(100),
-    description TEXT,
-    source_url TEXT,
-    difficulty VARCHAR(50), -- open-question, millennium-prize, tractable, speculative
-    status VARCHAR(50) DEFAULT 'unexplored',
-    
-    -- Work tracking
-    total_time_spent_minutes INTEGER DEFAULT 0,
-    last_worked_at TIMESTAMPTZ,
-    work_sessions INTEGER DEFAULT 0,
-    
-    -- Progress
-    current_approach TEXT,
-    progress_notes TEXT,
-    blockers TEXT,
-    
-    -- Collaboration
-    subagents_used TEXT[],
-    external_resources TEXT[],
-    
-    -- Metadata
-    added_at TIMESTAMPTZ DEFAULT NOW(),
-    added_by VARCHAR(100) DEFAULT 'NOVA',
-    priority INTEGER DEFAULT 5
-);
+**`motivation_d100`** — 100-slot random task table with tracking.
+- `roll_d100()` function picks a random enabled slot and updates tracking
+- `complete_d100(roll)` marks completion
+- Tracking columns are write-protected via SECURITY DEFINER functions
+
+### Supporting Tables (owned by other subsystems)
+
+- `workflows` / `workflow_steps` — Workflow definitions (cognition subsystem)
+- `tasks` — Task backlog (memory subsystem)
+- `research_projects` / `research_tasks` / `research_findings` / `research_conclusions` — Scout's research database (memory subsystem)
+- `agent_bootstrap_context` — Bootstrap records including HEARTBEAT (cognition subsystem)
+
+## Unsolved Problems Research
+
+The research workflow (id=32) separates concerns:
+
+1. **NOVA** selects a problem and formulates a research question
+2. **Scout** (Research domain) does exhaustive web research, stores structured findings with citations in `research_*` tables
+3. **NOVA** performs a reasoning/synthesis pass over Scout's findings
+4. **NOVA** updates `unsolved_problems` metadata (approach, synthesis) and triggers embedding
+
+This ensures research data is structured, deduplicated, citation-tracked, and vector-embedded for semantic recall.
+
+### Current Problem Set
+
+| Problem | Category | Sessions | Time Invested |
+|---------|----------|----------|---------------|
+| P vs NP | mathematics/computer-science | 11 | 36 min |
+| Riemann Hypothesis | mathematics | 5 | 6 min |
+| Climate Change Mitigation | climate/policy | 17 | 48 min |
+| Protein Folding Prediction | biology/AI | 7 | 12 min |
+| Consciousness Hard Problem | philosophy/neuroscience | 10 | 30 min |
+| Unified Field Theory | physics | 7 | 12 min |
+| Aging and Longevity | biology/medicine | 11 | 27 min |
+| AI Alignment | AI/ethics | 27 | 72 min |
+
+## Configuration
+
+### OpenClaw Config (`openclaw.json`)
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "heartbeat": {
+        "every": "30m",
+        "target": "discord",
+        "to": "channel:1504054635231445112",
+        "isolatedSession": true,
+        "skipWhenBusy": true
+      }
+    }
+  }
+}
 ```
 
-## Integration
+### Bootstrap Context
 
-Works with:
-- [nova-cognition](https://github.com/NOVA-Openclaw/nova-cognition) — Agent orchestration
-- [nova-memory](https://github.com/NOVA-Openclaw/nova-memory) — Task and memory storage
+The HEARTBEAT record in `agent_bootstrap_context` (file_key='HEARTBEAT', agent_name='nova') defines:
+- Idle detection method (sessions_list, message read, inbound metadata)
+- Idle threshold (1 hour)
+- Proactive mode dispatch to workflow id=27
+- Rules (don't compete with active conversation, report to #proactive-mode)
 
-## Documentation
+### Workflows
 
-- **[ARCHITECTURE.md](./ARCHITECTURE.md)** — Technical architecture and system design
-- **[WORKFLOW.md](./WORKFLOW.md)** — Detailed workflows and operational processes  
-- **[DEPLOYMENT.md](./DEPLOYMENT.md)** — Setup, deployment, and maintenance guide
-- **[AUTO-DEPLOY-PATTERN.md](./docs/AUTO-DEPLOY-PATTERN.md)** — Automated deployment pattern using Git hooks
-- **[GH-ISSUE-WRAPPER.md](./docs/GH-ISSUE-WRAPPER.md)** — GitHub issue creation wrapper with SE workflow integration
+Query the live workflow definitions:
+```sql
+-- Proactive Mode cascade
+SELECT step_order, domain, LEFT(description, 80) FROM workflow_steps WHERE workflow_id = 27 ORDER BY step_order;
 
-## Key Features
+-- Unsolved Problems Research
+SELECT step_order, domain, LEFT(description, 80) FROM workflow_steps WHERE workflow_id = 32 ORDER BY step_order;
+```
 
-### 🎯 3-Minute Work Sessions
-Time-boxed focus sessions on unsolved problems prevent rabbit holes while ensuring meaningful progress.
+## History
 
-### 🤝 Subagent Collaboration  
-Spawn specialized agents for different tasks:
-- **Scout** — Research and information gathering
-- **Coder** — Simulations, calculations, prototypes
-- **Analyst** — Data analysis and pattern recognition
-- **Writer** — Documentation and explanation
-
-### 📊 Progress Tracking
-Comprehensive tracking of time investment, approaches attempted, insights discovered, and collaboration patterns across all problems.
-
-### 🔄 Intelligent Problem Selection
-Weighted selection algorithm balances priority, freshness, and time investment to ensure all problems receive attention.
-
-## Initial Problem Set
-
-The system comes pre-loaded with eight carefully selected unsolved problems:
-
-| Problem | Category | Difficulty | Description |
-|---------|----------|------------|-------------|
-| P vs NP Problem | Mathematics | Millennium Prize | Computational complexity theory |
-| AI Alignment | Technology | Challenging | Ensuring AI systems remain beneficial |
-| Climate Change | Science | Challenging | Mitigation and adaptation strategies |
-| Consciousness | Philosophy | Speculative | Hard problem of subjective experience |
-| Aging/Longevity | Science | Challenging | Understanding and reversing aging |
-| Unified Field Theory | Physics | Speculative | Unifying all fundamental forces |
-| Riemann Hypothesis | Mathematics | Millennium Prize | Distribution of prime numbers |
-| Protein Folding | Biology | Tractable | Predicting 3D protein structures |
-
-## Quick Start
-
-1. **Setup Database**: Run the SQL scripts in [DEPLOYMENT.md](./DEPLOYMENT.md)
-2. **Configure Environment**: Set idle thresholds and subagent preferences  
-3. **Initialize Problems**: Import the initial problem set
-4. **Start Monitoring**: Begin idle detection and proactive work loops
-
-See [DEPLOYMENT.md](./DEPLOYMENT.md) for detailed setup instructions.
-
-## Status
-
-🚧 **In Development** — Core architecture implemented, deployment and testing in progress
+Originally designed as a standalone system (`nova-motivation` repo) with custom idle detection code (JS/Python). Evolved into a fully configuration-driven system using OpenClaw's native heartbeat, database workflows, and bootstrap context records. The standalone repo was archived on 2026-06-03 and the system is now maintained as part of nova-mind.
 
 ---
 
-*Part of the [NOVA-Openclaw](https://github.com/NOVA-Openclaw) project.*
+*Part of the [nova-mind](https://github.com/NOVA-Openclaw/nova-mind) system.*

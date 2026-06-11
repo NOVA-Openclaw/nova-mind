@@ -72,6 +72,7 @@ EXCLUDE_PATTERNS = (
 INTROSPECT_LINE_THRESHOLD = 50       # lines of daily log growth
 INTROSPECT_BYTE_THRESHOLD = 102400   # bytes of session transcript growth (100 KB)
 INTROSPECT_TIME_THRESHOLD_H = 8      # hours since last introspection
+INTROSPECT_MIN_INTERVAL_H = 2        # minimum interval between introspections (prevents heartbeat loop)
 
 # Memory maintenance cooldown
 MEMORY_MAINTENANCE_COOLDOWN_H = 4
@@ -297,21 +298,39 @@ def check_step3_introspection() -> dict:
             "reason": f"heartbeat-state.json malformed: {exc} — trigger introspection",
         }
 
+    # Parse timestamp once; reused by the cooldown check and elapsed check below.
+    last_ts = None
+    last_ts_parse_error = None
+    if last_ts_str:
+        try:
+            last_ts = _parse_iso(last_ts_str)
+        except (ValueError, OverflowError) as exc:
+            last_ts_parse_error = str(exc)
+
+    # Minimum interval floor — prevent over-firing (see nova-mind#326)
+    if last_ts is not None:
+        elapsed_h = (_now_utc() - last_ts).total_seconds() / 3600.0
+        if elapsed_h < INTROSPECT_MIN_INTERVAL_H:
+            remaining_h = INTROSPECT_MIN_INTERVAL_H - elapsed_h
+            return {
+                "actionable": False,
+                "reason": f"Cooldown active, {remaining_h:.1f}h remaining",
+                "data": {"elapsed_hours": round(elapsed_h, 1), "remaining_hours": round(remaining_h, 1)},
+            }
+
     reasons: list[str] = []
     data: dict[str, Any] = {}
 
     # Check elapsed time
-    if last_ts_str:
-        try:
-            last_ts = _parse_iso(last_ts_str)
-            elapsed_h = (_now_utc() - last_ts).total_seconds() / 3600.0
-            data["elapsed_hours"] = round(elapsed_h, 1)
-            if elapsed_h >= INTROSPECT_TIME_THRESHOLD_H:
-                reasons.append(
-                    f"{elapsed_h:.1f}h since last introspection (threshold {INTROSPECT_TIME_THRESHOLD_H}h)"
-                )
-        except (ValueError, OverflowError) as exc:
-            data["elapsed_error"] = str(exc)
+    if last_ts is not None:
+        elapsed_h = (_now_utc() - last_ts).total_seconds() / 3600.0
+        data["elapsed_hours"] = round(elapsed_h, 1)
+        if elapsed_h >= INTROSPECT_TIME_THRESHOLD_H:
+            reasons.append(
+                f"{elapsed_h:.1f}h since last introspection (threshold {INTROSPECT_TIME_THRESHOLD_H}h)"
+            )
+    elif last_ts_parse_error:
+        data["elapsed_error"] = last_ts_parse_error
 
     # Check daily log line growth
     today = _now_utc().strftime("%Y-%m-%d")

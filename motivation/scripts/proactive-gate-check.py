@@ -198,29 +198,30 @@ def check_step1_agent_chat() -> dict:
     """Step 1: Unacknowledged agent_chat messages addressed to nova."""
     try:
         conn = _db_connect()
-        with conn:
-            with conn.cursor() as cur:
-                cur.execute("""
-                    SELECT count(*)
-                    FROM agent_chat ac
-                    WHERE 'nova' = ANY(ac.recipients)
-                    AND NOT EXISTS (
-                        SELECT 1 FROM agent_chat_processed acp
-                        WHERE acp.chat_id = ac.id AND acp.agent = 'nova'
-                    )
-                """)
-                count = cur.fetchone()[0]
-        conn.close()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        SELECT count(*)
+                        FROM agent_chat ac
+                        WHERE 'nova' = ANY(ac.recipients)
+                        AND NOT EXISTS (
+                            SELECT 1 FROM agent_chat_processed acp
+                            WHERE acp.chat_id = ac.id AND acp.agent = 'nova'
+                        )
+                    """)
+                    count = cur.fetchone()[0]
+            if count > 0:
+                return {
+                    "actionable": True,
+                    "reason": f"{count} unacknowledged message(s) in agent_chat",
+                    "data": {"count": count},
+                }
+            return {"actionable": False, "reason": "0 unacknowledged messages"}
+        finally:
+            conn.close()
     except Exception as exc:
         return _step_error(f"DB error: {exc}")
-
-    if count > 0:
-        return {
-            "actionable": True,
-            "reason": f"{count} unacknowledged message(s) in agent_chat",
-            "data": {"count": count},
-        }
-    return {"actionable": False, "reason": "0 unacknowledged messages"}
 
 
 def check_step2_unanswered_sessions() -> dict:
@@ -404,58 +405,60 @@ def check_step5_entity_dedup() -> dict:
     """Step 5: Entity deduplication candidates using pg_trgm similarity."""
     try:
         conn = _db_connect()
-        with conn:
-            with conn.cursor() as cur:
-                cur.execute("""
-                    SELECT count(*) FROM (
-                        SELECT e1.id FROM entities e1
-                        JOIN entities e2
-                        ON e1.id < e2.id
-                        AND similarity(e1.name, e2.name) > 0.8
-                        LIMIT 1
-                    ) sub
-                """)
-                count = cur.fetchone()[0]
-        conn.close()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        SELECT count(*) FROM (
+                            SELECT e1.id FROM entities e1
+                            JOIN entities e2
+                            ON e1.id < e2.id
+                            AND similarity(e1.name, e2.name) > 0.8
+                            LIMIT 1
+                        ) sub
+                    """)
+                    count = cur.fetchone()[0]
+            if count > 0:
+                return {
+                    "actionable": True,
+                    "reason": "Entity dedup candidates found (similarity > 0.8)",
+                    "data": {"candidates_found": True},
+                }
+            return {"actionable": False, "reason": "No entity dedup candidates"}
+        finally:
+            conn.close()
     except Exception as exc:
         err = str(exc)
         if "function similarity" in err.lower() or "pg_trgm" in err.lower():
             return _step_error("pg_trgm extension not available")
         return _step_error(f"DB error: {exc}")
 
-    if count > 0:
-        return {
-            "actionable": True,
-            "reason": "Entity dedup candidates found (similarity > 0.8)",
-            "data": {"candidates_found": True},
-        }
-    return {"actionable": False, "reason": "No entity dedup candidates"}
-
 
 def check_step6_pending_tasks() -> dict:
     """Step 6: Pending unblocked tasks assigned to NOVA (entity_id=1)."""
     try:
         conn = _db_connect()
-        with conn:
-            with conn.cursor() as cur:
-                cur.execute("""
-                    SELECT count(*) FROM tasks
-                    WHERE status = 'pending'
-                    AND assigned_to = 1
-                    AND (blocked IS NULL OR blocked = false)
-                """)
-                count = cur.fetchone()[0]
-        conn.close()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        SELECT count(*) FROM tasks
+                        WHERE status = 'pending'
+                        AND assigned_to = 1
+                        AND (blocked IS NULL OR blocked = false)
+                    """)
+                    count = cur.fetchone()[0]
+            if count > 0:
+                return {
+                    "actionable": True,
+                    "reason": f"{count} pending unblocked task(s)",
+                    "data": {"count": count},
+                }
+            return {"actionable": False, "reason": "0 pending unblocked tasks"}
+        finally:
+            conn.close()
     except Exception as exc:
         return _step_error(f"DB error: {exc}")
-
-    if count > 0:
-        return {
-            "actionable": True,
-            "reason": f"{count} pending unblocked task(s)",
-            "data": {"count": count},
-        }
-    return {"actionable": False, "reason": "0 pending unblocked tasks"}
 
 
 def check_step7_github_issues() -> dict:
@@ -539,24 +542,25 @@ def check_step8_unsolved_problems() -> dict:
     """Step 8: Unsolved problems with status != 'solved'."""
     try:
         conn = _db_connect()
-        with conn:
-            with conn.cursor() as cur:
-                cur.execute("""
-                    SELECT count(*) FROM unsolved_problems
-                    WHERE status != 'solved'
-                """)
-                count = cur.fetchone()[0]
-        conn.close()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        SELECT count(*) FROM unsolved_problems
+                        WHERE status != 'solved'
+                    """)
+                    count = cur.fetchone()[0]
+            if count > 0:
+                return {
+                    "actionable": True,
+                    "reason": f"{count} unsolved problem(s) awaiting research",
+                    "data": {"count": count},
+                }
+            return {"actionable": False, "reason": "0 unsolved problems"}
+        finally:
+            conn.close()
     except Exception as exc:
         return _step_error(f"DB error: {exc}")
-
-    if count > 0:
-        return {
-            "actionable": True,
-            "reason": f"{count} unsolved problem(s) awaiting research",
-            "data": {"count": count},
-        }
-    return {"actionable": False, "reason": "0 unsolved problems"}
 
 
 def check_step9_filesystem_hygiene() -> dict:

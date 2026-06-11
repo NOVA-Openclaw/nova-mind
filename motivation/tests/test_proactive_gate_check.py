@@ -132,6 +132,30 @@ class TestIdleDetection:
         assert result["idle"] is True
         assert "reason" in result
 
+    def test_excludes_user_facing_bot_session(self, m, tmp_path):
+        """
+        A key that matches a user-facing pattern (discord:channel) AND an
+        exclude pattern (heartbeat) must be dropped by the exclude filter,
+        leaving no qualifying sessions → defaults to idle.
+
+        This exercises EXCLUDE_PATTERNS on keys that would otherwise pass the
+        USER_SESSION_PATTERNS guard — the vacuous-exclude bug reproduced with
+        keys like agent:nova:main:heartbeat which never reach the exclude check.
+        """
+        sessions_file = tmp_path / "sessions.json"
+        sessions_file.write_text(
+            _make_sessions({
+                # Matches discord:channel (user-facing) AND heartbeat (exclude) —
+                # should be dropped by EXCLUDE_PATTERNS, not counted.
+                "agent:nova:discord:channel:123:heartbeat": _ms(1),
+            })
+        )
+        with patch.object(m, "SESSIONS_JSON", str(sessions_file)), \
+             patch.object(m, "IDLE_THRESHOLD_MINUTES", 60):
+            result = m.check_idle()
+        assert result["idle"] is True
+        assert "reason" in result
+
     def test_custom_threshold_via_env(self, m, tmp_path):
         sessions_file = tmp_path / "sessions.json"
         sessions_file.write_text(
@@ -750,3 +774,120 @@ class TestOutputFormat:
             printed = mock_print.call_args[0][0]
         parsed = json.loads(printed)  # must not raise
         assert isinstance(parsed, dict)
+
+
+# ---------------------------------------------------------------------------
+# Boundary Value Analysis (BVA) — exact threshold values
+# ---------------------------------------------------------------------------
+
+class TestBoundaryValues:
+    """Exact-boundary tests for all numeric thresholds (Fix C6)."""
+
+    def _heartbeat_state(self, lines: int, bytez: int, hours_ago: float) -> str:
+        return json.dumps({
+            "lastIntrospection": {
+                "dailyLogLines": lines,
+                "sessionTranscriptBytes": bytez,
+                "timestamp": _iso(hours_ago),
+            }
+        })
+
+    # ---- Step 3: line growth exactly at threshold (50) ----
+
+    def test_step3_line_growth_exactly_50_is_actionable(self, m, tmp_path):
+        """Line growth == 50 (threshold >= 50) → actionable."""
+        state_file = tmp_path / "heartbeat-state.json"
+        # 1h ago — well below the 8h time threshold so time check won’t fire
+        state_file.write_text(self._heartbeat_state(100, 1_000_000, 1.0))
+
+        mock_wc = MagicMock()
+        mock_wc.returncode = 0
+        mock_wc.stdout = "150 /path"   # baseline=100, current=150 → growth=50
+        mock_du = MagicMock()
+        mock_du.returncode = 0
+        mock_du.stdout = "1000000"     # 0 byte growth
+
+        def fake_run(cmd, **kwargs):
+            return mock_wc if isinstance(cmd, list) and cmd[0] == "wc" else mock_du
+
+        with patch.object(m, "HEARTBEAT_STATE_JSON", str(state_file)), \
+             patch("subprocess.run", side_effect=fake_run):
+            result = m.check_step3_introspection()
+        assert result["actionable"] is True
+        assert "50 new daily log lines" in result["reason"]
+
+    # ---- Step 3: byte growth exactly at threshold (102400) ----
+
+    def test_step3_byte_growth_exactly_102400_is_actionable(self, m, tmp_path):
+        """Byte growth == 102400 (threshold >= 102400) → actionable."""
+        state_file = tmp_path / "heartbeat-state.json"
+        state_file.write_text(self._heartbeat_state(100, 1_000_000, 1.0))
+
+        mock_wc = MagicMock()
+        mock_wc.returncode = 0
+        mock_wc.stdout = "100 /path"   # 0 line growth
+        mock_du = MagicMock()
+        mock_du.returncode = 0
+        mock_du.stdout = str(1_000_000 + 102_400)  # exactly 102400 byte growth
+
+        def fake_run(cmd, **kwargs):
+            return mock_wc if isinstance(cmd, list) and cmd[0] == "wc" else mock_du
+
+        with patch.object(m, "HEARTBEAT_STATE_JSON", str(state_file)), \
+             patch("subprocess.run", side_effect=fake_run):
+            result = m.check_step3_introspection()
+        assert result["actionable"] is True
+        assert "bytes" in result["reason"]
+
+    # ---- Step 3: elapsed time exactly at threshold (8.0h) ----
+
+    def test_step3_time_exactly_8h_is_actionable(self, m, tmp_path):
+        """Elapsed time == 8.0h (threshold >= 8h) → actionable.
+
+        _iso(8.0) truncates to whole seconds, so by the time check_step3
+        executes, the measured elapsed will be >= 8.0h.
+        """
+        state_file = tmp_path / "heartbeat-state.json"
+        state_file.write_text(self._heartbeat_state(100, 1_000_000, 8.0))
+
+        mock_wc = MagicMock()
+        mock_wc.returncode = 0
+        mock_wc.stdout = "100 /path"   # 0 line growth
+        mock_du = MagicMock()
+        mock_du.returncode = 0
+        mock_du.stdout = "1000000"     # 0 byte growth
+
+        def fake_run(cmd, **kwargs):
+            return mock_wc if isinstance(cmd, list) and cmd[0] == "wc" else mock_du
+
+        with patch.object(m, "HEARTBEAT_STATE_JSON", str(state_file)), \
+             patch("subprocess.run", side_effect=fake_run):
+            result = m.check_step3_introspection()
+        assert result["actionable"] is True
+        assert "h since last introspection" in result["reason"]
+
+    # ---- Step 4: cooldown exactly at threshold (4.0h) ----
+
+    def test_step4_cooldown_exactly_4h_is_actionable(self, m, tmp_path):
+        """Elapsed == 4.0h (threshold >= 4h) → actionable.
+
+        _iso(4.0) truncates to whole seconds, so the measured elapsed is >= 4h.
+        """
+        state_file = tmp_path / "memory-maintenance.json"
+        state_file.write_text(json.dumps({"last_run": _iso(4.0)}))
+        with patch.object(m, "MEMORY_MAINTENANCE_JSON", str(state_file)):
+            result = m.check_step4_memory_maintenance()
+        assert result["actionable"] is True
+
+    # ---- Step 9: staleness exactly at threshold (7 days) ----
+
+    def test_step9_staleness_exactly_7_days_is_actionable(self, m, tmp_path):
+        """Elapsed == 7 days (threshold >= 7d) → actionable.
+
+        _iso(7 * 24.0) truncates to whole seconds, so measured elapsed >= 7d.
+        """
+        marker = tmp_path / ".last-fs-audit"
+        marker.write_text(_iso(7 * 24.0))  # exactly 7 days ago
+        with patch.object(m, "FS_AUDIT_MARKER", str(marker)):
+            result = m.check_step9_filesystem_hygiene()
+        assert result["actionable"] is True

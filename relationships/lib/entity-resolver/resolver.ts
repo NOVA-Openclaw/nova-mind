@@ -9,20 +9,27 @@ import { join } from "path";
 
 const { Pool } = pg;
 
-// Load PG* env vars from ~/.openclaw/postgres.json before any DB connections
+// Load PG config from ~/.openclaw/postgres.json without polluting process.env
+// See: https://github.com/NOVA-Openclaw/nova-mind/issues/330
 const pgEnvPath = join(process.env.HOME || os.homedir(), ".openclaw", "lib", "pg-env.ts");
-const { loadPgEnv } = await import(pgEnvPath);
-loadPgEnv();
+let pgConfig: { host?: string; port?: number; database?: string; user?: string; password?: string } = {};
+try {
+  const { loadPgEnv } = await import(pgEnvPath);
+  pgConfig = loadPgEnv();
+} catch (e) {
+  console.warn('[entity-resolver] Could not load pg-env.ts:', (e as Error).message);
+}
 
 // Database connection pool (singleton)
 let dbPool: pg.Pool | null = null;
 
 /**
- * Derive database name from username (same pattern as nova-memory)
+ * Derive database name: use config value or fall back to <user>_memory convention.
  */
 function getDatabaseName(): string {
-  const user = process.env.PGUSER || os.userInfo().username;
-  return process.env.PGDATABASE || `${user.replace(/-/g, '_')}_memory`;
+  if (pgConfig.database) return pgConfig.database;
+  const user = pgConfig.user || os.userInfo().username;
+  return `${user.replace(/-/g, '_')}_memory`;
 }
 
 /**
@@ -30,12 +37,12 @@ function getDatabaseName(): string {
  */
 function getDbPool(): pg.Pool {
   if (!dbPool) {
-    const dbUser = process.env.PGUSER || os.userInfo().username;
     dbPool = new Pool({
-      host: process.env.PGHOST || "localhost",
+      host: pgConfig.host || "localhost",
+      port: pgConfig.port,
       database: getDatabaseName(),
-      user: dbUser,
-      password: process.env.PGPASSWORD,
+      user: pgConfig.user || os.userInfo().username,
+      password: pgConfig.password,
       max: 5,
       idleTimeoutMillis: 30000,
       connectionTimeoutMillis: 5000,

@@ -2,7 +2,7 @@
  * pg-env.ts — Centralized PostgreSQL config loader for TypeScript/Node.js.
  *
  * Resolution order: ENV vars → ~/.openclaw/postgres.json → defaults
- * Issue: nova-memory #94
+ * Issue: nova-memory #94, nova-mind #330
  */
 
 import { readFileSync } from "fs";
@@ -32,16 +32,30 @@ const DEFAULTS: Record<string, string | (() => string)> = {
 };
 
 /**
- * Load PostgreSQL env vars with resolution: ENV → config file → defaults.
+ * PostgreSQL connection options interface that matches
+ * the pg.Client constructor options.
+ */
+export interface PgConnectionConfig {
+  host?: string;
+  port?: number;
+  database?: string;
+  user?: string;
+  password?: string;
+}
+
+/**
+ * Load PostgreSQL config with resolution: ENV → config file → defaults.
  *
- * Sets process.env for each PG* var and returns the resulting record.
+ * Returns connection config object suitable for pg.Client / pg.Pool constructor,
+ * without modifying process.env to avoid pollution of the environment
+ * for child processes and subagents.
  * Empty ENV strings are treated as unset.
  * Null values in JSON are treated as absent.
  * Malformed JSON is caught and warned about (falls through to defaults).
  */
 export function loadPgEnv(
   configPath?: string
-): Record<string, string> {
+): PgConnectionConfig {
   const cfgPath =
     configPath ?? join(homedir(), ".openclaw", "postgres.json");
 
@@ -67,13 +81,18 @@ export function loadPgEnv(
     }
   }
 
-  const result: Record<string, string> = {};
+  const result: PgConnectionConfig = {};
 
   for (const [jsonKey, envVar] of FIELD_MAP) {
     // 1. Check ENV (empty string = unset)
     const envVal = process.env[envVar];
     if (envVal) {
-      result[envVar] = envVal;
+      if (jsonKey === "port") {
+        const portNum = Number(envVal);
+        if (!isNaN(portNum)) result[jsonKey] = portNum;
+      } else {
+        result[jsonKey] = envVal;
+      }
       continue;
     }
 
@@ -82,8 +101,12 @@ export function loadPgEnv(
     if (cfgVal != null) {
       const strVal = String(cfgVal);
       if (strVal) {
-        result[envVar] = strVal;
-        process.env[envVar] = strVal;
+        if (jsonKey === "port") {
+          const portNum = Number(strVal);
+          if (!isNaN(portNum)) result[jsonKey] = portNum;
+        } else {
+          result[jsonKey] = strVal;
+        }
         continue;
       }
     }
@@ -92,8 +115,12 @@ export function loadPgEnv(
     const def = DEFAULTS[envVar];
     if (def !== undefined) {
       const defaultVal = typeof def === "function" ? def() : def;
-      result[envVar] = defaultVal;
-      process.env[envVar] = defaultVal;
+      if (jsonKey === "port") {
+        const portNum = Number(defaultVal);
+        if (!isNaN(portNum)) result[jsonKey] = portNum;
+      } else {
+        result[jsonKey] = defaultVal;
+      }
     }
   }
 

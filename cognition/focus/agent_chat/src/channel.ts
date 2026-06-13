@@ -9,10 +9,8 @@ import { loadPgEnv } from "../lib/pg-env.js";
 import { getAgentChatRuntime } from "./runtime.js";
 import { AgentChatConfigSchema, type ResolvedAgentChatAccount } from "./config.js";
 
-// Load PG* env vars from ~/.openclaw/postgres.json at extension startup.
-// The pg library reads these env vars natively when new Client() is called
-// with no arguments (PGHOST, PGUSER, PGPASSWORD, PGDATABASE, PGPORT).
-loadPgEnv();
+// Get PostgreSQL config without polluting process.env for child processes
+const pgConfig = loadPgEnv();
 
 const { Client } = pg;
 
@@ -38,12 +36,11 @@ const meta: Omit<ChannelMeta, "id"> = {
 };
 
 /**
- * Create PostgreSQL client.
- * Credentials are read from PG* env vars set by loadPgEnv() at startup.
- * The pg library natively reads PGHOST, PGUSER, PGPASSWORD, PGDATABASE, PGPORT.
+ * Create PostgreSQL client with direct config pass-through
+ * avoiding environment variable pollution for child processes.
  */
 function createPgClient(): pg.Client {
-  return new Client();
+  return new Client(pgConfig);
 }
 
 /**
@@ -529,8 +526,8 @@ export const agentChatPlugin: ChannelPlugin<ResolvedAgentChatAccount> = {
         enabled: account.enabled,
         configured: Boolean(resolveAgentName(cfg)),
         agentName: resolveAgentName(cfg),
-        database: process.env.PGDATABASE ?? null,
-        host: process.env.PGHOST ?? "localhost",
+        database: pgConfig.database ?? null,
+        host: pgConfig.host ?? "localhost",
       };
     },
   },
@@ -615,7 +612,7 @@ export const agentChatPlugin: ChannelPlugin<ResolvedAgentChatAccount> = {
         // Store custom info in probe
         probe: {
           agentName: resolveAgentName(cfg),
-          database: process.env.PGDATABASE ?? null,
+          database: pgConfig.database ?? null,
         },
       };
     },

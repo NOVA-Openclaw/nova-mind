@@ -10,14 +10,20 @@
 import { readFile } from 'fs/promises';
 import pg from 'pg';
 import { join } from 'path';
-import { homedir } from 'os';
+import { homedir, userInfo } from 'os';
 
-// Load PG env vars from postgres.json before creating Pool
-// See: https://github.com/NOVA-Openclaw/nova-memory/issues/136
+// Load PG config from postgres.json without polluting process.env
+// See: https://github.com/NOVA-Openclaw/nova-mind/issues/330
 const pgEnvPath = join(homedir(), '.openclaw', 'lib', 'pg-env.ts');
+let pgConfig: { host?: string; port?: number; database?: string; user?: string; password?: string } = {
+  host: 'localhost',
+  port: 5432,
+  database: 'nova_memory',
+  user: userInfo().username,
+};
 try {
   const { loadPgEnv } = await import(pgEnvPath);
-  loadPgEnv();
+  pgConfig = loadPgEnv();
 } catch (e) {
   console.warn('[bootstrap-context] Could not load pg-env.ts:', (e as Error).message);
 }
@@ -26,11 +32,7 @@ const { Pool } = pg;
 
 // Create connection pool (reused across invocations)
 const pool = new Pool({
-  host: process.env.PGHOST || 'localhost',
-  port: parseInt(process.env.PGPORT || '5432'),
-  database: process.env.PGDATABASE || 'nova_memory',
-  user: process.env.PGUSER || 'nova',
-  password: process.env.PGPASSWORD,
+  ...pgConfig,
   max: 5,
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 5000,

@@ -1,6 +1,6 @@
 # Database Schema Reference
 
-*Auto-generated: 2026-05-20T10:21:25.848397*
+*Auto-generated: 2026-06-09T03:38:05.109007*
 
 ## Tables
 
@@ -11,13 +11,13 @@
 | agent_bootstrap_context | Bootstrap context entries. Agents may write to their own AGENT-scoped records (matching their db user). Newhart (Agent Design/Management domain) manages schema, cross-agent entries, and GLOBAL/UNIVERSAL-scoped records. | 9 |
 | agent_chat | Agent messaging. INSERT allowed for all, UPDATE/DELETE only Newhart. | 6 |
 | agent_chat_processed | Message processing state. Agents can track, Newhart manages. | 7 |
-| agent_domains | Agent domain assignments. READ-ONLY except Newhart. | 8 |
+| agent_domains | Agent domain assignments. READ-ONLY except Newhart. | 9 |
 | agent_jobs | Agent job definitions. READ-ONLY except Newhart. | 18 |
 | agent_modifications | Agent modification history. READ-ONLY except Newhart. | 7 |
 | agent_spawns | Tracks all agent spawns from the general-purpose spawner daemon | 14 |
 | agent_system_config | Agent system configuration. READ-ONLY except Newhart. | 6 |
 | agent_turn_context | - | 8 |
-| agents | Agent registry | 33 |
+| agents | Agent registry | 37 |
 | ai_models | Available AI models. NOVA maintains this; Newhart reads for agent assignments. Credentials and endpoints stored in 1Password (see credential_ref column). | 16 |
 | artwork | Archive of NOVAs Instagram artwork. Reference for future compilation. | 27 |
 | asset_classes | Asset class definitions for financial portfolio management. Defines tradeable asset types with pricing sources and trading characteristics. | 6 |
@@ -29,7 +29,7 @@
 | comms_checks | Individual Hermes check run results. Each row = one social/email/digest check. Replaces memory/hermes-*.md files. Owner: Communications domain (hermes). | 11 |
 | comms_digests | Daily/weekly communications digests. Replaces hermes-social-digest-*.md and NOVA_Comms_Digest_*.html. Owner: Communications domain (hermes). | 11 |
 | comms_state | Per-platform communications tracking state (seen IDs, cursors). Replaces hermes-social-state.json. Owner: Communications domain (hermes). | 5 |
-| entities | People, AIs, organizations. NOVA has full access. Use entity_facts for attributes. | 20 |
+| entities | People, AIs, organizations. NOVA has full access. Use entity_facts for attributes. | 22 |
 | entity_fact_conflicts | Conflicts between entity facts requiring resolution. Part of the truth reconciliation system. | 13 |
 | entity_fact_sources | - | 8 |
 | entity_facts | Key-value facts about entities. Check current_timezone for I)ruid before time-based actions. | 19 |
@@ -45,6 +45,8 @@
 | gambling_entries | Individual gambling session records. Tracks bets, outcomes, and session details for analysis. | 10 |
 | gambling_logs | High-level gambling session summaries. Groups multiple gambling_entries by session. | 8 |
 | git_issue_queue | Issue queue for git-based workflows. NOTIFY triggers dispatch work automatically. | 16 |
+| income_sources | Registry of NOVA income streams — where money comes from, how to check it, and current status. Owner: NOVA. | 12 |
+| income_transactions | Individual income transactions, each linked to an income_source. Owner: NOVA. | 10 |
 | job_messages | Message log per job for conversation threading | 5 |
 | journal_entries | Personal prose journal entries for agent self-reflection. Short, introspective, written multiple times daily. Embedded into memory_embeddings with source_type=journal. Triggers: heartbeat, d100, post_workflow, daily_report, conversation, incident, manual. | 6 |
 | lessons | Lessons and insights learned. Update when learning something worth remembering. | 13 |
@@ -63,21 +65,16 @@
 | memory_type_priorities | Priority weights for semantic recall by source_type. Higher = more likely to surface. NOVA can modify. | 5 |
 | music_analysis | Deep musical analysis (harmonic, rhythmic, lyrical, spectral). Managed by Erato. | 11 |
 | music_library | Music-specific metadata extending media_consumed. Managed by Erato. | 37 |
-| music_works | Original music compositions (AI-generated or human-composed). Complements music_library which holds collected external sources. | 41 |
+| music_works | Original music compositions (AI-generated or human-composed). Complements music_library which holds collected external sources. | 42 |
 | place_properties | Properties and attributes of places. Key-value storage for place characteristics. | 5 |
 | places | Locations (houses, venues, cities). Reference I)ruid houses in USER.md. | 15 |
-| pm_domain_portfolio_snapshots | **DEPRECATED** — empty, pending drop. Superseded by `portfolio_snapshots`. | 6 |
-| portfolio_history | **DEPRECATED** — empty, pending drop. Data migrated to `portfolio_snapshots`. | 6 |
-| portfolio_metrics | - | 10 |
-| portfolio_positions | **DEPRECATED** — empty, pending drop. Superseded by `positions`. | 9 |
-| portfolio_snapshots | **CANONICAL** — Intra-day and daily portfolio value snapshots with P&L. Columns: `trading_session` (pre/regular/after/closed), `session_open_value`. Written by `market-review.sh`. | 8 |
-| portfolio_updates | **DEPRECATED** — empty, pending drop. | 3 |
-| positions | **CANONICAL** — Current open/closed portfolio positions. Includes `sold_at`, `sale_proceeds`, `asset_class` FK. Open positions: `sold_at IS NULL`. | 20 |
+| portfolio_snapshots | Historical snapshots of portfolio values and performance metrics over time. | 10 |
 | preferences | User preferences by entity_id. Check before making assumptions. | 6 |
 | price_cache_v2 | Cached price data for assets to reduce API calls. Version 2 of price caching system. | 12 |
 | project_entities | Links projects to entities (people, orgs, AIs). Many-to-many relationship table for project participants. | 3 |
 | project_tasks | Project-specific task breakdown. Links tasks to projects for organized project management. | 8 |
 | projects | Project tracking. For repo-backed projects (locked=TRUE, repo_url set), use GitHub for management. For non-repo projects, use notes field here. | 12 |
+| prompt_helper_config | Per-message-type gating for turn-context subsystems (entity_resolver, semantic_recall, domain_identifier, turn_reminders). Rows with agent_name IS NULL are defaults; agent-specific rows override them. turn_reminders always fires regardless of config. | 9 |
 | publications | - | 8 |
 | ralph_sessions | Tracks Ralph-style iterative agent sessions. Each iteration runs with fresh context, state persists in DB. | 15 |
 | research_citations | Source citations linking findings to original sources. Write access: Research domain (scout) only. | 13 |
@@ -88,20 +85,20 @@
 | research_taggings | Junction table linking tags to research entities. Write access: Research domain (scout) only. | 6 |
 | research_tags | Hierarchical, polymorphic tag taxonomy for research entities. Write access: Research domain (scout) only. | 7 |
 | research_tasks | Individual research investigation tasks within projects. Write access: Research domain (scout) only. | 14 |
+| self_awareness_triggers | Trigger patterns for the self-awareness plugin. Each row defines keyphrases that, when semantically matched in outbound messages, fire an action. Managed by NOVA. | 14 |
 | shopping_history | - | 13 |
 | shopping_preferences | - | 8 |
 | shopping_wishlist | - | 11 |
 | skills | Skill definitions. Override precedence: WORKSPACE > DOMAIN > MANAGED > BUNDLED. See get_agent_skills(). | 24 |
 | tags | - | 5 |
 | tasks | Task tracking. NOVA can create, update status, assign. Check before starting work. | 23 |
-| ticker_portfolio | **DEPRECATED** — empty, pending drop. | 1 |
 | tools | Tool usage notes. Override: WORKSPACE > DOMAIN > MANAGED > BUNDLED. See get_agent_tools(). | 13 |
 | unsolved_problems | Humanity's unsolved problems for NOVA to work on during idle time. Part of the Motivation System - provides meaningful default work when task queue is empty. | 18 |
 | user_insights | Human-contributed insights — observations, realizations, and wisdom shared by users. Primarily for users to save important insights. Managed by any agent on behalf of the contributing user. | 8 |
 | vehicles | Vehicle tracking and management. Cars, bikes, boats, planes owned or used. | 13 |
 | vocabulary | Custom vocabulary for speech recognition. Add names, terms, jargon as encountered. | 8 |
 | work_tags | - | 3 |
-| workflow_runs | Tracks individual executions of workflows. Each row is one run from opening bookend to closing bookend. Updated as the orchestrator advances through steps. | 9 |
+| workflow_runs | Tracks individual executions of workflows. Each row is one run from opening bookend to closing bookend. Updated as the orchestrator advances through steps. | 10 |
 | workflow_steps | Ordered steps in a workflow with agent assignments and deliverable specifications | 14 |
 | workflows | Defines multi-agent workflows with ordered steps and deliverable handoffs | 10 |
 | works | - | 14 |

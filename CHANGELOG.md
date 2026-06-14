@@ -1,5 +1,17 @@
 # Changelog
 
+### Batch: installer-bugs-266-315-316 (Issues #266, #315, #316)
+
+#### Bug Fixes
+
+- **#266 — `NOVA_DIR` unbound variable:** `NOVA_DIR="$HOME/.local/share/nova"` is now defined in the path constants block at the top of `agent-install.sh` (line ~71), before any reference to it. Previously the variable was first assigned inside the shell environment setup block (line ~2044), causing an unbound variable error under `set -u` / `bash -o nounset` environments and silently expanding to an empty string otherwise. The nova data directory (`~/.local/share/nova/`) stores `shell-aliases.sh` and the Python venv used by motivation scripts.
+
+- **#315 — `cp -r` directory nesting on reinstall:** `install_metacognition_plugin()` now runs `rm -rf "$plugin_target/$f"` before `cp -r` when the entry being copied is a directory (e.g., `src/`). Previously, a second install would nest the source directory inside the existing target (`src/src/index.ts` etc.) because POSIX `cp -r src/ dest/` appends `src/` as a subdirectory when `dest/src/` already exists rather than replacing it in place.
+
+- **#316 — Plugin config overwrite destroys existing settings:** The `jq` expression in `install_metacognition_plugin()` that writes plugin entries to `openclaw.json` now uses a merge pattern: `.plugins.entries[$name] = (.plugins.entries[$name] // {}) * { ... }` instead of a direct assignment `= { ... }`. This preserves any existing per-plugin settings (custom hooks config, feature flags) set outside the installer, deep-merging only the installer-managed keys (`enabled`, `hooks.allowConversationAccess`) over the existing entry.
+
+---
+
 ### Batch: confidence-check-two-phase (Issues #272, #312)
 
 #### Changed

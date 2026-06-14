@@ -1,9 +1,9 @@
 # nova-mind Architecture
 
-NOVA's unified agent mind stack combining memory, cognition, and relationships into a cohesive PostgreSQL-backed system.
+NOVA's unified agent mind stack combining memory, cognition, relationships, psyche, and motivation into a cohesive PostgreSQL-backed system.
 
-> *Memory, thought, trust—*
-> *three rivers join, flow as one*
+> *Memory, thought, trust, self—*
+> *five rivers join, flow as one*
 > *mind holds what it meets*
 >
 > — **Erato**
@@ -40,13 +40,15 @@ Other subsystems (`entity_facts`, `agent_bootstrap_context`, `agent_chat`) requi
 
 ## System Overview
 
-nova-mind is a unified repository consolidating three previously separate subsystems:
+nova-mind is a unified repository consolidating five previously separate subsystems:
 
 - **`memory/`** — Persistent PostgreSQL memory with semantic recall, extraction hooks, and structured schema for entities, facts, relationships, events, and lessons.
 - **`cognition/`** — Agent orchestration, inter-agent messaging (`agent_chat`), bootstrap context seeding, and the `agent-config-sync` system that keeps model configuration in sync with the database.
 - **`relationships/`** — Entity resolution across platforms, session-aware caching, certificate-based agent identity (Web of Trust), and the social graph.
+- **`psyche/`** — Agent self-awareness design: core values, agent-chat architecture, entity/user identity models, and identification protocols. (Migrated from archived `nova-psyche` repo.)
+- **`motivation/`** — Drive assignment, goal tracking, reward signals, and proactive mode orchestration. (Migrated from archived `nova-motivation` repo.)
 
-All three subsystems share a single PostgreSQL database (`{username}_memory`) and are installed via a unified installer (`agent-install.sh`) that ensures idempotent, declarative deployments.
+All five subsystems share a single PostgreSQL database (`{username}_memory`) and are installed via a unified installer (`agent-install.sh`) that ensures idempotent, declarative deployments.
 
 ### High-Level Architecture Diagram
 
@@ -267,6 +269,9 @@ The unified installer (`agent‑install.sh`) is idempotent and declarative:
 - **Shared Library Installation:** Installs `pg‑env.sh`, `pg_env.py`, `pg‑env.ts` to `~/.openclaw/lib/` for consistent PostgreSQL connection loading
 - **Environment‑Aware:** Works for both interactive human installs (`shell‑install.sh`) and pre‑configured agent environments
 - **Gateway Integration:** Automatically restarts the OpenClaw gateway after installation (unless `--no‑restart`)
+- **Plugin Config Preservation:** Plugin entries written to `openclaw.json` use a merge pattern (`existing // {} * installer_defaults`) so any custom settings configured outside the installer are preserved on reinstall.
+- **Idempotent Plugin Directory Installs:** When copying directory entries (e.g., `src/`) into an existing plugin target, the installer removes the target directory first to prevent POSIX `cp -r` nesting (`src/src/`) on subsequent installs.
+- **Nova Data Directory:** `NOVA_DIR="$HOME/.local/share/nova"` is declared in the path constants block and is used for `shell-aliases.sh` and the Python venv (`~/.local/share/nova/venv/`) consumed by motivation scripts.
 
 ### Shared Libraries (`lib/`)
 
@@ -286,7 +291,7 @@ All database‑connected scripts use these loaders, ensuring consistent connecti
 
 **Why:** Previously separate repos (`nova‑memory`, `nova‑cognition`, `nova‑relationships`) caused version drift and complex dependency management.
 
-**Outcome:** Single `nova‑mind` repo ensures all three subsystems evolve together, share a common installer, and maintain a consistent database schema.
+**Outcome:** Single `nova‑mind` repo ensures all five subsystems evolve together, share a common installer, and maintain a consistent database schema.
 
 ### 2. PostgreSQL as Single Source of Truth
 

@@ -68,6 +68,7 @@ WORKSPACE="${OPENCLAW_WORKSPACE:-$HOME/.openclaw/workspace-coder}"
 OPENCLAW_DIR="$HOME/.openclaw"
 OPENCLAW_PROJECTS="$OPENCLAW_DIR/projects"
 EXTENSIONS_DIR="$OPENCLAW_DIR/extensions"
+NOVA_DIR="$HOME/.local/share/nova"
 
 # Superuser connection helper for DDL operations
 PG_SUPERUSER="${PG_SUPERUSER:-$DB_USER}"
@@ -1586,6 +1587,7 @@ install_metacognition_plugin() {
     for f in package.json openclaw.plugin.json tsconfig.json src; do
         if [ -e "$plugin_source/$f" ]; then
             if [ -d "$plugin_source/$f" ]; then
+                rm -rf "$plugin_target/$f"
                 cp -r "$plugin_source/$f" "$plugin_target/$f"
             else
                 cp "$plugin_source/$f" "$plugin_target/$f"
@@ -1631,7 +1633,7 @@ install_metacognition_plugin() {
     if [ -f "$OPENCLAW_CONFIG" ] && command -v jq &>/dev/null; then
         jq --arg path "$plugin_target" --arg name "$plugin_name" '
             .plugins.load.paths = ((.plugins.load.paths // []) + [$path] | unique)
-            | .plugins.entries[$name] = {
+            | .plugins.entries[$name] = (.plugins.entries[$name] // {}) * {
                 "enabled": true,
                 "hooks": {
                   "allowConversationAccess": true

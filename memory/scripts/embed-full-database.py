@@ -34,7 +34,7 @@ TABLES_TO_EMBED = {
         FROM entity_facts ef JOIN entities e ON ef.entity_id = e.id
     """,
     "project": """
-        SELECT id, name || ': ' || COALESCE(description, '') || 
+        SELECT id, name || ': ' || COALESCE(goal, '') || 
                CASE WHEN status IS NOT NULL THEN ' [' || status || ']' ELSE '' END
         FROM projects WHERE name IS NOT NULL
     """,
@@ -47,7 +47,7 @@ TABLES_TO_EMBED = {
         FROM lessons WHERE lesson IS NOT NULL
     """,
     "event": """
-        SELECT id, COALESCE(title, event_type, 'event') || ' (' || event_date::date || '): ' || COALESCE(description, '')
+        SELECT id, COALESCE(title, 'event') || ' (' || event_date::date || '): ' || COALESCE(description, '')
         FROM events WHERE (title IS NOT NULL OR description IS NOT NULL)
     """,
     # #233/#259: stale table entries removed (see GitHub issues #233 and #259)
@@ -58,7 +58,7 @@ TABLES_TO_EMBED = {
     """,
     # #259: fixed column reference -- vocabulary.word (see issue #259)
     "vocabulary": """
-        SELECT id, word || ': ' || COALESCE(definition, '')
+        SELECT id, word || COALESCE(' (' || category || ')', '')
         FROM vocabulary WHERE word IS NOT NULL
     """,
     "library": """

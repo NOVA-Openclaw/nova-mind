@@ -58,7 +58,7 @@ TABLES_TO_EMBED = {
     """,
     # #259: fixed column reference -- vocabulary.word (see issue #259)
     "vocabulary": """
-        SELECT id, word || ': ' || COALESCE(category, '')
+        SELECT id, word || COALESCE(' (' || category || ')', '')
         FROM vocabulary WHERE word IS NOT NULL
     """,
     "library": """

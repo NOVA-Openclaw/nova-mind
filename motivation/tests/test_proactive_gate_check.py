@@ -401,6 +401,133 @@ class TestStep3Introspection:
             result = m.check_step3_introspection()
         assert result["actionable"] is True
 
+    def test_cooldown_active_blocks_introspection(self, m, tmp_path):
+        state_file = tmp_path / "heartbeat-state.json"
+        state_file.write_text(self._make_heartbeat_state(100, 1_000_000, 0.5))
+
+        with patch.object(m, "HEARTBEAT_STATE_JSON", str(state_file)):
+            result = m.check_step3_introspection()
+        assert result["actionable"] is False
+        assert "Cooldown active" in result["reason"]
+        assert abs(result["data"]["remaining_hours"] - 1.5) < 0.1
+
+    def test_cooldown_expired_proceeds_to_thresholds(self, m, tmp_path):
+        state_file = tmp_path / "heartbeat-state.json"
+        state_file.write_text(self._make_heartbeat_state(100, 1_000_000, 2.5))
+
+        mock_wc = MagicMock(); mock_wc.returncode = 0; mock_wc.stdout = "102 /path"
+        mock_du = MagicMock(); mock_du.returncode = 0; mock_du.stdout = "1050000"
+
+        def fake_run(cmd, **kwargs):
+            return mock_wc if isinstance(cmd, list) and cmd[0] == "wc" else mock_du
+
+        with patch.object(m, "HEARTBEAT_STATE_JSON", str(state_file)), \
+             patch("subprocess.run", side_effect=fake_run):
+            result = m.check_step3_introspection()
+        assert result["actionable"] is False
+        assert "Cooldown active" not in result["reason"]
+        assert result["reason"] == "No introspection threshold exceeded"
+
+    def test_cooldown_boundary_exactly_2h_not_blocked(self, m, tmp_path):
+        fixed_now = datetime(2026, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
+        timestamp = (fixed_now - timedelta(hours=2.0)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        state_file = tmp_path / "heartbeat-state.json"
+        state_file.write_text(json.dumps({
+            "lastIntrospection": {
+                "dailyLogLines": 100,
+                "sessionTranscriptBytes": 1_000_000,
+                "timestamp": timestamp,
+            }
+        }))
+
+        mock_wc = MagicMock(); mock_wc.returncode = 0; mock_wc.stdout = "102 /path"
+        mock_du = MagicMock(); mock_du.returncode = 0; mock_du.stdout = "1050000"
+
+        def fake_run(cmd, **kwargs):
+            return mock_wc if isinstance(cmd, list) and cmd[0] == "wc" else mock_du
+
+        with patch.object(m, "HEARTBEAT_STATE_JSON", str(state_file)), \
+             patch.object(m, "_now_utc", return_value=fixed_now), \
+             patch("subprocess.run", side_effect=fake_run):
+            result = m.check_step3_introspection()
+        assert result["actionable"] is False
+        assert "Cooldown active" not in result["reason"]
+        assert result["reason"] == "No introspection threshold exceeded"
+
+    def test_cooldown_expired_force_trigger_9h(self, m, tmp_path):
+        state_file = tmp_path / "heartbeat-state.json"
+        state_file.write_text(self._make_heartbeat_state(100, 1_000_000, 9.0))
+
+        mock_wc = MagicMock(); mock_wc.returncode = 0; mock_wc.stdout = "102 /path"
+        mock_du = MagicMock(); mock_du.returncode = 0; mock_du.stdout = "1001000"
+
+        def fake_run(cmd, **kwargs):
+            return mock_wc if isinstance(cmd, list) and cmd[0] == "wc" else mock_du
+
+        with patch.object(m, "HEARTBEAT_STATE_JSON", str(state_file)), \
+             patch("subprocess.run", side_effect=fake_run):
+            result = m.check_step3_introspection()
+        assert result["actionable"] is True
+        assert "h since last introspection" in result["reason"]
+        assert "Cooldown active" not in result["reason"]
+
+    def test_cooldown_no_timestamp_falls_through_to_thresholds(self, m, tmp_path):
+        state_file = tmp_path / "heartbeat-state.json"
+        state_file.write_text(json.dumps({
+            "lastIntrospection": {
+                "dailyLogLines": 100,
+                "sessionTranscriptBytes": 1_000_000,
+            }
+        }))
+
+        mock_wc = MagicMock(); mock_wc.returncode = 0; mock_wc.stdout = "102 /path"
+        mock_du = MagicMock(); mock_du.returncode = 0; mock_du.stdout = "1050000"
+
+        def fake_run(cmd, **kwargs):
+            return mock_wc if isinstance(cmd, list) and cmd[0] == "wc" else mock_du
+
+        with patch.object(m, "HEARTBEAT_STATE_JSON", str(state_file)), \
+             patch("subprocess.run", side_effect=fake_run):
+            result = m.check_step3_introspection()
+        assert result["actionable"] is False
+        assert result["reason"] == "No introspection threshold exceeded"
+
+    def test_cooldown_malformed_timestamp_falls_through(self, m, tmp_path):
+        state_file = tmp_path / "heartbeat-state.json"
+        state_file.write_text(json.dumps({
+            "lastIntrospection": {
+                "dailyLogLines": 100,
+                "sessionTranscriptBytes": 1_000_000,
+                "timestamp": "not-a-valid-date",
+            }
+        }))
+
+        mock_wc = MagicMock(); mock_wc.returncode = 0; mock_wc.stdout = "102 /path"
+        mock_du = MagicMock(); mock_du.returncode = 0; mock_du.stdout = "1050000"
+
+        def fake_run(cmd, **kwargs):
+            return mock_wc if isinstance(cmd, list) and cmd[0] == "wc" else mock_du
+
+        with patch.object(m, "HEARTBEAT_STATE_JSON", str(state_file)), \
+             patch("subprocess.run", side_effect=fake_run):
+            result = m.check_step3_introspection()
+        assert result["actionable"] is False
+        assert "elapsed_error" in result["data"]
+        assert result["reason"] == "No introspection threshold exceeded"
+
+    def test_cooldown_response_format(self, m, tmp_path):
+        state_file = tmp_path / "heartbeat-state.json"
+        state_file.write_text(self._make_heartbeat_state(100, 1_000_000, 0.5))
+
+        with patch.object(m, "HEARTBEAT_STATE_JSON", str(state_file)):
+            result = m.check_step3_introspection()
+        assert set(result.keys()) == {"actionable", "reason", "data"}
+        assert set(result["data"].keys()) == {"elapsed_hours", "remaining_hours"}
+        assert isinstance(result["data"]["elapsed_hours"], float)
+        assert isinstance(result["data"]["remaining_hours"], float)
+        assert 0.0 <= result["data"]["elapsed_hours"] < 2.0
+        assert 0.0 < result["data"]["remaining_hours"] <= 2.0
+
 
 # ---------------------------------------------------------------------------
 # Step 4 — memory maintenance
@@ -798,7 +925,7 @@ class TestBoundaryValues:
         """Line growth == 50 (threshold >= 50) → actionable."""
         state_file = tmp_path / "heartbeat-state.json"
         # 1h ago — well below the 8h time threshold so time check won’t fire
-        state_file.write_text(self._heartbeat_state(100, 1_000_000, 1.0))
+        state_file.write_text(self._heartbeat_state(100, 1_000_000, 3.0))
 
         mock_wc = MagicMock()
         mock_wc.returncode = 0
@@ -821,7 +948,7 @@ class TestBoundaryValues:
     def test_step3_byte_growth_exactly_102400_is_actionable(self, m, tmp_path):
         """Byte growth == 102400 (threshold >= 102400) → actionable."""
         state_file = tmp_path / "heartbeat-state.json"
-        state_file.write_text(self._heartbeat_state(100, 1_000_000, 1.0))
+        state_file.write_text(self._heartbeat_state(100, 1_000_000, 3.0))
 
         mock_wc = MagicMock()
         mock_wc.returncode = 0

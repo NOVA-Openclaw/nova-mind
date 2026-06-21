@@ -43,6 +43,14 @@ def m() -> ModuleType:
     return _load_module()
 
 
+@pytest.fixture(autouse=True)
+def _isolate_heartbeat_alt(m, tmp_path):
+    """Prevent the real alt heartbeat file from leaking into tests."""
+    alt_path = str(tmp_path / "alt-heartbeat.json")
+    with patch.object(m, "HEARTBEAT_STATE_JSON_ALT", alt_path):
+        yield
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -527,6 +535,211 @@ class TestStep3Introspection:
         assert isinstance(result["data"]["remaining_hours"], float)
         assert 0.0 <= result["data"]["elapsed_hours"] < 2.0
         assert 0.0 < result["data"]["remaining_hours"] <= 2.0
+
+
+# ---------------------------------------------------------------------------
+# Step 3 — introspection dual-mirror heartbeat state
+# ---------------------------------------------------------------------------
+
+class TestStep3IntrospectionDualMirror:
+    def _make_heartbeat_state(self, lines: int, bytez: int, hours_ago: float) -> str:
+        return json.dumps({
+            "lastIntrospection": {
+                "dailyLogLines": lines,
+                "sessionTranscriptBytes": bytez,
+                "timestamp": _iso(hours_ago),
+            }
+        })
+
+    def _fake_run(self, mock_wc, mock_du):
+        def fake_run(cmd, **kwargs):
+            if isinstance(cmd, list) and cmd[0] == "wc":
+                return mock_wc
+            return mock_du
+        return fake_run
+
+    def _no_threshold_mocks(self):
+        mock_wc = MagicMock()
+        mock_wc.returncode = 0
+        mock_wc.stdout = "102 /path"  # 2-line growth
+        mock_du = MagicMock()
+        mock_du.returncode = 0
+        mock_du.stdout = "1050000"  # 50KB growth
+        return mock_wc, mock_du
+
+    def test_both_exist_primary_newer_uses_primary(self, m, tmp_path):
+        primary_file = tmp_path / "primary.json"
+        alt_file = tmp_path / "alt.json"
+        primary_file.write_text(self._make_heartbeat_state(100, 1_000_000, 3.0))
+        alt_file.write_text(self._make_heartbeat_state(100, 1_000_000, 8.0))
+
+        mock_wc, mock_du = self._no_threshold_mocks()
+
+        with patch.object(m, "HEARTBEAT_STATE_JSON", str(primary_file)), \
+             patch.object(m, "HEARTBEAT_STATE_JSON_ALT", str(alt_file)), \
+             patch("subprocess.run", side_effect=self._fake_run(mock_wc, mock_du)):
+            result = m.check_step3_introspection()
+        assert result["actionable"] is False
+
+    def test_both_exist_alt_newer_uses_alt(self, m, tmp_path):
+        primary_file = tmp_path / "primary.json"
+        alt_file = tmp_path / "alt.json"
+        primary_file.write_text(self._make_heartbeat_state(100, 1_000_000, 9.0))
+        alt_file.write_text(self._make_heartbeat_state(100, 1_000_000, 3.0))
+
+        mock_wc, mock_du = self._no_threshold_mocks()
+
+        with patch.object(m, "HEARTBEAT_STATE_JSON", str(primary_file)), \
+             patch.object(m, "HEARTBEAT_STATE_JSON_ALT", str(alt_file)), \
+             patch("subprocess.run", side_effect=self._fake_run(mock_wc, mock_du)):
+            result = m.check_step3_introspection()
+        assert result["actionable"] is False
+
+    def test_only_primary_exists_uses_primary(self, m, tmp_path):
+        primary_file = tmp_path / "primary.json"
+        alt_file = tmp_path / "alt.json"
+        primary_file.write_text(self._make_heartbeat_state(100, 1_000_000, 3.0))
+        # alt_file intentionally does not exist
+
+        mock_wc, mock_du = self._no_threshold_mocks()
+
+        with patch.object(m, "HEARTBEAT_STATE_JSON", str(primary_file)), \
+             patch.object(m, "HEARTBEAT_STATE_JSON_ALT", str(alt_file)), \
+             patch("subprocess.run", side_effect=self._fake_run(mock_wc, mock_du)):
+            result = m.check_step3_introspection()
+        assert result["actionable"] is False
+
+    def test_only_alt_exists_uses_alt(self, m, tmp_path):
+        primary_file = tmp_path / "primary.json"
+        alt_file = tmp_path / "alt.json"
+        # primary_file intentionally does not exist
+        alt_file.write_text(self._make_heartbeat_state(100, 1_000_000, 3.0))
+
+        mock_wc, mock_du = self._no_threshold_mocks()
+
+        with patch.object(m, "HEARTBEAT_STATE_JSON", str(primary_file)), \
+             patch.object(m, "HEARTBEAT_STATE_JSON_ALT", str(alt_file)), \
+             patch("subprocess.run", side_effect=self._fake_run(mock_wc, mock_du)):
+            result = m.check_step3_introspection()
+        assert result["actionable"] is False
+
+    def test_neither_exists_triggers_introspection(self, m, tmp_path):
+        primary_file = tmp_path / "primary.json"
+        alt_file = tmp_path / "alt.json"
+        # Neither file exists
+
+        with patch.object(m, "HEARTBEAT_STATE_JSON", str(primary_file)), \
+             patch.object(m, "HEARTBEAT_STATE_JSON_ALT", str(alt_file)):
+            result = m.check_step3_introspection()
+        assert result["actionable"] is True
+        assert "missing" in result["reason"].lower()
+
+    def test_primary_malformed_alt_valid_uses_alt(self, m, tmp_path):
+        primary_file = tmp_path / "primary.json"
+        alt_file = tmp_path / "alt.json"
+        primary_file.write_text("{bad json{{")
+        alt_file.write_text(self._make_heartbeat_state(100, 1_000_000, 3.0))
+
+        mock_wc, mock_du = self._no_threshold_mocks()
+
+        with patch.object(m, "HEARTBEAT_STATE_JSON", str(primary_file)), \
+             patch.object(m, "HEARTBEAT_STATE_JSON_ALT", str(alt_file)), \
+             patch("subprocess.run", side_effect=self._fake_run(mock_wc, mock_du)):
+            result = m.check_step3_introspection()
+        assert result["actionable"] is False
+
+    def test_alt_malformed_primary_valid_uses_primary(self, m, tmp_path):
+        primary_file = tmp_path / "primary.json"
+        alt_file = tmp_path / "alt.json"
+        primary_file.write_text(self._make_heartbeat_state(100, 1_000_000, 3.0))
+        alt_file.write_text("{bad json{{")
+
+        mock_wc, mock_du = self._no_threshold_mocks()
+
+        with patch.object(m, "HEARTBEAT_STATE_JSON", str(primary_file)), \
+             patch.object(m, "HEARTBEAT_STATE_JSON_ALT", str(alt_file)), \
+             patch("subprocess.run", side_effect=self._fake_run(mock_wc, mock_du)):
+            result = m.check_step3_introspection()
+        assert result["actionable"] is False
+
+    def test_same_timestamp_uses_primary(self, m, tmp_path):
+        primary_file = tmp_path / "primary.json"
+        alt_file = tmp_path / "alt.json"
+        fixed_ts = "2026-06-21T10:00:00Z"
+        primary_file.write_text(json.dumps({
+            "lastIntrospection": {
+                "dailyLogLines": 100,
+                "sessionTranscriptBytes": 1_000_000,
+                "timestamp": fixed_ts,
+            }
+        }))
+        alt_file.write_text(json.dumps({
+            "lastIntrospection": {
+                "dailyLogLines": 999,
+                "sessionTranscriptBytes": 9_000_000,
+                "timestamp": fixed_ts,
+            }
+        }))
+
+        mock_wc, mock_du = self._no_threshold_mocks()
+
+        with patch.object(m, "HEARTBEAT_STATE_JSON", str(primary_file)), \
+             patch.object(m, "HEARTBEAT_STATE_JSON_ALT", str(alt_file)), \
+             patch("subprocess.run", side_effect=self._fake_run(mock_wc, mock_du)):
+            result = m.check_step3_introspection()
+        # Primary wins tie, so it uses baseline 100/1M → no thresholds exceeded.
+        assert result["actionable"] is False
+
+    def test_both_malformed_triggers_introspection(self, m, tmp_path):
+        primary_file = tmp_path / "primary.json"
+        alt_file = tmp_path / "alt.json"
+        primary_file.write_text("{bad json{{")
+        alt_file.write_text("{also bad{{")
+
+        with patch.object(m, "HEARTBEAT_STATE_JSON", str(primary_file)), \
+             patch.object(m, "HEARTBEAT_STATE_JSON_ALT", str(alt_file)):
+            result = m.check_step3_introspection()
+        assert result["actionable"] is True
+
+    def test_sync_writes_stale_copy(self, m, tmp_path):
+        primary_file = tmp_path / "primary.json"
+        alt_file = tmp_path / "alt.json"
+        # Primary is stale; alt is fresher and has different values.
+        primary_file.write_text(self._make_heartbeat_state(100, 1_000_000, 9.0))
+        alt_state = {
+            "lastIntrospection": {
+                "dailyLogLines": 200,
+                "sessionTranscriptBytes": 2_000_000,
+                "timestamp": _iso(3.0),
+            }
+        }
+        alt_file.write_text(json.dumps(alt_state))
+
+        mock_wc, mock_du = self._no_threshold_mocks()
+
+        with patch.object(m, "HEARTBEAT_STATE_JSON", str(primary_file)), \
+             patch.object(m, "HEARTBEAT_STATE_JSON_ALT", str(alt_file)), \
+             patch("subprocess.run", side_effect=self._fake_run(mock_wc, mock_du)):
+            result = m.check_step3_introspection()
+        assert result["actionable"] is False
+        synced = json.loads(primary_file.read_text())
+        assert synced["lastIntrospection"]["dailyLogLines"] == 200
+        assert synced["lastIntrospection"]["sessionTranscriptBytes"] == 2_000_000
+
+    def test_sync_does_not_create_nonexistent_file(self, m, tmp_path):
+        primary_file = tmp_path / "primary.json"
+        alt_file = tmp_path / "alt.json"
+        # Only alt exists; primary is missing.
+        alt_file.write_text(self._make_heartbeat_state(100, 1_000_000, 3.0))
+
+        mock_wc, mock_du = self._no_threshold_mocks()
+
+        with patch.object(m, "HEARTBEAT_STATE_JSON", str(primary_file)), \
+             patch.object(m, "HEARTBEAT_STATE_JSON_ALT", str(alt_file)), \
+             patch("subprocess.run", side_effect=self._fake_run(mock_wc, mock_du)):
+            result = m.check_step3_introspection()
+        assert result["actionable"] is False
+        assert not primary_file.exists()
 
 
 # ---------------------------------------------------------------------------

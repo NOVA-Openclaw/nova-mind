@@ -47,6 +47,9 @@ SESSIONS_JSON = os.path.expanduser(
 HEARTBEAT_STATE_JSON = os.path.expanduser(
     "~/.openclaw/workspace/memory/heartbeat-state.json"
 )
+HEARTBEAT_STATE_JSON_ALT = os.path.expanduser(
+    "~/.openclaw/workspace/heartbeat-state.json"
+)
 MEMORY_MAINTENANCE_JSON = os.path.expanduser(
     "~/.openclaw/state/memory-maintenance-last-run.json"
 )
@@ -115,6 +118,29 @@ def _db_connect():
 
 def _step_error(msg: str) -> dict:
     return {"actionable": False, "error": msg}
+
+
+def _load_heartbeat_state(path: str) -> tuple[dict[str, Any] | None, datetime | None]:
+    """
+    Load heartbeat state from a single JSON file.
+
+    Returns (state_dict, timestamp_datetime) on success, or (None, None) if
+    the file is missing or cannot be parsed.
+    """
+    try:
+        with open(path, "r") as fh:
+            state = json.load(fh)
+        last_introspect = state.get("lastIntrospection", {})
+        ts_str = last_introspect.get("timestamp")
+        ts = None
+        if ts_str:
+            try:
+                ts = _parse_iso(ts_str)
+            except (ValueError, OverflowError):
+                ts = None
+        return state, ts
+    except (FileNotFoundError, json.JSONDecodeError, ValueError):
+        return None, None
 
 
 # ---------------------------------------------------------------------------
@@ -278,25 +304,35 @@ def check_step3_introspection() -> dict:
     Step 3: Introspection gate.
     Compares current daily log lines + session transcript bytes + elapsed time
     against last recorded values. Any threshold exceeded → actionable.
+
+    Reads heartbeat state from two mirrored locations and uses whichever
+    copy has the more recent timestamp (primary wins ties).
     """
-    # Load last introspection state
-    try:
-        with open(HEARTBEAT_STATE_JSON, "r") as fh:
-            state = json.load(fh)
-        last_introspect = state.get("lastIntrospection", {})
-        last_lines = last_introspect.get("dailyLogLines")
-        last_bytes = last_introspect.get("sessionTranscriptBytes")
-        last_ts_str = last_introspect.get("timestamp")
-    except FileNotFoundError:
+    # Load heartbeat state from both mirrors.
+    primary_state, primary_ts = _load_heartbeat_state(HEARTBEAT_STATE_JSON)
+    alt_state, alt_ts = _load_heartbeat_state(HEARTBEAT_STATE_JSON_ALT)
+
+    if primary_state is None and alt_state is None:
         return {
             "actionable": True,
-            "reason": "heartbeat-state.json missing — first run, trigger introspection",
+            "reason": "heartbeat-state.json missing or malformed in both locations — trigger introspection",
         }
-    except (json.JSONDecodeError, ValueError) as exc:
-        return {
-            "actionable": True,
-            "reason": f"heartbeat-state.json malformed: {exc} — trigger introspection",
-        }
+
+    # Prefer the fresher mirror; primary wins ties.
+    # Guard against None timestamps: treat None as "oldest possible".
+    if alt_state is not None and (primary_state is None or (alt_ts is not None and (primary_ts is None or alt_ts > primary_ts))):
+        state = alt_state
+        source_path = HEARTBEAT_STATE_JSON_ALT
+        stale_path = HEARTBEAT_STATE_JSON
+    else:
+        state = primary_state
+        source_path = HEARTBEAT_STATE_JSON
+        stale_path = HEARTBEAT_STATE_JSON_ALT
+
+    last_introspect = state.get("lastIntrospection", {})
+    last_lines = last_introspect.get("dailyLogLines")
+    last_bytes = last_introspect.get("sessionTranscriptBytes")
+    last_ts_str = last_introspect.get("timestamp")
 
     # Parse timestamp once; reused by the cooldown check and elapsed check below.
     last_ts = None
@@ -306,6 +342,14 @@ def check_step3_introspection() -> dict:
             last_ts = _parse_iso(last_ts_str)
         except (ValueError, OverflowError) as exc:
             last_ts_parse_error = str(exc)
+
+    # Best-effort sync: write the fresher state to the stale mirror if it exists.
+    if source_path != stale_path and os.path.exists(stale_path):
+        try:
+            with open(stale_path, "w") as fh:
+                json.dump(state, fh)
+        except (OSError, TypeError):
+            pass  # Non-fatal; sync is best-effort
 
     # Minimum interval floor — prevent over-firing (see nova-mind#326)
     if last_ts is not None:

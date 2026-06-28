@@ -71,6 +71,7 @@ class OllamaConnectionError(Exception):
 # ---------------------------------------------------------------------------
 DEFAULT_STATE_FILE = os.path.expanduser("~/.openclaw/state/memory-maintenance-last-run.json")
 COOLDOWN_HOURS = 4
+DECAY_COOLDOWN_HOURS = 24
 EMBED_BATCH_SIZE = 64
 ARCHIVE_THRESHOLD = 0.1
 MIN_AGE_DAYS = 7
@@ -120,10 +121,36 @@ def check_cooldown(state_file, force=False):
     return True
 
 
-def update_state(state_file):
+def check_decay_cooldown(state_file, force=False):
+    if force:
+        return True
+    try:
+        with open(state_file) as f:
+            state = json.load(f)
+        last_decay_run = datetime.fromisoformat(state["last_decay_run"])
+        if datetime.now(timezone.utc) - last_decay_run < timedelta(hours=DECAY_COOLDOWN_HOURS):
+            logger.info(
+                f"Decay cooldown active — last run {last_decay_run.isoformat()}, skipping"
+            )
+            return False
+    except (FileNotFoundError, KeyError, json.JSONDecodeError):
+        pass
+    return True
+
+
+def update_state(state_file, ran_decay=False):
     os.makedirs(os.path.dirname(state_file), exist_ok=True)
+    state = {"last_run": datetime.now(timezone.utc).isoformat()}
+    try:
+        with open(state_file) as f:
+            state.update(json.load(f))
+    except (FileNotFoundError, json.JSONDecodeError):
+        pass
+    state["last_run"] = datetime.now(timezone.utc).isoformat()
+    if ran_decay:
+        state["last_decay_run"] = datetime.now(timezone.utc).isoformat()
     with open(state_file, "w") as f:
-        json.dump({"last_run": datetime.now(timezone.utc).isoformat()}, f)
+        json.dump(state, f)
 
 
 # ---------------------------------------------------------------------------
@@ -765,7 +792,7 @@ def apply_decay_to_entity_facts(conn, dry_run=False, verbose=False):
             decay_factor = 0.0
         else:
             decay_factor = calculate_decay(row['durability'], days_since, row['decay_rate'])
-        new_confidence = row['confidence'] * decay_factor
+        new_confidence = decay_factor
         if abs(new_confidence - row['confidence']) > 0.001:
             updates.append({'id': row['id'], 'new_confidence': new_confidence})
     if verbose:
@@ -800,7 +827,7 @@ def apply_decay_to_table(conn, table_name, decay_rate, dry_run=False, verbose=Fa
         if days_since <= 0:
             continue
         decay_factor = math.exp(-decay_rate * days_since)
-        new_confidence = row['confidence'] * decay_factor
+        new_confidence = decay_factor
         if abs(new_confidence - row['confidence']) > 0.001:
             updates.append({'id': row['id'], 'new_confidence': new_confidence})
     if verbose and updates:
@@ -819,10 +846,13 @@ def apply_decay_to_table(conn, table_name, decay_rate, dry_run=False, verbose=Fa
 
 def apply_decay(conn, args):
     """Run confidence decay across all tables."""
+    if not check_decay_cooldown(args.state_file, args.force):
+        return 0, 0, 0, 0
     decayed_facts = apply_decay_to_entity_facts(conn, args.dry_run, args.verbose)
     decayed_events = apply_decay_to_table(conn, 'events', TABLE_DECAY_RATES['events'], args.dry_run, args.verbose)
     decayed_lessons = apply_decay_to_table(conn, 'lessons', TABLE_DECAY_RATES['lessons'], args.dry_run, args.verbose)
     decayed_embeddings = apply_decay_to_table(conn, 'memory_embeddings', TABLE_DECAY_RATES['memory_embeddings'], args.dry_run, args.verbose)
+    args._ran_decay = True
     return decayed_facts, decayed_events, decayed_lessons, decayed_embeddings
 
 
@@ -1210,7 +1240,7 @@ def main():
 
         if not args.dry_run:
             conn.commit()
-            update_state(args.state_file)
+            update_state(args.state_file, ran_decay=getattr(args, '_ran_decay', False))
             logger.info("Committed all changes.")
         else:
             logger.info("DRY RUN — no changes committed.")

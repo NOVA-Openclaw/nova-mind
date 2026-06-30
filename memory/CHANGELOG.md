@@ -3,6 +3,8 @@
 ## Unreleased
 
 ### Changed
+- **Embedding scripts consolidated into unified `memory-maintenance.py` template** (#352) — Removed the four separate deprecated embedding scripts (`embed-full-database.py`, `embed-research.py`, `embed-memories.py`, `embed-library.py`) from `memory/scripts/`. Added `memory/templates/memory-maintenance.py` as the authoritative source, deployed to `~/.openclaw/scripts/memory-maintenance.py` by `agent-install.sh`. The installer now also removes stale copies of the deprecated scripts from deployed locations on upgrade. No functional change — `memory-maintenance.py` already absorbed all embedding logic in the prior consolidation.
+
 - **Turn-context plugin replaces old semantic-recall and agent-turn-context hooks** (#182, #185) — The broken fire-and-forget internal hooks have been removed and consolidated into a single OpenClaw Plugin SDK plugin at `memory/plugins/turn-context/`. The plugin runs entity resolution, semantic recall, and turn reminders in parallel via `before_prompt_build` and `message_received` hooks.
   - `memory/hooks/semantic-recall/` — deleted (HOOK.md, IMPLEMENTATION.md, handler.ts, test-entity-resolution.js, verify-refactor.ts)
   - `memory/hooks/agent-turn-context/` — deleted (HOOK.md, handler.ts, package.json)

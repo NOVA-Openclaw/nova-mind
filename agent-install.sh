@@ -1213,6 +1213,47 @@ if [ -d "$SCRIPTS_SOURCE" ]; then
         fi
     done
 
+    # --- Template scripts (install-if-not-exists) ---
+    TEMPLATES_SOURCE="$SCRIPT_DIR/memory/templates"
+    if [ -d "$TEMPLATES_SOURCE" ]; then
+        templates_installed=0
+        templates_skipped=0
+        for source_file in "$TEMPLATES_SOURCE"/*.py "$TEMPLATES_SOURCE"/*.sh; do
+            [ -f "$source_file" ] || continue
+            filename=$(basename "$source_file")
+            for target_dir in "$SCRIPTS_TARGET_WORKSPACE" "$SCRIPTS_TARGET_OPENCLAW"; do
+                if [ "$FORCE_INSTALL" -eq 1 ] || [ ! -f "$target_dir/$filename" ]; then
+                    cp "$source_file" "$target_dir/$filename"
+                    chmod +x "$target_dir/$filename"
+                    templates_installed=$((templates_installed + 1))
+                else
+                    templates_skipped=$((templates_skipped + 1))
+                fi
+            done
+        done
+        if [ "$templates_installed" -gt 0 ]; then
+            echo -e "  ${CHECK_MARK} $templates_installed template(s) installed"
+        fi
+        if [ "$templates_skipped" -gt 0 ]; then
+            echo -e "  ${INFO} $templates_skipped template(s) skipped (local copy exists)"
+        fi
+    fi
+
+    # --- Cleanup deprecated individual embedding scripts ---
+    DEPRECATED_SCRIPTS=("embed-full-database.py" "embed-research.py" "embed-memories.py" "embed-library.py")
+    deprecated_removed=0
+    for script_name in "${DEPRECATED_SCRIPTS[@]}"; do
+        for target_dir in "$SCRIPTS_TARGET_WORKSPACE" "$SCRIPTS_TARGET_OPENCLAW"; do
+            if [ -f "$target_dir/$script_name" ]; then
+                rm "$target_dir/$script_name"
+                deprecated_removed=$((deprecated_removed + 1))
+            fi
+        done
+    done
+    if [ "$deprecated_removed" -gt 0 ]; then
+        echo -e "  ${CHECK_MARK} Removed $deprecated_removed deprecated embedding script(s)"
+    fi
+
     # Check Python dependencies
     if ls "$SCRIPTS_TARGET_WORKSPACE"/*.py &>/dev/null; then
         MISSING_DEPS=()

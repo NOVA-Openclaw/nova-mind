@@ -917,7 +917,7 @@ The file resides in the `memory/scripts/` directory and is automatically loaded 
 
 ### Unified Memory Maintenance
 
-The separate embedding scripts (`embed-full-database.py`, `embed-memories.py`, `embed-research.py`, `embed-library.py`) have been **absorbed** into a single unified script `memory/scripts/memory-maintenance.py`. This script runs a full 9-phase pipeline:
+The separate embedding scripts (`embed-full-database.py`, `embed-memories.py`, `embed-research.py`, `embed-library.py`) have been **removed** and replaced by a single unified script `memory/templates/memory-maintenance.py` (deployed to `~/.openclaw/scripts/memory-maintenance.py` by `agent-install.sh`). This script runs a full 9-phase pipeline:
 
 | Phase | Description |
 |-------|-------------|
@@ -939,21 +939,18 @@ The separate embedding scripts (`embed-full-database.py`, `embed-memories.py`, `
 
 **Scheduling:** Removed from crontab. Now triggered from the HEARTBEAT idle cascade as priority #2 (after peer agent messages, before pending tasks). The 4-hour cooldown prevents redundant runs.
 
-The old scripts remain in the repo for backward compatibility but are **deprecated** — they will not receive further updates.
-
 ### Running Embedding (if you need only embedding)
 
 Run the full maintenance pipeline:
 
 ```bash
-cd memory/scripts
-python3 memory-maintenance.py
+python3 ~/.openclaw/scripts/memory-maintenance.py
 ```
 
 To run only the embedding phase:
 
 ```bash
-python3 memory-maintenance.py --skip-consolidation --skip-dedup --skip-decay --skip-ghost-cleanup --skip-entity-dedup
+python3 ~/.openclaw/scripts/memory-maintenance.py --skip-consolidation --skip-dedup --skip-decay --skip-ghost-cleanup --skip-entity-dedup
 ```
 
 ## Resource Policies (1Password Integration)

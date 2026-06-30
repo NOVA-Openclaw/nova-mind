@@ -29,7 +29,7 @@ All four subsystems share a single PostgreSQL database (`{username}_memory`) and
 
 ### Memory Maintenance
 
-Memory maintenance is handled by a **unified** script `memory/scripts/memory-maintenance.py` that replaces the separate embedding scripts (`embed-full-database.py`, `embed-memories.py`, `embed-research.py`, `embed-library.py`) and the previous memory maintenance logic. It runs as a 9-phase pipeline:
+Memory maintenance is handled by a **unified** script `memory/templates/memory-maintenance.py` (deployed to `~/.openclaw/scripts/memory-maintenance.py` by `agent-install.sh`) that replaces the separate embedding scripts (`embed-full-database.py`, `embed-memories.py`, `embed-research.py`, `embed-library.py`) and the previous memory maintenance logic. It runs as a 9-phase pipeline:
 
 1. **Cooldown check** — 4-hour gate prevents redundant runs (`--force` to bypass, `--state-file` override)
 2. **Embed** — Absorbs embed-full-database.py, embed-memories.py, embed-research.py

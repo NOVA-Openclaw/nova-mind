@@ -1,5 +1,15 @@
 # Changelog
 
+### Batch: consolidate-embedding-scripts (Issue #352)
+
+#### Changed
+- **Embedding scripts consolidated into `memory-maintenance.py` template** (#352) — Removed the four separate deprecated embedding scripts (`embed-full-database.py`, `embed-research.py`, `embed-memories.py`, `embed-library.py`) from `memory/scripts/`. The authoritative source is now `memory/templates/memory-maintenance.py`, deployed to `~/.openclaw/scripts/memory-maintenance.py` by `agent-install.sh`. The installer cleanup block also removes stale copies of these deprecated scripts from both deploy targets (`~/.openclaw/workspace/scripts/` and `~/.openclaw/scripts/`) on upgrade. No functional change — `memory-maintenance.py` already absorbed all embedding logic in the entity-facts-quality batch.
+
+#### Issues Closed
+- #352 — Consolidate deprecated embedding scripts; move `memory-maintenance.py` to `memory/templates/`
+
+---
+
 ### Batch: installer-bugs-266-315-316 (Issues #266, #315, #316)
 
 #### Bug Fixes

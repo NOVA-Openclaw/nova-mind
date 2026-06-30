@@ -615,10 +615,11 @@ verify_cognition() {
         echo -e "  ${INFO} self-awareness plugin not installed"
     fi
 
+    # confidence-check plugin intentionally disabled (see nova-mind #342)
     if [ -f "$OPENCLAW_DIR/plugins/confidence-check/dist/index.js" ]; then
-        echo -e "  ${CHECK_MARK} confidence-check plugin installed"
+        echo -e "  ${WARNING} confidence-check plugin found but should be DISABLED (see #342)"
     else
-        echo -e "  ${INFO} confidence-check plugin not installed"
+        echo -e "  ${CHECK_MARK} confidence-check plugin not installed (disabled per #342)"
     fi
 
     if [ -d "$OPENCLAW_DIR/hooks/db-bootstrap-context" ]; then
@@ -1719,9 +1720,15 @@ install_metacognition_plugin "self-awareness" \
     "$SCRIPT_DIR/cognition/metacognition/self-awareness" \
     "$OPENCLAW_DIR/plugins/self-awareness"
 
-install_metacognition_plugin "confidence-check" \
-    "$SCRIPT_DIR/cognition/metacognition/confidence-check" \
-    "$OPENCLAW_DIR/plugins/confidence-check"
+# confidence-check plugin DISABLED — do NOT install.
+# The plugin's Phase 1 self-verification forces a revision turn that is
+# incompatible with group-chat NO_REPLY behavior, causing real responses
+# to be swallowed. See nova-mind issue #342 for the upstream fix.
+# Re-enable ONLY after #342 is resolved and the plugin is group-chat-safe.
+#
+# install_metacognition_plugin "confidence-check" \
+#     "$SCRIPT_DIR/cognition/metacognition/confidence-check" \
+#     "$OPENCLAW_DIR/plugins/confidence-check"
 
 # --- Bootstrap context system ---
 echo ""
@@ -2259,9 +2266,10 @@ fi
 if [ -f "$OPENCLAW_DIR/plugins/self-awareness/dist/index.js" ]; then
     echo "    • self-awareness plugin → $OPENCLAW_DIR/plugins/self-awareness"
 fi
-if [ -f "$OPENCLAW_DIR/plugins/confidence-check/dist/index.js" ]; then
-    echo "    • confidence-check plugin → $OPENCLAW_DIR/plugins/confidence-check"
-fi
+# confidence-check plugin disabled (see #342)
+# if [ -f "$OPENCLAW_DIR/plugins/confidence-check/dist/index.js" ]; then
+#     echo "    • confidence-check plugin → $OPENCLAW_DIR/plugins/confidence-check"
+# fi
 echo "    • Bootstrap context → $OPENCLAW_DIR/hooks/db-bootstrap-context"
 echo "    • agents.json → $OPENCLAW_DIR/agents.json"
 echo "    • shell-aliases.sh → $NOVA_DIR/shell-aliases.sh"

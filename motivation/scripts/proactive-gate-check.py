@@ -36,6 +36,20 @@ try:
 except ImportError:
     _DB_AVAILABLE = False
 
+# Load centralized PG config loader so agent_chat queries resolve to the
+# dedicated messaging DB while memory-DB queries keep flat/memory config.
+_PG_ENV_DIR = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "..", "lib"
+)
+if os.path.isdir(_PG_ENV_DIR) and _PG_ENV_DIR not in sys.path:
+    sys.path.insert(0, _PG_ENV_DIR)
+
+try:
+    from pg_env import load_pg_env
+    _PG_ENV_AVAILABLE = True
+except ImportError:
+    _PG_ENV_AVAILABLE = False
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -91,12 +105,53 @@ BLOCKERS_PER_MESSAGE = 3
 # D100 forced-roll threshold (issue #358)
 D100_FORCED_COOLDOWN_H = 12
 
-DB_DSN = "host=/var/run/postgresql dbname=nova_memory user=nova"
-
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _dsn_from_pg_env(section: str | None = None) -> str:
+    """Build a psycopg2 DSN from pg_env, honoring the optional section key.
+
+    Falls back to the original Unix-socket default when no host is configured,
+    preserving pre-cutover behavior while still respecting explicit config.
+    Password is intentionally omitted from the DSN string; libpq reads
+    PGPASSWORD from the environment set by load_pg_env and/or .pgpass.
+    """
+    if not _PG_ENV_AVAILABLE:
+        raise RuntimeError("pg_env loader not importable")
+    env = load_pg_env(section=section)
+    parts: list[str] = []
+    host = env.get("PGHOST")
+    if host:
+        parts.append(f"host={host}")
+    else:
+        # Preserve the legacy Unix-socket default used by the hardcoded DSN.
+        parts.append("host=/var/run/postgresql")
+    if env.get("PGPORT"):
+        parts.append(f"port={env['PGPORT']}")
+    if env.get("PGDATABASE"):
+        parts.append(f"dbname={env['PGDATABASE']}")
+    if env.get("PGUSER"):
+        parts.append(f"user={env['PGUSER']}")
+    return " ".join(parts)
+
+
+def _db_connect(section: str | None = None):
+    """Return a psycopg2 connection for the requested config section."""
+    if not _DB_AVAILABLE:
+        raise RuntimeError("psycopg2 not importable")
+    return psycopg2.connect(_dsn_from_pg_env(section=section))
+
+
+def _memory_db_connect():
+    """Connect to the agent's memory database (flat config keys)."""
+    return _db_connect(section=None)
+
+
+def _agent_chat_db_connect():
+    """Connect to the agent_chat messaging database (nested section)."""
+    return _db_connect(section="agent_chat")
+
 
 def _now_utc() -> datetime:
     return datetime.now(timezone.utc)
@@ -115,13 +170,6 @@ def _parse_iso(ts: str) -> datetime:
         ts = ts.split(".")[0]
     dt = datetime.strptime(ts, "%Y-%m-%dT%H:%M:%S")
     return dt.replace(tzinfo=timezone.utc)
-
-
-def _db_connect():
-    """Return a psycopg2 connection or raise if unavailable."""
-    if not _DB_AVAILABLE:
-        raise RuntimeError("psycopg2 not importable")
-    return psycopg2.connect(DB_DSN)
 
 
 def _step_error(msg: str) -> dict:
@@ -232,7 +280,7 @@ def check_idle() -> dict:
 def check_step1_agent_chat() -> dict:
     """Step 1: Unacknowledged agent_chat messages addressed to nova."""
     try:
-        conn = _db_connect()
+        conn = _agent_chat_db_connect()
         try:
             with conn:
                 with conn.cursor() as cur:
@@ -627,7 +675,7 @@ def check_step7_github_issues() -> dict:
             "reason": f"{total_issues} open issue(s) across {len(per_repo)} repo(s)",
             "data": result_dict,
         }
-    msg = "0 open GitHub issues"
+    msg = "0 open Git issues"
     if errors:
         msg += f" ({len(errors)} repo(s) had errors)"
     return {"actionable": False, "reason": msg, "data": result_dict}
@@ -904,14 +952,12 @@ def check_step8_blocker_outreach() -> dict:
     (entity_id=2), the blocker set is reassigned to the next domain entity
     (via _reassign_exhausted_entity — agent_domains first, then
     user_domains by priority, excluding already-exhausted entities in the
-    chain), restarting cascade level at 1 against the new entity. If every
-    domain entity is exhausted, the chain falls to I)ruid as final
-    fallback. If I)ruid himself is the exhausted entity, no reassignment
-    occurs — he holds at his last available channel/level and the normal
-    72h per-blocker cooldown continues to gate the next attempt. Each
-    returned entity entry carries "exhausted" (True only for the I)ruid
-    hold-in-place case) and, when reassignment occurred, the original
-    "reassigned_from_entity_id".
+    chain), eventually falling to I)ruid if every domain entity is exhausted.
+    If I)ruid himself is the exhausted entity, no reassignment occurs — he
+    holds at his last available channel/level and the normal 72h per-blocker
+    cooldown continues to gate the next attempt. Each returned entity entry
+    carries "exhausted" (True only for the I)ruid hold-in-place case) and,
+    when reassignment occurred, the original "reassigned_from_entity_id".
     """
     try:
         conn = _db_connect()

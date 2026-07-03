@@ -87,9 +87,10 @@ CREATE TABLE entity_facts (
 
 **Example usage:**
 ```sql
--- Add a fact about someone
-INSERT INTO entity_facts (entity_id, key, value, source)
-SELECT id, 'location', 'Brooklyn', 'conversation 2026-02-08'
+-- Add a fact about someone (no `source` column on entity_facts —
+-- source attribution goes in entity_fact_sources, see note above)
+INSERT INTO entity_facts (entity_id, key, value, category)
+SELECT id, 'location', 'Brooklyn', 'observation'
 FROM entities WHERE name = 'john';
 
 -- Query preferences

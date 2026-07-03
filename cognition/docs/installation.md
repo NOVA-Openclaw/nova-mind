@@ -32,7 +32,11 @@ CREATE TABLE ai_models (
     updated_at TIMESTAMPTZ DEFAULT now()
 );
 
--- Agent registry
+-- Agent registry (minimal starter shape — the live `agents` table in a fully-installed
+-- system has ~35+ columns, including context_type, thinking, allowed_subagents,
+-- parent_agents, heartbeat_* fields, domain assignments, etc. See
+-- database/schema-reference.md or `\d agents` on a live install for the full
+-- current column set before building tooling against this table.)
 CREATE TABLE agents (
     id SERIAL PRIMARY KEY,
     nickname VARCHAR(50) UNIQUE,

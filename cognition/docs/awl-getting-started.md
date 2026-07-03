@@ -1,12 +1,14 @@
 # Agent Workflow Language - Getting Started Guide
 
+> ⚠️ **Status: Design Proposal, not yet implemented.** This guide is written in a hands-on tutorial style for when AWL ships, but there is currently no `nova-workflow` CLI, no workflow executor, and no `workflow_executions`/`workflow_gates` tables in this repo. See `agent-workflow-language.md` for the current spec status. Treat the commands and steps below as a design mockup of the intended developer experience, not something you can run today.
+
 > *YAML choreographs*
 > *Agents branch and merge as one*
 > *Complex, made simple*
 >
 > — **Quill**
 
-**🚀 From zero to your first AWL workflow in 15 minutes**
+**🚀 From zero to your first AWL workflow in 15 minutes (once implemented)**
 
 This guide shows you how to integrate and use the Agent Workflow Language (AWL) in your nova-cognition system. AWL lets you orchestrate complex multi-agent processes using declarative YAML workflows.
 
@@ -35,7 +37,7 @@ psql nova_memory -c "SELECT count(*) FROM agents;"
 nova-session spawn newhart "Hello, just testing!"
 
 # 4. Check workflow directory exists
-ls ~/workspace/nova-mind/cognition/focus/protocols/workflows/
+ls ~/.openclaw/workspace/nova-mind/cognition/focus/protocols/workflows/
 ```
 
 If any of these fail, see the [Troubleshooting](#troubleshooting) section.
@@ -48,7 +50,7 @@ Let's start with the simplest possible workflow - having an agent say hello.
 
 ### Step 1: Create the workflow file
 
-Create `~/workspace/nova-mind/cognition/focus/protocols/workflows/getting-started/hello-world.awl.yaml`:
+Create `~/.openclaw/workspace/nova-mind/cognition/focus/protocols/workflows/getting-started/hello-world.awl.yaml`:
 
 ```yaml
 workflow:
@@ -104,7 +106,7 @@ nova-workflow run workflows/getting-started/hello-world.awl.yaml \
 
 Let's build something more realistic - a workflow that gets approval before doing work.
 
-Create `~/workspace/nova-mind/cognition/focus/protocols/workflows/getting-started/write-with-approval.awl.yaml`:
+Create `~/.openclaw/workspace/nova-mind/cognition/focus/protocols/workflows/getting-started/write-with-approval.awl.yaml`:
 
 ```yaml
 workflow:
@@ -202,7 +204,7 @@ nova-workflow run workflows/getting-started/write-with-approval.awl.yaml \
 
 Real workflows often need to do multiple things at once. Here's how:
 
-Create `~/workspace/nova-mind/cognition/focus/protocols/workflows/getting-started/parallel-research.awl.yaml`:
+Create `~/.openclaw/workspace/nova-mind/cognition/focus/protocols/workflows/getting-started/parallel-research.awl.yaml`:
 
 ```yaml
 workflow:
@@ -637,7 +639,7 @@ timeout: 7200  # 2 hours
 
 Now that you understand AWL basics:
 
-1. **Study the examples** in `~/workspace/nova-mind/cognition/focus/protocols/workflows/`
+1. **Study the examples** in `~/.openclaw/workspace/nova-mind/cognition/focus/protocols/workflows/`
 2. **Read the full specification** in `docs/agent-workflow-language.md`
 3. **Create your own workflows** for common tasks
 4. **Set up monitoring** for production workflows

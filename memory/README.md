@@ -94,8 +94,8 @@ createdb "$DB_NAME"
 # 3. Set your Anthropic API key
 export ANTHROPIC_API_KEY="your-key-here"
 
-# 4. Test extraction
-./scripts/process-input.sh "John mentioned he loves coffee from Blue Bottle in Brooklyn"
+# 4. Test extraction (send a real message through a channel with memory-extract
+#    enabled and check entity_facts — there is no standalone CLI test script)
 
 # 5. Install OpenClaw hooks
 openclaw hooks enable memory-extract
@@ -741,43 +741,29 @@ FROM artwork ORDER BY created_at DESC LIMIT 5;
 
 ## Extraction Scripts
 
-### extract-memories.sh
+> **Note:** `extract-memories.sh`, `store-memories.sh`, and `process-input.sh` (documented below in their original form) were consolidated into a single Python script as part of the #174 grammar-parser removal. See `memory/docs/memory-extraction-pipeline.md` for the current pipeline and a known bug where `memory-catchup.sh` still calls the now-removed `process-input.sh`.
 
-Uses Claude API to parse natural language into structured JSON.
+### extract_memories.py (current)
 
-```bash
-export ANTHROPIC_API_KEY="your-key"
-./scripts/extract-memories.sh "John said he loves pizza from Mario's in Brooklyn"
-```
+Uses Claude API to parse natural language into structured JSON in a single pass — replaces the old extract-memories.sh + store-memories.sh + process-input.sh three-script chain. Runs via the `memory-extract` hook, driven by sender metadata passed as environment variables (`SENDER_NAME`, `SENDER_ID`, etc.) rather than a CLI argument.
 
-Output:
+Output shape (current extraction template — see the script for the authoritative version):
 ```json
 {
-  "entities": [{"name": "John", "type": "person"}],
-  "places": [{"name": "Mario's", "type": "restaurant", "location": "Brooklyn"}],
-  "opinions": [{"holder": "John", "subject": "Mario's pizza", "opinion": "loves it"}]
+  "facts": [{"subject": "John", "key": "favorite_food", "value": "pizza from Mario's", "category": "preference", "durability": "long_term", "confidence": 1.0, "visibility": "public"}],
+  "entities": [{"name": "John", "type": "person", "visibility": "public"}],
+  "events": [],
+  "vocabulary": []
 }
 ```
 
-### store-memories.sh
+### process-input.sh (removed)
 
-Takes JSON from extract-memories.sh and inserts into PostgreSQL.
-
-```bash
-echo '{"entities": [...]}' | ./scripts/store-memories.sh
-```
-
-### process-input.sh
-
-Combined pipeline: extract → store.
-
-```bash
-./scripts/process-input.sh "I)ruid mentioned Niché has great steak au poivre"
-```
+This was the combined extract → store entry point in the old pipeline. It no longer exists — `extract_memories.py` is invoked directly by the `memory-extract` hook instead of via a CLI wrapper.
 
 ## Environment Variables
 
-- `ANTHROPIC_API_KEY` - Required for extraction scripts
+- `ANTHROPIC_API_KEY` - Required for `extract_memories.py`
 - `PGHOST`, `PGPORT`, `PGUSER`, `PGDATABASE`, `PGPASSWORD` - PostgreSQL connection (see [Database Configuration](#database-configuration) above)
 
 > **Note:** All scripts use the centralized database configuration loaders installed at `~/.openclaw/lib/` (`pg-env.sh` for Bash, `pg_env.py` for Python). No script contains hardcoded connection logic — see #94 for the config system, #95 for the full migration, and #102 for the lib install mechanism.
@@ -855,10 +841,7 @@ The turn-context plugin registers `before_prompt_build` and runs at prompt const
 
 Memories are automatically extracted and stored from conversations.
 
-**Manual extraction** (if needed):
-```bash
-./scripts/process-input.sh "User said: I love pizza from Mario's"
-```
+**Manual extraction**: There is no standalone CLI for this anymore — extraction runs via the `memory-extract` hook as part of live message handling (see `memory/docs/memory-extraction-pipeline.md`).
 
 ### Uninstallation
 
@@ -1108,7 +1091,7 @@ Yes, keep the aesthetic
 ### Deduplication
 
 **Layer 1 (Prompt)**: Existing facts/vocab queried and included in prompt
-**Layer 2 (Storage)**: `store-memories.sh` checks before every insert
+**Layer 2 (Storage)**: `dedup_helper.py` checks before every insert (current — `store-memories.sh` no longer exists, see note below)
 
 ### Scripts Updated
 

@@ -50,14 +50,16 @@ Nova-memory is a PostgreSQL-based long-term memory system for AI assistants that
 - [Semantic Search Guide](semantic-search-guide.md) - Vector embeddings and intelligent queries
 
 ### 🔧 Advanced Topics
-- [Librarian Agent Deployment](librarian-agent-deployment.md) - Specialized memory management agent
-- [Access Control Implementation](access-control-guide.md) - Multi-agent security patterns  
-- [Performance Tuning](performance-tuning.md) - Optimization and scaling
+> **Note:** The docs below (Librarian Agent Deployment, Access Control Implementation, Performance Tuning) are referenced here as planned topics but have not been written yet — no corresponding files exist in `memory/docs/`. Treat these as a roadmap note, not working links.
+- Librarian Agent Deployment - Specialized memory management agent (not yet written)
+- Access Control Implementation - Multi-agent security patterns (not yet written)
+- Performance Tuning - Optimization and scaling (not yet written)
 
 ### 🛠 Integration
+> **Note:** API Reference and Agent Communication Protocols below are also not yet written; only `integration-overview.md` currently exists.
 - [OpenClaw Integration](integration-overview.md) - Hooks, plugins, and tools
-- [API Reference](api-reference.md) - REST endpoints and client libraries
-- [Agent Communication Protocols](agent-communication.md) - Inter-agent messaging
+- API Reference - REST endpoints and client libraries (not yet written; nova-mind is DB-driven, not a REST API)
+- Agent Communication Protocols - Inter-agent messaging (not yet written; see `psyche/ARCHITECTURE-agent-chat.md` and `GLOBAL/COMMUNICATION` for current `agent_chat`/`send_agent_message()` documentation)
 
 ## Quick Reference
 
@@ -86,27 +88,19 @@ WHERE status = 'active';
 
 ### Memory Extraction Commands
 
+There is no standalone CLI script to manually process a single message — extraction runs via the `memory-extract` hook (`memory/scripts/extract_memories.py`) as part of normal message handling, with sender metadata passed via environment variables. To exercise it manually for testing, set the same env vars the hook sets and pipe content on stdin (see `extract_memories.py`'s module docstring for the current env var contract).
+
 ```bash
-# Process a specific message
-./scripts/process-input.sh "John mentioned he loves coffee from Blue Bottle"
-
-# Manual extraction pipeline
-echo "Test message" | ./scripts/extract-memories.sh | ./scripts/store-memories.sh
-
-# Check extraction status
+# Check extraction/catchup status
 tail -f ~/.openclaw/logs/memory-catchup.log
-
-# Health check
-./scripts/health-check.sh
 ```
 
 ### Search Operations
 
-```bash
-# Semantic search (requires embeddings)
-./scripts/search-memories.sh "pizza places in Brooklyn" 10
+Semantic search runs through the `turn-context` Plugin SDK plugin (`memory/plugins/turn-context/`), which calls `memory/scripts/proactive-recall.py` internally — there is no standalone `search-memories.sh` CLI.
 
-# SQL full-text search
+```bash
+# SQL full-text search (direct DB query)
 psql -c "
 SELECT content FROM memory_embeddings 
 WHERE to_tsvector(content) @@ plainto_tsquery('brooklyn pizza');"
@@ -176,17 +170,13 @@ WHERE name = 'nova-memory';
 ```
 
 ### Research and Learning
-```bash
-# Ingest and search research materials
-./scripts/ingest-media.sh ~/Documents/research-paper.pdf
-./scripts/search-memories.sh "machine learning techniques" 20
-```
+Research/library ingestion is owned by the Library domain (Athena) via the `library_works` table and `media_queue` — there is no `ingest-media.sh` or `search-memories.sh` CLI in this repo. See `memory/docs/library-schema.md`.
 
 ## Troubleshooting
 
 ### Memory Extraction Issues
-1. **Check API connectivity:** `echo "test" | ./scripts/extract-memories.sh`
-2. **Verify cron job:** `crontab -l | grep memory-catchup`  
+1. **Verify the hook is enabled:** `openclaw hooks list`
+2. **Verify cron job for catchup:** `crontab -l | grep memory-catchup`  
 3. **Review logs:** `tail -50 ~/.openclaw/logs/memory-catchup.log`
 4. **Test database:** `psql -c "SELECT COUNT(*) FROM entities;"`
 
@@ -229,19 +219,16 @@ git commit -m "feat: add new table for feature X"
 
 ### Adding New Extraction Categories
 ```bash
-# 1. Update extraction prompt
-vim scripts/extract-memories.sh
+# 1. Update the extraction prompt (LLM instructions + JSON template)
+vim scripts/extract_memories.py
 
-# 2. Update storage logic  
-vim scripts/store-memories.sh
+# 2. Add database table if needed
+vim ../database/schema.sql   # root schema.sql is authoritative; memory/schema/schema.sql is reference-only
 
-# 3. Add database table if needed
-vim schema/schema.sql
+# 3. Test end-to-end by sending a real message through a channel with the
+#    memory-extract hook enabled, then check entity_facts/events for the result
 
-# 4. Test end-to-end
-./scripts/process-input.sh "Test message for new category"
-
-# 5. Update documentation
+# 4. Update documentation
 vim docs/memory-extraction-pipeline.md
 ```
 

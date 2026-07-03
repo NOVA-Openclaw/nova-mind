@@ -21,21 +21,25 @@ Workflow context is now sourced dynamically from the authoritative `workflows` a
 
 ### How It Works
 
+> **Note:** The match criteria and function body below describe the original (#95/#171-era) implementation. `workflow_steps` has never had an `agent_id` column — match has always been domain-based. As of `get_agent_bootstrap()`'s current form (post migration 064), the WORKFLOW section also emits a compact per-workflow summary (name, workflow_id, purpose sentence, and the agent's own step numbers) rather than a single flat `WORKFLOW_CONTEXT.md` per matching row — see `database/schema.sql`'s `get_agent_bootstrap()` definition for the exact current query.
+
 The `get_agent_bootstrap()` function includes workflows in an agent's bootstrap context when:
 
-**Match Criteria:**
-- Any `workflow_steps.agent_id` matches the target agent, OR  
-- Any `workflow_steps.domains` overlap with the agent's assigned domains (via `agent_domains` table)
+**Match Criteria (current):**
+- Any `workflow_steps.domain` or `workflow_steps.domains` entry overlaps with the agent's assigned domains (via the `agent_domains` table, matched on `agent_id`/`domain_topic`)
 
-**Output Format:**
-- **Filename**: `WORKFLOW_CONTEXT.md`
-- **Content**: `Workflow: {name}\n\n{description}`
-- **Source**: `workflow:{workflow_name}`
+There is no `workflow_steps.agent_id` column — step assignment is purely domain-based.
 
-### Function Implementation
+**Output Format (current):**
+- **Filename**: `WORKFLOW_<NAME>.md` (uppercased workflow name, hyphens to underscores)
+- **Content**: A compact summary — workflow name, `workflow_id`, a purpose sentence extracted from the workflow description, and the agent's own step number(s) with a query hint
+- **Source**: `WORKFLOW:<workflow_name>`
+
+### Function Implementation (historical — see note above for current behavior)
 
 ```sql
--- Workflow context (dynamic from workflow_steps)
+-- Workflow context (dynamic from workflow_steps) — illustrative of the original design;
+-- does not match the current get_agent_bootstrap() query verbatim
 SELECT 
     'WORKFLOW_CONTEXT.md' as filename,
     'Workflow: ' || w.name || E'\n\n' || w.description as content,
@@ -43,8 +47,10 @@ SELECT
     4 as priority
 FROM workflow_steps ws
 JOIN workflows w ON ws.workflow_id = w.id
-WHERE ws.agent_id = v_agent_id
-    AND w.status = 'active'
+WHERE EXISTS (
+    SELECT 1 FROM agent_domains ad
+    WHERE ad.agent_id = v_agent_id AND ad.domain_topic = ws.domain
+)
 ```
 
 ## Migration Details
@@ -69,8 +75,9 @@ FROM pg_constraint c
 JOIN pg_class t ON c.conrelid = t.oid
 WHERE t.relname = 'agent_bootstrap_context' AND conname LIKE '%context_type%';
 
--- Verify workflow context works for an agent
-SELECT * FROM verify_workflow_context('conductor');
+-- Verify workflow context works for an agent (there is no verify_workflow_context()
+-- helper function — query get_agent_bootstrap() directly instead)
+SELECT filename, source FROM get_agent_bootstrap('conductor') WHERE source LIKE 'WORKFLOW%';
 ```
 
 ## Benefits
@@ -97,11 +104,10 @@ SELECT * FROM verify_workflow_context('conductor');
 To verify workflow context is working:
 
 ```sql
--- List workflow context for an agent
+-- List workflow context for an agent (source values are uppercase, e.g. 'WORKFLOW:code-document-commit')
 SELECT filename, source 
 FROM get_agent_bootstrap('conductor') 
-WHERE source LIKE 'workflow%';
-
--- Check specific workflow assignments
-SELECT * FROM verify_workflow_context('conductor');
+WHERE source LIKE 'WORKFLOW%';
 ```
+
+There is no `verify_workflow_context()` helper function in the current schema — the query above is the direct way to check.

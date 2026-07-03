@@ -18,6 +18,9 @@ cd nova-relationships
 ```
 
 2. **Database Setup**
+
+> **Note:** This subsystem does not ship its own `schema/init.sql`. The unified schema lives at the repo root (`database/schema.sql`), applied declaratively via `pgschema` by the root `agent-install.sh`. Install `memory/` first (it owns the shared `entities`/`entity_facts`/`entity_relationships` tables this subsystem depends on), then run this subsystem's own `agent-install.sh` for the entity-resolver library and CA setup.
+
 ```bash
 # Create database and user
 # Database name follows pattern: {username}_memory
@@ -25,8 +28,9 @@ cd nova-relationships
 sudo -u postgres createdb nova_memory
 sudo -u postgres createuser nova
 
-# Run schema setup
-psql -U nova -d nova_memory -f schema/init.sql
+# Apply the unified schema (run from repo root, not from relationships/)
+cd ~/.openclaw/workspace/nova-mind
+./agent-install.sh
 ```
 
 3. **Environment Configuration**
@@ -204,9 +208,11 @@ describe('Entity Resolution', () => {
 
 ### Schema Changes
 
-1. **Create Migration Script**
+> **Note:** There is no `relationships/migrations/` or `relationships/schema/` directory in this repo — shared tables (`entities`, `entity_facts`, `entity_relationships`) are owned by the root-level declarative schema at `database/schema.sql` and versioned via `memory/migrations/*.sql`. Schema changes affecting these tables should go through that process, not a subsystem-local migration file.
+
+1. **Edit the declarative schema**
 ```sql
--- migrations/003_add_relationship_strength.sql
+-- database/schema.sql (repo root) — edit the entity_relationships CREATE TABLE block directly
 ALTER TABLE entity_relationships 
 ADD COLUMN strength DECIMAL(3,2) DEFAULT 0.5;
 
@@ -214,15 +220,16 @@ CREATE INDEX idx_relationships_strength
 ON entity_relationships(strength);
 ```
 
-2. **Test Migration**
+2. **If the change requires a data migration** (e.g., a rename or backfill), add a numbered file to `memory/migrations/` following the existing convention (e.g., `084_add_relationship_strength.sql`).
+
+3. **Apply via the installer**
 ```bash
-# Test on development database
-# Database name pattern: {username}_memory (e.g., nova_memory, john_staging_memory)
-psql -U nova -d nova_memory_dev -f migrations/003_add_relationship_strength.sql
+cd ~/.openclaw/workspace/nova-mind
+./agent-install.sh
 ```
 
-3. **Document Changes**
-Update `schema/README.md` with new schema version and changes.
+4. **Document Changes**
+Update `database/schema-reference.md` and `memory/CHANGELOG.md` with the new column/table and its purpose.
 
 ### Query Guidelines
 

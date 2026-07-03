@@ -3361,6 +3361,140 @@ COMMENT ON COLUMN motivation_d100.skill_name IS 'Optional SKILL.md to follow (e.
 COMMENT ON COLUMN motivation_d100.tool_name IS 'Optional tool to use (e.g., "bird-x", "gog")';
 
 --
+-- Name: proactive_outreach; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS proactive_outreach (
+    id SERIAL PRIMARY KEY,
+    entity_id INTEGER NOT NULL REFERENCES entities(id),
+    blocker_type VARCHAR(50) NOT NULL,
+    blocker_id INTEGER NOT NULL,
+    channel_used VARCHAR(50) NOT NULL,
+    channel_target TEXT,
+    message_summary TEXT,
+    attempted_at TIMESTAMPTZ DEFAULT NOW(),
+    response_received BOOLEAN DEFAULT FALSE,
+    response_at TIMESTAMPTZ,
+    notes TEXT
+);
+
+
+COMMENT ON TABLE proactive_outreach IS 'Tracks outreach attempts for blocked tasks/GitHub issues/unsolved problems/D100 items and (as of migration 082) blockers-table rows. blocker_type/blocker_id are polymorphic — blocker_type=''blocker'' + blocker_id=blockers.id is the current outreach path (Step 8, issue #356); no FK is added to blockers to preserve the polymorphic pattern. Cooldown logic (24h entity-level, 72h per-blocker) queries this table by (entity_id, blocker_type, blocker_id, attempted_at).';
+
+--
+-- Name: idx_proactive_outreach_entity; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_proactive_outreach_entity ON proactive_outreach (entity_id);
+
+--
+-- Name: idx_proactive_outreach_blocker; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_proactive_outreach_blocker ON proactive_outreach (blocker_type, blocker_id);
+
+--
+-- Name: idx_proactive_outreach_cooldown; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_proactive_outreach_cooldown ON proactive_outreach (entity_id, blocker_type, blocker_id, attempted_at);
+
+--
+-- Name: blockers; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS blockers (
+    id SERIAL PRIMARY KEY,
+    source_type VARCHAR(50) NOT NULL,
+    source_ref VARCHAR(255) NOT NULL,
+    description TEXT NOT NULL,
+    needs TEXT NOT NULL,
+    entity_id INTEGER NOT NULL REFERENCES entities(id),
+    priority INTEGER DEFAULT 5,
+    status VARCHAR(20) DEFAULT 'open',
+    first_seen TIMESTAMPTZ DEFAULT NOW(),
+    last_seen TIMESTAMPTZ DEFAULT NOW(),
+    satisfied_at TIMESTAMPTZ,
+    CONSTRAINT blockers_status_check CHECK (status IN ('open', 'satisfied')),
+    CONSTRAINT blockers_source_type_check CHECK (
+        source_type IN (
+            'task',
+            'github_issue',
+            'workflow_run',
+            'unanswered_question',
+            'agent_chat_request'
+        )
+    ),
+    CONSTRAINT blockers_source_unique UNIQUE (source_type, source_ref)
+);
+
+
+COMMENT ON TABLE blockers IS 'Curated registry of items blocked waiting on another entity''s action (issue #356). Populated by Proactive Mode workflow (id=27) Steps 6/7 via ON CONFLICT (source_type, source_ref) DO UPDATE upsert; entity_id is resolved via agent_domains first, then user_domains, falling back to entity_id=2 (I)ruid) if no domain match. Outreach against this registry is centralized in Step 8 (see proactive_outreach). Reopen semantics: when a satisfied blocker becomes blocked again, satisfied_at is cleared back to NULL rather than inserting a new row.';
+
+--
+-- Name: idx_blockers_entity; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_blockers_entity ON blockers (entity_id);
+
+--
+-- Name: idx_blockers_status; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_blockers_status ON blockers (status);
+
+--
+-- Name: idx_blockers_priority_first_seen; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_blockers_priority_first_seen ON blockers (priority ASC, first_seen ASC, id ASC);
+
+--
+-- Name: d100_roll_log; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS d100_roll_log (
+    id SERIAL PRIMARY KEY,
+    roll INTEGER NOT NULL,
+    rolled_at TIMESTAMPTZ DEFAULT NOW(),
+    CONSTRAINT d100_roll_log_roll_check CHECK (roll >= 1 AND roll <= 100)
+);
+
+
+COMMENT ON TABLE d100_roll_log IS 'Roll history for motivation_d100 (issue #358). motivation_d100.last_rolled is per-slot and cannot answer "when was the most recent roll across any slot", which the forced-D100-after-12h gate (Proactive Mode Step 11) needs. Populated by trigger trg_log_d100_roll on motivation_d100, not written directly.';
+
+--
+-- Name: idx_d100_roll_log_rolled_at; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_d100_roll_log_rolled_at ON d100_roll_log (rolled_at DESC);
+
+--
+-- Name: _trg_log_d100_roll; Type: FUNCTION; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE FUNCTION _trg_log_d100_roll()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF NEW.last_rolled IS DISTINCT FROM OLD.last_rolled AND NEW.last_rolled IS NOT NULL THEN
+        INSERT INTO d100_roll_log (roll, rolled_at)
+        VALUES (NEW.roll, NEW.last_rolled);
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+--
+-- Name: trg_log_d100_roll; Type: TRIGGER; Schema: -; Owner: -
+--
+
+DROP TRIGGER IF EXISTS trg_log_d100_roll ON motivation_d100;
+CREATE TRIGGER trg_log_d100_roll
+    AFTER UPDATE ON motivation_d100
+    FOR EACH ROW
+    EXECUTE FUNCTION _trg_log_d100_roll();
+
+--
 -- Name: workflow_steps; Type: TABLE; Schema: -; Owner: -
 --
 

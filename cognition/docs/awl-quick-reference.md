@@ -1,5 +1,7 @@
 # AWL Quick Reference
 
+> ⚠️ **Status: Design Proposal, not yet implemented.** No `nova-workflow` CLI or executor exists in this repo yet. See `agent-workflow-language.md` for the current spec status.
+
 **Agent Workflow Language (AWL) - Essential syntax and patterns for rapid development**
 
 ## Basic Workflow Structure
@@ -439,7 +441,7 @@ nova-workflow run my-workflow.awl.yaml --dry-run
 
 ### Recommended Structure
 ```
-~/workspace/nova-mind/cognition/focus/protocols/workflows/
+~/.openclaw/workspace/nova-mind/cognition/focus/protocols/workflows/
 ├── getting-started/          # Learning examples
 ├── production/              # Live production workflows
 ├── development/             # Development/testing workflows

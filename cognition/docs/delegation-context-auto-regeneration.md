@@ -238,6 +238,8 @@ psql -d nova_memory -c "DELETE FROM agents WHERE nickname = 'tester';"
 
 ## Long-Term Solution (Issue #10)
 
+> ⚠️ **Status check:** As written, this section depends on `update_universal_context()`, which **no longer exists** in the current schema (confirmed via `\df update_universal_context` against the live database — zero results). It was removed at some point after the #110-era note below was written, and the codebase has at least one stale call site (`copy_file_to_bootstrap()` in `database/schema.sql` still calls it, which would raise `function update_universal_context() does not exist` if that code path executes — worth a bug report). This entire Long-Term Solution section describes a plan that has **not** been implemented; the Short-Term Solution above remains the live, active system. Before implementing this plan, re-derive the write path against the current `agent_bootstrap_context` schema rather than assuming `update_universal_context()` can be reused.
+
 ### Overview
 
 After PR #9 merges, DELEGATION_CONTEXT will be integrated into the bootstrap context system, eliminating the need for the external listener service.

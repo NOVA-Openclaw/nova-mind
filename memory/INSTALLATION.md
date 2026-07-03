@@ -51,7 +51,7 @@ Before installing the nova-mind memory subsystem, ensure you have the following:
 ## Quick Install
 
 ```bash
-cd ~/workspace/nova-mind
+cd ~/.openclaw/workspace/nova-mind
 ./shell-install.sh    # Interactive: prompts for DB details and API keys, then calls agent-install.sh
 ```
 

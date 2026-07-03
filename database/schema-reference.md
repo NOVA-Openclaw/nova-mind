@@ -21,6 +21,7 @@
 | ai_models | Available AI models. NOVA maintains this; Newhart reads for agent assignments. Credentials and endpoints stored in 1Password (see credential_ref column). | 16 |
 | artwork | Archive of NOVAs Instagram artwork. Reference for future compilation. | 27 |
 | asset_classes | Asset class definitions for financial portfolio management. Defines tradeable asset types with pricing sources and trading characteristics. | 6 |
+| blockers | Curated registry of items blocked waiting on another entity's action (issue #356). Populated by Proactive Mode workflow (id=27) Steps 6/7; outreach against this registry is centralized in Step 8. | 11 |
 | bootstrap_context_config | Configuration for bootstrap system behavior | 4 |
 | certificates | Client certificates issued by NOVA CA. Security-sensitive. Verify before modifications. | 12 |
 | channel_activity | Tracks last message per channel for idle detection. Read/write: NOVA, Newhart. | 3 |
@@ -29,6 +30,7 @@
 | comms_checks | Individual Hermes check run results. Each row = one social/email/digest check. Replaces memory/hermes-*.md files. Owner: Communications domain (hermes). | 11 |
 | comms_digests | Daily/weekly communications digests. Replaces hermes-social-digest-*.md and NOVA_Comms_Digest_*.html. Owner: Communications domain (hermes). | 11 |
 | comms_state | Per-platform communications tracking state (seen IDs, cursors). Replaces hermes-social-state.json. Owner: Communications domain (hermes). | 5 |
+| d100_roll_log | Roll history for motivation_d100 (issue #358), populated by a trigger on motivation_d100. Used by the Proactive Mode gate check to force a D100 roll after 12h regardless of other steps' state. | 3 |
 | entities | People, AIs, organizations. NOVA has full access. Use entity_facts for attributes. | 22 |
 | entity_fact_conflicts | Conflicts between entity facts requiring resolution. Part of the truth reconciliation system. | 13 |
 | entity_fact_sources | - | 8 |
@@ -71,6 +73,7 @@
 | portfolio_snapshots | Historical snapshots of portfolio values and performance metrics over time. | 10 |
 | preferences | User preferences by entity_id. Check before making assumptions. | 6 |
 | price_cache_v2 | Cached price data for assets to reduce API calls. Version 2 of price caching system. | 12 |
+| proactive_outreach | Tracks outreach attempts for blocked tasks/GitHub issues/unsolved problems/D100 items, and (as the current path) blockers-table rows via the dedicated Blocker Outreach step (issue #356). Cooldown logic (24h entity-level, 72h per-blocker) queries this table. | 11 |
 | project_entities | Links projects to entities (people, orgs, AIs). Many-to-many relationship table for project participants. | 3 |
 | project_tasks | Project-specific task breakdown. Links tasks to projects for organized project management. | 8 |
 | projects | Project tracking. For repo-backed projects (locked=TRUE, repo_url set), use GitHub for management. For non-repo projects, use notes field here. | 12 |

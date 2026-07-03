@@ -48,18 +48,22 @@ The core challenge: **How do we resolve multiple platform-specific identifiers t
 
 ## 3. Current Storage (entity_facts table)
 
-The `entity_facts` table stores key-value pairs linking platform identifiers to entities:
+The `entity_facts` table stores key-value pairs linking platform identifiers to entities. The actual schema (see `database/schema.sql`) uses an integer `entity_id` FK to `entities.id` (a SERIAL primary key, not a UUID), a SERIAL `id` as its own primary key (not a composite key on the fact columns), and columns named `key`/`value` (not `fact_key`/`fact_value`):
 
 ```sql
 CREATE TABLE entity_facts (
-    entity_id UUID NOT NULL,
-    fact_key VARCHAR(255) NOT NULL,
-    fact_value TEXT NOT NULL,
-    created_at TIMESTAMP DEFAULT NOW(),
+    id SERIAL PRIMARY KEY,
+    entity_id INTEGER REFERENCES entities(id) ON DELETE CASCADE,
+    key VARCHAR(255) NOT NULL,
+    value TEXT NOT NULL,
+    learned_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW(),
-    PRIMARY KEY (entity_id, fact_key)
+    -- plus confidence, durability, category, visibility, and other columns
+    -- (see database/schema-reference.md for the full column list)
 );
 ```
+
+The examples below use `fact_key`/`fact_value` for readability, but the real columns are `key`/`value`. The live resolution implementation is `relationships/lib/entity-resolver/` (`resolveEntity()` / `resolveEntityByIdentifiers()`), which maps platform-specific identifiers via the `IDENTIFIER_TO_DB_KEY` table (includes `deviceId` → `nova_app_device_id`, in addition to the keys listed below) — see `relationships/ARCHITECTURE-entity-resolver.md` for the current API reference.
 
 ### Standard Fact Keys
 

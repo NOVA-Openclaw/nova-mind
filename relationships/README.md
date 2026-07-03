@@ -15,7 +15,7 @@ Part of the nova-mind ecosystem, providing comprehensive entity perception, prof
 The NOVA Relationships System is a unified platform that merged the original Entity Relations System with the NOVA Multiuser System. It provides:
 
 ### Core Capabilities
-- **Entity Perception**: How NOVA notices and identifies entities across all interaction channels, now with `is_plausible_entity()` heuristics to prevent ghost entities and leveraging `alternate_spellings` for more accurate matching.
+- **Entity Perception**: How NOVA notices and identifies entities across all interaction channels. Ghost-entity prevention (`is_plausible_entity()` heuristics, `find_entity_id()` smarter matching via `alternate_spellings`) lives in the memory domain's extraction pipeline (`memory/scripts/extract_memories.py`), not in this repo's `lib/entity-resolver/` — see `memory/CHANGELOG.md` (#230, #267, #295).
 - **Entity Profiling**: Dynamic profiling of entities (people, organizations, concepts) with behavioral/trait schema
 - **Relationship Management**: Mapping and managing relationships between entities
 - **Recall Triggers**: Context-aware retrieval of relevant entity information
@@ -25,8 +25,9 @@ The NOVA Relationships System is a unified platform that merged the original Ent
 ### Key Components
 
 1. **Entity Resolver Library** (`lib/entity-resolver/`)
-   - **Enhanced Identity Resolution**: Expanded `find_entity_id()` to include `alternate_spellings`, domain-to-entity normalization, and whole-word substring matching. Supports resolution across multiple identifiers (phone, email, UUID, certificates, Discord ID, Telegram ID, Slack member ID, Signal UUID/username, `deviceId`).
+   - **Identity Resolution**: `resolveEntity()` looks up an entity across multiple identifiers (phone, email, UUID, certificates, Discord ID, Telegram ID, Slack member ID, Signal UUID/username, `deviceId`) via the `IDENTIFIER_TO_DB_KEY` mapping.
    - Conflict detection via `resolveEntityByIdentifiers()` — flags when identifiers match different entities
+   - (Note: `find_entity_id()`/`is_plausible_entity()` — alternate-spelling matching and ghost-entity heuristics — are implemented in the memory domain's `extract_memories.py`, not this library.)
    - Session-aware caching for performance
    - Profile management and fact storage
    - Cross-platform integration (Discord, Telegram, Slack, Signal, email, web, certificates, devices)
@@ -205,47 +206,50 @@ This is the actual installer. It:
 - `--database NAME` or `-d NAME` — Override database name (default: `${USER}_memory`)
 
 ### Database Setup
+
+> **Note:** These tables are created by the `memory/` installer, not by this subsystem — the block below is illustrative of the shape, not a script to run directly. For the exact current schema, see `database/schema.sql` / `database/schema-reference.md`. A few real column names differ from earlier drafts of this doc: `entity_relationships` uses `entity_a`/`entity_b`/`relationship` (not `from_entity_id`/`to_entity_id`/`relationship_type`), and `entity_facts` has no `source` column (source attribution is a separate `entity_fact_sources` table) and no composite primary key (it has its own `id SERIAL PRIMARY KEY`).
+
 ```sql
--- Create entities table
+-- entities table (simplified — see database/schema.sql for full column list)
 CREATE TABLE entities (
   id SERIAL PRIMARY KEY,
   name VARCHAR(255) NOT NULL,
   full_name VARCHAR(255),
   alternate_spellings TEXT[],
-  type VARCHAR(50) DEFAULT 'person',
+  type VARCHAR(50) NOT NULL,
   created_at TIMESTAMP DEFAULT NOW(),
   updated_at TIMESTAMP DEFAULT NOW()
 );
 
--- Create entity facts table  
+-- entity_facts table (simplified — see database/schema.sql for full column list,
+-- including durability/category/extraction_count/last_confirmed_at)
 CREATE TABLE entity_facts (
+  id SERIAL PRIMARY KEY,
   entity_id INTEGER REFERENCES entities(id),
   key VARCHAR(255) NOT NULL,
   value TEXT,
   confidence DECIMAL(3,2) DEFAULT 1.0,
-  source VARCHAR(255),
-  created_at TIMESTAMP DEFAULT NOW(),
-  updated_at TIMESTAMP DEFAULT NOW(),
-  PRIMARY KEY (entity_id, key)
+  learned_at TIMESTAMP DEFAULT NOW(),
+  updated_at TIMESTAMP DEFAULT NOW()
 );
 
--- Create relationships table
+-- entity_relationships table (actual column names)
 CREATE TABLE entity_relationships (
   id SERIAL PRIMARY KEY,
-  from_entity_id INTEGER REFERENCES entities(id),
-  to_entity_id INTEGER REFERENCES entities(id),
-  relationship_type VARCHAR(100) NOT NULL,
-  strength DECIMAL(3,2) DEFAULT 0.5,
-  context TEXT,
-  created_at TIMESTAMP DEFAULT NOW(),
-  updated_at TIMESTAMP DEFAULT NOW()
+  entity_a INTEGER REFERENCES entities(id),
+  entity_b INTEGER REFERENCES entities(id),
+  relationship VARCHAR(100) NOT NULL,
+  since TIMESTAMP,
+  notes TEXT,
+  is_long_distance BOOLEAN DEFAULT FALSE,
+  seriousness VARCHAR(20) DEFAULT 'standard'
 );
 
 -- Create indexes for performance
 CREATE INDEX idx_entity_facts_key_value ON entity_facts(key, value);
 CREATE INDEX idx_entity_facts_entity_id ON entity_facts(entity_id);
-CREATE INDEX idx_relationships_from_entity ON entity_relationships(from_entity_id);
-CREATE INDEX idx_relationships_to_entity ON entity_relationships(to_entity_id);
+CREATE INDEX idx_entity_rel_a ON entity_relationships(entity_a);
+CREATE INDEX idx_entity_rel_b ON entity_relationships(entity_b);
 ```
 
 ### Environment Configuration

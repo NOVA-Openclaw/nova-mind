@@ -230,10 +230,10 @@ $$ LANGUAGE plpgsql;
 
 ### 1. Automatic Embedding on Extraction
 
-When memories are extracted and stored, they're automatically queued for embedding:
+When memories are extracted and stored, they're automatically queued for embedding. (Note: there is no `store-memories.sh` in the current pipeline — extraction and storage happen in `memory/scripts/extract_memories.py`; the illustrative snippet below shows the concept, not a literal current file.)
 
 ```bash
-# In store-memories.sh, after inserting data:
+# Conceptual — illustrates the check, not a literal current script location
 
 # Check if new entities were created
 NEW_ENTITIES=$(psql -t -c "
@@ -292,8 +292,10 @@ WHERE l.id = NEW.id;
 
 ### 1. Command-Line Search Tool
 
+> **Note:** There is no `search-memories.sh` in the current repo. Semantic search runs through the `turn-context` Plugin SDK plugin (`memory/plugins/turn-context/`), which calls `memory/scripts/proactive-recall.py` internally as part of turn context injection — not as a standalone CLI. The script below is illustrative of the query pattern, not a literal current file.
+
 ```bash
-# scripts/search-memories.sh
+# Illustrative — not a literal current file; see proactive-recall.py for the real query logic
 #!/bin/bash
 
 QUERY="$1"
@@ -640,12 +642,14 @@ VACUUM ANALYZE memory_embeddings;
 ### 1. OpenClaw Integration
 
 ```javascript
-// openclaw-plugin: semantic-memory-search
+// Illustrative integration pattern — the real integration is the turn-context
+// Plugin SDK plugin (memory/plugins/turn-context/), which calls
+// proactive-recall.py directly rather than spawning a shell script per query.
 const { spawn } = require('child_process');
 
 function searchMemories(query, limit = 10) {
     return new Promise((resolve, reject) => {
-        const search = spawn('./scripts/search-memories.sh', [query, limit.toString()]);
+        const search = spawn('./scripts/proactive-recall.py', [query, limit.toString()]);
         let output = '';
         
         search.stdout.on('data', (data) => {

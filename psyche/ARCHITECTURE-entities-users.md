@@ -40,12 +40,15 @@ The core table for all tracked entities.
 | `photo` | bytea | Avatar/photo (binary) |
 | `user_id` | varchar(255) | External user identifier |
 | `auth_token` | varchar(255) | Authentication token |
-| `trust_level` | integer | Trust score (default 0) |
+| `trust_level` | varchar(20) | Trust level string, default `'unknown'` (values: `owner`, `admin`, `user`, `unknown`, `untrusted`) |
 | `collaborate` | boolean | Can this entity collaborate? |
 | `collaboration_scope` | text | 'full', 'domain-specific', or 'supervised' |
 | `introduction_context` | text | How was this entity introduced? |
 | `capabilities` | jsonb | What can this entity do? |
 | `access_constraints` | jsonb | Limitations on access |
+| `preferred_contact` | varchar(50) | Preferred outreach channel |
+| `did` | text | Decentralized identifier, if any |
+| `alternate_spellings` | text[] | Alternate name spellings for fuzzy entity matching (issue #267) |
 
 **Type Constraint:**
 ```sql
@@ -71,16 +74,22 @@ Flexible key-value storage for any fact about an entity.
 | `key` | varchar(255) | Fact name (e.g., 'phone', 'email') |
 | `value` | text | Fact value |
 | `data` | jsonb | Structured data (optional) |
-| `source` | varchar(255) | Where did this fact come from? |
-| `source_entity_id` | integer | Who told us this? (FK to entities) |
 | `confidence` | float | 0.0 - 1.0 confidence score (default 1.0) |
 | `learned_at` | timestamp | When first learned |
 | `updated_at` | timestamp | When last updated |
-| `last_confirmed` | timestamp | When last verified |
-| `vote_count` | integer | Confirmation count |
+| `last_confirmed_at` | timestamptz | When last verified (default now()) |
+| `extraction_count` | integer | Reinforcement/confirmation count (default 1) |
+| `decay_rate` | real | Confidence decay rate |
+| `durability` | varchar(20) | `permanent`, `long_term`, `short_term`, or `ephemeral` — replaces the old `data_type` column |
+| `category` | text | Free-form category, default `'observation'` |
+| `expires` | timestamptz | Optional expiration for ephemeral facts |
+| `source_channel_transcript_id` | bigint | FK to `channel_transcripts` — source attribution (replaces the old `source`/`source_entity_id` columns) |
+| `source_channel_session_id` | bigint | FK to `channel_sessions` — source attribution |
 | `visibility` | varchar(20) | 'public', 'private', etc. |
 | `privacy_scope` | integer[] | Array of entity IDs who can see this |
 | `visibility_reason` | text | Why is visibility set this way? |
+
+> **Note:** Source attribution ("who told us this") lives in the separate `entity_fact_sources` table, not as columns on `entity_facts`. See `database/schema-reference.md` for its schema.
 
 **Common Keys for Users:**
 - `is_user` — 'true' marks entity as a user
@@ -133,9 +142,11 @@ Links entities together with typed relationships.
 
 ```sql
 -- Example: Sean knows I)ruid
-INSERT INTO entity_relationships (entity_a, entity_b, relationship_type)
+INSERT INTO entity_relationships (entity_a, entity_b, relationship)
 VALUES (28, 2, 'knows');
 ```
+
+Other columns: `since` (timestamp), `notes`, `is_long_distance` (boolean), `seriousness` (varchar, default `'standard'`).
 
 ## Related Tables
 

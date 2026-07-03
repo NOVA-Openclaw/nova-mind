@@ -37,13 +37,13 @@ Parse the JSON output:
   "idle": true,
   "idle_minutes": 95.3,
   "idle_threshold_minutes": 60,
-  "actionable_steps": [3, 6, 10],
+  "actionable_steps": [3, 6, 11],
   "actionable_count": 3,
-  "summary": "3 of 10 steps actionable"
+  "summary": "3 of 11 steps actionable"
 }
 ```
 
-The `actionable_steps` array lists step numbers (1–10) corresponding to the **NOVA Proactive
+The `actionable_steps` array lists step numbers (1–11) corresponding to the **NOVA Proactive
 Mode** workflow (id=27). The script has already evaluated all gate conditions; do not
 re-evaluate them manually.
 
@@ -74,9 +74,20 @@ SELECT step_order, description FROM workflow_steps
 WHERE workflow_id = 27 ORDER BY step_order;
 ```
 
-**Step 10 (D100 random task) is mandatory when no other steps are actionable.** If
-`actionable_steps` contains only `[10]`, that is the work to do — it is the catch-all that
-ensures the cascade always produces output.
+**Step 8 (Blocker Outreach) sends outreach for blockers curated by Steps 6 and 7.** Steps 6
+and 7 only upsert blocked items into the `blockers` table — they never contact anyone
+directly. Step 8 is the sole place outreach is sent: it enforces a 24h entity-level cooldown
+and a 72h per-blocker cooldown, selects up to 3 eligible blockers per entity, and sends one
+consolidated message per entity at the most-escalated channel among its selected blockers.
+See `motivation/ARCHITECTURE.md` for the full cascade/channel/reassignment rules
+(issue #356).
+
+**Step 11 (D100 random task) is mandatory when no other steps are actionable, and forced
+when more than 12h have elapsed since the last roll.** If `actionable_steps` contains only
+`[11]`, that is the work to do — it is the catch-all that ensures the cascade always
+produces output. Independently, Step 11 will also appear in `actionable_steps` whenever
+`d100_roll_log` shows more than 12h since the last roll (or no roll on record at all), even
+if other steps already had actionable work (issue #358).
 
 ## Rules
 

@@ -20,18 +20,45 @@
 -- description edits are needed for the pure renumbering of steps 8/9/10.
 
 -- ---------------------------------------------------------------------------
--- 1. Renumber steps 8, 9, 10 -> 9, 10, 11 using a temporary offset to avoid
---    violating the workflow_steps_workflow_id_step_order_key UNIQUE
---    constraint (workflow_id, step_order) while the new step 8 is inserted
---    below.
+-- Idempotency guard: this migration rewrites workflow 27 in place. A second
+-- run must be a clean no-op. We detect the already-applied state by looking
+-- for the final 11-step layout with the new "Blocker Outreach" step at
+-- step_order 8. When that layout is present we skip the renumbering and
+-- description edits entirely.
 -- ---------------------------------------------------------------------------
-UPDATE workflow_steps
-SET step_order = step_order + 1000
-WHERE workflow_id = 27 AND step_order IN (8, 9, 10);
+DO $$
+DECLARE
+    v_already_applied BOOLEAN;
+BEGIN
+    SELECT EXISTS (
+        SELECT 1 FROM workflow_steps
+        WHERE workflow_id = 27
+          AND step_order = 8
+          AND description LIKE '## Blocker Outreach%'
+    )
+    AND EXISTS (
+        SELECT 1 FROM workflow_steps
+        WHERE workflow_id = 27 AND step_order = 11
+    )
+    INTO v_already_applied;
 
-UPDATE workflow_steps
-SET step_order = step_order - 1000 + 1
-WHERE workflow_id = 27 AND step_order IN (1008, 1009, 1010);
+    IF v_already_applied THEN
+        RETURN;
+    END IF;
+
+    -- -----------------------------------------------------------------------
+    -- 1. Renumber steps 8, 9, 10 -> 9, 10, 11 using a temporary offset to
+    --    avoid violating the workflow_steps_workflow_id_step_order_key UNIQUE
+    --    constraint (workflow_id, step_order) while the new step 8 is
+    --    inserted below.
+    -- -----------------------------------------------------------------------
+    UPDATE workflow_steps
+    SET step_order = step_order + 1000
+    WHERE workflow_id = 27 AND step_order IN (8, 9, 10);
+
+    UPDATE workflow_steps
+    SET step_order = step_order - 1000 + 1
+    WHERE workflow_id = 27 AND step_order IN (1008, 1009, 1010);
 
 -- ---------------------------------------------------------------------------
 -- 2. Step 6 (Work on Pending Tasks) — curation semantics, no immediate
@@ -67,4 +94,7 @@ VALUES (
     E'## Blocker Outreach\n\nThe gate check (`proactive-gate-check.py`) curates eligible blockers into this step''s data payload: up to 3 blockers per responsible entity, ordered by priority ASC, first_seen ASC, id ASC, filtered by cooldown eligibility (see below). Work from that payload — do not re-query `blockers` independently unless the payload is empty and you need to double-check.\n\n**Before selecting outreach targets — reconcile satisfied blockers:**\n- For any blocker in the registry whose underlying condition has cleared (task completed, issue closed, question answered, etc.), mark it `status = ''satisfied''`, `satisfied_at = NOW()`.\n- If a previously-satisfied blocker''s condition recurs (reopened issue, task re-blocked), **reopen it**: set `status = ''open''` and clear `satisfied_at` back to `NULL` — do not create a duplicate row (the `(source_type, source_ref)` unique constraint on `blockers` prevents this anyway; rely on the `ON CONFLICT ... DO UPDATE` upsert from steps 6/7).\n\n**Eligibility (enforced by the gate check, informational here):**\n- Entity master cooldown: an entity is eligible for a new message only if more than 24h have elapsed since ANY prior `proactive_outreach` row for that entity (strict >; exactly 24h still blocks).\n- Per-blocker cooldown: a specific blocker is eligible only if more than 72h have elapsed since the last `proactive_outreach` row for `(entity_id, blocker_type=''blocker'', blocker_id)` (strict >).\n- Top 3 blockers per eligible entity are selected, ordered by `priority ASC, first_seen ASC, id ASC`.\n\n**Sending outreach — one message per entity:**\n- Send **exactly ONE message per entity** this step, even when multiple blockers were selected for them.\n- The message channel is the **most-escalated requested level** among that entity''s selected blockers. Cascade level for a blocker = the count of prior `proactive_outreach` rows for `(entity_id, ''blocker'', blocker_id)` + 1. Levels map onto that entity''s available contact channels (per `entity_facts`: `discord_id` → discord mention, then discord DM, then `signal`, then `slack`, then `email`, skipping any missing channel) — or `agent_chat` unconditionally for entities that are agents (row exists in `agents` with matching `entity_id`).\n- The message should summarize all selected blockers for that entity, not just the most-escalated one.\n\n**Logging — one row per blocker, not per message:**\n- Log **one `proactive_outreach` row per blocker** included in the message (even though only one message was sent), recording the **actual channel used** to deliver that message — not the requested/theoretical channel for that specific blocker''s own cascade level.\n- Cascade position for the NEXT attempt is derived purely from the count of prior `proactive_outreach` rows for that blocker, regardless of which channel actually delivered any given attempt. Do not track cascade position by channel.\n\n**Channel exhaustion — reassignment, not skip:**\n- If an entity has exhausted all of their available contact channels (cascade level exceeds the number of channels the mapping helper found for them) and they are not I)ruid, **reassign the blocker to the next domain entity** (re-resolve via `agent_domains`/`user_domains` excluding the exhausted entity) rather than continuing to message someone with no reachable channel left.\n- If reassignment eventually exhausts every domain entity, escalate to **I)ruid (entity_id=2) as the final fallback**.\n- If I)ruid himself is exhausted (all of his channels already used at his highest cascade level), **hold the blocker at his last available channel/level** and continue trying him on the normal 72h cadence — do not loop reassignment past him and do not drop the blocker.\n\n**If no entities are eligible this cycle:** advance to next step; no outreach is sent.\n\n---\n\n**Step reporting requirement:** After completing this step (whether work was performed or the step was skipped via gate check), post a concise summary of the step''s outcome to Discord <#1504054635231445112> (#proactive-mode). Include: step number/name, action taken or reason skipped, and any notable findings. Keep it brief — one short paragraph or a few bullets.',
     'NOVA Operations',
     true, false, false
-);
+)
+ON CONFLICT (workflow_id, step_order) DO NOTHING;
+
+END $$;

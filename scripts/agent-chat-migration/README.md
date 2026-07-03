@@ -207,6 +207,60 @@ psql -U nova -d agent_chat -c "SELECT send_agent_message('nova', 'post-DROP smok
 psql -U postgres -d nova_memory -c "SELECT count(*) FROM agent_chat;"  # should fail with "relation does not exist"
 ```
 
+## Rollout-status audit
+
+`scripts/agent-chat-migration/audit_rollout.py` reads each candidate
+`~/.openclaw/postgres.json` and resolves which database `agent_chat` would
+connect to, using the same nested-section → flat-key fallback as the
+plugin and consumer scripts.
+
+```bash
+./scripts/agent-chat-migration/audit_rollout.py
+```
+
+Sample output:
+
+```
+Agent        Status       Database             User            Path
+------------------------------------------------------------------------------------------
+nova         migrated     agent_chat           nova            /home/nova/.openclaw/postgres.json
+newhart      unreadable   None                 None            /home/newhart/.openclaw/postgres.json
+             error: [Errno 13] Permission denied: '/home/newhart/.openclaw/postgres.json'
+graybeard    unreadable   None                 None            /home/graybeard/.openclaw/postgres.json
+             error: [Errno 13] Permission denied: '/home/graybeard/.openclaw/postgres.json'
+
+Summary: 1 migrated, 0 unmigrated, 2 unreadable/missing (of 3 candidates)
+```
+
+Peer agents (`newhart`, `graybeard`) run as separate unix users, so a
+non-root audit will see permission-denied for their home directories. Run
+the audit as root, or run it once per peer as that peer's unix user, to
+verify those configs. The script exits non-zero until every candidate is
+readable and resolves to the `agent_chat` database.
+
+### Required postgres.json snippet per agent
+
+Every agent must add the nested `agent_chat` section to its
+`~/.openclaw/postgres.json`:
+
+```json
+{
+  "host": "localhost",
+  "port": 5432,
+  "database": "nova_memory",
+  "user": "<agent>",
+  "password": "<password>",
+  "agent_chat": {
+    "database": "agent_chat",
+    "user": "<agent>",
+    "password": "<password>"
+  }
+}
+```
+
+Only `database`, `user`, and `password` are required inside `agent_chat`;
+`host` and `port` fall back to the flat keys (or their defaults) if omitted.
+
 ## Rollback notes
 
 Before Step 7, the original `nova_memory` tables still contain all data.

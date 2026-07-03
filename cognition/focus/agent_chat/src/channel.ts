@@ -9,8 +9,9 @@ import { loadPgEnv } from "../lib/pg-env.js";
 import { getAgentChatRuntime } from "./runtime.js";
 import { AgentChatConfigSchema, type ResolvedAgentChatAccount } from "./config.js";
 
-// Get PostgreSQL config without polluting process.env for child processes
-const pgConfig = loadPgEnv();
+// Resolve agent_chat DB from the nested config section, falling back to flat keys.
+// No process.env pollution so child processes/subagents keep their own env.
+const pgConfig = loadPgEnv(undefined, "agent_chat");
 
 const { Client } = pg;
 
@@ -319,7 +320,9 @@ async function startAgentChatMonitor(
 
   try {
     await client.connect();
-    log?.info?.(`Connected to PostgreSQL`);
+    log?.info?.(
+      `Connected to PostgreSQL host=${pgConfig.host ?? "localhost"} database=${pgConfig.database ?? "<unset>"}`
+    );
 
     // Listen to agent_chat channel
     await client.query("LISTEN agent_chat");
@@ -393,7 +396,10 @@ async function startAgentChatMonitor(
       }
     });
   } catch (error) {
-    log?.error?.(`Fatal error: ${error}`);
+    log?.error?.(
+      `agent_chat: fatal error connecting to PostgreSQL ` +
+      `host=${pgConfig.host ?? "localhost"} database=${pgConfig.database ?? "<unset>"}: ${error}`
+    );
     try {
       await client.end();
     } catch (cleanupError) {

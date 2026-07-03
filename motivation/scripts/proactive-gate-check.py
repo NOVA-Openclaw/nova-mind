@@ -2,7 +2,7 @@
 """
 proactive-gate-check.py — Deterministic gate checker for NOVA's proactive cascade.
 
-Checks all 10 cascade step gates without LLM involvement. Outputs a structured
+Checks all 11 cascade step gates without LLM involvement. Outputs a structured
 JSON manifest so the heartbeat agent can work only on actionable steps.
 
 Exit code is always 0. Per-step errors are embedded in JSON output.
@@ -15,7 +15,7 @@ import os
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 # ---------------------------------------------------------------------------
@@ -82,6 +82,14 @@ MEMORY_MAINTENANCE_COOLDOWN_H = 4
 
 # Filesystem audit staleness threshold
 FS_AUDIT_STALENESS_DAYS = 7
+
+# Blocker outreach cooldowns (issue #356)
+BLOCKER_ENTITY_COOLDOWN_H = 24
+BLOCKER_PER_BLOCKER_COOLDOWN_H = 72
+BLOCKERS_PER_MESSAGE = 3
+
+# D100 forced-roll threshold (issue #358)
+D100_FORCED_COOLDOWN_H = 12
 
 DB_DSN = "host=/var/run/postgresql dbname=nova_memory user=nova"
 
@@ -251,52 +259,76 @@ def check_step1_agent_chat() -> dict:
         return _step_error(f"DB error: {exc}")
 
 
+def _last_conversational_role(session_file: str) -> str | None:
+    """Return the role ('user' or 'assistant') of the last conversational message in a session JSONL file.
+
+    Skips toolResult, system, and other non-conversational entries.
+    Returns None if no conversational message is found.
+    """
+    if not os.path.exists(session_file):
+        return None
+    try:
+        with open(session_file, "r") as fh:
+            lines = fh.readlines()
+    except OSError:
+        return None
+    # Walk backwards to find last user or assistant message
+    for line in reversed(lines):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            entry = json.loads(line)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        role = entry.get("message", {}).get("role")
+        if role in ("user", "assistant"):
+            return role
+    return None
+
+
 def check_step2_unanswered_sessions() -> dict:
     """
-    Step 2: Recent user-facing sessions.
-    Runs `openclaw sessions list --json` and counts sessions with ageMs < 24h.
+    Step 2: Check for unanswered user messages in recent user-facing sessions.
+    Reads sessions.json and checks each session's JSONL file to see if the last
+    conversational message is from a user (i.e. unanswered).
     """
     ONE_DAY_MS = 86_400_000
     try:
-        result = subprocess.run(
-            ["openclaw", "sessions", "list", "--json"],
-            capture_output=True,
-            text=True,
-            timeout=15,
-        )
-        if result.returncode != 0:
-            return _step_error(
-                f"openclaw sessions list failed (rc={result.returncode}): {result.stderr[:200]}"
-            )
-        payload = json.loads(result.stdout)
-    except FileNotFoundError:
-        return _step_error("openclaw CLI not found")
-    except subprocess.TimeoutExpired:
-        return _step_error("openclaw sessions list timed out")
-    except (json.JSONDecodeError, ValueError) as exc:
-        return _step_error(f"Failed to parse openclaw sessions list output: {exc}")
+        with open(SESSIONS_JSON, "r") as fh:
+            sessions_data = json.load(fh)
+    except (OSError, json.JSONDecodeError) as exc:
+        return _step_error(f"Failed to read sessions.json: {exc}")
 
-    sessions = payload.get("sessions", [])
-    active: list[str] = []
-    for sess in sessions:
-        key = sess.get("key", "")
-        age_ms = sess.get("ageMs", ONE_DAY_MS + 1)
+    now_ms = int(time.time() * 1000)
+    unanswered: list[str] = []
+
+    for key, sess in sessions_data.items():
+        updated = sess.get("updatedAt", 0)
+        age_ms = now_ms - updated
         if age_ms >= ONE_DAY_MS:
             continue
         if not any(pat in key for pat in USER_SESSION_PATTERNS):
             continue
         if any(exc_pat in key for exc_pat in EXCLUDE_PATTERNS):
             continue
-        active.append(key)
 
-    count = len(active)
+        session_file = sess.get("sessionFile", "")
+        if not session_file:
+            continue
+
+        last_role = _last_conversational_role(session_file)
+        if last_role == "user":
+            unanswered.append(key)
+
+    count = len(unanswered)
     if count > 0:
         return {
             "actionable": True,
-            "reason": f"{count} recent active user-facing session(s)",
-            "data": {"count": count, "sessions": active},
+            "reason": f"{count} session(s) with unanswered user messages",
+            "data": {"count": count, "sessions": unanswered},
         }
-    return {"actionable": False, "reason": "No recent active user-facing sessions"}
+    return {"actionable": False, "reason": "No unanswered user messages in recent sessions"}
 
 
 def check_step3_introspection() -> dict:
@@ -601,8 +633,481 @@ def check_step7_github_issues() -> dict:
     return {"actionable": False, "reason": msg, "data": result_dict}
 
 
-def check_step8_unsolved_problems() -> dict:
-    """Step 8: Unsolved problems with status != 'solved'."""
+def _entity_channel_facts(entity_id: int) -> dict[str, str]:
+    """Return available human contact channels for an entity from entity_facts.
+
+    Keys: discord_id, discord_dm (same fact as discord_id), signal, slack, email.
+    Values are the fact values. Agents use agent_chat instead.
+    """
+    channels: dict[str, str] = {}
+    try:
+        conn = _db_connect()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT key, value FROM entity_facts
+                        WHERE entity_id = %s
+                          AND key IN ('discord_id', 'signal', 'slack', 'email')
+                        """,
+                        (entity_id,),
+                    )
+                    for key, value in cur.fetchall():
+                        if key == "discord_id":
+                            channels["discord_channel"] = value
+                            channels["discord_dm"] = value
+                        else:
+                            channels[key] = value
+        finally:
+            conn.close()
+    except Exception:
+        pass
+    return channels
+
+
+def _entity_is_agent(entity_id: int) -> bool:
+    """Return True if this entity maps to a row in the agents table."""
+    try:
+        conn = _db_connect()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT 1 FROM agents WHERE entity_id = %s LIMIT 1",
+                        (entity_id,),
+                    )
+                    return cur.fetchone() is not None
+        finally:
+            conn.close()
+    except Exception:
+        return False
+
+
+def _entity_name_lookup(entity_id: int) -> str | None:
+    """Return entities.name for the given entity_id, or None on failure."""
+    try:
+        conn = _db_connect()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT name FROM entities WHERE id = %s LIMIT 1",
+                        (entity_id,),
+                    )
+                    row = cur.fetchone()
+                    return row[0] if row is not None else None
+        finally:
+            conn.close()
+    except Exception:
+        return None
+
+
+def _map_cascade_to_channel(level: int, channels: dict[str, str], is_agent: bool) -> str:
+    """Map a computed cascade level to a concrete channel.
+
+    Agents always map to agent_chat. Humans escalate through available
+    channels: discord_channel (1), discord_dm (2), signal (3), slack (4),
+    email (5+). If the requested level has no fact, fall back to the last
+    available channel (repeat-at-ceiling). If no channels exist, return
+    'none'. Both the repeat-at-ceiling and no-channels cases are signals of
+    *cascade exhaustion* for the entity — see _is_cascade_exhausted() and
+    _reassign_exhausted_entity(), which detect this condition and drive
+    reassignment/hold-at-I)ruid behavior. This function itself only maps
+    level -> channel string; it does not decide reassignment.
+    """
+    if is_agent:
+        return "agent_chat"
+    order = ["discord_channel", "discord_dm", "signal", "slack", "email"]
+    available = [ch for ch in order if ch in channels]
+    if not available:
+        return "none"
+    idx = max(0, level - 1)
+    if idx >= len(available):
+        return available[-1]
+    return available[idx]
+
+
+def _is_cascade_exhausted(level: int, channels: dict[str, str], is_agent: bool) -> bool:
+    """Return True if the cascade level exceeds the entity's available channels.
+
+    Agents are never exhausted (agent_chat is unconditionally available).
+    A human entity with zero channels is exhausted at any level >= 1.
+    """
+    if is_agent:
+        return False
+    order = ["discord_channel", "discord_dm", "signal", "slack", "email"]
+    available_count = len([ch for ch in order if ch in channels])
+    return level > available_count
+
+
+def _entity_domain_topics(entity_id: int) -> list[str]:
+    """Return domain_topic values for which this entity is the PRIMARY owner.
+
+    Checks agent_domains first (joined via agents.entity_id), then
+    user_domains. Per ruling TC-E07, when the same domain_topic exists in
+    both tables, agent_domains wins as primary owner for that topic — so a
+    topic already claimed by an agent is excluded from this entity's list
+    if the entity itself is not that agent. Only used to find which topics
+    an *exhausted* entity currently owns, so we can look up the next
+    candidate for the same topic(s).
+    """
+    topics: set[str] = set()
+    try:
+        conn = _db_connect()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    # Topics this entity owns via agent_domains (entity is an agent).
+                    cur.execute(
+                        """
+                        SELECT ad.domain_topic
+                        FROM agent_domains ad
+                        JOIN agents a ON a.id = ad.agent_id
+                        WHERE a.entity_id = %s
+                        """,
+                        (entity_id,),
+                    )
+                    topics.update(r[0] for r in cur.fetchall())
+
+                    # Topics this entity owns via user_domains, EXCLUDING any
+                    # topic that agent_domains already claims for some agent
+                    # (agent_domains wins ties per TC-E07 — a human's
+                    # user_domains row for that topic is a fallback, not a
+                    # primary ownership claim, when an agent also claims it).
+                    cur.execute(
+                        """
+                        SELECT ud.domain_topic
+                        FROM user_domains ud
+                        WHERE ud.entity_id = %s
+                          AND NOT EXISTS (
+                              SELECT 1 FROM agent_domains ad2
+                              WHERE ad2.domain_topic = ud.domain_topic
+                          )
+                        """,
+                        (entity_id,),
+                    )
+                    topics.update(r[0] for r in cur.fetchall())
+        finally:
+            conn.close()
+    except Exception:
+        pass
+    return sorted(topics)
+
+
+def _next_domain_entity(domain_topic: str, exclude_entity_ids: set[int]) -> int | None:
+    """Resolve the next-priority responsible entity for a domain topic.
+
+    Resolution order matches curation (agent_domains first, then
+    user_domains by priority ASC, tiebreak first_seen/id), excluding any
+    entity already in exclude_entity_ids (already-exhausted entities in
+    this reassignment chain). Returns None if no candidate remains.
+    """
+    try:
+        conn = _db_connect()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    # agent_domains: domain_topic is globally unique per the
+                    # current schema constraint, so at most one candidate.
+                    cur.execute(
+                        """
+                        SELECT a.entity_id
+                        FROM agent_domains ad
+                        JOIN agents a ON a.id = ad.agent_id
+                        WHERE ad.domain_topic = %s
+                        """,
+                        (domain_topic,),
+                    )
+                    row = cur.fetchone()
+                    if row is not None and row[0] is not None and row[0] not in exclude_entity_ids:
+                        return row[0]
+
+                    # user_domains: lower priority number wins; tiebreak
+                    # created_at ASC, id ASC (deterministic; the random
+                    # tiebreak used in curation is for direct assignment,
+                    # not reassignment which needs a stable next-candidate).
+                    cur.execute(
+                        """
+                        SELECT entity_id
+                        FROM user_domains
+                        WHERE domain_topic = %s
+                          AND entity_id != ALL(%s)
+                        ORDER BY priority ASC, created_at ASC, id ASC
+                        LIMIT 1
+                        """,
+                        (domain_topic, list(exclude_entity_ids) or [-1]),
+                    )
+                    row = cur.fetchone()
+                    if row is not None:
+                        return row[0]
+        finally:
+            conn.close()
+    except Exception:
+        return None
+    return None
+
+
+def _reassign_exhausted_entity(
+    entity_id: int, exclude_entity_ids: set[int]
+) -> tuple[int | None, bool]:
+    """Find the reassignment target for an exhausted entity's blockers.
+
+    Per ruling #7 (SE Run #333 Step 4) / TC-D07:
+      1. Look up domain topics the exhausted entity currently owns as
+         primary responsible entity.
+      2. For each topic, find the next-priority domain entity (excluding
+         already-exhausted entities in this chain).
+      3. If any topic yields a candidate, reassign to it (first match wins;
+         topics are not expected to disagree in practice, and picking the
+         first deterministic match keeps this function total and simple).
+      4. If no topic yields a candidate (or the entity owns no topics),
+         fall back to entity_id = 2 (I)ruid) as the final fallback.
+
+    Returns (new_entity_id, is_final_fallback). is_final_fallback is True
+    when the returned entity is the I)ruid fallback (2) rather than a
+    genuine domain-topic reassignment — callers use this to distinguish
+    "reassigned to a peer" from "fell through to the catch-all."
+
+    Callers must not invoke this for entity_id == 2 (I)ruid) — his
+    exhaustion is a hold-in-place, not a reassignment; see
+    check_step8_blocker_outreach for that branch.
+    """
+    topics = _entity_domain_topics(entity_id)
+    chain_exclude = exclude_entity_ids | {entity_id}
+    for topic in topics:
+        candidate = _next_domain_entity(topic, chain_exclude)
+        if candidate is not None:
+            return candidate, False
+    return 2, True
+
+
+def check_step8_blocker_outreach() -> dict:
+    """
+    Step 8: Blocker outreach.
+
+    Curates eligible open blockers for outreach. Returns actionable=True when
+    at least one responsible entity has blockers ready for a new message.
+
+    Eligibility:
+      - entity master cooldown: >24h since ANY proactive_outreach row for the entity
+      - per-blocker cooldown: >72h since a proactive_outreach row for
+        (entity_id, blocker_type='blocker', blocker_id=blocker.id)
+      - top-3 per entity ordered by priority ASC, first_seen ASC, id ASC
+
+    Cascade level per blocker = prior proactive_outreach row count + 1.
+    One message per entity is sent at the most-escalated requested level among
+    its selected blockers; one proactive_outreach row is logged per blocker.
+
+    Cascade exhaustion (ruling #7 / TC-D07): when an entity's max cascade
+    level exceeds their available contact channels and they are not I)ruid
+    (entity_id=2), the blocker set is reassigned to the next domain entity
+    (via _reassign_exhausted_entity — agent_domains first, then
+    user_domains by priority, excluding already-exhausted entities in the
+    chain), restarting cascade level at 1 against the new entity. If every
+    domain entity is exhausted, the chain falls to I)ruid as final
+    fallback. If I)ruid himself is the exhausted entity, no reassignment
+    occurs — he holds at his last available channel/level and the normal
+    72h per-blocker cooldown continues to gate the next attempt. Each
+    returned entity entry carries "exhausted" (True only for the I)ruid
+    hold-in-place case) and, when reassignment occurred, the original
+    "reassigned_from_entity_id".
+    """
+    try:
+        conn = _db_connect()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT
+                            b.id,
+                            b.source_type,
+                            b.source_ref,
+                            b.description,
+                            b.needs,
+                            b.entity_id,
+                            e.name AS entity_name,
+                            b.priority,
+                            b.first_seen,
+                            COALESCE(po.attempt_count, 0) AS attempt_count,
+                            COALESCE(po.latest_attempt, 'epoch'::timestamptz) AS latest_attempt
+                        FROM blockers b
+                        JOIN entities e ON e.id = b.entity_id
+                        LEFT JOIN LATERAL (
+                            SELECT
+                                COUNT(*) AS attempt_count,
+                                MAX(attempted_at) AS latest_attempt
+                            FROM proactive_outreach
+                            WHERE entity_id = b.entity_id
+                              AND blocker_type = 'blocker'
+                              AND blocker_id = b.id
+                        ) po ON true
+                        WHERE b.status = 'open'
+                        ORDER BY b.entity_id, b.priority ASC, b.first_seen ASC, b.id ASC
+                        """
+                    )
+                    rows = cur.fetchall()
+
+                    # Entity master cooldown: latest ANY outreach to entity in last 24h
+                    entity_ids = list({r[5] for r in rows})
+                    entity_master: dict[int, datetime] = {}
+                    if entity_ids:
+                        cur.execute(
+                            """
+                            SELECT entity_id, MAX(attempted_at)
+                            FROM proactive_outreach
+                            WHERE entity_id = ANY(%s)
+                            GROUP BY entity_id
+                            """,
+                            (entity_ids,),
+                        )
+                        entity_master = {
+                            eid: ts for eid, ts in cur.fetchall() if ts is not None
+                        }
+        finally:
+            conn.close()
+    except Exception as exc:
+        return _step_error(f"DB error: {exc}")
+
+    now = _now_utc()
+    entity_cooldown_cutoff = now - timedelta(hours=BLOCKER_ENTITY_COOLDOWN_H)
+    blocker_cooldown_cutoff = now - timedelta(hours=BLOCKER_PER_BLOCKER_COOLDOWN_H)
+
+    by_entity: dict[int, dict[str, Any]] = {}
+    for row in rows:
+        (
+            bid, source_type, source_ref, description, needs,
+            entity_id, entity_name, priority, first_seen,
+            attempt_count, latest_attempt,
+        ) = row
+
+        # Entity master cooldown: strict > 24h elapsed required to be eligible,
+        # i.e. blocked while master_latest >= cutoff (elapsed <= 24h exactly
+        # still blocks).
+        master_latest = entity_master.get(entity_id)
+        if master_latest is not None and master_latest >= entity_cooldown_cutoff:
+            continue
+
+        # Per-blocker cooldown: strict > 72h elapsed required to be eligible,
+        # i.e. blocked while latest_attempt >= cutoff (elapsed <= 72h exactly
+        # still blocks).
+        if latest_attempt >= blocker_cooldown_cutoff:
+            continue
+
+        cascade_level = int(attempt_count) + 1
+
+        if entity_id not in by_entity:
+            by_entity[entity_id] = {
+                "entity_id": entity_id,
+                "entity_name": entity_name,
+                "channels": _entity_channel_facts(entity_id),
+                "is_agent": _entity_is_agent(entity_id),
+                "selected_blockers": [],
+            }
+
+        by_entity[entity_id]["selected_blockers"].append({
+            "id": bid,
+            "source_type": source_type,
+            "source_ref": source_ref,
+            "description": description,
+            "needs": needs,
+            "priority": priority,
+            "first_seen": first_seen.isoformat() if first_seen else None,
+            "cascade_level": cascade_level,
+        })
+
+    # Keep only top-3 per entity, compute actual channel, and detect/resolve
+    # cascade exhaustion (ruling #7 / TC-D07): when max_level exceeds the
+    # entity's available channels and the entity is not I)ruid, reassign to
+    # the next domain entity (chain excludes already-exhausted entities),
+    # eventually falling to I)ruid if every domain entity is exhausted. If
+    # I)ruid himself is exhausted, hold him at his last available channel —
+    # no reassignment, no fabricated level increase.
+    eligible_entities: list[dict[str, Any]] = []
+    for entity_id in sorted(by_entity.keys()):
+        ent = by_entity[entity_id]
+        selected = ent["selected_blockers"][:BLOCKERS_PER_MESSAGE]
+        if not selected:
+            continue
+        max_level = max(b["cascade_level"] for b in selected)
+
+        current_entity_id = entity_id
+        current_channels = ent["channels"]
+        current_is_agent = ent["is_agent"]
+        current_entity_name = ent["entity_name"]
+        exhausted_chain: list[int] = []
+        reassigned = False
+        exhaustion_hold = False
+
+        while _is_cascade_exhausted(max_level, current_channels, current_is_agent):
+            if current_entity_id == 2:
+                # I)ruid is exhausted — hold at his last available level,
+                # no further reassignment. Normal 72h cadence continues to
+                # gate future attempts.
+                exhaustion_hold = True
+                break
+
+            exhausted_chain.append(current_entity_id)
+            new_entity_id, is_final_fallback = _reassign_exhausted_entity(
+                current_entity_id, set(exhausted_chain)
+            )
+            if new_entity_id is None:
+                # No candidate at all (defensive; _reassign_exhausted_entity
+                # always returns entity 2 as a floor, but guard anyway).
+                new_entity_id = 2
+                is_final_fallback = True
+
+            reassigned = True
+            current_entity_id = new_entity_id
+            # Reassignment restarts cascade level at 1 against the new
+            # entity — no prior proactive_outreach rows exist against them
+            # for this blocker set yet.
+            max_level = 1
+            current_channels = _entity_channel_facts(current_entity_id)
+            current_is_agent = _entity_is_agent(current_entity_id)
+            current_entity_name = (
+                "I)ruid" if is_final_fallback and current_entity_id == 2
+                else _entity_name_lookup(current_entity_id) or current_entity_name
+            )
+
+            if current_entity_id in exhausted_chain:
+                # Defensive: avoid infinite loop if reassignment somehow
+                # cycles back to an already-exhausted entity.
+                break
+
+        actual_channel = _map_cascade_to_channel(
+            max_level, current_channels, current_is_agent
+        )
+
+        entry: dict[str, Any] = {
+            "entity_id": current_entity_id,
+            "entity_name": current_entity_name,
+            "selected_blockers": selected,
+            "max_cascade_level": max_level,
+            "actual_channel": actual_channel,
+            "is_agent": current_is_agent,
+            "exhausted": exhaustion_hold,
+        }
+        if reassigned:
+            entry["reassigned_from_entity_id"] = entity_id
+        eligible_entities.append(entry)
+
+    total = sum(len(e["selected_blockers"]) for e in eligible_entities)
+    if total > 0:
+        return {
+            "actionable": True,
+            "reason": f"{total} blocker(s) eligible across {len(eligible_entities)} entity/entities",
+            "data": {
+                "eligible_entities": eligible_entities,
+                "total_eligible_blockers": total,
+            },
+        }
+    return {"actionable": False, "reason": "No blockers eligible for outreach"}
+
+
+def check_step9_unsolved_problems() -> dict:
+    """Step 9: Unsolved problems with status != 'solved'."""
     try:
         conn = _db_connect()
         try:
@@ -626,8 +1131,8 @@ def check_step8_unsolved_problems() -> dict:
         return _step_error(f"DB error: {exc}")
 
 
-def check_step9_filesystem_hygiene() -> dict:
-    """Step 9: Filesystem hygiene audit marker staleness."""
+def check_step10_filesystem_hygiene() -> dict:
+    """Step 10: Filesystem hygiene audit marker staleness."""
     STALE_SECONDS = FS_AUDIT_STALENESS_DAYS * 86_400
     try:
         with open(FS_AUDIT_MARKER, "r") as fh:
@@ -656,13 +1161,33 @@ def check_step9_filesystem_hygiene() -> dict:
         return {"actionable": True, "reason": f"Could not parse audit marker timestamp: {exc}"}
 
 
-def check_step10_d100(prior_actionable_count: int) -> dict:
+def check_step11_d100(prior_actionable_count: int) -> dict:
     """
-    Step 10: D100 roll.
+    Step 11: D100 roll.
 
     MANDATORY (actionable=True) if no prior step was actionable.
     Optional (actionable=False, skippable) if at least one prior step was actionable.
+    Also forced actionable if >12h since the last D100 roll (issue #358).
     """
+    try:
+        conn = _db_connect()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT MAX(rolled_at) FROM d100_roll_log")
+                    row = cur.fetchone()
+                    last_rolled = row[0]
+        finally:
+            conn.close()
+    except Exception:
+        last_rolled = None
+
+    if last_rolled is None or (_now_utc() - last_rolled).total_seconds() > D100_FORCED_COOLDOWN_H * 3600:
+        return {
+            "actionable": True,
+            "reason": "Forced — >12h since last D100 roll",
+        }
+
     if prior_actionable_count == 0:
         return {
             "actionable": True,
@@ -700,7 +1225,7 @@ def main() -> None:
         print(json.dumps(base, indent=2))
         return
 
-    # 2. Run all 10 gate checks
+    # 2. Run all 11 gate checks
     steps: dict[str, dict] = {}
 
     steps["1_agent_chat"] = check_step1_agent_chat()
@@ -710,12 +1235,13 @@ def main() -> None:
     steps["5_entities"] = check_step5_entity_dedup()
     steps["6_tasks"] = check_step6_pending_tasks()
     steps["7_github"] = check_step7_github_issues()
-    steps["8_research"] = check_step8_unsolved_problems()
-    steps["9_filesystem"] = check_step9_filesystem_hygiene()
+    steps["8_blocker_outreach"] = check_step8_blocker_outreach()
+    steps["9_research"] = check_step9_unsolved_problems()
+    steps["10_filesystem"] = check_step10_filesystem_hygiene()
 
-    # Count actionable steps 1-9 (excluding step 10)
-    prior_actionable = [k for k, v in steps.items() if v.get("actionable")]
-    steps["10_d100"] = check_step10_d100(len(prior_actionable))
+    # Count actionable steps 1-10 (excluding step 11)
+    prior_actionable = [k for k, v in steps.items() if k != "11_d100" and v.get("actionable")]
+    steps["11_d100"] = check_step11_d100(len(prior_actionable))
 
     # Collect final actionable step numbers
     actionable_steps: list[int] = []
@@ -734,7 +1260,7 @@ def main() -> None:
         "steps": steps,
         "actionable_steps": actionable_steps,
         "actionable_count": actionable_count,
-        "summary": f"{actionable_count} of 10 steps actionable",
+        "summary": f"{actionable_count} of 11 steps actionable",
     }
 
     print(json.dumps(output, indent=2))

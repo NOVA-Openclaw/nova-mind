@@ -29,14 +29,14 @@ Source of truth for the file content: `~/nova-mind/HEARTBEAT.md`.
 **Type:** Python script
 **Path:** `motivation/scripts/proactive-gate-check.py`
 **Installed path:** `~/.openclaw/workspace/scripts/proactive-gate-check.py`
-**Role:** Deterministic gate checker. Evaluates all 10 cascade step conditions without LLM
+**Role:** Deterministic gate checker. Evaluates all 11 cascade step conditions without LLM
 involvement and emits a structured JSON manifest. See [Proactive Gate Check](#proactive-gate-check)
 below for full details.
 
 ### 4. Proactive Mode Workflow (id=27)
 
 **Type:** Database workflow (`workflows` / `workflow_steps` tables)
-**Role:** 9-step priority cascade defining what NOVA does when idle. The gate check script
+**Role:** 11-step priority cascade defining what NOVA does when idle. The gate check script
 maps each step to its gate function; the script's `actionable_steps` output tells NOVA
 which workflow steps have work to do.
 
@@ -47,15 +47,30 @@ WHERE workflow_id = 27`.
 
 **Type:** Database table (`motivation_d100`)
 **Role:** 100-slot random task roller providing variety in autonomous work. Used by
-cascade Step 10, which is the mandatory catch-all when no other steps are actionable.
-Managed via `roll_d100()` and `complete_d100(roll)` SECURITY DEFINER functions.
+cascade Step 11, which is the mandatory catch-all when no other steps are actionable —
+and additionally **forced** actionable whenever more than 12h have elapsed since the last
+recorded roll, regardless of other steps' state (issue #358). Managed via `roll_d100()` and
+`complete_d100(roll)` SECURITY DEFINER functions. Roll history (used for the forced-D100
+check) is tracked in `d100_roll_log`, populated by a trigger on `motivation_d100` (migration
+082).
 
 ### 6. Unsolved Problems Research Workflow (id=32)
 
 **Type:** Database workflow
 **Role:** Structured research workflow delegating data gathering to Scout and reserving
-reasoning/synthesis for NOVA. Triggered by cascade Step 8 when `unsolved_problems` with
+reasoning/synthesis for NOVA. Triggered by cascade Step 9 when `unsolved_problems` with
 `status != 'solved'` exist.
+
+### 7. Blocker Registry & Outreach (Step 8)
+
+**Type:** Database table (`blockers`) + cascade Step 8 (workflow_id=27)
+**Role:** Curated registry of items blocked on another entity's action (issue #356).
+Steps 6 (Pending Tasks) and 7 (GitHub Issues) upsert blocked items into `blockers`
+(`ON CONFLICT (source_type, source_ref) DO UPDATE ... last_seen`) but perform **no**
+outreach themselves — outreach is centralized in the dedicated Step 8, which is driven by
+`check_step8_blocker_outreach()` in the gate check script. See
+[Blocker Outreach](#blocker-outreach-step-8) below for cooldown, cascade, and channel
+escalation details.
 
 ---
 
@@ -72,7 +87,7 @@ databases, and reason about whether each cascade step had actionable work. This 
 inconsistent gate decisions and unnecessary token consumption on sessions that would always
 result in `HEARTBEAT_OK`.
 
-The script replaces that with a deterministic, pre-LLM evaluation pass: it checks all 10
+The script replaces that with a deterministic, pre-LLM evaluation pass: it checks all 11
 gate conditions programmatically, then emits a compact JSON manifest so NOVA's heartbeat
 session can skip straight to work.
 
@@ -87,7 +102,7 @@ OpenClaw heartbeat fires
       → queries nova_memory DB           ← agent_chat, tasks, entities, unsolved_problems
       → reads state files                ← heartbeat-state.json, memory-maintenance-last-run.json
       → calls gh CLI                     ← open GitHub issues
-      → calls openclaw CLI               ← recent active sessions
+      → reads sessions.json + JSONL      ← unanswered user messages
       → emits JSON manifest
   → idle=false: HEARTBEAT_OK (zero LLM work on gate checks)
   → idle=true: NOVA works only actionable_steps from manifest
@@ -106,7 +121,8 @@ owns that role entirely — the LLM only sees the output, never the gate logic.
 | `~/.openclaw/state/memory-maintenance-last-run.json` | Memory maintenance cooldown state |
 | `~/.openclaw/workspace/.last-fs-audit` | Filesystem audit staleness marker |
 | `gh` CLI | Open GitHub issues across NOVA-Openclaw repos |
-| `openclaw` CLI | Recent active user-facing sessions (for Step 2) |
+| PostgreSQL `blockers` / `proactive_outreach` / `entity_facts` / `agents` | Blocker outreach eligibility, cascade level, and channel resolution (Step 8) |
+| PostgreSQL `d100_roll_log` | Forced D100 staleness check (Step 11, issue #358) |
 
 ### Output
 
@@ -137,13 +153,14 @@ When idle, the full manifest is emitted:
     "5_entities":      { "actionable": false, "reason": "No entity dedup candidates" },
     "6_tasks":         { "actionable": true,  "reason": "3 pending unblocked task(s)" },
     "7_github":        { "actionable": false, "reason": "0 open GitHub issues" },
-    "8_research":      { "actionable": false, "reason": "0 unsolved problems" },
-    "9_filesystem":    { "actionable": false, "reason": "Audited 2.1d ago (threshold 7d)" },
-    "10_d100":         { "actionable": false, "reason": "Optional — 2 prior step(s) already actionable" }
+    "8_blocker_outreach": { "actionable": false, "reason": "No blockers eligible for outreach" },
+    "9_research":      { "actionable": false, "reason": "0 unsolved problems" },
+    "10_filesystem":   { "actionable": false, "reason": "Audited 2.1d ago (threshold 7d)" },
+    "11_d100":         { "actionable": false, "reason": "Optional — 2 prior step(s) already actionable" }
   },
   "actionable_steps": [3, 6],
   "actionable_count": 2,
-  "summary": "2 of 10 steps actionable"
+  "summary": "2 of 11 steps actionable"
 }
 ```
 
@@ -153,9 +170,22 @@ and never abort the run — the script always exits 0.
 
 ### Key Design Decisions
 
-**D100 is a mandatory catch-all (Step 10).** When steps 1–9 produce zero actionable work,
-Step 10 is always marked actionable. This guarantees the cascade never produces a no-op
-idle session — NOVA always has something to do.
+**D100 is a mandatory catch-all, and forced past 12h (Step 11).** When steps 1–10 produce
+zero actionable work, Step 11 is always marked actionable. Independently of that,
+Step 11 is **forced** actionable whenever more than 12h have elapsed since the last
+recorded roll in `d100_roll_log` (or no roll is on record at all) — even if other steps
+had actionable work, per issue #358. This guarantees both that the cascade never produces
+a no-op idle session, and that D100 itself doesn't go stale for extended periods.
+
+**Blocker outreach is centralized and cooldown-gated (Step 8).** Steps 6 and 7 only curate
+blocked items into the `blockers` registry — they never contact anyone directly. Step 8
+owns all outreach: it enforces a 24h entity-level cooldown (no more than one message to a
+given entity per 24h, across all of their blockers) and a 72h per-blocker cooldown (a given
+blocker cannot be re-raised with the same entity more often than every 72h), selects the
+top 3 eligible blockers per entity, and sends one consolidated message per entity at the
+most-escalated channel among its selected blockers. See
+[Blocker Outreach](#blocker-outreach-step-8) for the full cascade/channel/reassignment
+rules.
 
 **Exit code is always 0.** Per-step errors (DB unavailable, CLI timeout, missing file) are
 embedded in the JSON output rather than surfaced as failures. This prevents a partial outage
@@ -187,3 +217,81 @@ OpenClaw heartbeat (every 30m)
 Compare to the pre-#324 flow, where NOVA evaluated each cascade step gate inline during
 its reasoning pass — running sessions queries, DB queries, and GitHub checks as part of the
 LLM turn rather than before it.
+
+---
+
+## Blocker Outreach (Step 8)
+
+**Issues:** [nova-mind#356](https://github.com/NOVA-Openclaw/nova-mind/issues/356),
+[nova-mind#358](https://github.com/NOVA-Openclaw/nova-mind/issues/358)
+
+### Curation vs. Outreach
+
+Before this feature, Steps 6 (Pending Tasks) and 7 (GitHub Issues) each contained inline
+outreach cascade logic — contacting a domain owner directly the moment a blocker was found,
+with an ad hoc 3-day cooldown. That logic is now split into two distinct concerns:
+
+- **Curation (Steps 6 and 7):** when a task or issue is blocked, upsert a row into the
+  `blockers` table (`ON CONFLICT (source_type, source_ref) DO UPDATE SET last_seen = NOW(), ...`).
+  The responsible entity is resolved via `agent_domains` first, then `user_domains`
+  (lower priority number wins, tiebreak random among ties), falling back to entity_id=2
+  (I)ruid) if no domain match exists. **No outreach happens in these steps.**
+- **Outreach (Step 8):** a dedicated step that reads the curated `blockers` registry (via
+  `check_step8_blocker_outreach()` in the gate check script) and owns all cooldown
+  enforcement, cascade escalation, and message dispatch.
+
+### Eligibility Rules
+
+| Rule | Threshold | Boundary behavior |
+|------|-----------|--------------------|
+| Entity master cooldown | 24h since ANY `proactive_outreach` row for the entity | Strict `>`; exactly 24h elapsed still blocks |
+| Per-blocker cooldown | 72h since a `proactive_outreach` row for `(entity_id, 'blocker', blocker_id)` | Strict `>`; exactly 72h elapsed still blocks |
+| Selection | Top 3 blockers per eligible entity | `ORDER BY priority ASC, first_seen ASC, id ASC` |
+
+### Cascade Level & Channel Mapping
+
+Cascade level for a given blocker = count of prior `proactive_outreach` rows for
+`(entity_id, 'blocker', blocker_id)` + 1. Levels map onto that entity's available contact
+channels, in escalation order: `discord_mention → discord_dm → signal → slack → email`,
+skipping any channel missing from `entity_facts`. Entities that are agents (a row exists in
+`agents` with a matching `entity_id`) always use `agent_chat` instead, regardless of level.
+
+### One Message, Multiple Logged Attempts
+
+An entity may have up to 3 selected blockers in a single cycle, but receives **exactly one
+message**, sent at the most-escalated requested channel among those blockers. Despite only
+one message being sent, **one `proactive_outreach` row is logged per blocker**, each
+recording the actual channel used to deliver that consolidated message — not the
+theoretical channel implied by that individual blocker's own cascade level.
+
+**Cascade position is derived from attempt-row count, not delivered channel** (TC-D09).
+Because every attempt is logged with the actual delivery channel rather than the
+requested one, a blocker's next cascade level is always `COUNT(proactive_outreach rows for
+this blocker) + 1` — independent of which channel any given attempt actually used.
+
+### Channel Exhaustion & Reassignment
+
+If an entity's cascade level exceeds the number of channels available to them (channel
+exhaustion) and they are not I)ruid, the blocker is reassigned to the next domain entity
+(re-resolved via `agent_domains`/`user_domains`, excluding the exhausted entity). If
+reassignment exhausts every domain entity, escalation falls through to **I)ruid
+(entity_id=2) as the final fallback**. If I)ruid himself is exhausted, the blocker holds at
+his last available channel/level and continues on the normal 72h cadence — it is never
+dropped or looped past him.
+
+This is enforced deterministically in `check_step8_blocker_outreach()`, not left as
+agent-turn inference: `_is_cascade_exhausted()` detects the condition,
+`_entity_domain_topics()` + `_next_domain_entity()` resolve the next candidate, and
+`_reassign_exhausted_entity()` drives the chain (next domain entity → I)ruid final
+fallback → hold-in-place if I)ruid himself is exhausted). Each entry in the returned
+`eligible_entities` payload carries `exhausted` (true only for the I)ruid hold-in-place
+case) and, when reassignment occurred, `reassigned_from_entity_id`.
+
+### Satisfied Blocker Reconciliation
+
+Before selecting outreach targets each cycle, Step 8 marks any blocker whose underlying
+condition has cleared as `status = 'satisfied'`, `satisfied_at = NOW()`. If a
+previously-satisfied blocker's condition recurs, it is **reopened**: `status` reverts to
+`'open'` and `satisfied_at` is cleared back to `NULL` — the existing row is reused (the
+`(source_type, source_ref)` unique constraint prevents duplicates) rather than a new one
+being created.

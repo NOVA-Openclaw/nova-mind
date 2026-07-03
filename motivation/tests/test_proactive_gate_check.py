@@ -3,8 +3,8 @@ Tests for motivation/scripts/proactive-gate-check.py
 
 Covers:
 - Idle detection (active, idle, boundary, missing file, malformed, bot-only, custom threshold)
-- All 10 gate check steps (actionable / not-actionable paths)
-- D100 logic (mandatory vs optional)
+- All 11 gate check steps (actionable / not-actionable paths)
+- D100 logic (mandatory vs optional vs forced by roll staleness)
 - Error handling (DB failure, missing state files, gh unavailable)
 - Output format validation (required fields, correct types)
 """
@@ -247,66 +247,97 @@ class TestStep1AgentChat:
 # ---------------------------------------------------------------------------
 
 class TestStep2UnansweredSessions:
-    def _make_openclaw_output(self, sessions: list[dict]) -> str:
-        return json.dumps({"sessions": sessions})
+    """check_step2_unanswered_sessions() reads SESSIONS_JSON directly and, for
+    each recent user-facing session, inspects the last conversational role in
+    its JSONL session file via _last_conversational_role()."""
 
-    def test_recent_user_sessions_found(self, m):
-        payload = self._make_openclaw_output([
-            {"key": "agent:nova:discord:channel:123", "ageMs": 1000},
-            {"key": "agent:nova:discord:channel:456", "ageMs": 2000},
-        ])
-        mock_result = MagicMock()
-        mock_result.returncode = 0
-        mock_result.stdout = payload
+    def _write_sessions_json(self, tmp_path, entries: dict[str, dict]) -> str:
+        path = tmp_path / "sessions.json"
+        path.write_text(json.dumps(entries))
+        return str(path)
 
-        with patch("subprocess.run", return_value=mock_result):
+    def _write_session_file(self, tmp_path, name: str, roles: list[str]) -> str:
+        """Write a minimal JSONL session file; last entry in `roles` is the
+        last conversational message role."""
+        path = tmp_path / name
+        lines = [json.dumps({"message": {"role": role}}) for role in roles]
+        path.write_text("\n".join(lines) + "\n")
+        return str(path)
+
+    def test_recent_user_sessions_found(self, m, tmp_path):
+        now_ms = int(time.time() * 1000)
+        sf1 = self._write_session_file(tmp_path, "s1.jsonl", ["assistant", "user"])
+        sf2 = self._write_session_file(tmp_path, "s2.jsonl", ["assistant", "user"])
+        sessions_json = self._write_sessions_json(tmp_path, {
+            "agent:nova:discord:channel:123": {"updatedAt": now_ms - 1000, "sessionFile": sf1},
+            "agent:nova:discord:channel:456": {"updatedAt": now_ms - 2000, "sessionFile": sf2},
+        })
+        with patch.object(m, "SESSIONS_JSON", sessions_json):
             result = m.check_step2_unanswered_sessions()
         assert result["actionable"] is True
         assert result["data"]["count"] == 2
 
-    def test_no_recent_user_sessions(self, m):
-        payload = self._make_openclaw_output([
-            {"key": "agent:nova:discord:channel:123", "ageMs": 90_000_000},
-        ])
-        mock_result = MagicMock()
-        mock_result.returncode = 0
-        mock_result.stdout = payload
-
-        with patch("subprocess.run", return_value=mock_result):
+    def test_no_recent_user_sessions(self, m, tmp_path):
+        now_ms = int(time.time() * 1000)
+        sf1 = self._write_session_file(tmp_path, "s1.jsonl", ["user", "assistant"])
+        sessions_json = self._write_sessions_json(tmp_path, {
+            "agent:nova:discord:channel:123": {"updatedAt": now_ms - 90_000_000, "sessionFile": sf1},
+        })
+        with patch.object(m, "SESSIONS_JSON", sessions_json):
             result = m.check_step2_unanswered_sessions()
         assert result["actionable"] is False
 
-    def test_excludes_bot_sessions(self, m):
-        payload = self._make_openclaw_output([
-            {"key": "agent:nova:discord:channel:123", "ageMs": 1000},
-            {"key": "agent:nova:main:heartbeat", "ageMs": 500},
-            {"key": "agent:nova:cron:abc", "ageMs": 300},
-        ])
-        mock_result = MagicMock()
-        mock_result.returncode = 0
-        mock_result.stdout = payload
+    def test_answered_session_not_actionable(self, m, tmp_path):
+        """Last conversational message is from the assistant -> not unanswered."""
+        now_ms = int(time.time() * 1000)
+        sf1 = self._write_session_file(tmp_path, "s1.jsonl", ["user", "assistant"])
+        sessions_json = self._write_sessions_json(tmp_path, {
+            "agent:nova:discord:channel:123": {"updatedAt": now_ms - 1000, "sessionFile": sf1},
+        })
+        with patch.object(m, "SESSIONS_JSON", sessions_json):
+            result = m.check_step2_unanswered_sessions()
+        assert result["actionable"] is False
 
-        with patch("subprocess.run", return_value=mock_result):
+    def test_excludes_bot_sessions(self, m, tmp_path):
+        now_ms = int(time.time() * 1000)
+        sf1 = self._write_session_file(tmp_path, "s1.jsonl", ["assistant", "user"])
+        sf2 = self._write_session_file(tmp_path, "s2.jsonl", ["assistant", "user"])
+        sf3 = self._write_session_file(tmp_path, "s3.jsonl", ["assistant", "user"])
+        sessions_json = self._write_sessions_json(tmp_path, {
+            "agent:nova:discord:channel:123": {"updatedAt": now_ms - 1000, "sessionFile": sf1},
+            "agent:nova:main:heartbeat": {"updatedAt": now_ms - 500, "sessionFile": sf2},
+            "agent:nova:cron:abc": {"updatedAt": now_ms - 300, "sessionFile": sf3},
+        })
+        with patch.object(m, "SESSIONS_JSON", sessions_json):
             result = m.check_step2_unanswered_sessions()
         # Only the discord channel should count
         assert result["data"]["count"] == 1
 
-    def test_openclaw_cli_not_found(self, m):
-        import subprocess as sp
-        with patch("subprocess.run", side_effect=FileNotFoundError):
+    def test_sessions_json_missing(self, m, tmp_path):
+        missing = str(tmp_path / "no-such-sessions.json")
+        with patch.object(m, "SESSIONS_JSON", missing):
             result = m.check_step2_unanswered_sessions()
         assert result["actionable"] is False
         assert "error" in result
 
-    def test_openclaw_cli_failure(self, m):
-        mock_result = MagicMock()
-        mock_result.returncode = 1
-        mock_result.stderr = "something went wrong"
-
-        with patch("subprocess.run", return_value=mock_result):
+    def test_sessions_json_malformed(self, m, tmp_path):
+        path = tmp_path / "sessions.json"
+        path.write_text("not json")
+        with patch.object(m, "SESSIONS_JSON", str(path)):
             result = m.check_step2_unanswered_sessions()
         assert result["actionable"] is False
         assert "error" in result
+
+    def test_missing_session_file_skipped(self, m, tmp_path):
+        """A session entry with no sessionFile on disk should be skipped, not error."""
+        now_ms = int(time.time() * 1000)
+        missing_file = str(tmp_path / "does-not-exist.jsonl")
+        sessions_json = self._write_sessions_json(tmp_path, {
+            "agent:nova:discord:channel:123": {"updatedAt": now_ms - 1000, "sessionFile": missing_file},
+        })
+        with patch.object(m, "SESSIONS_JSON", sessions_json):
+            result = m.check_step2_unanswered_sessions()
+        assert result["actionable"] is False
 
 
 # ---------------------------------------------------------------------------
@@ -665,7 +696,10 @@ class TestStep3IntrospectionDualMirror:
     def test_same_timestamp_uses_primary(self, m, tmp_path):
         primary_file = tmp_path / "primary.json"
         alt_file = tmp_path / "alt.json"
-        fixed_ts = "2026-06-21T10:00:00Z"
+        # Relative (3h ago) rather than a hardcoded absolute date so this test
+        # doesn't bit-rot as real time passes and eventually cross the
+        # INTROSPECT_TIME_THRESHOLD_H threshold regardless of tie-break winner.
+        fixed_ts = _iso(3.0)
         primary_file.write_text(json.dumps({
             "lastIntrospection": {
                 "dailyLogLines": 100,
@@ -935,7 +969,7 @@ class TestStep7GithubIssues:
 # Step 8 — unsolved problems
 # ---------------------------------------------------------------------------
 
-class TestStep8UnsolvedProblems:
+class TestStep9UnsolvedProblems:
     def _mock_conn(self, count: int) -> MagicMock:
         mock_cur = MagicMock()
         mock_cur.__enter__ = MagicMock(return_value=mock_cur)
@@ -949,80 +983,658 @@ class TestStep8UnsolvedProblems:
 
     def test_no_unsolved_problems(self, m):
         with patch.object(m, "_db_connect", return_value=self._mock_conn(0)):
-            result = m.check_step8_unsolved_problems()
+            result = m.check_step9_unsolved_problems()
         assert result["actionable"] is False
+        # D-2 revert: no last_worked_at/3-day-cooldown predicate in this PR;
+        # reason string restored to the pre-PR count-only form.
+        assert result["reason"] == "0 unsolved problems"
 
     def test_unsolved_problems_present(self, m):
         with patch.object(m, "_db_connect", return_value=self._mock_conn(3)):
-            result = m.check_step8_unsolved_problems()
+            result = m.check_step9_unsolved_problems()
         assert result["actionable"] is True
         assert result["data"]["count"] == 3
+        assert result["reason"] == "3 unsolved problem(s) awaiting research"
 
     def test_db_failure(self, m):
         with patch.object(m, "_db_connect", side_effect=Exception("db error")):
-            result = m.check_step8_unsolved_problems()
+            result = m.check_step9_unsolved_problems()
         assert result["actionable"] is False
         assert "error" in result
 
 
 # ---------------------------------------------------------------------------
-# Step 9 — filesystem hygiene
+# Step 8 — blocker outreach
 # ---------------------------------------------------------------------------
 
-class TestStep9FilesystemHygiene:
+class TestStep8BlockerOutreach:
+    """Tests for check_step8_blocker_outreach().
+
+    The function issues three DB round-trips via a single connection:
+      1. main SELECT joining blockers + entities + LATERAL proactive_outreach
+         (per-blocker attempt_count / latest_attempt)
+      2. entity master-cooldown SELECT (MAX(attempted_at) GROUP BY entity_id)
+      3. (helpers) _entity_channel_facts / _entity_is_agent, one query each,
+         called per-entity outside the main connection block.
+
+    We mock _db_connect to return a context-manager connection whose
+    cursor.execute/fetchall are driven by a small dispatcher keyed on the
+    SQL text, and separately patch _entity_channel_facts / _entity_is_agent
+    since those open their own connections.
+    """
+
+    def _row(
+        self,
+        bid: int,
+        entity_id: int,
+        entity_name: str = "entity",
+        priority: int = 5,
+        first_seen_hours_ago: float = 1.0,
+        attempt_count: int = 0,
+        latest_attempt_hours_ago: float | None = None,
+        source_type: str = "task",
+        source_ref: str = "ref-1",
+    ):
+        latest_attempt = (
+            "epoch"
+            if latest_attempt_hours_ago is None
+            else datetime.now(timezone.utc) - timedelta(hours=latest_attempt_hours_ago)
+        )
+        if latest_attempt == "epoch":
+            latest_attempt = datetime(1970, 1, 1, tzinfo=timezone.utc)
+        return (
+            bid,
+            source_type,
+            source_ref,
+            f"desc-{bid}",
+            f"needs-{bid}",
+            entity_id,
+            entity_name,
+            priority,
+            datetime.now(timezone.utc) - timedelta(hours=first_seen_hours_ago),
+            attempt_count,
+            latest_attempt,
+        )
+
+    def _mock_conn(self, rows: list, entity_master: dict[int, Any]):
+        """Build a mock connection whose cursor dispatches on query text."""
+        mock_cur = MagicMock()
+        mock_cur.__enter__ = MagicMock(return_value=mock_cur)
+        mock_cur.__exit__ = MagicMock(return_value=False)
+
+        state = {"last": None}
+
+        def fake_execute(sql, params=None):
+            if "FROM blockers b" in sql:
+                state["last"] = "main"
+            elif "GROUP BY entity_id" in sql:
+                state["last"] = "master"
+            else:
+                state["last"] = "other"
+
+        def fake_fetchall():
+            if state["last"] == "main":
+                return rows
+            if state["last"] == "master":
+                return list(entity_master.items())
+            return []
+
+        mock_cur.execute.side_effect = fake_execute
+        mock_cur.fetchall.side_effect = fake_fetchall
+
+        mock_conn = MagicMock()
+        mock_conn.__enter__ = MagicMock(return_value=mock_conn)
+        mock_conn.__exit__ = MagicMock(return_value=False)
+        mock_conn.cursor.return_value = mock_cur
+        mock_conn.close = MagicMock()
+        return mock_conn
+
+    def _patched(self, m, rows, entity_master=None, channels=None, is_agent=None):
+        """Context manager patching _db_connect + the per-entity helpers."""
+        entity_master = entity_master or {}
+        channels = channels if channels is not None else {}
+        is_agent = is_agent if is_agent is not None else False
+        conn = self._mock_conn(rows, entity_master)
+        return (
+            patch.object(m, "_db_connect", return_value=conn),
+            patch.object(m, "_entity_channel_facts", return_value=channels),
+            patch.object(m, "_entity_is_agent", return_value=is_agent),
+        )
+
+    # ---- cooldown boundaries ----
+
+    def test_entity_master_cooldown_exactly_24h_is_blocked(self, m):
+        """Master cooldown is strict >24h: exactly 24h elapsed must still be blocked.
+
+        A 100ms safety margin is added so the row's timestamp is captured
+        very slightly *after* the true 24h mark, absorbing the microseconds
+        that elapse before the function's internal _now_utc() call runs —
+        otherwise this boundary test is flaky (real elapsed drifts just past
+        24h and is treated as eligible).
+        """
+        rows = [self._row(1, entity_id=10, attempt_count=0)]
+        master = {10: datetime.now(timezone.utc) - timedelta(hours=24.0) + timedelta(milliseconds=100)}
+        p1, p2, p3 = self._patched(m, rows, entity_master=master)
+        with p1, p2, p3:
+            result = m.check_step8_blocker_outreach()
+        assert result["actionable"] is False
+
+    def test_entity_master_cooldown_24h_plus_1s_is_eligible(self, m):
+        rows = [self._row(1, entity_id=10, attempt_count=0)]
+        master = {10: datetime.now(timezone.utc) - timedelta(hours=24.0, seconds=1)}
+        p1, p2, p3 = self._patched(m, rows, entity_master=master)
+        with p1, p2, p3:
+            result = m.check_step8_blocker_outreach()
+        assert result["actionable"] is True
+
+    def test_per_blocker_cooldown_exactly_72h_is_blocked(self, m):
+        """Per-blocker cooldown is strict >72h: exactly 72h elapsed must still be blocked.
+
+        Uses a 100ms-under-72h delta (see note on the 24h master-cooldown
+        boundary test above) to avoid boundary flakiness.
+        """
+        rows = [self._row(
+            1, entity_id=10, attempt_count=1,
+            latest_attempt_hours_ago=72.0 - (0.1 / 3600),
+        )]
+        p1, p2, p3 = self._patched(m, rows, entity_master={})
+        with p1, p2, p3:
+            result = m.check_step8_blocker_outreach()
+        assert result["actionable"] is False
+
+    def test_per_blocker_cooldown_72h_plus_1s_is_eligible(self, m):
+        rows = [self._row(
+            1, entity_id=10, attempt_count=1,
+            latest_attempt_hours_ago=72.0 + (1 / 3600),
+        )]
+        p1, p2, p3 = self._patched(m, rows, entity_master={})
+        with p1, p2, p3:
+            result = m.check_step8_blocker_outreach()
+        assert result["actionable"] is True
+
+    # ---- never-contacted entity ----
+
+    def test_never_contacted_entity_is_eligible(self, m):
+        """No proactive_outreach rows at all (empty master dict, epoch latest_attempt)."""
+        rows = [self._row(1, entity_id=10, attempt_count=0, latest_attempt_hours_ago=None)]
+        p1, p2, p3 = self._patched(m, rows, entity_master={})
+        with p1, p2, p3:
+            result = m.check_step8_blocker_outreach()
+        assert result["actionable"] is True
+        assert result["data"]["eligible_entities"][0]["selected_blockers"][0]["cascade_level"] == 1
+
+    # ---- non-blocker outreach triggers master but not per-blocker cooldown ----
+
+    def test_non_blocker_outreach_triggers_master_not_per_blocker(self, m):
+        """A proactive_outreach row for a *different* blocker_type/id still counts
+        toward the entity master cooldown (any row for the entity), but the
+        per-blocker cooldown for THIS blocker is independent — attempt_count
+        for this blocker's LATERAL join is 0 since the row is keyed to a
+        different blocker_id, so its own cooldown is unaffected. The master
+        cooldown (recent) should block the entity outright.
+        """
+        rows = [self._row(1, entity_id=10, attempt_count=0, latest_attempt_hours_ago=None)]
+        # Master cooldown recent (1h ago) from an unrelated (e.g. non-blocker) row
+        master = {10: datetime.now(timezone.utc) - timedelta(hours=1.0)}
+        p1, p2, p3 = self._patched(m, rows, entity_master=master)
+        with p1, p2, p3:
+            result = m.check_step8_blocker_outreach()
+        # Blocked by master cooldown even though per-blocker attempt_count is 0
+        assert result["actionable"] is False
+
+    # ---- top-3 tiebreak determinism ----
+
+    def test_top_3_tiebreak_determinism(self, m):
+        """5 blockers for one entity, all same priority/first_seen — only first
+        3 by id (as returned in SQL ORDER BY) are selected."""
+        now_h = 1.0
+        rows = [
+            self._row(i, entity_id=10, priority=5, first_seen_hours_ago=now_h, attempt_count=0)
+            for i in range(1, 6)
+        ]
+        p1, p2, p3 = self._patched(m, rows, entity_master={})
+        with p1, p2, p3:
+            result = m.check_step8_blocker_outreach()
+        assert result["actionable"] is True
+        selected = result["data"]["eligible_entities"][0]["selected_blockers"]
+        assert len(selected) == 3
+        assert [b["id"] for b in selected] == [1, 2, 3]
+
+    def test_top_3_respects_priority_ordering(self, m):
+        """Lower priority number sorts first (already ordered by SQL); function
+        must preserve incoming row order, not re-sort."""
+        rows = [
+            self._row(3, entity_id=10, priority=1, attempt_count=0),
+            self._row(1, entity_id=10, priority=2, attempt_count=0),
+            self._row(2, entity_id=10, priority=3, attempt_count=0),
+        ]
+        p1, p2, p3 = self._patched(m, rows, entity_master={})
+        with p1, p2, p3:
+            result = m.check_step8_blocker_outreach()
+        selected = result["data"]["eligible_entities"][0]["selected_blockers"]
+        assert [b["id"] for b in selected] == [3, 1, 2]
+
+    # ---- empty tables ----
+
+    def test_empty_blockers_table(self, m):
+        p1, p2, p3 = self._patched(m, rows=[], entity_master={})
+        with p1, p2, p3:
+            result = m.check_step8_blocker_outreach()
+        assert result["actionable"] is False
+        assert "reason" in result
+
+    def test_db_failure(self, m):
+        with patch.object(m, "_db_connect", side_effect=Exception("db error")):
+            result = m.check_step8_blocker_outreach()
+        assert result["actionable"] is False
+        assert "error" in result
+
+    # ---- cascade level -> channel mapping ----
+
+    def test_cascade_level_maps_to_agent_chat_for_agents(self, m):
+        rows = [self._row(1, entity_id=99, attempt_count=0)]
+        p1, p2, p3 = self._patched(m, rows, entity_master={}, is_agent=True)
+        with p1, p2, p3:
+            result = m.check_step8_blocker_outreach()
+        entity = result["data"]["eligible_entities"][0]
+        assert entity["actual_channel"] == "agent_chat"
+
+    def test_cascade_level_maps_to_available_human_channel(self, m):
+        rows = [self._row(1, entity_id=2, attempt_count=0)]
+        channels = {"discord_channel": "123", "discord_dm": "123", "email": "x@y.com"}
+        p1, p2, p3 = self._patched(m, rows, entity_master={}, channels=channels, is_agent=False)
+        with p1, p2, p3:
+            result = m.check_step8_blocker_outreach()
+        entity = result["data"]["eligible_entities"][0]
+        assert entity["actual_channel"] == "discord_channel"
+
+    # ---- cascade exhaustion + reassignment (D-1 fix, ruling #7 / TC-D07) ----
+
+    def test_zero_channels_zero_attempts_triggers_reassignment(self, m):
+        """Entity with 0 contact channels and 0 prior attempts (cascade_level=1)
+        is immediately exhausted (1 > 0 available channels) — must reassign
+        rather than silently returning 'none'."""
+        rows = [self._row(1, entity_id=10, attempt_count=0)]
+        p1, p2, p3 = self._patched(m, rows, entity_master={}, channels={}, is_agent=False)
+        with (
+            p1, p2, p3,
+            patch.object(m, "_reassign_exhausted_entity", return_value=(20, False)) as mock_reassign,
+            patch.object(m, "_entity_channel_facts", side_effect=lambda eid: {"discord_channel": "abc"} if eid == 20 else {}),
+            patch.object(m, "_entity_is_agent", return_value=False),
+            patch.object(m, "_entity_name_lookup", return_value="Next Entity"),
+        ):
+            result = m.check_step8_blocker_outreach()
+        entity = result["data"]["eligible_entities"][0]
+        mock_reassign.assert_called_once_with(10, {10})
+        assert entity["entity_id"] == 20
+        assert entity["reassigned_from_entity_id"] == 10
+        assert entity["exhausted"] is False
+        assert entity["max_cascade_level"] == 1
+        assert entity["actual_channel"] == "discord_channel"
+
+    def test_n_channels_level_n_plus_1_triggers_reassignment(self, m):
+        """Entity with N channels, cascade_level = N+1 (first exhaustion past
+        the ceiling) — must reassign rather than repeating the last channel
+        silently."""
+        # attempt_count=2 -> cascade_level=3; only 2 channels available (N=2)
+        # so level 3 > 2 available channels -> exhausted.
+        rows = [self._row(1, entity_id=11, attempt_count=2)]
+        channels = {"discord_channel": "123", "discord_dm": "123"}
+        p1, p2, p3 = self._patched(m, rows, entity_master={}, channels=channels, is_agent=False)
+        with (
+            p1, p2, p3,
+            patch.object(m, "_reassign_exhausted_entity", return_value=(30, False)) as mock_reassign,
+            patch.object(m, "_entity_channel_facts", side_effect=lambda eid: {"signal": "sig"} if eid == 30 else channels),
+            patch.object(m, "_entity_is_agent", return_value=False),
+            patch.object(m, "_entity_name_lookup", return_value="Reassigned Entity"),
+        ):
+            result = m.check_step8_blocker_outreach()
+        entity = result["data"]["eligible_entities"][0]
+        mock_reassign.assert_called_once_with(11, {11})
+        assert entity["entity_id"] == 30
+        assert entity["reassigned_from_entity_id"] == 11
+        assert entity["max_cascade_level"] == 1
+        assert entity["actual_channel"] == "signal"
+
+    def test_iruid_exhausted_holds_no_reassignment(self, m):
+        """Entity is I)ruid (entity_id=2); cascade_level exceeds his channel
+        count. Must NOT reassign — holds at his last available channel and
+        is marked exhausted=True so the agent turn knows to keep the 72h
+        cadence rather than escalate further."""
+        # attempt_count=3 -> cascade_level=4; only 1 channel available -> exhausted.
+        rows = [self._row(1, entity_id=2, attempt_count=3)]
+        channels = {"discord_channel": "123"}
+        p1, p2, p3 = self._patched(m, rows, entity_master={}, channels=channels, is_agent=False)
+        with (
+            p1, p2, p3,
+            patch.object(m, "_reassign_exhausted_entity") as mock_reassign,
+        ):
+            result = m.check_step8_blocker_outreach()
+        entity = result["data"]["eligible_entities"][0]
+        mock_reassign.assert_not_called()
+        assert entity["entity_id"] == 2
+        assert entity["exhausted"] is True
+        assert entity["max_cascade_level"] == 4
+        assert entity["actual_channel"] == "discord_channel"
+        assert "reassigned_from_entity_id" not in entity
+
+    def test_full_reassignment_chain_falls_to_iruid(self, m):
+        """Original entity exhausted -> reassigned entity ALSO exhausted ->
+        falls through to I)ruid (entity_id=2) as final fallback."""
+        rows = [self._row(1, entity_id=10, attempt_count=0)]
+        p1, p2, p3 = self._patched(m, rows, entity_master={}, channels={}, is_agent=False)
+
+        # First reassignment: 10 -> 40 (also exhausted, 0 channels).
+        # Second reassignment: 40 -> 2 (I)ruid, final fallback), with channels.
+        reassign_calls = {"count": 0}
+
+        def fake_reassign(entity_id, exclude_ids):
+            reassign_calls["count"] += 1
+            if reassign_calls["count"] == 1:
+                assert entity_id == 10
+                assert exclude_ids == {10}
+                return 40, False
+            assert entity_id == 40
+            assert exclude_ids == {10, 40}
+            return 2, True
+
+        def fake_channels(eid):
+            if eid == 2:
+                return {"discord_channel": "999"}
+            return {}
+
+        with (
+            p1, p2, p3,
+            patch.object(m, "_reassign_exhausted_entity", side_effect=fake_reassign) as mock_reassign,
+            patch.object(m, "_entity_channel_facts", side_effect=fake_channels),
+            patch.object(m, "_entity_is_agent", return_value=False),
+            patch.object(m, "_entity_name_lookup", return_value="I)ruid"),
+        ):
+            result = m.check_step8_blocker_outreach()
+        entity = result["data"]["eligible_entities"][0]
+        assert mock_reassign.call_count == 2
+        assert entity["entity_id"] == 2
+        assert entity["reassigned_from_entity_id"] == 10
+        assert entity["exhausted"] is False  # landed on I)ruid with a channel, not a hold
+        assert entity["max_cascade_level"] == 1
+        assert entity["actual_channel"] == "discord_channel"
+
+
+# ---------------------------------------------------------------------------
+# Cascade exhaustion helpers — direct unit coverage (D-1 fix)
+# ---------------------------------------------------------------------------
+
+class TestIsCascadeExhausted:
+    def test_agent_never_exhausted(self, m):
+        assert m._is_cascade_exhausted(99, {}, is_agent=True) is False
+
+    def test_zero_channels_exhausted_at_level_1(self, m):
+        assert m._is_cascade_exhausted(1, {}, is_agent=False) is True
+
+    def test_level_within_available_channels_not_exhausted(self, m):
+        channels = {"discord_channel": "1", "discord_dm": "1", "signal": "s"}
+        assert m._is_cascade_exhausted(3, channels, is_agent=False) is False
+
+    def test_level_exceeding_available_channels_exhausted(self, m):
+        channels = {"discord_channel": "1", "discord_dm": "1"}
+        assert m._is_cascade_exhausted(3, channels, is_agent=False) is True
+
+
+class TestEntityDomainTopics:
+    def _mock_conn_for_topics(self, agent_rows, user_rows, exists_rows=None):
+        mock_cur = MagicMock()
+        mock_cur.__enter__ = MagicMock(return_value=mock_cur)
+        mock_cur.__exit__ = MagicMock(return_value=False)
+        state = {"last": None}
+
+        def fake_execute(sql, params=None):
+            state["last"] = "agent" if "ad.domain_topic" in sql else "user"
+
+        def fake_fetchall():
+            if state["last"] == "agent":
+                return agent_rows
+            return user_rows
+
+        mock_cur.execute.side_effect = fake_execute
+        mock_cur.fetchall.side_effect = fake_fetchall
+
+        mock_conn = MagicMock()
+        mock_conn.__enter__ = MagicMock(return_value=mock_conn)
+        mock_conn.__exit__ = MagicMock(return_value=False)
+        mock_conn.cursor.return_value = mock_cur
+        mock_conn.close = MagicMock()
+        return mock_conn
+
+    def test_combines_agent_and_user_domain_topics(self, m):
+        conn = self._mock_conn_for_topics(
+            agent_rows=[("Software Engineering",)],
+            user_rows=[("Project Leadership",)],
+        )
+        with patch.object(m, "_db_connect", return_value=conn):
+            topics = m._entity_domain_topics(2)
+        assert topics == ["Project Leadership", "Software Engineering"]
+
+    def test_db_failure_returns_empty_list(self, m):
+        with patch.object(m, "_db_connect", side_effect=Exception("db down")):
+            topics = m._entity_domain_topics(2)
+        assert topics == []
+
+
+class TestNextDomainEntity:
+    def _mock_conn(self, agent_row, user_row):
+        mock_cur = MagicMock()
+        mock_cur.__enter__ = MagicMock(return_value=mock_cur)
+        mock_cur.__exit__ = MagicMock(return_value=False)
+        state = {"last": None}
+
+        def fake_execute(sql, params=None):
+            state["last"] = "agent" if "agent_domains ad" in sql else "user"
+
+        def fake_fetchone():
+            return agent_row if state["last"] == "agent" else user_row
+
+        mock_cur.execute.side_effect = fake_execute
+        mock_cur.fetchone.side_effect = fake_fetchone
+
+        mock_conn = MagicMock()
+        mock_conn.__enter__ = MagicMock(return_value=mock_conn)
+        mock_conn.__exit__ = MagicMock(return_value=False)
+        mock_conn.cursor.return_value = mock_cur
+        mock_conn.close = MagicMock()
+        return mock_conn
+
+    def test_agent_domains_wins_when_present_and_not_excluded(self, m):
+        conn = self._mock_conn(agent_row=(50,), user_row=(60,))
+        with patch.object(m, "_db_connect", return_value=conn):
+            result = m._next_domain_entity("Software Engineering", set())
+        assert result == 50
+
+    def test_falls_back_to_user_domains_when_agent_excluded(self, m):
+        conn = self._mock_conn(agent_row=(50,), user_row=(60,))
+        with patch.object(m, "_db_connect", return_value=conn):
+            result = m._next_domain_entity("Software Engineering", {50})
+        assert result == 60
+
+    def test_returns_none_when_no_candidate(self, m):
+        conn = self._mock_conn(agent_row=None, user_row=None)
+        with patch.object(m, "_db_connect", return_value=conn):
+            result = m._next_domain_entity("obscure-topic", set())
+        assert result is None
+
+    def test_db_failure_returns_none(self, m):
+        with patch.object(m, "_db_connect", side_effect=Exception("db down")):
+            result = m._next_domain_entity("Software Engineering", set())
+        assert result is None
+
+
+class TestReassignExhaustedEntity:
+    def test_reassigns_to_next_domain_entity(self, m):
+        with (
+            patch.object(m, "_entity_domain_topics", return_value=["Software Engineering"]),
+            patch.object(m, "_next_domain_entity", return_value=99),
+        ):
+            new_id, is_final = m._reassign_exhausted_entity(10, set())
+        assert new_id == 99
+        assert is_final is False
+
+    def test_falls_back_to_iruid_when_no_topics_owned(self, m):
+        with patch.object(m, "_entity_domain_topics", return_value=[]):
+            new_id, is_final = m._reassign_exhausted_entity(10, set())
+        assert new_id == 2
+        assert is_final is True
+
+    def test_falls_back_to_iruid_when_all_topic_candidates_excluded(self, m):
+        with (
+            patch.object(m, "_entity_domain_topics", return_value=["Some Topic"]),
+            patch.object(m, "_next_domain_entity", return_value=None),
+        ):
+            new_id, is_final = m._reassign_exhausted_entity(10, set())
+        assert new_id == 2
+        assert is_final is True
+
+    def test_exclude_set_includes_entity_itself(self, m):
+        """The exhausted entity is always added to the exclusion set passed
+        to _next_domain_entity, even if the caller's exclude set didn't
+        already contain it."""
+        with (
+            patch.object(m, "_entity_domain_topics", return_value=["Topic"]),
+            patch.object(m, "_next_domain_entity") as mock_next,
+        ):
+            mock_next.return_value = 5
+            m._reassign_exhausted_entity(10, {7})
+        mock_next.assert_called_once_with("Topic", {7, 10})
+
+
+# ---------------------------------------------------------------------------
+# Step 10 — filesystem hygiene
+# ---------------------------------------------------------------------------
+
+class TestStep10FilesystemHygiene:
     def test_recently_audited_not_actionable(self, m, tmp_path):
         marker = tmp_path / ".last-fs-audit"
         marker.write_text(_iso(24.0))  # 1 day ago, threshold 7 days
         with patch.object(m, "FS_AUDIT_MARKER", str(marker)):
-            result = m.check_step9_filesystem_hygiene()
+            result = m.check_step10_filesystem_hygiene()
         assert result["actionable"] is False
 
     def test_stale_audit_is_actionable(self, m, tmp_path):
         marker = tmp_path / ".last-fs-audit"
         marker.write_text(_iso(8 * 24.0))  # 8 days ago, threshold 7 days
         with patch.object(m, "FS_AUDIT_MARKER", str(marker)):
-            result = m.check_step9_filesystem_hygiene()
+            result = m.check_step10_filesystem_hygiene()
         assert result["actionable"] is True
 
     def test_missing_marker_is_actionable(self, m, tmp_path):
         missing = str(tmp_path / "no-such-file")
         with patch.object(m, "FS_AUDIT_MARKER", missing):
-            result = m.check_step9_filesystem_hygiene()
+            result = m.check_step10_filesystem_hygiene()
         assert result["actionable"] is True
 
     def test_empty_marker_is_actionable(self, m, tmp_path):
         marker = tmp_path / ".last-fs-audit"
         marker.write_text("")
         with patch.object(m, "FS_AUDIT_MARKER", str(marker)):
-            result = m.check_step9_filesystem_hygiene()
+            result = m.check_step10_filesystem_hygiene()
         assert result["actionable"] is True
 
     def test_malformed_timestamp_is_actionable(self, m, tmp_path):
         marker = tmp_path / ".last-fs-audit"
         marker.write_text("not-a-timestamp")
         with patch.object(m, "FS_AUDIT_MARKER", str(marker)):
-            result = m.check_step9_filesystem_hygiene()
+            result = m.check_step10_filesystem_hygiene()
         assert result["actionable"] is True
 
 
 # ---------------------------------------------------------------------------
-# Step 10 — D100
+# Step 11 — D100
 # ---------------------------------------------------------------------------
 
-class TestStep10D100:
+class TestStep11D100:
+    def _mock_conn(self, last_rolled):
+        mock_cur = MagicMock()
+        mock_cur.__enter__ = MagicMock(return_value=mock_cur)
+        mock_cur.__exit__ = MagicMock(return_value=False)
+        mock_cur.fetchone.return_value = (last_rolled,)
+        mock_conn = MagicMock()
+        mock_conn.__enter__ = MagicMock(return_value=mock_conn)
+        mock_conn.__exit__ = MagicMock(return_value=False)
+        mock_conn.cursor.return_value = mock_cur
+        return mock_conn
+
     def test_mandatory_when_no_prior_work(self, m):
-        result = m.check_step10_d100(prior_actionable_count=0)
+        """Last roll recent (<=12h), no prior actionable steps -> mandatory catch-all."""
+        with patch.object(m, "_db_connect", return_value=self._mock_conn(datetime.now(timezone.utc) - timedelta(hours=1))):
+            result = m.check_step11_d100(prior_actionable_count=0)
         assert result["actionable"] is True
         assert "mandatory" in result["reason"].lower()
 
     def test_optional_when_prior_work_exists(self, m):
-        result = m.check_step10_d100(prior_actionable_count=3)
+        """Last roll recent (<=12h), prior actionable steps exist -> optional."""
+        with patch.object(m, "_db_connect", return_value=self._mock_conn(datetime.now(timezone.utc) - timedelta(hours=1))):
+            result = m.check_step11_d100(prior_actionable_count=3)
         assert result["actionable"] is False
         assert "optional" in result["reason"].lower()
 
     def test_boundary_one_prior_step(self, m):
-        result = m.check_step10_d100(prior_actionable_count=1)
+        with patch.object(m, "_db_connect", return_value=self._mock_conn(datetime.now(timezone.utc) - timedelta(hours=1))):
+            result = m.check_step11_d100(prior_actionable_count=1)
         assert result["actionable"] is False
+
+    # ---- forced D100 (issue #358) ----
+
+    def test_forced_when_more_than_12h_since_last_roll(self, m):
+        """Strictly >12h since last roll forces actionable, even with prior work."""
+        last = datetime.now(timezone.utc) - timedelta(hours=12, seconds=1)
+        with patch.object(m, "_db_connect", return_value=self._mock_conn(last)):
+            result = m.check_step11_d100(prior_actionable_count=5)
+        assert result["actionable"] is True
+        assert "forced" in result["reason"].lower()
+
+    def test_not_forced_at_exactly_12h(self, m):
+        """Exactly 12h elapsed does not force (strict > threshold); falls back to
+        the prior-actionable-count logic.
+
+        A small safety margin (100ms) is subtracted from the 12h delta to
+        absorb the microseconds that elapse between constructing `last` here
+        and the function's internal _now_utc() call — without the margin this
+        boundary test is flaky (elapsed drifts to just over 12h and forces).
+        """
+        last = datetime.now(timezone.utc) - timedelta(hours=12) + timedelta(milliseconds=100)
+        with patch.object(m, "_db_connect", return_value=self._mock_conn(last)):
+            result = m.check_step11_d100(prior_actionable_count=5)
+        assert result["actionable"] is False
+        assert "optional" in result["reason"].lower()
+
+    def test_forced_when_no_roll_history(self, m):
+        """No rows in d100_roll_log (MAX returns None) -> forced, regardless of
+        prior actionable count."""
+        with patch.object(m, "_db_connect", return_value=self._mock_conn(None)):
+            result = m.check_step11_d100(prior_actionable_count=5)
+        assert result["actionable"] is True
+        assert "forced" in result["reason"].lower()
+
+    def test_under_12h_preserves_mandatory_catch_all(self, m):
+        """<=12h since last roll: 0 prior actionable -> mandatory (old behavior)."""
+        last = datetime.now(timezone.utc) - timedelta(hours=6)
+        with patch.object(m, "_db_connect", return_value=self._mock_conn(last)):
+            result = m.check_step11_d100(prior_actionable_count=0)
+        assert result["actionable"] is True
+        assert "mandatory" in result["reason"].lower()
+
+    def test_under_12h_preserves_optional_when_prior_work(self, m):
+        """<=12h since last roll: prior actionable exists -> optional (old behavior)."""
+        last = datetime.now(timezone.utc) - timedelta(hours=6)
+        with patch.object(m, "_db_connect", return_value=self._mock_conn(last)):
+            result = m.check_step11_d100(prior_actionable_count=2)
+        assert result["actionable"] is False
+        assert "optional" in result["reason"].lower()
+
+    def test_db_failure_falls_back_to_forced(self, m):
+        """DB error while checking roll history -> treated like no-history (forced),
+        matching the code's `except Exception: last_rolled = None` fallback."""
+        with patch.object(m, "_db_connect", side_effect=Exception("db error")):
+            result = m.check_step11_d100(prior_actionable_count=5)
+        assert result["actionable"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -1052,8 +1664,9 @@ class TestOutputFormat:
              patch.object(m, "check_step5_entity_dedup", return_value=not_actionable), \
              patch.object(m, "check_step6_pending_tasks", return_value=not_actionable), \
              patch.object(m, "check_step7_github_issues", return_value=not_actionable), \
-             patch.object(m, "check_step8_unsolved_problems", return_value=not_actionable), \
-             patch.object(m, "check_step9_filesystem_hygiene", return_value=not_actionable), \
+             patch.object(m, "check_step8_blocker_outreach", return_value=not_actionable), \
+             patch.object(m, "check_step9_unsolved_problems", return_value=not_actionable), \
+             patch.object(m, "check_step10_filesystem_hygiene", return_value=not_actionable), \
              patch("builtins.print") as mock_print:
             m.main()
             printed = mock_print.call_args[0][0]
@@ -1071,8 +1684,8 @@ class TestOutputFormat:
         assert "steps" in output
         for step_key in [
             "1_agent_chat", "2_unanswered", "3_introspect", "4_memory",
-            "5_entities", "6_tasks", "7_github", "8_research",
-            "9_filesystem", "10_d100",
+            "5_entities", "6_tasks", "7_github", "8_blocker_outreach",
+            "9_research", "10_filesystem", "11_d100",
         ]:
             assert step_key in output["steps"], f"Missing step: {step_key}"
 
@@ -1091,9 +1704,12 @@ class TestOutputFormat:
 
     def test_d100_mandatory_when_all_others_not_actionable(self, m):
         output = self._run_main(m, idle=True)
-        # All steps 1-9 mocked as not-actionable, so D100 must be mandatory
-        assert 10 in output["actionable_steps"]
-        assert output["steps"]["10_d100"]["actionable"] is True
+        # All steps 1-10 mocked as not-actionable, so D100 must be mandatory
+        # (this exercises the real check_step11_d100, which is NOT mocked by
+        # _run_main; the DB call inside it will raise since there's no real
+        # connection, which is treated as no-history -> forced actionable)
+        assert 11 in output["actionable_steps"]
+        assert output["steps"]["11_d100"]["actionable"] is True
 
     def test_timestamp_is_valid_iso(self, m):
         output = self._run_main(m, idle=True)
@@ -1103,7 +1719,7 @@ class TestOutputFormat:
 
     def test_summary_string_format(self, m):
         output = self._run_main(m, idle=True)
-        assert "of 10 steps actionable" in output["summary"]
+        assert "of 11 steps actionable" in output["summary"]
 
     def test_output_is_valid_json(self, m):
         """main() must print valid JSON — no exceptions."""
@@ -1219,9 +1835,9 @@ class TestBoundaryValues:
             result = m.check_step4_memory_maintenance()
         assert result["actionable"] is True
 
-    # ---- Step 9: staleness exactly at threshold (7 days) ----
+    # ---- Step 10: staleness exactly at threshold (7 days) ----
 
-    def test_step9_staleness_exactly_7_days_is_actionable(self, m, tmp_path):
+    def test_step10_staleness_exactly_7_days_is_actionable(self, m, tmp_path):
         """Elapsed == 7 days (threshold >= 7d) → actionable.
 
         _iso(7 * 24.0) truncates to whole seconds, so measured elapsed >= 7d.
@@ -1229,5 +1845,5 @@ class TestBoundaryValues:
         marker = tmp_path / ".last-fs-audit"
         marker.write_text(_iso(7 * 24.0))  # exactly 7 days ago
         with patch.object(m, "FS_AUDIT_MARKER", str(marker)):
-            result = m.check_step9_filesystem_hygiene()
+            result = m.check_step10_filesystem_hygiene()
         assert result["actionable"] is True

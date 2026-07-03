@@ -6,7 +6,7 @@ Scripts supporting NOVA's proactive motivation system.
 
 ## proactive-gate-check.py
 
-Deterministic gate checker for NOVA's proactive cascade. Checks all 10 cascade step
+Deterministic gate checker for NOVA's proactive cascade. Checks all 11 cascade step
 conditions without LLM involvement and emits a structured JSON manifest indicating which
 steps have actionable work. The heartbeat session runs this script first and works only the
 steps listed in `actionable_steps`, eliminating the need for inline LLM gate evaluation and
@@ -60,19 +60,30 @@ step numbers:
     "5_entities":    { "actionable": false, "reason": "No entity dedup candidates" },
     "6_tasks":       { "actionable": true,  "reason": "3 pending unblocked task(s)" },
     "7_github":      { "actionable": false, "reason": "0 open GitHub issues" },
-    "8_research":    { "actionable": false, "reason": "0 unsolved problems" },
-    "9_filesystem":  { "actionable": false, "reason": "Audited 2.1d ago (threshold 7d)" },
-    "10_d100":       { "actionable": false, "reason": "Optional — 2 prior step(s) already actionable" }
+    "8_blocker_outreach": { "actionable": false, "reason": "No blockers eligible for outreach" },
+    "9_research":    { "actionable": false, "reason": "0 unsolved problems" },
+    "10_filesystem": { "actionable": false, "reason": "Audited 2.1d ago (threshold 7d)" },
+    "11_d100":       { "actionable": false, "reason": "Optional — 2 prior step(s) already actionable" }
   },
   "actionable_steps": [3, 6],
   "actionable_count": 2,
-  "summary": "2 of 10 steps actionable"
+  "summary": "2 of 11 steps actionable"
 }
 ```
 
 Step numbers in `actionable_steps` correspond to `step_order` values in the `workflow_steps`
-table for the NOVA Proactive Mode workflow (id=27). Step 10 (D100 random task) is marked
-mandatory when no steps 1–9 are actionable, ensuring the cascade always produces output.
+table for the NOVA Proactive Mode workflow (id=27). Step 11 (D100 random task) is marked
+mandatory when no steps 1–10 are actionable, ensuring the cascade always produces output.
+Step 11 is also **forced** actionable whenever more than 12h have elapsed since the last
+recorded roll in `d100_roll_log` (or no roll is on record), regardless of other steps'
+actionable state (issue #358).
+
+Step 8 (Blocker Outreach) curates a per-entity, per-blocker eligible set from the `blockers`
+registry — entity master cooldown 24h, per-blocker cooldown 72h (both strict `>`), top 3
+blockers per entity by `priority ASC, first_seen ASC, id ASC`. Its `data` payload includes
+each eligible entity's selected blockers, computed cascade level per blocker, and the
+resolved delivery channel (see `motivation/ARCHITECTURE.md#blocker-outreach-step-8` for the
+full cascade/channel/reassignment rules, issue #356).
 
 Each step entry may include a `data` field with additional context (counts, timestamps,
 lists). Error conditions appear as `{ "actionable": false, "error": "..." }`.
@@ -83,7 +94,7 @@ lists). Error conditions appear as `{ "actionable": false, "error": "..." }`.
 |------------|----------------|
 | `psycopg2` | PostgreSQL queries (agent_chat, tasks, entities, unsolved_problems). Loaded from the nova venv at `~/.local/share/nova/venv/` — no manual activation required. |
 | `gh` CLI | Lists open GitHub issues across NOVA-Openclaw repos (Step 7) and enumerates repos. |
-| `openclaw` CLI | Lists recent active sessions (Step 2). |
+| `~/.openclaw/agents/nova/sessions/sessions.json` + per-session JSONL files | Detects unanswered user messages directly from session state (Step 2). |
 
 All other dependencies are Python standard library (`json`, `os`, `subprocess`, `sys`,
 `time`, `datetime`).

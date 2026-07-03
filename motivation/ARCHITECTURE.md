@@ -279,6 +279,14 @@ reassignment exhausts every domain entity, escalation falls through to **I)ruid
 his last available channel/level and continues on the normal 72h cadence — it is never
 dropped or looped past him.
 
+This is enforced deterministically in `check_step8_blocker_outreach()`, not left as
+agent-turn inference: `_is_cascade_exhausted()` detects the condition,
+`_entity_domain_topics()` + `_next_domain_entity()` resolve the next candidate, and
+`_reassign_exhausted_entity()` drives the chain (next domain entity → I)ruid final
+fallback → hold-in-place if I)ruid himself is exhausted). Each entry in the returned
+`eligible_entities` payload carries `exhausted` (true only for the I)ruid hold-in-place
+case) and, when reassignment occurred, `reassigned_from_entity_id`.
+
 ### Satisfied Blocker Reconciliation
 
 Before selecting outreach targets each cycle, Step 8 marks any blocker whose underlying

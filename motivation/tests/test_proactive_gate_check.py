@@ -985,12 +985,16 @@ class TestStep9UnsolvedProblems:
         with patch.object(m, "_db_connect", return_value=self._mock_conn(0)):
             result = m.check_step9_unsolved_problems()
         assert result["actionable"] is False
+        # D-2 revert: no last_worked_at/3-day-cooldown predicate in this PR;
+        # reason string restored to the pre-PR count-only form.
+        assert result["reason"] == "0 unsolved problems"
 
     def test_unsolved_problems_present(self, m):
         with patch.object(m, "_db_connect", return_value=self._mock_conn(3)):
             result = m.check_step9_unsolved_problems()
         assert result["actionable"] is True
         assert result["data"]["count"] == 3
+        assert result["reason"] == "3 unsolved problem(s) awaiting research"
 
     def test_db_failure(self, m):
         with patch.object(m, "_db_connect", side_effect=Exception("db error")):
@@ -1243,6 +1247,262 @@ class TestStep8BlockerOutreach:
             result = m.check_step8_blocker_outreach()
         entity = result["data"]["eligible_entities"][0]
         assert entity["actual_channel"] == "discord_channel"
+
+    # ---- cascade exhaustion + reassignment (D-1 fix, ruling #7 / TC-D07) ----
+
+    def test_zero_channels_zero_attempts_triggers_reassignment(self, m):
+        """Entity with 0 contact channels and 0 prior attempts (cascade_level=1)
+        is immediately exhausted (1 > 0 available channels) — must reassign
+        rather than silently returning 'none'."""
+        rows = [self._row(1, entity_id=10, attempt_count=0)]
+        p1, p2, p3 = self._patched(m, rows, entity_master={}, channels={}, is_agent=False)
+        with (
+            p1, p2, p3,
+            patch.object(m, "_reassign_exhausted_entity", return_value=(20, False)) as mock_reassign,
+            patch.object(m, "_entity_channel_facts", side_effect=lambda eid: {"discord_channel": "abc"} if eid == 20 else {}),
+            patch.object(m, "_entity_is_agent", return_value=False),
+            patch.object(m, "_entity_name_lookup", return_value="Next Entity"),
+        ):
+            result = m.check_step8_blocker_outreach()
+        entity = result["data"]["eligible_entities"][0]
+        mock_reassign.assert_called_once_with(10, {10})
+        assert entity["entity_id"] == 20
+        assert entity["reassigned_from_entity_id"] == 10
+        assert entity["exhausted"] is False
+        assert entity["max_cascade_level"] == 1
+        assert entity["actual_channel"] == "discord_channel"
+
+    def test_n_channels_level_n_plus_1_triggers_reassignment(self, m):
+        """Entity with N channels, cascade_level = N+1 (first exhaustion past
+        the ceiling) — must reassign rather than repeating the last channel
+        silently."""
+        # attempt_count=2 -> cascade_level=3; only 2 channels available (N=2)
+        # so level 3 > 2 available channels -> exhausted.
+        rows = [self._row(1, entity_id=11, attempt_count=2)]
+        channels = {"discord_channel": "123", "discord_dm": "123"}
+        p1, p2, p3 = self._patched(m, rows, entity_master={}, channels=channels, is_agent=False)
+        with (
+            p1, p2, p3,
+            patch.object(m, "_reassign_exhausted_entity", return_value=(30, False)) as mock_reassign,
+            patch.object(m, "_entity_channel_facts", side_effect=lambda eid: {"signal": "sig"} if eid == 30 else channels),
+            patch.object(m, "_entity_is_agent", return_value=False),
+            patch.object(m, "_entity_name_lookup", return_value="Reassigned Entity"),
+        ):
+            result = m.check_step8_blocker_outreach()
+        entity = result["data"]["eligible_entities"][0]
+        mock_reassign.assert_called_once_with(11, {11})
+        assert entity["entity_id"] == 30
+        assert entity["reassigned_from_entity_id"] == 11
+        assert entity["max_cascade_level"] == 1
+        assert entity["actual_channel"] == "signal"
+
+    def test_iruid_exhausted_holds_no_reassignment(self, m):
+        """Entity is I)ruid (entity_id=2); cascade_level exceeds his channel
+        count. Must NOT reassign — holds at his last available channel and
+        is marked exhausted=True so the agent turn knows to keep the 72h
+        cadence rather than escalate further."""
+        # attempt_count=3 -> cascade_level=4; only 1 channel available -> exhausted.
+        rows = [self._row(1, entity_id=2, attempt_count=3)]
+        channels = {"discord_channel": "123"}
+        p1, p2, p3 = self._patched(m, rows, entity_master={}, channels=channels, is_agent=False)
+        with (
+            p1, p2, p3,
+            patch.object(m, "_reassign_exhausted_entity") as mock_reassign,
+        ):
+            result = m.check_step8_blocker_outreach()
+        entity = result["data"]["eligible_entities"][0]
+        mock_reassign.assert_not_called()
+        assert entity["entity_id"] == 2
+        assert entity["exhausted"] is True
+        assert entity["max_cascade_level"] == 4
+        assert entity["actual_channel"] == "discord_channel"
+        assert "reassigned_from_entity_id" not in entity
+
+    def test_full_reassignment_chain_falls_to_iruid(self, m):
+        """Original entity exhausted -> reassigned entity ALSO exhausted ->
+        falls through to I)ruid (entity_id=2) as final fallback."""
+        rows = [self._row(1, entity_id=10, attempt_count=0)]
+        p1, p2, p3 = self._patched(m, rows, entity_master={}, channels={}, is_agent=False)
+
+        # First reassignment: 10 -> 40 (also exhausted, 0 channels).
+        # Second reassignment: 40 -> 2 (I)ruid, final fallback), with channels.
+        reassign_calls = {"count": 0}
+
+        def fake_reassign(entity_id, exclude_ids):
+            reassign_calls["count"] += 1
+            if reassign_calls["count"] == 1:
+                assert entity_id == 10
+                assert exclude_ids == {10}
+                return 40, False
+            assert entity_id == 40
+            assert exclude_ids == {10, 40}
+            return 2, True
+
+        def fake_channels(eid):
+            if eid == 2:
+                return {"discord_channel": "999"}
+            return {}
+
+        with (
+            p1, p2, p3,
+            patch.object(m, "_reassign_exhausted_entity", side_effect=fake_reassign) as mock_reassign,
+            patch.object(m, "_entity_channel_facts", side_effect=fake_channels),
+            patch.object(m, "_entity_is_agent", return_value=False),
+            patch.object(m, "_entity_name_lookup", return_value="I)ruid"),
+        ):
+            result = m.check_step8_blocker_outreach()
+        entity = result["data"]["eligible_entities"][0]
+        assert mock_reassign.call_count == 2
+        assert entity["entity_id"] == 2
+        assert entity["reassigned_from_entity_id"] == 10
+        assert entity["exhausted"] is False  # landed on I)ruid with a channel, not a hold
+        assert entity["max_cascade_level"] == 1
+        assert entity["actual_channel"] == "discord_channel"
+
+
+# ---------------------------------------------------------------------------
+# Cascade exhaustion helpers — direct unit coverage (D-1 fix)
+# ---------------------------------------------------------------------------
+
+class TestIsCascadeExhausted:
+    def test_agent_never_exhausted(self, m):
+        assert m._is_cascade_exhausted(99, {}, is_agent=True) is False
+
+    def test_zero_channels_exhausted_at_level_1(self, m):
+        assert m._is_cascade_exhausted(1, {}, is_agent=False) is True
+
+    def test_level_within_available_channels_not_exhausted(self, m):
+        channels = {"discord_channel": "1", "discord_dm": "1", "signal": "s"}
+        assert m._is_cascade_exhausted(3, channels, is_agent=False) is False
+
+    def test_level_exceeding_available_channels_exhausted(self, m):
+        channels = {"discord_channel": "1", "discord_dm": "1"}
+        assert m._is_cascade_exhausted(3, channels, is_agent=False) is True
+
+
+class TestEntityDomainTopics:
+    def _mock_conn_for_topics(self, agent_rows, user_rows, exists_rows=None):
+        mock_cur = MagicMock()
+        mock_cur.__enter__ = MagicMock(return_value=mock_cur)
+        mock_cur.__exit__ = MagicMock(return_value=False)
+        state = {"last": None}
+
+        def fake_execute(sql, params=None):
+            state["last"] = "agent" if "ad.domain_topic" in sql else "user"
+
+        def fake_fetchall():
+            if state["last"] == "agent":
+                return agent_rows
+            return user_rows
+
+        mock_cur.execute.side_effect = fake_execute
+        mock_cur.fetchall.side_effect = fake_fetchall
+
+        mock_conn = MagicMock()
+        mock_conn.__enter__ = MagicMock(return_value=mock_conn)
+        mock_conn.__exit__ = MagicMock(return_value=False)
+        mock_conn.cursor.return_value = mock_cur
+        mock_conn.close = MagicMock()
+        return mock_conn
+
+    def test_combines_agent_and_user_domain_topics(self, m):
+        conn = self._mock_conn_for_topics(
+            agent_rows=[("Software Engineering",)],
+            user_rows=[("Project Leadership",)],
+        )
+        with patch.object(m, "_db_connect", return_value=conn):
+            topics = m._entity_domain_topics(2)
+        assert topics == ["Project Leadership", "Software Engineering"]
+
+    def test_db_failure_returns_empty_list(self, m):
+        with patch.object(m, "_db_connect", side_effect=Exception("db down")):
+            topics = m._entity_domain_topics(2)
+        assert topics == []
+
+
+class TestNextDomainEntity:
+    def _mock_conn(self, agent_row, user_row):
+        mock_cur = MagicMock()
+        mock_cur.__enter__ = MagicMock(return_value=mock_cur)
+        mock_cur.__exit__ = MagicMock(return_value=False)
+        state = {"last": None}
+
+        def fake_execute(sql, params=None):
+            state["last"] = "agent" if "agent_domains ad" in sql else "user"
+
+        def fake_fetchone():
+            return agent_row if state["last"] == "agent" else user_row
+
+        mock_cur.execute.side_effect = fake_execute
+        mock_cur.fetchone.side_effect = fake_fetchone
+
+        mock_conn = MagicMock()
+        mock_conn.__enter__ = MagicMock(return_value=mock_conn)
+        mock_conn.__exit__ = MagicMock(return_value=False)
+        mock_conn.cursor.return_value = mock_cur
+        mock_conn.close = MagicMock()
+        return mock_conn
+
+    def test_agent_domains_wins_when_present_and_not_excluded(self, m):
+        conn = self._mock_conn(agent_row=(50,), user_row=(60,))
+        with patch.object(m, "_db_connect", return_value=conn):
+            result = m._next_domain_entity("Software Engineering", set())
+        assert result == 50
+
+    def test_falls_back_to_user_domains_when_agent_excluded(self, m):
+        conn = self._mock_conn(agent_row=(50,), user_row=(60,))
+        with patch.object(m, "_db_connect", return_value=conn):
+            result = m._next_domain_entity("Software Engineering", {50})
+        assert result == 60
+
+    def test_returns_none_when_no_candidate(self, m):
+        conn = self._mock_conn(agent_row=None, user_row=None)
+        with patch.object(m, "_db_connect", return_value=conn):
+            result = m._next_domain_entity("obscure-topic", set())
+        assert result is None
+
+    def test_db_failure_returns_none(self, m):
+        with patch.object(m, "_db_connect", side_effect=Exception("db down")):
+            result = m._next_domain_entity("Software Engineering", set())
+        assert result is None
+
+
+class TestReassignExhaustedEntity:
+    def test_reassigns_to_next_domain_entity(self, m):
+        with (
+            patch.object(m, "_entity_domain_topics", return_value=["Software Engineering"]),
+            patch.object(m, "_next_domain_entity", return_value=99),
+        ):
+            new_id, is_final = m._reassign_exhausted_entity(10, set())
+        assert new_id == 99
+        assert is_final is False
+
+    def test_falls_back_to_iruid_when_no_topics_owned(self, m):
+        with patch.object(m, "_entity_domain_topics", return_value=[]):
+            new_id, is_final = m._reassign_exhausted_entity(10, set())
+        assert new_id == 2
+        assert is_final is True
+
+    def test_falls_back_to_iruid_when_all_topic_candidates_excluded(self, m):
+        with (
+            patch.object(m, "_entity_domain_topics", return_value=["Some Topic"]),
+            patch.object(m, "_next_domain_entity", return_value=None),
+        ):
+            new_id, is_final = m._reassign_exhausted_entity(10, set())
+        assert new_id == 2
+        assert is_final is True
+
+    def test_exclude_set_includes_entity_itself(self, m):
+        """The exhausted entity is always added to the exclusion set passed
+        to _next_domain_entity, even if the caller's exclude set didn't
+        already contain it."""
+        with (
+            patch.object(m, "_entity_domain_topics", return_value=["Topic"]),
+            patch.object(m, "_next_domain_entity") as mock_next,
+        ):
+            mock_next.return_value = 5
+            m._reassign_exhausted_entity(10, {7})
+        mock_next.assert_called_once_with("Topic", {7, 10})
 
 
 # ---------------------------------------------------------------------------

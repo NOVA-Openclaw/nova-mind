@@ -684,13 +684,37 @@ def _entity_is_agent(entity_id: int) -> bool:
         return False
 
 
+def _entity_name_lookup(entity_id: int) -> str | None:
+    """Return entities.name for the given entity_id, or None on failure."""
+    try:
+        conn = _db_connect()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT name FROM entities WHERE id = %s LIMIT 1",
+                        (entity_id,),
+                    )
+                    row = cur.fetchone()
+                    return row[0] if row is not None else None
+        finally:
+            conn.close()
+    except Exception:
+        return None
+
+
 def _map_cascade_to_channel(level: int, channels: dict[str, str], is_agent: bool) -> str:
     """Map a computed cascade level to a concrete channel.
 
     Agents always map to agent_chat. Humans escalate through available
     channels: discord_channel (1), discord_dm (2), signal (3), slack (4),
-    email (5+). If the requested level has no fact, fall back to the next
-    available channel. If no channels exist, return 'none'.
+    email (5+). If the requested level has no fact, fall back to the last
+    available channel (repeat-at-ceiling). If no channels exist, return
+    'none'. Both the repeat-at-ceiling and no-channels cases are signals of
+    *cascade exhaustion* for the entity — see _is_cascade_exhausted() and
+    _reassign_exhausted_entity(), which detect this condition and drive
+    reassignment/hold-at-I)ruid behavior. This function itself only maps
+    level -> channel string; it does not decide reassignment.
     """
     if is_agent:
         return "agent_chat"
@@ -702,6 +726,160 @@ def _map_cascade_to_channel(level: int, channels: dict[str, str], is_agent: bool
     if idx >= len(available):
         return available[-1]
     return available[idx]
+
+
+def _is_cascade_exhausted(level: int, channels: dict[str, str], is_agent: bool) -> bool:
+    """Return True if the cascade level exceeds the entity's available channels.
+
+    Agents are never exhausted (agent_chat is unconditionally available).
+    A human entity with zero channels is exhausted at any level >= 1.
+    """
+    if is_agent:
+        return False
+    order = ["discord_channel", "discord_dm", "signal", "slack", "email"]
+    available_count = len([ch for ch in order if ch in channels])
+    return level > available_count
+
+
+def _entity_domain_topics(entity_id: int) -> list[str]:
+    """Return domain_topic values for which this entity is the PRIMARY owner.
+
+    Checks agent_domains first (joined via agents.entity_id), then
+    user_domains. Per ruling TC-E07, when the same domain_topic exists in
+    both tables, agent_domains wins as primary owner for that topic — so a
+    topic already claimed by an agent is excluded from this entity's list
+    if the entity itself is not that agent. Only used to find which topics
+    an *exhausted* entity currently owns, so we can look up the next
+    candidate for the same topic(s).
+    """
+    topics: set[str] = set()
+    try:
+        conn = _db_connect()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    # Topics this entity owns via agent_domains (entity is an agent).
+                    cur.execute(
+                        """
+                        SELECT ad.domain_topic
+                        FROM agent_domains ad
+                        JOIN agents a ON a.id = ad.agent_id
+                        WHERE a.entity_id = %s
+                        """,
+                        (entity_id,),
+                    )
+                    topics.update(r[0] for r in cur.fetchall())
+
+                    # Topics this entity owns via user_domains, EXCLUDING any
+                    # topic that agent_domains already claims for some agent
+                    # (agent_domains wins ties per TC-E07 — a human's
+                    # user_domains row for that topic is a fallback, not a
+                    # primary ownership claim, when an agent also claims it).
+                    cur.execute(
+                        """
+                        SELECT ud.domain_topic
+                        FROM user_domains ud
+                        WHERE ud.entity_id = %s
+                          AND NOT EXISTS (
+                              SELECT 1 FROM agent_domains ad2
+                              WHERE ad2.domain_topic = ud.domain_topic
+                          )
+                        """,
+                        (entity_id,),
+                    )
+                    topics.update(r[0] for r in cur.fetchall())
+        finally:
+            conn.close()
+    except Exception:
+        pass
+    return sorted(topics)
+
+
+def _next_domain_entity(domain_topic: str, exclude_entity_ids: set[int]) -> int | None:
+    """Resolve the next-priority responsible entity for a domain topic.
+
+    Resolution order matches curation (agent_domains first, then
+    user_domains by priority ASC, tiebreak first_seen/id), excluding any
+    entity already in exclude_entity_ids (already-exhausted entities in
+    this reassignment chain). Returns None if no candidate remains.
+    """
+    try:
+        conn = _db_connect()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    # agent_domains: domain_topic is globally unique per the
+                    # current schema constraint, so at most one candidate.
+                    cur.execute(
+                        """
+                        SELECT a.entity_id
+                        FROM agent_domains ad
+                        JOIN agents a ON a.id = ad.agent_id
+                        WHERE ad.domain_topic = %s
+                        """,
+                        (domain_topic,),
+                    )
+                    row = cur.fetchone()
+                    if row is not None and row[0] is not None and row[0] not in exclude_entity_ids:
+                        return row[0]
+
+                    # user_domains: lower priority number wins; tiebreak
+                    # created_at ASC, id ASC (deterministic; the random
+                    # tiebreak used in curation is for direct assignment,
+                    # not reassignment which needs a stable next-candidate).
+                    cur.execute(
+                        """
+                        SELECT entity_id
+                        FROM user_domains
+                        WHERE domain_topic = %s
+                          AND entity_id != ALL(%s)
+                        ORDER BY priority ASC, created_at ASC, id ASC
+                        LIMIT 1
+                        """,
+                        (domain_topic, list(exclude_entity_ids) or [-1]),
+                    )
+                    row = cur.fetchone()
+                    if row is not None:
+                        return row[0]
+        finally:
+            conn.close()
+    except Exception:
+        return None
+    return None
+
+
+def _reassign_exhausted_entity(
+    entity_id: int, exclude_entity_ids: set[int]
+) -> tuple[int | None, bool]:
+    """Find the reassignment target for an exhausted entity's blockers.
+
+    Per ruling #7 (SE Run #333 Step 4) / TC-D07:
+      1. Look up domain topics the exhausted entity currently owns as
+         primary responsible entity.
+      2. For each topic, find the next-priority domain entity (excluding
+         already-exhausted entities in this chain).
+      3. If any topic yields a candidate, reassign to it (first match wins;
+         topics are not expected to disagree in practice, and picking the
+         first deterministic match keeps this function total and simple).
+      4. If no topic yields a candidate (or the entity owns no topics),
+         fall back to entity_id = 2 (I)ruid) as the final fallback.
+
+    Returns (new_entity_id, is_final_fallback). is_final_fallback is True
+    when the returned entity is the I)ruid fallback (2) rather than a
+    genuine domain-topic reassignment — callers use this to distinguish
+    "reassigned to a peer" from "fell through to the catch-all."
+
+    Callers must not invoke this for entity_id == 2 (I)ruid) — his
+    exhaustion is a hold-in-place, not a reassignment; see
+    check_step8_blocker_outreach for that branch.
+    """
+    topics = _entity_domain_topics(entity_id)
+    chain_exclude = exclude_entity_ids | {entity_id}
+    for topic in topics:
+        candidate = _next_domain_entity(topic, chain_exclude)
+        if candidate is not None:
+            return candidate, False
+    return 2, True
 
 
 def check_step8_blocker_outreach() -> dict:
@@ -720,6 +898,20 @@ def check_step8_blocker_outreach() -> dict:
     Cascade level per blocker = prior proactive_outreach row count + 1.
     One message per entity is sent at the most-escalated requested level among
     its selected blockers; one proactive_outreach row is logged per blocker.
+
+    Cascade exhaustion (ruling #7 / TC-D07): when an entity's max cascade
+    level exceeds their available contact channels and they are not I)ruid
+    (entity_id=2), the blocker set is reassigned to the next domain entity
+    (via _reassign_exhausted_entity — agent_domains first, then
+    user_domains by priority, excluding already-exhausted entities in the
+    chain), restarting cascade level at 1 against the new entity. If every
+    domain entity is exhausted, the chain falls to I)ruid as final
+    fallback. If I)ruid himself is the exhausted entity, no reassignment
+    occurs — he holds at his last available channel/level and the normal
+    72h per-blocker cooldown continues to gate the next attempt. Each
+    returned entity entry carries "exhausted" (True only for the I)ruid
+    hold-in-place case) and, when reassignment occurred, the original
+    "reassigned_from_entity_id".
     """
     try:
         conn = _db_connect()
@@ -825,7 +1017,13 @@ def check_step8_blocker_outreach() -> dict:
             "cascade_level": cascade_level,
         })
 
-    # Keep only top-3 per entity and compute actual channel
+    # Keep only top-3 per entity, compute actual channel, and detect/resolve
+    # cascade exhaustion (ruling #7 / TC-D07): when max_level exceeds the
+    # entity's available channels and the entity is not I)ruid, reassign to
+    # the next domain entity (chain excludes already-exhausted entities),
+    # eventually falling to I)ruid if every domain entity is exhausted. If
+    # I)ruid himself is exhausted, hold him at his last available channel —
+    # no reassignment, no fabricated level increase.
     eligible_entities: list[dict[str, Any]] = []
     for entity_id in sorted(by_entity.keys()):
         ent = by_entity[entity_id]
@@ -833,17 +1031,67 @@ def check_step8_blocker_outreach() -> dict:
         if not selected:
             continue
         max_level = max(b["cascade_level"] for b in selected)
+
+        current_entity_id = entity_id
+        current_channels = ent["channels"]
+        current_is_agent = ent["is_agent"]
+        current_entity_name = ent["entity_name"]
+        exhausted_chain: list[int] = []
+        reassigned = False
+        exhaustion_hold = False
+
+        while _is_cascade_exhausted(max_level, current_channels, current_is_agent):
+            if current_entity_id == 2:
+                # I)ruid is exhausted — hold at his last available level,
+                # no further reassignment. Normal 72h cadence continues to
+                # gate future attempts.
+                exhaustion_hold = True
+                break
+
+            exhausted_chain.append(current_entity_id)
+            new_entity_id, is_final_fallback = _reassign_exhausted_entity(
+                current_entity_id, set(exhausted_chain)
+            )
+            if new_entity_id is None:
+                # No candidate at all (defensive; _reassign_exhausted_entity
+                # always returns entity 2 as a floor, but guard anyway).
+                new_entity_id = 2
+                is_final_fallback = True
+
+            reassigned = True
+            current_entity_id = new_entity_id
+            # Reassignment restarts cascade level at 1 against the new
+            # entity — no prior proactive_outreach rows exist against them
+            # for this blocker set yet.
+            max_level = 1
+            current_channels = _entity_channel_facts(current_entity_id)
+            current_is_agent = _entity_is_agent(current_entity_id)
+            current_entity_name = (
+                "I)ruid" if is_final_fallback and current_entity_id == 2
+                else _entity_name_lookup(current_entity_id) or current_entity_name
+            )
+
+            if current_entity_id in exhausted_chain:
+                # Defensive: avoid infinite loop if reassignment somehow
+                # cycles back to an already-exhausted entity.
+                break
+
         actual_channel = _map_cascade_to_channel(
-            max_level, ent["channels"], ent["is_agent"]
+            max_level, current_channels, current_is_agent
         )
-        eligible_entities.append({
-            "entity_id": entity_id,
-            "entity_name": ent["entity_name"],
+
+        entry: dict[str, Any] = {
+            "entity_id": current_entity_id,
+            "entity_name": current_entity_name,
             "selected_blockers": selected,
             "max_cascade_level": max_level,
             "actual_channel": actual_channel,
-            "is_agent": ent["is_agent"],
-        })
+            "is_agent": current_is_agent,
+            "exhausted": exhaustion_hold,
+        }
+        if reassigned:
+            entry["reassigned_from_entity_id"] = entity_id
+        eligible_entities.append(entry)
 
     total = sum(len(e["selected_blockers"]) for e in eligible_entities)
     if total > 0:

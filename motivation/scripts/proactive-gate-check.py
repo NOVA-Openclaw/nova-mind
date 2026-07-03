@@ -1107,7 +1107,7 @@ def check_step8_blocker_outreach() -> dict:
 
 
 def check_step9_unsolved_problems() -> dict:
-    """Step 9: Unsolved problems with status != 'solved' and not researched in the last 3 days."""
+    """Step 9: Unsolved problems with status != 'solved'."""
     try:
         conn = _db_connect()
         try:
@@ -1116,17 +1116,15 @@ def check_step9_unsolved_problems() -> dict:
                     cur.execute("""
                         SELECT count(*) FROM unsolved_problems
                         WHERE status != 'solved'
-                          AND (last_worked_at IS NULL
-                               OR last_worked_at < NOW() - INTERVAL '3 days')
                     """)
                     count = cur.fetchone()[0]
             if count > 0:
                 return {
                     "actionable": True,
-                    "reason": f"{count} unsolved problem(s) due for research (3-day cooldown)",
+                    "reason": f"{count} unsolved problem(s) awaiting research",
                     "data": {"count": count},
                 }
-            return {"actionable": False, "reason": "All unsolved problems researched within the last 3 days"}
+            return {"actionable": False, "reason": "0 unsolved problems"}
         finally:
             conn.close()
     except Exception as exc:

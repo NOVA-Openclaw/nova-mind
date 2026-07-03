@@ -790,14 +790,17 @@ def check_step8_blocker_outreach() -> dict:
             attempt_count, latest_attempt,
         ) = row
 
-        # Entity master cooldown: strict > 24h means latest ANY outreach must be
-        # older than cutoff (or absent).
+        # Entity master cooldown: strict > 24h elapsed required to be eligible,
+        # i.e. blocked while master_latest >= cutoff (elapsed <= 24h exactly
+        # still blocks).
         master_latest = entity_master.get(entity_id)
-        if master_latest is not None and master_latest > entity_cooldown_cutoff:
+        if master_latest is not None and master_latest >= entity_cooldown_cutoff:
             continue
 
-        # Per-blocker cooldown: strict > 72h
-        if latest_attempt > blocker_cooldown_cutoff:
+        # Per-blocker cooldown: strict > 72h elapsed required to be eligible,
+        # i.e. blocked while latest_attempt >= cutoff (elapsed <= 72h exactly
+        # still blocks).
+        if latest_attempt >= blocker_cooldown_cutoff:
             continue
 
         cascade_level = int(attempt_count) + 1

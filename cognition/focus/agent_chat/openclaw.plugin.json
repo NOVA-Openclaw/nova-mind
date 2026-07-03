@@ -35,7 +35,6 @@
         "type": "string",
         "description": "Route messages to a specific session instead of creating unique sessions per message"
       }
-    },
-    "required": ["database", "host", "user", "password"]
+    }
   }
 }

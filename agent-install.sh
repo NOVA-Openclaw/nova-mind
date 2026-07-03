@@ -64,6 +64,11 @@ fi
 # Derived variables
 DB_USER="${PGUSER:-$(whoami)}"
 DB_NAME="${PGDATABASE:-${DB_USER//-/_}_memory}"
+AGENT_CHAT_DB_NAME="agent_chat"
+
+# PostgreSQL password file path
+PGPASS_FILE="${HOME}/.pgpass"
+
 WORKSPACE="${OPENCLAW_WORKSPACE:-$HOME/.openclaw/workspace-coder}"
 OPENCLAW_DIR="$HOME/.openclaw"
 OPENCLAW_PROJECTS="$OPENCLAW_DIR/projects"
@@ -103,6 +108,72 @@ _superuser_pgschema() {
     else
         sudo -u "$PG_SUPERUSER" "$PGSCHEMA_BIN" "$@"
     fi
+}
+
+# Ensure a ~/.pgpass entry exists for a given connection.
+# Removes any existing entry with the same host:port:database:user prefix
+# and appends the current password, so re-runs are idempotent and password
+# rotations are picked up.
+_ensure_pgpass_entry() {
+    local host="$1"
+    local port="$2"
+    local database="$3"
+    local user="$4"
+    local password="$5"
+    local pgpass="$PGPASS_FILE"
+    local prefix="${host}:${port}:${database}:${user}:"
+    local line="${prefix}${password}"
+
+    if [ ! -f "$pgpass" ]; then
+        touch "$pgpass"
+        chmod 600 "$pgpass"
+    fi
+
+    # Already correct? Nothing to do.
+    if grep -qxF "$line" "$pgpass" 2>/dev/null; then
+        return 1
+    fi
+
+    local tmpfile
+    tmpfile=$(mktemp)
+    TMPFILES+=("$tmpfile")
+    chmod 600 "$tmpfile"
+    # Drop any stale entry with the same prefix, then append the new one.
+    if [ -s "$pgpass" ]; then
+        grep -vF "$prefix" "$pgpass" >"$tmpfile" 2>/dev/null || cat "$pgpass" >"$tmpfile"
+    fi
+    printf '%s\n' "$line" >>"$tmpfile"
+    mv "$tmpfile" "$pgpass"
+    chmod 600 "$pgpass"
+    return 0
+}
+
+# Write the nested agent_chat section to ~/.openclaw/postgres.json.
+# Host/port fall back to the flat keys at runtime, so only database/user/password
+# are written in the nested block.
+_ensure_agent_chat_postgres_json() {
+    local pg_config="$1"
+    local database="$2"
+    local user="$3"
+    local password="$4"
+
+    if [ ! -f "$pg_config" ] || ! command -v jq &>/dev/null; then
+        return 1
+    fi
+
+    local already_correct
+    already_correct=$(jq --arg db "$database" --arg user "$user" --arg pass "$password" \
+        '(.agent_chat // {}) | {database, user, password} == {database: $db, user: $user, password: $pass}' \
+        "$pg_config" 2>/dev/null || echo "false")
+    if [ "$already_correct" = "true" ]; then
+        return 1
+    fi
+
+    jq --arg db "$database" --arg user "$user" --arg pass "$password" \
+        '.agent_chat = {"database": $db, "user": $user, "password": $pass}' \
+        "$pg_config" >"${pg_config}.tmp" && \
+        mv "${pg_config}.tmp" "$pg_config" && \
+        chmod 600 "$pg_config"
 }
 
 echo "  Agent DB user: $DB_USER"
@@ -629,17 +700,25 @@ verify_cognition() {
         VERIFICATION_ERRORS=$((VERIFICATION_ERRORS + 1))
     fi
 
-    local required_tables=("agent_chat" "agent_chat_processed")
-    for table in "${required_tables[@]}"; do
-        local TABLE_EXISTS
-        TABLE_EXISTS=$(psql -U "$DB_USER" -d "$DB_NAME" -tAc "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name = '$table'" | tr -d '[:space:]')
-        if [ "$TABLE_EXISTS" -eq 0 ]; then
-            echo -e "  ${WARNING} Table '$table' not yet created (will be created by extension)"
-            VERIFICATION_WARNINGS=$((VERIFICATION_WARNINGS + 1))
-        else
-            echo -e "  ${CHECK_MARK} Table '$table' exists"
-        fi
-    done
+    # agent_chat tables live in the dedicated agent_chat DB, not the memory DB.
+    local agent_chat_db
+    agent_chat_db=$(jq -r '.agent_chat.database // "agent_chat"' "$PG_CONFIG" 2>/dev/null || echo "agent_chat")
+    if psql -U "$DB_USER" -d "$agent_chat_db" -c '\q' >/dev/null 2>&1; then
+        local required_tables=("agent_chat" "agent_chat_processed")
+        for table in "${required_tables[@]}"; do
+            local TABLE_EXISTS
+            TABLE_EXISTS=$(psql -U "$DB_USER" -d "$agent_chat_db" -tAc "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name = '$table'" | tr -d '[:space:]')
+            if [ "$TABLE_EXISTS" -eq 0 ]; then
+                echo -e "  ${WARNING} Table '$table' not yet created in '$agent_chat_db'"
+                VERIFICATION_WARNINGS=$((VERIFICATION_WARNINGS + 1))
+            else
+                echo -e "  ${CHECK_MARK} Table '$table' exists in '$agent_chat_db'"
+            fi
+        done
+    else
+        echo -e "  ${WARNING} Cannot verify agent_chat tables (database '$agent_chat_db' unreachable)"
+        VERIFICATION_WARNINGS=$((VERIFICATION_WARNINGS + 1))
+    fi
 }
 
 verify_config() {
@@ -1415,26 +1494,14 @@ else
 fi
 
 # --- agent_chat runtime configuration ---
-# Schema is managed by pgschema via database/schema.sql
-# This section only configures triggers for logical replication
+# The agent_chat messaging bus now lives in a dedicated `agent_chat` database.
+# Schema/objects for that database are managed by database/agent-chat/schema.sql
+# and applied by scripts/agent-chat-migration/migrate.sh, not by this installer.
+# Logical replication for agent_chat (#64/#67) was superseded by the shared-DB
+# design and is no longer configured here.
 echo ""
 echo "Agent chat schema..."
-
-# Configure triggers for logical replication if subscriptions exist
-echo "  Checking for logical replication subscriptions..."
-SUBSCRIPTION_COUNT=$(psql -U "$DB_USER" -d "$DB_NAME" -tAc "SELECT COUNT(*) FROM pg_subscription WHERE subname LIKE '%agent_chat%'" 2>/dev/null || echo "0")
-
-if [ "$SUBSCRIPTION_COUNT" -gt 0 ]; then
-    echo -e "  ${CHECK_MARK} Found $SUBSCRIPTION_COUNT agent_chat subscription(s)"
-    psql -U "$DB_USER" -d "$DB_NAME" -c "ALTER TABLE agent_chat ENABLE ALWAYS TRIGGER trg_notify_agent_chat;" >/dev/null 2>&1 && \
-        echo -e "  ${CHECK_MARK} Notification trigger configured (ALWAYS)" || \
-        echo -e "  ${WARNING} Failed to configure notification trigger"
-    psql -U "$DB_USER" -d "$DB_NAME" -c "ALTER TABLE agent_chat DISABLE TRIGGER trg_embed_chat_message;" >/dev/null 2>&1 && \
-        echo -e "  ${CHECK_MARK} Embedding trigger DISABLED (source-only embeddings)" || \
-        echo -e "  ${WARNING} Failed to configure embedding trigger"
-else
-    echo "  No agent_chat subscriptions found — using default trigger configuration"
-fi
+echo -e "  ${INFO} agent_chat bus is a dedicated database; trigger/schema config lives in database/agent-chat/schema.sql"
 
 # --- agent_chat extension ---
 echo ""
@@ -2137,47 +2204,50 @@ if [ -f "$OPENCLAW_CONFIG" ] && command -v jq &>/dev/null; then
     fi
 fi
 
+# --- Configure PostgreSQL password file and agent_chat DB config ---
+echo ""
+echo "PostgreSQL password file and agent_chat DB config..."
+
+if [ -n "${PGPASSWORD:-}" ]; then
+    pgpass_changed=0
+    _ensure_pgpass_entry "localhost" "5432" "$DB_NAME" "$DB_USER" "$PGPASSWORD" && pgpass_changed=1
+    _ensure_pgpass_entry "127.0.0.1" "5432" "$DB_NAME" "$DB_USER" "$PGPASSWORD" && pgpass_changed=1
+    _ensure_pgpass_entry "localhost" "5432" "$AGENT_CHAT_DB_NAME" "$DB_USER" "$PGPASSWORD" && pgpass_changed=1
+    _ensure_pgpass_entry "127.0.0.1" "5432" "$AGENT_CHAT_DB_NAME" "$DB_USER" "$PGPASSWORD" && pgpass_changed=1
+    if [ "$pgpass_changed" -eq 1 ]; then
+        echo -e "  ${CHECK_MARK} Updated ~/.pgpass with memory and agent_chat DB entries"
+    else
+        echo -e "  ${CHECK_MARK} ~/.pgpass entries already correct"
+    fi
+else
+    echo -e "  ${WARNING} PGPASSWORD not set — skipping ~/.pgpass provisioning"
+fi
+
+if _ensure_agent_chat_postgres_json "$PG_CONFIG" "$AGENT_CHAT_DB_NAME" "$DB_USER" "${PGPASSWORD:-}"; then
+    echo -e "  ${CHECK_MARK} Wrote nested agent_chat section to $PG_CONFIG"
+else
+    echo -e "  ${CHECK_MARK} Nested agent_chat section already correct in $PG_CONFIG (or could not update)"
+fi
+
 # --- Configure agent_chat channel ---
 echo ""
 echo "Configuring agent_chat channel..."
 
 OPENCLAW_CONFIG="$OPENCLAW_DIR/openclaw.json"
 if [ -f "$OPENCLAW_CONFIG" ] && command -v jq &>/dev/null; then
-    # Read DB password from postgres.json (may be empty for peer auth)
-    AGENT_CHAT_PASSWORD=""
-    if [ -f "$PG_CONFIG" ]; then
-        AGENT_CHAT_PASSWORD=$(jq -r '.password // empty' "$PG_CONFIG" 2>/dev/null || true)
-    fi
-
-    jq --arg db "$DB_NAME" --arg user "$DB_USER" --arg pass "$AGENT_CHAT_PASSWORD" \
-        '.channels.agent_chat = (.channels.agent_chat // {}) * {
-            "enabled": true,
-            "database": $db,
-            "host": "localhost",
-            "port": 5432,
-            "user": $user,
-            "password": $pass
-        }' \
+    # The plugin now resolves agent_chat DB credentials from ~/.openclaw/postgres.json.
+    # Keep only the operational keys here; drop the dead connection keys that the
+    # installer used to write (and that agent_config_sync could otherwise misread).
+    jq '.channels.agent_chat |= ((. // {}) | del(.database, .host, .port, .user, .password) + {"enabled": true})' \
         "$OPENCLAW_CONFIG" >"$OPENCLAW_CONFIG.tmp" && \
         mv "$OPENCLAW_CONFIG.tmp" "$OPENCLAW_CONFIG" && \
-        echo -e "  ${CHECK_MARK} Configured channels.agent_chat (db=$DB_NAME, user=$DB_USER)" || \
+        echo -e "  ${CHECK_MARK} Configured channels.agent_chat (connection keys removed, enabled=true)" || \
         echo -e "  ${WARNING} Could not configure agent_chat channel"
 
-    jq --arg db "$DB_NAME" --arg user "$DB_USER" --arg pass "$AGENT_CHAT_PASSWORD" \
-        '.plugins.entries.agent_chat = (.plugins.entries.agent_chat // {}) * {
-            "enabled": true,
-            "config": ((.plugins.entries.agent_chat.config // {}) * {
-                "database": $db,
-                "host": "localhost",
-                "port": 5432,
-                "user": $user,
-                "password": $pass,
-                "routeToSession": "main"
-            })
-        }' \
+    jq '.plugins.entries.agent_chat |= (. + {"enabled": true} | .config |= ((. // {}) | del(.database, .host, .port, .user, .password) + {"routeToSession": "main"}))' \
         "$OPENCLAW_CONFIG" >"$OPENCLAW_CONFIG.tmp" && \
         mv "$OPENCLAW_CONFIG.tmp" "$OPENCLAW_CONFIG" && \
-        echo -e "  ${CHECK_MARK} Configured plugins.entries.agent_chat (db=$DB_NAME, user=$DB_USER)" || \
+        echo -e "  ${CHECK_MARK} Configured plugins.entries.agent_chat (connection keys removed, routeToSession=main)" || \
         echo -e "  ${WARNING} Could not configure agent_chat plugin"
 else
     echo -e "  ${WARNING} Cannot configure agent_chat (missing config or jq)"

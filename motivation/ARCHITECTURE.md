@@ -102,7 +102,7 @@ OpenClaw heartbeat fires
       → queries nova_memory DB           ← agent_chat, tasks, entities, unsolved_problems
       → reads state files                ← heartbeat-state.json, memory-maintenance-last-run.json
       → calls gh CLI                     ← open GitHub issues
-      → calls openclaw CLI               ← recent active sessions
+      → reads sessions.json + JSONL      ← unanswered user messages
       → emits JSON manifest
   → idle=false: HEARTBEAT_OK (zero LLM work on gate checks)
   → idle=true: NOVA works only actionable_steps from manifest

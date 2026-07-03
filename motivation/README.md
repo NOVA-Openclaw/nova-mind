@@ -12,10 +12,11 @@ The motivation system is **entirely configuration-driven** — there is no custo
 
 1. **OpenClaw heartbeat** — Triggers every 30 minutes, configured in `openclaw.json` (`agents.defaults.heartbeat`)
 2. **HEARTBEAT bootstrap context** — Database record (`agent_bootstrap_context`, file_key='HEARTBEAT') that defines idle detection logic and gates proactive mode on 1+ hour of channel inactivity
-3. **Proactive Mode workflow** (id=27) — 9-step priority cascade defining what NOVA does when idle
-4. **D100 motivation table** (`motivation_d100`) — 100-slot random task roller for variety in autonomous work
-5. **Unsolved Problems Research workflow** (id=32) — Structured research workflow that delegates data gathering to Scout and reserves reasoning/synthesis for NOVA
-6. **`unsolved_problems` table** — NOVA's notebook for 8 humanity-scale research problems
+3. **Proactive Mode workflow** (id=27) — 11-step priority cascade defining what NOVA does when idle, evaluated deterministically by `motivation/scripts/proactive-gate-check.py`
+4. **`blockers` registry table** — Curated registry of items blocked on another entity's action, populated by Steps 6/7, consumed by the dedicated Step 8 Blocker Outreach step (issue #356)
+5. **D100 motivation table** (`motivation_d100`) — 100-slot random task roller for variety in autonomous work, backed by `d100_roll_log` roll-history and forced past 12h staleness (issue #358)
+6. **Unsolved Problems Research workflow** (id=32) — Structured research workflow that delegates data gathering to Scout and reserves reasoning/synthesis for NOVA
+7. **`unsolved_problems` table** — NOVA's notebook for 8 humanity-scale research problems
 
 ## Operational Flow
 
@@ -23,17 +24,22 @@ The motivation system is **entirely configuration-driven** — there is no custo
 OpenClaw heartbeat (every 30m)
   → HEARTBEAT bootstrap context (idle check)
     → If idle < 1 hour: HEARTBEAT_OK (do nothing)
-    → If idle ≥ 1 hour: Execute Proactive Mode workflow (id=27)
-        Step 1: Check agent_chat for peer messages
-        Step 2: Check communication channels (Hermes)
-        Step 3: Check GitHub repos (Gidget)
-        Step 4: Work on pending tasks
-        Step 5: Check for blocked items needing outreach
-        Step 6: Website/content maintenance
-        Step 7: Unsolved Problems Research (workflow id=32)
-        Step 8: Random D100 task
-        Step 9: Introspection / journal
+    → If idle ≥ 1 hour: Run proactive-gate-check.py, execute only actionable steps
+        Step 1:  Check agent_chat for peer messages
+        Step 2:  Check sessions for unanswered messages
+        Step 3:  Introspection (work-gated + time-backstop)
+        Step 4:  Memory maintenance (REM sleep)
+        Step 5:  Relationship & entity maintenance
+        Step 6:  Work on pending tasks (curates blockers; no outreach)
+        Step 7:  Work on open GitHub issues (curates blockers; no outreach)
+        Step 8:  Blocker outreach (issue #356 — sole outreach step; cooldown-gated, cascade-escalated)
+        Step 9:  Unsolved Problems Mode (workflow id=32)
+        Step 10: Filesystem hygiene audit
+        Step 11: Random D100 task (mandatory catch-all; forced past 12h — issue #358)
 ```
+
+See `motivation/ARCHITECTURE.md` for full step details, gate-check design, and the
+Blocker Outreach cascade/channel/reassignment rules.
 
 ## Database Schema
 

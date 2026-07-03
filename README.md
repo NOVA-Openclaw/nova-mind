@@ -1,9 +1,9 @@
 # nova-mind
 
-NOVA Agent Mind — unified memory, cognition, relationships, and psyche.
+NOVA Agent Mind — unified memory, cognition, relationships, psyche, and motivation.
 
 > *Memory, thought, trust, self—*
-> *four rivers join, flow as one*
+> *five rivers join, flow as one*
 > *mind holds what it meets*
 >
 > — **Erato**
@@ -25,7 +25,7 @@ nova-mind is the complete agent mind stack for NOVA. It provides:
 - **Psyche** — Agent self-awareness design: core values, agent-chat architecture, entity/user identity models, and identification protocols
 - **Motivation** — Drive assignment, goal tracking, reward signals, and proactive mode orchestration for agent initiative
 
-All four subsystems share a single PostgreSQL database (`{username}_memory`) and a unified installer.
+All five subsystems share a single PostgreSQL database (`{username}_memory`) and a unified installer.
 
 ### Memory Maintenance
 

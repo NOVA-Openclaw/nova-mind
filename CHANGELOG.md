@@ -1,5 +1,38 @@
 # Changelog
 
+### Batch: blocker-outreach-356 (Issues #356, #358)
+
+#### Added
+- **`blockers` registry table** — Curated registry of items blocked on another entity's action, with `source_type`/`source_ref` unique constraint (upsert target for Steps 6/7), `entity_id`, `priority`, `status` (open/satisfied), and `satisfied_at`. (#356)
+- **`d100_roll_log` table + trigger** — Roll-history table populated by a trigger on `motivation_d100`, used to detect staleness for the forced-D100 check. (#358)
+- **Step 8 (Blocker Outreach)** — New dedicated step in the Proactive Mode workflow (id=27) that owns all blocker outreach cadence and channel escalation. Enforces a 24h entity-level cooldown and a 72h per-blocker cooldown (both strict `>`), selects the top 3 eligible blockers per entity (`priority ASC, first_seen ASC, id ASC`), and sends one consolidated message per entity at the most-escalated requested channel among its selected blockers. Cascade channel order: `discord_mention → discord_dm → signal → slack → email`, or `agent_chat` unconditionally for agent entities. (#356)
+- **`check_step8_blocker_outreach()`** (`motivation/scripts/proactive-gate-check.py`) — Deterministic gate function driving Step 8: satisfied-blocker reconciliation (reopen clears `satisfied_at`), cooldown-eligible entity/blocker selection, cascade level derivation from prior `proactive_outreach` row counts (not delivered channel), and channel-exhaustion reassignment (next domain entity → I)ruid final fallback → hold-in-place if I)ruid himself is exhausted). (#356)
+- **`check_step11_d100()` forced-D100 logic** — Step 11 (D100, renumbered from Step 10) is now forced actionable whenever more than 12h have elapsed since the last roll in `d100_roll_log` (or no roll on record), independent of whether other steps already had actionable work. ≤12h preserves the original mandatory-catch-all/optional behavior. (#358)
+- **Tests** — `TestStep8BlockerOutreach` (cooldown boundaries, never-contacted entities, non-blocker-outreach isolation, top-3 tiebreak, empty tables, channel mapping, cascade exhaustion + reassignment) and `TestStep11D100` (forced-D100 cases) in `motivation/tests/test_proactive_gate_check.py`. New `tests/TEST-CASES-ISSUE-356.md` and `memory/tests/test_migration_083_idempotency.py`. 122 passing (was 104 at initial PR open, +18 from the D-1 exhaustion/reassignment fix).
+
+#### Changed
+- **Proactive Mode workflow (id=27) renumbered from 10 to 11 steps** — Steps 6 (Pending Tasks) and 7 (GitHub Issues) now only curate blocked items into the `blockers` registry (upsert; entity resolution via `agent_domains` → `user_domains` → fallback entity_id=2); they no longer send outreach directly. Step 7's prior inline cascade + 3-day cooldown text (introduced in #232, see the `batch-se-run-8` entry below) is removed entirely — that responsibility now belongs exclusively to the new Step 8. Old steps 8/9/10 (Unsolved Problems, Filesystem Hygiene, D100) are renumbered to 9/10/11.
+- **HEARTBEAT.md, `motivation/ARCHITECTURE.md`, `motivation/scripts/README.md`** updated for the 11-step cascade, D100 now Step 11, and the new Step 8 Blocker Outreach reference section.
+- **Cascade exhaustion detection + reassignment** — When an entity's cascade channels are exhausted, the blocker is reassigned to the next domain entity in line, with I)ruid as the final fallback; if I)ruid is also exhausted, the blocker is held in place rather than dropped. The outreach payload carries `exhausted` and `reassigned_from_entity_id` fields so downstream consumers can distinguish a fresh assignment from a reassignment.
+
+#### Fixed
+- **24h/72h cooldown off-by-one** — `check_step8_blocker_outreach()`'s cooldown comparisons used `>` against the cutoff instead of the intended "strict greater-than" semantics allowing the exact boundary hour through as eligible; corrected so elapsed == threshold still blocks, per spec.
+- **`TestStep2UnansweredSessions` test drift** — Rewritten to match the prior `sessions.json` + per-session JSONL read refactor (predates this branch).
+- **`TestStep3IntrospectionDualMirror` hardcoded-date flake** — Pre-existing bug (predates this branch, at `fb7252d`), fixed alongside the above while chasing a green full-suite run.
+
+#### Migrations
+- `082_blockers_and_d100_roll_history.sql` — Creates `blockers` registry table and `d100_roll_log` roll-history table + trigger off `motivation_d100`.
+- `083_blocker_outreach_workflow_27.sql` — Rewrites workflow 27's `workflow_steps` for the 11-step layout described above. Idempotency-hardened: a PL/pgSQL DO-block guard detects the already-applied 11-step layout and skips re-running the renumbering, and the new Step 8 insert uses `ON CONFLICT (workflow_id, step_order) DO NOTHING`. **Not yet applied to the production database as of this branch** — per the `agent-install.sh` migration-application gap tracked in #355, migrations 082/083 must be applied manually on deploy.
+
+#### Known Caveats
+- **#355 caveat carried forward** — `agent-install.sh` does not apply `memory/migrations/`; migrations 082 and 083 in this batch are subject to the same gap already reported for migrations 077–079 and must be applied manually to the production database on deploy.
+
+#### Issues Closed
+- #356 — Heartbeat-integrated blocker outreach (dedicated Step 8, curation/outreach split, cascade escalation, reassignment)
+- #358 — Forced D100 roll past 12h staleness threshold, independent of other steps' actionable state
+
+---
+
 ### Batch: consolidate-embedding-scripts (Issue #352)
 
 #### Changed

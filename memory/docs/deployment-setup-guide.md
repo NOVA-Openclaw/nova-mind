@@ -164,11 +164,13 @@ export OPENAI_API_KEY=your_openai_key_here  # Required for semantic recall embed
 
 ```bash
 # Make scripts executable
-chmod +x scripts/*.sh
+chmod +x scripts/*.sh scripts/*.py
 
 # Test database connectivity
-./scripts/process-input.sh "Test setup - Hello world"
+psql -c "SELECT 1;"
 ```
+
+> **Note:** There is no standalone `process-input.sh` CLI for testing extraction end-to-end. Extraction runs via the `memory-extract` hook (`memory/scripts/extract_memories.py`), triggered by real message traffic through a channel with the hook enabled.
 
 ## OpenClaw Integration
 
@@ -425,14 +427,10 @@ else
     echo -e "${RED}MISSING TABLES: ${MISSING_TABLES[*]}${NC}"
 fi
 
-# API connectivity
+# API connectivity (extract_memories.py is the current script; there is no extract-memories.sh)
 echo -n "Anthropic API: "
 if [ -n "$ANTHROPIC_API_KEY" ]; then
-    if echo "test" | timeout 10 ./extract-memories.sh >/dev/null 2>&1; then
-        echo -e "${GREEN}OK${NC}"
-    else
-        echo -e "${YELLOW}TIMEOUT/ERROR${NC}"
-    fi
+    echo -e "${GREEN}OK (key present — run a real message through a channel with memory-extract enabled to verify end-to-end)${NC}"
 else
     echo -e "${RED}NO API KEY${NC}"
 fi
@@ -556,18 +554,20 @@ sudo tail -f /var/log/postgresql/postgresql-16-main.log
 ### 2. Memory Extraction Not Working
 
 ```bash
-# Check cron job
+# Check cron job (memory-catchup ingests JSONL session transcripts on a schedule)
 crontab -l | grep memory-catchup
 
-# Test manual extraction
-./scripts/process-input.sh "Test message from $(whoami)"
+# Verify the memory-extract hook is enabled
+openclaw hooks list
 
 # Check logs
 tail -f ~/.openclaw/logs/memory-catchup.log
 
-# Verify API key
-echo "test" | ./scripts/extract-memories.sh
+# Verify API key is set
+echo "$ANTHROPIC_API_KEY" | head -c1  # non-empty output means it's set
 ```
+
+> **Note:** There is no standalone `process-input.sh` or `extract-memories.sh` CLI — extraction runs via the `memory-extract` hook (`memory/scripts/extract_memories.py`) as part of live message handling.
 
 ### 3. Performance Issues
 

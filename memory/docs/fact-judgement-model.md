@@ -28,44 +28,53 @@ This is testimony. Witnesses disagree. People change their minds. Information co
 
 ## Source Attribution
 
-Every `entity_facts` row must carry attribution via the `source` and `source_entity_id` columns:
+Source attribution does **not** live on `entity_facts` directly (there is no `source` or `source_entity_id` column on that table). It lives in the separate `entity_fact_sources` table, joined by `fact_id`:
 
 ```sql
-source           VARCHAR(255)     -- Who told NOVA this fact?
-source_entity_id INTEGER          -- The entity ID of the source (NULL if unknown)
+CREATE TABLE entity_fact_sources (
+    id SERIAL PRIMARY KEY,
+    fact_id INTEGER NOT NULL REFERENCES entity_facts(id) ON DELETE CASCADE,
+    source_entity_id INTEGER NOT NULL REFERENCES entities(id),
+    source_citation TEXT,          -- free-form citation metadata (author, publication, url, etc.)
+    attribution_count INTEGER DEFAULT 1,
+    first_seen TIMESTAMPTZ DEFAULT NOW(),
+    last_seen TIMESTAMPTZ DEFAULT NOW(),
+    source_url TEXT,
+    UNIQUE (fact_id, source_entity_id)
+);
 ```
 
 ### Source Categories
 
-The `source` field answers "who told me this?" — whether that's a human, an agent, or NOVA herself.
+`entity_fact_sources.source_entity_id` answers "who told me this?" — whether that's a human, an agent, or NOVA herself.
 
-| Category | `source` value | `source_entity_id` | Credibility |
-|----------|---------------|-------------------|-------------|
-| **Self-report** | The entity's name / handle | Entity's own ID | Highest — the entity directly stated it about themselves |
-| **Direct observation** | `'nova'` | `1` (NOVA's entity_id) | High — NOVA evaluated or inferred it directly |
-| **Agent research** | Agent name (e.g., `'scout'`, `'athena'`) | Agent's entity ID | Medium-high — depends on agent trust |
-| **Secondhand / hearsay** | Speaker's name | Speaker's entity ID | Lower — someone said it *about* someone else |
-| **External source** | Source URL or citation name | `NULL` or entity ID | Variable — credentials tracked separately |
+| Category | `source_entity_id` | Credibility |
+|----------|-------------------|-------------|
+| **Self-report** | The entity's own ID (fact's `entity_id` == source's entity_id) | Highest — the entity directly stated it about themselves |
+| **Direct observation** | `1` (NOVA's entity_id) | High — NOVA evaluated or inferred it directly |
+| **Agent research** | Agent's entity ID (e.g., Scout, Athena) | Medium-high — depends on agent trust |
+| **Secondhand / hearsay** | Speaker's entity ID | Lower — someone said it *about* someone else |
+| **External source** | `source_citation` / `source_url` populated, `source_entity_id` may be a placeholder | Variable — credentials tracked separately |
 
 ### Schema Fields Involved
 
-The testimony model engages several columns on `entity_facts`:
+The testimony model engages several columns across `entity_facts` and `entity_fact_sources`:
 
-| Column | Role in Testimony |
-|--------|-------------------|
-| `entity_id` | The subject — who the fact is *about* |
-| `key` | The attribute or property being described |
-| `value` | The asserted value |
-| `source` | Who told NOVA this (see categories above) |
-| `source_entity_id` | Entity ID of the speaker / source agent |
-| `confidence` | Initial confidence estimate (1.0 for authority, scaled for others) |
-| `data_type` | Semantic category: `permanent`, `identity`, `preference`, `temporal`, `observation` |
-| `vote_count` | How many times this fact has been reinforced |
-| `confirmation_count` | How many distinct sources confirmed this fact |
-| `last_confirmed` | When this fact was last re-stated or confirmed |
-| `learned_at` | When this fact was first recorded |
-| `source_channel_transcript_id` | Link to the source conversation transcript |
-| `source_channel_session_id` | Link to the source session |
+| Column | Table | Role in Testimony |
+|--------|-------|-------------------|
+| `entity_id` | entity_facts | The subject — who the fact is *about* |
+| `key` | entity_facts | The attribute or property being described |
+| `value` | entity_facts | The asserted value |
+| `source_entity_id` | entity_fact_sources | Entity ID of the speaker / source agent |
+| `source_citation` / `source_url` | entity_fact_sources | External-source provenance |
+| `confidence` | entity_facts | Initial confidence estimate (1.0 for I)ruid, scaled for others via `confidence_helper.py`) |
+| `durability` | entity_facts | Semantic/decay category: `permanent`, `long_term`, `short_term`, `ephemeral` (replaces the retired `data_type` column) |
+| `category` | entity_facts | Free-form category label: `observation`, `preference`, `identity`, `mood`, `decision`, `routine`, `state`, `obligation`, etc. |
+| `extraction_count` | entity_facts | How many times this fact has been reinforced (replaces the retired `vote_count`/`confirmation_count` columns) |
+| `last_confirmed_at` | entity_facts | When this fact was last re-stated or confirmed (timestamptz; replaces the retired `last_confirmed` column) |
+| `learned_at` | entity_facts | When this fact was first recorded |
+| `source_channel_transcript_id` | entity_facts | Link to the source conversation transcript |
+| `source_channel_session_id` | entity_facts | Link to the source session |
 
 ## Credibility Weighting (at Query Time)
 
@@ -87,7 +96,7 @@ How many times a fact has been reinforced. A fact stated five times across diffe
 
 ### 3. Recency
 
-More recent information may reflect changed preferences or circumstances. Especially relevant for `data_type = 'temporal'` or `data_type = 'preference'`.
+More recent information may reflect changed preferences or circumstances. Especially relevant for `category = 'state'`/`'mood'` or `category = 'preference'` facts.
 
 ### 4. Consistency
 
@@ -103,20 +112,26 @@ I)ruid states: *"My favorite pizza topping is pineapple."*
 
 ```sql
 -- Self-report: highest credibility
-INSERT INTO entity_facts
-    (entity_id, key, value, source, source_entity_id, confidence, data_type)
-VALUES
-    (2, 'favorite_pizza_topping', 'pineapple', 'I)ruid', 2, 1.0, 'preference');
+WITH new_fact AS (
+    INSERT INTO entity_facts (entity_id, key, value, confidence, durability, category)
+    VALUES (2, 'favorite_pizza_topping', 'pineapple', 1.0, 'long_term', 'preference')
+    RETURNING id
+)
+INSERT INTO entity_fact_sources (fact_id, source_entity_id)
+SELECT id, 2 FROM new_fact;  -- source_entity_id = 2 (I)ruid, self-report)
 ```
 
 Later, another agent (Scout) researches and finds: *"I)ruid favorite pizza topping is pepperoni."*
 
 ```sql
 -- Agent research: medium credibility
-INSERT INTO entity_facts
-    (entity_id, key, value, source, source_entity_id, confidence, data_type)
-VALUES
-    (2, 'favorite_pizza_topping', 'pepperoni', 'scout', 7, 0.8, 'preference');
+WITH new_fact AS (
+    INSERT INTO entity_facts (entity_id, key, value, confidence, durability, category)
+    VALUES (2, 'favorite_pizza_topping', 'pepperoni', 0.8, 'long_term', 'preference')
+    RETURNING id
+)
+INSERT INTO entity_fact_sources (fact_id, source_entity_id)
+SELECT id, 7 FROM new_fact;  -- source_entity_id = 7 (scout's entity ID)
 ```
 
 **Both facts coexist.** At query time, NOVA reasons:
@@ -130,9 +145,9 @@ VALUES
 
 Contradicting facts decay at the **same rate**. There is no mechanism to artificially suppress one side.
 
-- Both pineapple and pepperoni facts decay normally according to their `data_type` decay rates
+- Both pineapple and pepperoni facts decay normally according to their `durability` decay rates
 - The signal emerges from the **pattern of reinforcement over time**, not from suppressing unwanted entries
-- If I)ruid keeps re-stating "pineapple", that fact gets reinforced (higher `vote_count`, newer `last_confirmed`, higher effective credibility)
+- If I)ruid keeps re-stating "pineapple", that fact gets reinforced (higher `extraction_count`, newer `last_confirmed_at`, higher effective credibility)
 - If nobody mentions "pepperoni" again, it fades naturally
 
 ## Anti-Patterns
@@ -144,7 +159,7 @@ The following approaches are **explicitly contrary** to the testimony model:
 | **Treating contradictions as data integrity problems** | Contradictions are expected in testimony. Resolving them at write-time destroys signal. |
 | **Auto-resolving conflicts by keeping only the "newest" fact** | Newest is not always truest. Source credibility matters more than recency. |
 | **Reducing confidence scores on facts just because a conflicting one exists** | Each fact stands on its own provenance. A conflicting fact doesn't make the first one less reliable — it just means there are two competing testimonies. |
-| **Leaving `source` / `source_entity_id` blank when the origin is known** | Missing provenance cripples query-time reasoning. Always attribute. |
+| **Leaving `entity_fact_sources` unpopulated when the origin is known** | Missing provenance cripples query-time reasoning. Always attribute. |
 | **Attributing agent-sourced facts to "auto-extracted" instead of the specific agent** | "auto-extracted" loses the chain of custody. The specific agent (scout, athena, coder) preserves accountability. |
 | **Deleting facts to resolve ambiguity** | Deletion destroys signal. Reason about truth at query time, not storage time. |
 
@@ -157,15 +172,14 @@ The existing `SOURCE-AUTHORITY.md` describes an older model where authority-sour
 What changes:
 - **Authority self-reports still carry the highest credibility weight** — they are just no longer enforced at write time
 - **Contradictory facts are no longer rejected** — they persist alongside authority facts for query-time reasoning
-- **`data_type = 'permanent'` and `confidence = 1.0`** from authority sources remain as signals, but they inform reasoning rather than enforcing a write-time lock
+- **`durability = 'permanent'` and `confidence = 1.0`** from authority sources remain as signals, but they inform reasoning rather than enforcing a write-time lock
 
 What stays the same:
-- Authority detection and attribution logic (identifying I)ruid as entity_id=2)
-- Confidence scoring at insertion time based on source authority
-- Permanent facts excluded from decay
-- The database schema and SQL queries for authority detection
+- I)ruid is entity_id=2 and always gets `confidence = 1.0` via `confidence_helper.py`'s `OWNER_ENTITY_ID` constant
+- Permanent facts (`durability = 'permanent'`) are excluded from decay
+- The `entity_facts` / `entity_fact_sources` schema itself
 
-See `SOURCE-AUTHORITY.md` for the concrete implementation details of authority detection, confidence scoring, and maintenance. The testimony model described here governs **why** and **how** those mechanisms feed into NOVA's reasoning.
+See `SOURCE-AUTHORITY.md` for the current confidence-scoring implementation (`confidence_helper.py`) — note that document's deterministic write-time authority-rejection sections describe a pre-#174 pipeline that no longer exists; only its schema/concept sections and the confidence_helper.py description are current. The testimony model described here governs **why** and **how** those mechanisms feed into NOVA's reasoning.
 
 ## Summary
 
@@ -175,7 +189,7 @@ See `SOURCE-AUTHORITY.md` for the concrete implementation details of authority d
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                 │
 │  Storage Time:  Every fact is testimony with attribution        │
-│                  └─ source, source_entity_id, context           │
+│                  └─ entity_fact_sources.source_entity_id, context │
 │                  └─ Contradictions preserved                    │
 │                                                                 │
 │  Query Time:     Reason about credibility                      │

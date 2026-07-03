@@ -240,6 +240,7 @@ The resolver maps camelCase identifier fields to snake_case `entity_facts.key` v
 | `slackMemberId` | `slack_member_id` |
 | `signalUuid` | `signal_uuid` |
 | `signalUsername` | `signal_username` |
+| `deviceId` | `nova_app_device_id` |
 
 Legacy identifiers (`phone`, `uuid`, `certCN`, `email`) are mapped inline to `phone`, `signal_uuid`, `cert_cn`, and `email`.
 

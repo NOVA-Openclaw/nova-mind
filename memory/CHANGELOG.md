@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### Added
+- **`blockers` table + `d100_roll_log` roll history** (#356, #358) — Migration 082 adds the `blockers` table, a curated registry of items blocked on another entity's action (source_type in task/github_issue/workflow_run/unanswered_question/agent_chat_request, unique on `(source_type, source_ref)`, resolved `entity_id`, `priority`, `status` open/satisfied). Also adds `d100_roll_log`, populated by a trigger on `motivation_d100` (`trg_log_d100_roll`), so the gate check can answer "when was the most recent D100 roll across any slot" — `motivation_d100.last_rolled` is per-slot and can't answer that on its own. No FK from `proactive_outreach` to `blockers.id` — the polymorphic `(blocker_type, blocker_id)` pattern from #232 is preserved.
+- **Workflow 27 (Proactive Mode) rewritten to 11 steps: dedicated Blocker Outreach step** (#356) — Migration 083 (idempotent) inserts a new step 8 ("Blocker Outreach") and renumbers the old steps 8/9/10 (Unsolved Problems, Filesystem Hygiene, D100) to 9/10/11. Steps 6 (Pending Tasks) and 7 (GitHub Issues) are rewritten to curation-only semantics — they upsert into `blockers` and no longer perform any outreach directly; all outreach cadence, cascade escalation, and channel resolution is centralized in step 8, driven by `check_step8_blocker_outreach()` in `proactive-gate-check.py`. Enforces a 24h entity-level cooldown and a 72h per-blocker cooldown (both strict `>`) against `proactive_outreach`, selects the top 3 eligible blockers per entity, and sends one consolidated message per entity at the most-escalated resolved channel. See `motivation/ARCHITECTURE.md#blocker-outreach-step-8` for full cascade/channel/reassignment rules.
+- **Forced D100 roll after 12h** (#358) — `check_step11_d100()` in `proactive-gate-check.py` now also forces step 11 actionable whenever more than 12h have elapsed since the last row in `d100_roll_log` (or no roll is on record), independent of whether steps 1–10 found actionable work.
+- **Cascade exhaustion detection + reassignment** (D-1 fix, commit b66f8da) — When an entity's outreach cascade level exceeds the number of contact channels available to them (`_is_cascade_exhausted()`) and they are not I)ruid, the blocker is reassigned to the next domain entity (`_reassign_exhausted_entity()`, via `agent_domains`/`user_domains`, excluding already-exhausted entities in the chain) rather than looping on an unreachable channel. If every domain entity is exhausted, the chain falls through to I)ruid (entity_id=2) as final fallback. If I)ruid himself is exhausted, the blocker holds at his last available channel/level on the normal 72h cadence — no reassignment past him, no dropped blockers.
+
+### Tests
+- `memory/tests/test_migration_083_idempotency.py` — Seeds the pre-migration 10-step workflow 27 layout in a fresh test database, applies migration 083 twice, and asserts the second run is a safe no-op producing exactly the expected 11-step layout with no duplicate `(workflow_id, step_order)` rows.
+
+### Migrations
+- `082_blockers_and_d100_roll_history.sql` — Creates `blockers` and `d100_roll_log`, adds the `trg_log_d100_roll` trigger on `motivation_d100`.
+- `083_blocker_outreach_workflow_27.sql` — Rewrites workflow 27 to 11 steps (new step 8, renumbered 8/9/10 → 9/10/11, curation-only step 6/7 descriptions). Idempotent: detects the post-migration layout and no-ops on rerun.
+
+### Issues Closed
+- #356 — Heartbeat-integrated blocker outreach (blockers registry, dedicated Step 8, cooldowns, cascade escalation, exhaustion/reassignment)
+- #358 — Forced D100 roll after 12h via `d100_roll_log`
+
 ### Changed
 - **Embedding scripts consolidated into unified `memory-maintenance.py` template** (#352) — Removed the four separate deprecated embedding scripts (`embed-full-database.py`, `embed-research.py`, `embed-memories.py`, `embed-library.py`) from `memory/scripts/`. Added `memory/templates/memory-maintenance.py` as the authoritative source, deployed to `~/.openclaw/scripts/memory-maintenance.py` by `agent-install.sh`. The installer now also removes stale copies of the deprecated scripts from deployed locations on upgrade. No functional change — `memory-maintenance.py` already absorbed all embedding logic in the prior consolidation.
 

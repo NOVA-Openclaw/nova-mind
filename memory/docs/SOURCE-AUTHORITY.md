@@ -1,8 +1,8 @@
 # Source Authority
 
-> **Note:** The Fact Judgement & Testimony Model (`fact-judgement-model.md`) **supersedes** the old "authority wins" approach described here for contradiction handling. Under the new model, contradictory facts are no longer rejected at write time — they persist alongside authority facts for query-time reasoning. Authority self-reports still carry the highest credibility weight, but that weight is applied at query time rather than as a write-time lock. This file remains the reference for authority detection, confidence scoring, and maintenance implementation.
+> **Note:** The Fact Judgement & Testimony Model (`fact-judgement-model.md`) **supersedes** the old "authority wins" approach described here for contradiction handling. Under the new model, contradictory facts are no longer rejected at write time — they persist alongside authority facts for query-time reasoning. Authority self-reports still carry the highest credibility weight, but that weight is applied at query time rather than as a write-time lock. This file remains the reference for the authority *concept*, confidence scoring, and the current schema.
 
-> **Note:** The original grammar parser (`grammar_parser/`) that implemented this feature has been removed (#174). Authority detection and conflict resolution now follow the patterns described below, implemented in `store-memories.sh`, `confidence_helper.py`, and `memory-maintenance.py`.
+> **Note:** The original grammar parser (`grammar_parser/`) that implemented this feature has been removed (#174), and the shell pipeline described below (`store-memories.sh`, `extract-memories.sh`) no longer exists either. Extraction is now a single Python script, `memory/scripts/extract_memories.py`, which asks the LLM to judge `durability`/`category`/`confidence` per fact directly in its extraction prompt — there is no separate write-time step that force-sets `durability='permanent'` for a hardcoded authority entity, and no write-time rejection of non-authority facts that conflict with authority facts. `memory/scripts/confidence_helper.py` (function `get_initial_confidence()`) computes an initial confidence score from the entity's `trust_level` (owner=1.0, admin=0.9, user=0.7, unknown=0.4, untrusted=0.2) and a source-type multiplier (direct/inferred/external) — entity_id 2 (I)ruid) always gets 1.0 via the `OWNER_ENTITY_ID` constant, but there is no `AUTHORITY_ENTITY_ID` env var override, no `SENDER_NAME`-based authority lookup, and no automatic `durability='permanent'` promotion baked into that helper. The rules below describe the *intended* authority behavior/schema; treat the "Implementation" and "Usage"/"Testing" sections further down as historical (pre-#174) unless re-verified against current code.
 
 ## Key Concepts
 
@@ -22,36 +22,36 @@
    - Authority fact vs. conflicting authority fact → Update to new value
    - Non-authority vs. authority fact → Rejected with log message
 
-## Implementation
+## Implementation (current, as of extract_memories.py + confidence_helper.py)
 
 ### Current Architecture
 
 Source authority is a cross-cutting concern implemented across multiple components:
 
-#### `confidence_helper.py`
+#### `memory/scripts/confidence_helper.py`
 
-Calculates confidence scores based on source authority:
+`get_initial_confidence(entity_id, source)` calculates an initial confidence score:
 
-- Authority sources get confidence = 1.0
-- Non-authority sources get confidence scaled by entity trust level and source type
-- Used by `store-memories.sh` to set initial confidence on new facts
+- `entity_id == OWNER_ENTITY_ID` (2, I)ruid) always returns `1.0`
+- Otherwise, base confidence comes from the entity's `trust_level` column (`owner`=1.0, `admin`=0.9, `user`=0.7, `unknown`=0.4, `untrusted`=0.2), scaled by a source-type multiplier (`direct`=1.0, `external`=0.7, `inferred`=0.5)
+- Used by `memory/scripts/dedup_helper.py` (imports `get_initial_confidence`)
 
-#### `memory-maintenance.py`
+#### `memory/templates/memory-maintenance.py`
 
-Enforces authority rules during maintenance operations:
+Enforces authority-adjacent rules during the unified maintenance pipeline (see `memory/README.md`):
 
 - Permanent facts (`durability = 'permanent'`) are excluded from confidence decay
-- Authority facts are never archived or cleaned up
-- Non-authority facts with conflicting values are evaluated against existing authority facts
+- Non-authority facts still decay and can be archived per the normal `durability`-based rates
 
-#### `store-memories.sh`
+#### `memory/scripts/extract_memories.py`
 
-Handles conflict resolution at insertion time:
+The current extraction pipeline does **not** implement deterministic authority-based conflict rejection at write time. Instead:
 
-- Checks if the source is an authority entity via `SENDER_NAME` or entity ID lookup
-- Sets `durability='permanent'` for authority-sourced facts
-- Rejects non-authority insertions that conflict with existing authority facts
-- Increments `extraction_count` when authority confirms an existing fact
+- The extraction LLM call judges `durability`, `category`, and `confidence` per fact directly (see the DURABILITY GUIDANCE in the extraction prompt) — there is no separate `SENDER_NAME`-based authority check that force-promotes a fact to `durability='permanent'`
+- Source attribution (who said it) is recorded via the `entity_fact_sources` table, populated from sender metadata automatically — not from a `source`/`source_entity_id` column on `entity_facts` itself
+- Conflicting facts from different sources are **not** rejected at insertion — per the Fact Judgement & Testimony Model (`fact-judgement-model.md`), they persist side-by-side for query-time reasoning rather than being blocked write-time
+
+The deterministic `AUTHORITY_ENTITY_ID`-driven write-time rejection flow described in the sections below (Usage, Testing, Authority Detection Flow) predates the #174 grammar-parser removal and the Fact Judgement model; it does not reflect the current pipeline. Verify against `extract_memories.py` / `confidence_helper.py` before relying on it.
 
 ### Database Schema
 
@@ -64,7 +64,7 @@ The following columns support authority enforcement:
 - `entity_facts.extraction_count` — Incremented when fact is confirmed
 - `entity_facts.last_confirmed_at` — Updated when fact is re-stated
 
-### Authority Detection Flow
+### Authority Detection Flow (historical — pre-#174 / pre-Fact-Judgement-Model; see the note above)
 
 ```
 Message received
@@ -84,43 +84,21 @@ store-memories.sh
         └── If no authority fact → insert normally
 ```
 
+**Current flow** is simpler: `memory-extract` hook → `extract_memories.py` (LLM judges durability/category/confidence per fact in one pass) → direct INSERT into `entity_facts` + `entity_fact_sources`. No deterministic authority branch; I)ruid's facts get `confidence=1.0` only via `confidence_helper.py`'s `OWNER_ENTITY_ID` check when that helper is invoked (`dedup_helper.py`), not from the extraction path itself setting `durability='permanent'` unconditionally.
+
 ## Usage
 
-### Basic Usage
+### Basic Usage (current pipeline)
 
-Authority is automatically detected in `store-memories.sh` based on `SENDER_NAME` environment variable:
-
-```bash
-# I)ruid states a fact (automatically becomes permanent via Claude extraction → store)
-SENDER_NAME="I)ruid" ./scripts/process-input.sh "My preferred name is I)ruid"
-```
+The extraction pipeline runs via the `memory-extract` hook, which invokes `memory/scripts/extract_memories.py` with sender metadata (`SENDER_NAME`, `SENDER_ID`, etc. — see the script's module docstring) passed as environment variables. There is no standalone CLI entry point to manually trigger extraction for a single message; extraction happens as part of normal message processing.
 
 ### Configurable Authority Entity
 
-Override the default authority entity:
-
-```bash
-# Use entity_id=5 as authority instead of 2
-export AUTHORITY_ENTITY_ID=5
-export SENDER_NAME="CustomAuthority"
-./scripts/process-input.sh "A fact from this authority"
-```
+There is currently no `AUTHORITY_ENTITY_ID` environment variable in the live pipeline. `confidence_helper.py` hardcodes `OWNER_ENTITY_ID = 2` (I)ruid). To change the authority entity, that constant would need to be edited directly.
 
 ## Testing
 
-Run the test suite:
-
-```bash
-cd ~/.openclaw/workspace/nova-mind
-./tests/test_authority_facts.sh
-```
-
-**Test Coverage**:
-1. Authority fact insertion (new fact)
-2. Authority fact confirmation (same value)
-3. Authority fact override (conflicting value)
-4. Non-authority cannot override authority fact
-5. Configurable authority entity
+`tests/test_authority_facts.sh` was removed as part of the grammar-parser removal (#174) and does not exist in the current repo. See `memory/tests/` for current test coverage relevant to fact storage and confidence.
 
 ## Logging and Debugging
 

@@ -208,32 +208,32 @@ WHERE me.source_type = 'entity_fact' AND ef.id IS NULL;
 
 ## Memory Extraction Pipeline
 
-A cron job runs every minute to extract memories from chat. The pipeline now also ingests session transcripts into structured database tables:
+Real-time extraction happens per-message via a hook; session transcript ingestion runs on a separate cron-driven cadence:
 
 ```
-Session JSONL files → memory-catchup.sh (every 1 min)
+Real-time path:
+Incoming message → memory-extract hook → extract_memories.py (Claude extracts
+                                          facts/entities/events/vocabulary in one pass,
+                                          LLM judges durability/category/confidence)
+                                       → PostgreSQL
+
+Catch-up path (separate cadence, check crontab for current schedule):
+Session JSONL files → memory-catchup.sh
                     → channel_sessions + channel_transcripts (DB ingest)
                     → delete source JSONL files
-                    
-and separately:
-
-Chat transcript → extract-memories.sh (Claude extracts 8 categories)
-               → store-memories.sh (inserts to PostgreSQL, sets source FK pointers)
-               → New vocabulary? → STT service restarts
 ```
 
-**Transcript ingestion:** JSONL files from `~/.openclaw/agents/*/sessions/*.jsonl` are parsed, upserted into `channel_sessions` and `channel_transcripts`, then the source files are deleted. Rich metadata (sender names, IDs, group info, providers) is extracted from the JSONL structure. The `memory-extract` hook also does real-time upserts during message processing, passing FK IDs (`SOURCE_CHANNEL_TRANSCRIPT_ID`, `SOURCE_CHANNEL_SESSION_ID`) to `store-memories.sh` so `entity_facts` rows link back to their source transcripts.
+> **Note:** `extract-memories.sh` and `store-memories.sh` (the old two-script shell pipeline this diagram used to describe) were removed as part of the #174 grammar-parser removal and consolidated into `memory/scripts/extract_memories.py`. See `memory/docs/memory-extraction-pipeline.md` for the current pipeline, including a known bug where `memory-catchup.sh` still calls a nonexistent `process-input.sh`.
+
+**Transcript ingestion:** JSONL files from `~/.openclaw/agents/*/sessions/*.jsonl` are parsed, upserted into `channel_sessions` and `channel_transcripts`, then the source files are deleted. Rich metadata (sender names, IDs, group info, providers) is extracted from the JSONL structure. The `memory-extract` hook does real-time upserts during message processing, and `extract_memories.py` sets `SOURCE_CHANNEL_TRANSCRIPT_ID`/`SOURCE_CHANNEL_SESSION_ID`-derived FK pointers so `entity_facts` rows link back to their source transcripts.
 
 ### Extraction Categories
 
-1. **entities** — People, AIs, organizations
-2. **places** — Locations, venues
-3. **facts** — Objective information
-4. **opinions** — Subjective views (with holder)
-5. **preferences** — Likes/dislikes
-6. **events** — Things that happened
-7. **relationships** — Connections
-8. **vocabulary** — Words for STT
+Per `extract_memories.py`'s current extraction template:
+1. **facts** — Entity-scoped key/value facts (covers what used to be split across facts/opinions/preferences — disambiguated via `category`: observation, preference, identity, mood, decision, routine, state, obligation)
+2. **entities** — People, AIs, organizations, places
+3. **events** — Things that happened
+4. **vocabulary** — Words for STT (names, brands, technical jargon, slang)
 
 ## Data Flow
 

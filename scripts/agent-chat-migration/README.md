@@ -29,6 +29,8 @@ PostgreSQL superuser connection via `.pgpass` or environment variables.
 | `scripts/agent-chat-migration/delta_check_and_migrate.py` | Repeated delta detection/migration after rollout |
 | `scripts/agent-chat-migration/pre_drop_gate_check.sh` | Six-gate checklist before dropping old objects |
 | `scripts/agent-chat-migration/decommission.sh` | Drop objects from `nova_memory` |
+| `scripts/agent-chat-migration/audit_rollout.py` | Rollout-status audit — reports which DB each agent's config resolves to |
+| `agent-install.sh` | Auto-provisions the `postgres.json` `agent_chat` section, `.pgpass` entries, and the `pg-notify-listener.py` systemd service for new/upgraded installs (see Step 4 below) |
 | `scripts/agent-chat-migration/README.md` | This runbook |
 
 ## Strict Operator Sequence
@@ -81,8 +83,23 @@ Confirm a LISTEN client on `agent_chat` receives the NOTIFY payload.
 
 ### 4. Roll out agent configs (Chunk B/C pointer)
 
-Update every agent's `~/.openclaw/postgres.json` to include the nested
-`agent_chat` section:
+As of the installer fix cycle (`c5fa491`, tested in `4c812d3`), running
+`agent-install.sh` **automatically** provisions the nested `agent_chat` section
+of `~/.openclaw/postgres.json` for you — this step no longer requires manual
+JSON editing on a fresh or upgraded install. The installer:
+
+* Writes/merges the nested section (idempotent — re-running reports the
+  section is "already correct", never clobbers existing values).
+* Adds `~/.pgpass` entries for both `nova_memory` and `agent_chat` on `localhost`
+  and `127.0.0.1`.
+* Deploys `pg-notify-listener.py` to `~/.openclaw/workspace/scripts/` plus a
+  user-level systemd unit (`~/.config/systemd/user/pg-notify-listener.service`),
+  and places `pg_env.py` at `~/.openclaw/lib/pg_env.py` (the listener does
+  `sys.path.insert(0, ~/.openclaw/lib)` to import it).
+* Strips dead `database`/`host`/`port`/`user`/`password` connection keys from
+  both `channels.agent_chat` and `plugins.entries.agent_chat.config`.
+
+The resulting `postgres.json` looks like:
 
 ```json
 {
@@ -98,6 +115,24 @@ Update every agent's `~/.openclaw/postgres.json` to include the nested
 }
 ```
 
+For a manual/from-scratch setup without the installer, add this section by hand.
+
+**Known post-install check (tracked as #379):** the installer's `systemctl --user
+enable --now pg-notify-listener.service` step silently degrades to a warning
+when `agent-install.sh` is run under `sudo`, because there is no D-Bus user
+session available in that context. If you see a warning like "pg-notify-listener.service
+enable/start failed" during install, verify the service afterward and start it
+manually if needed:
+
+```bash
+systemctl --user status pg-notify-listener.service
+# If not active:
+systemctl --user enable --now pg-notify-listener.service
+```
+
+This is a known limitation of running the installer via `sudo`; it does not
+affect installs run as the target user directly (no `sudo`).
+
 Covered in Chunk B:
 
 * `loadPgEnv()` / `load_pg_env()` section-key support.
@@ -111,6 +146,10 @@ Covered in Chunk C:
 * `agent-install.sh` writes `.pgpass` entries for memory + messaging DBs.
 * `agent-install.sh` removes dead `channels.agent_chat` connection keys.
 * Installer verification arrays are two-DB aware.
+* `agent-install.sh` auto-provisions the `postgres.json` `agent_chat` section
+  and deploys `pg-notify-listener.py` + its systemd unit (fix cycle `c5fa491`/`4c812d3`,
+  after an earlier ordering bug where these blocks ran after an early exit in the
+  `agent_chat` extension build step).
 
 ### 5. Interim delta check / migrate
 

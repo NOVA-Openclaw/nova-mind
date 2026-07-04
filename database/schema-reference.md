@@ -2,6 +2,16 @@
 
 *Auto-generated: 2026-06-09T03:38:05.109007*
 
+> **Stale as of nova-mind#320 for `agent_chat` / `agent_chat_processed`.** This file was
+> generated before the #320 migration and lists `agent_chat` and `agent_chat_processed`
+> below as if they are `nova_memory` tables. As of #320, both tables live in a separate,
+> dedicated `agent_chat` database — not `nova_memory`. This is an auto-generated file;
+> do not hand-edit the table listing below to "fix" this. Regenerate it against the
+> current `nova_memory` schema (which will correctly omit `agent_chat`/`agent_chat_processed`
+> going forward) using whatever tool produced it originally, and see
+> `memory/docs/database-config.md` / `scripts/agent-chat-migration/README.md` for the
+> current `agent_chat` schema and connection story.
+
 ## Tables
 
 | Table | Description | Columns |

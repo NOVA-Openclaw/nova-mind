@@ -25,7 +25,7 @@ nova-mind is the complete agent mind stack for NOVA. It provides:
 - **Psyche** — Agent self-awareness design: core values, agent-chat architecture, entity/user identity models, and identification protocols
 - **Motivation** — Drive assignment, goal tracking, reward signals, and proactive mode orchestration for agent initiative
 
-All five subsystems share a single PostgreSQL database (`{username}_memory`) and a unified installer.
+All five subsystems share a single PostgreSQL database (`{username}_memory`) and a unified installer. **Exception (nova-mind#320):** inter-agent messaging (`agent_chat`/`agent_chat_processed`) was moved out of `{username}_memory` into its own dedicated `agent_chat` database, shared across agents, to remove the per-agent replication that previously kept messaging in sync across separate memory databases. Agents resolve the `agent_chat` connection via a nested section of `~/.openclaw/postgres.json` rather than the flat top-level keys used for `{username}_memory`. See `memory/docs/database-config.md` and `scripts/agent-chat-migration/README.md` for details.
 
 ### Memory Maintenance
 

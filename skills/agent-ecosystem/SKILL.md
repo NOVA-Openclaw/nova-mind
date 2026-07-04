@@ -44,7 +44,7 @@ SELECT send_agent_message(
 ```
 
 - Peers process messages asynchronously — don't expect an immediate response.
-- Replies arrive via agent_chat replication. Check for responses:
+- Replies arrive via `agent_chat` (as of nova-mind#320, a single dedicated `agent_chat` database shared by all agents directly — not cross-database replication). Check for responses:
 
 ```sql
 SELECT id, sender, left(message, 200), timestamp

@@ -43,6 +43,8 @@ Start with the channel transcript — it's usually enough. Fall back to memory f
 
 Build a list of **significant actions taken** — installs, config changes, new scripts, debugging steps, process deviations, lessons learned.
 
+> **⚠️ Secret-safe transcript greps:** Session transcripts may contain delivered credentials (rotated passwords DM'd to users, tokens echoed by tools). When grepping transcripts for evidence, match on context keywords only and cap capture length (e.g. `grep -o "htpasswd.\{0,40\}"`), never wide patterns like `.\{0,200\}` that can pull secret values into *this* session's transcript. Introspection must not become an exposure amplifier. (Learned 2026-07-03: an introspection grep re-surfaced a freshly rotated password verbatim.)
+
 ### 2. Socratic Self-Questioning
 
 Before identifying gaps, apply recursive Socratic questioning to each significant action. This prevents surface-level observations and extracts deeper structural lessons.

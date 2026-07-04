@@ -370,6 +370,8 @@ VALUES (
 
 ### Agent Chat Tables (Inter-Agent Messaging)
 
+> **As of nova-mind#320, these tables live in a dedicated `agent_chat` database, not `nova_memory`.** The schema and protocol described below are otherwise unchanged — only the database they live in moved. Agents resolve the connection via the nested `agent_chat` section of `~/.openclaw/postgres.json` (see `memory/docs/database-config.md` and `scripts/agent-chat-migration/README.md`), not via the `nova_memory` connection used for the rest of this document.
+
 The `agent_chat` and `agent_chat_processed` tables enable asynchronous communication between AI agents via PostgreSQL NOTIFY:
 
 **agent_chat** - Message queue for inter-agent communication

@@ -253,6 +253,8 @@ COMMENT ON TABLE agents IS 'Agent definitions. READ-ONLY except Newhart (Agent D
 #### agent_chat table
 **Purpose:** Inter-agent messaging via PostgreSQL NOTIFY
 
+> **As of nova-mind#320, this table lives in a dedicated `agent_chat` database, not `nova_memory`.** The schema and protocol below are otherwise accurate and unchanged by the move — they describe the table shape, not which database hosts it. Agents resolve the connection via the nested `agent_chat` section of `~/.openclaw/postgres.json` (`load_pg_env(section="agent_chat")` / `loadPgEnv(undefined, "agent_chat")`); see `memory/docs/database-config.md` and `scripts/agent-chat-migration/README.md`.
+
 > **Column history (#106):** `mentions → recipients`, `created_at → "timestamp"` (TIMESTAMPTZ), `channel` dropped. All inserts via `send_agent_message()`.
 
 ```sql

@@ -49,8 +49,23 @@ USING ivfflat (embedding vector_cosine_ops) WITH (lists='100');
 
 Embeddings are generated automatically via database triggers:
 
+> **`agent_chat` no longer triggers automatic embedding (as of nova-mind#320).**
+> The example below (`embed_chat_message()` / `embed_chat_message_trigger`) reflects
+> the pre-#320 architecture, where `agent_chat` lived in `nova_memory` alongside
+> `memory_embeddings` and could reference it in an `AFTER INSERT` trigger. Since
+> #320 moved `agent_chat` into its own dedicated database, this cross-database
+> trigger is no longer possible in plain PostgreSQL (no cross-database triggers)
+> and was intentionally dropped during migration — see `database/agent-chat/schema.sql`
+> header notes and `scripts/agent-chat-migration/README.md`. `agent_chat` messages
+> are currently **not** automatically embedded into `memory_embeddings`; this is a
+> known gap, not a design decision, and is tracked for a future batch/ETL-based
+> re-embedding path rather than an in-database trigger. Other trigger-embedded
+> source types (`entity_fact`, `event`, `lesson`, etc.) that still live in
+> `nova_memory` are unaffected and continue to work as shown elsewhere in this guide.
+
 ```sql
--- Example trigger for agent_chat table
+-- Historical (pre-#320) example trigger for agent_chat table --
+-- no longer present; kept for historical reference only.
 CREATE FUNCTION embed_chat_message() RETURNS TRIGGER AS $$
 BEGIN
     INSERT INTO memory_embeddings (source_type, source_id, content)
@@ -178,6 +193,14 @@ LEFT JOIN entities e ON ef.entity_id = e.id
 LEFT JOIN events ev ON me.source_type = 'event' AND me.source_id = ev.id::text  
 LEFT JOIN agent_chat ac ON me.source_type = 'agent_chat' AND me.source_id = ac.id::text;
 ```
+
+> **Note (#320):** The `agent_chat` branch of the `CASE` and its `LEFT JOIN` above
+> are historical. `agent_chat` now lives in a separate dedicated database (not
+> `nova_memory`), so a same-query `JOIN` against it is no longer possible from
+> `nova_memory`, and (per the note above) no new `source_type = 'agent_chat'` rows
+> are being created since the embedding trigger was dropped. Existing historical
+> `agent_chat` embedding rows, if any remain from before #320, will simply resolve
+> `context` to `NULL` here rather than erroring.
 
 ### 3. Hybrid Search (Semantic + Keyword)
 

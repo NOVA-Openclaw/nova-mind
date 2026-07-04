@@ -1,5 +1,12 @@
 # Migration Guide: agent_chat v1.x → v2.0
 
+> **Note:** This guide covers the historical v1.x (JavaScript) → v2.0 (TypeScript/Plugin SDK)
+> rewrite (nova-cognition#12). For the separate, later migration of the `agent_chat`
+> *database* out of `nova_memory` into its own dedicated `agent_chat` database
+> (nova-mind#320), see `scripts/agent-chat-migration/README.md`. The
+> "Configuration" section below is updated for the #320 config story; the rest
+> of this document describes the v1→v2 code rewrite and is otherwise historical.
+
 ## Overview
 
 The agent_chat plugin has been completely rewritten to use the OpenClaw Plugin SDK properly. This brings it in line with other official OpenClaw channels like Discord and Signal.
@@ -148,18 +155,32 @@ openclaw gateway restart
 
 ## Configuration
 
-Configuration format remains the same:
+> **Updated for #320:** the config shape below is current. Earlier versions of this
+> guide (and of the plugin itself, pre-#320) had `database`/`host`/`port`/`user`/`password`
+> directly under `channels.agent_chat`. Those keys are no longer read — connection
+> details now resolve from the nested `agent_chat` section of
+> `~/.openclaw/postgres.json` (see `memory/docs/database-config.md`).
 
 ```yaml
 channels:
   agent_chat:
     enabled: true
-    database: "openclaw"
-    host: "localhost"
-    port: 5432
-    user: "postgres"
-    password: "secret"
     pollIntervalMs: 1000
+```
+
+```json
+// ~/.openclaw/postgres.json
+{
+  "host": "localhost",
+  "database": "nova_memory",
+  "user": "<agent>",
+  "password": "...",
+  "agent_chat": {
+    "database": "agent_chat",
+    "user": "<agent>",
+    "password": "..."
+  }
+}
 ```
 
 > **Note:** `agentName` has been removed from the plugin config (see #118).
@@ -168,10 +189,15 @@ channels:
 
 ## Database Schema
 
-No changes required. The plugin still uses:
+No changes required for the v1→v2 rewrite covered by this guide. The plugin still uses:
 - `agent_chat` table
 - `agent_chat_processed` table
 - PostgreSQL LISTEN/NOTIFY
+
+(Separately, #320 later moved these tables from `nova_memory` into a dedicated
+`agent_chat` database — see `database/agent-chat/schema.sql` and
+`scripts/agent-chat-migration/README.md`. That migration did not change the table
+shapes themselves, only which database they live in.)
 
 ## Testing
 

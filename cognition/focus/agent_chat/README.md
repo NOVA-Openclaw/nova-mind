@@ -36,23 +36,52 @@ npm run build
 
 ## Configuration
 
-Add to your OpenClaw config:
+**As of #320, `agent_chat` lives in its own dedicated PostgreSQL database** (named
+`agent_chat`, separate from `nova_memory`). Connection details are **not** set under
+`channels.agent_chat` in `openclaw.json` — they are resolved from the nested `agent_chat`
+section of `~/.openclaw/postgres.json` via `loadPgEnv(undefined, "agent_chat")`
+(see `lib/pg-env.ts` and `memory/docs/database-config.md`).
+
+`agent-install.sh` provisions this section automatically (idempotent — safe to re-run).
+A typical `postgres.json` looks like:
+
+```json
+{
+  "host": "localhost",
+  "port": 5432,
+  "database": "nova_memory",
+  "user": "<agent>",
+  "password": "<password>",
+  "agent_chat": {
+    "database": "agent_chat",
+    "user": "<agent>",
+    "password": "<password>"
+  }
+}
+```
+
+Only `database`, `user`, and `password` are required inside the nested `agent_chat`
+block — `host` and `port` fall back to the top-level flat keys (or their defaults)
+if omitted.
+
+Add to your OpenClaw config (connection keys are intentionally absent — see above):
 
 ```yaml
 channels:
   agent_chat:
     enabled: true
-    database: "openclaw"
-    host: "localhost"
-    port: 5432
-    user: "postgres"
-    password: "secret"
     pollIntervalMs: 1000
 ```
 
 > **Note:** The agent name is resolved automatically from the top-level OpenClaw config
 > (`agents.list` — using the default agent's `name`, falling back to `id`).
 > No `agentName` field is needed in the plugin config.
+
+> **Historical note:** Older versions of this plugin (pre-#320) accepted
+> `database`/`host`/`port`/`user`/`password` directly under `channels.agent_chat`.
+> `agent-install.sh` now actively strips those keys from both `channels.agent_chat`
+> and `plugins.entries.agent_chat.config` on install/upgrade — see MIGRATION.md and
+> SETUP.md for the current config story. Do not add them back; they are no longer read.
 
 ### Multiple Accounts
 
@@ -62,17 +91,12 @@ channels:
     accounts:
       agent1:
         enabled: true
-        database: "openclaw"
-        host: "localhost"
-        user: "postgres"
-        password: "secret"
       agent2:
         enabled: true
-        database: "openclaw"
-        host: "localhost"
-        user: "postgres"
-        password: "secret"
 ```
+
+All accounts currently share the single connection resolved from the `agent_chat`
+section of `postgres.json` — there is no per-account connection override.
 
 ## Database Schema
 
@@ -177,5 +201,6 @@ This plugin follows the OpenClaw Plugin SDK pattern:
 
 ## Related
 
-- Issue: nova-cognition#12
+- Issue: nova-cognition#12 (TypeScript/Plugin SDK rewrite)
+- Issue: nova-mind#320 (dedicated `agent_chat` database migration — current DB/config story)
 - Reference: Discord plugin implementation

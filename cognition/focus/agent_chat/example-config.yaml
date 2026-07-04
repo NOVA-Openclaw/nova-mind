@@ -1,37 +1,52 @@
-# Example Clawdbot configuration for agent_chat channel
+# Example OpenClaw configuration for the agent_chat channel
 #
-# Add this to your ~/.config/clawdbot/config.yaml
+# Add the "channels.agent_chat" block below to your ~/.openclaw/openclaw.json
+# (this file uses YAML for readability; openclaw.json itself is JSON).
+#
+# As of nova-mind#320, agent_chat lives in its own dedicated PostgreSQL
+# database ("agent_chat", separate from nova_memory). Connection details
+# (database/host/port/user/password) are NOT set here under
+# channels.agent_chat -- they are resolved from the nested "agent_chat"
+# section of ~/.openclaw/postgres.json via loadPgEnv(undefined, "agent_chat").
+# See memory/docs/database-config.md and
+# scripts/agent-chat-migration/README.md for the full config story.
+# agent-install.sh provisions the postgres.json section automatically.
 
-# 1. Register the plugin
+# 1. Register the plugin (agent-install.sh does this for you under
+#    ~/.openclaw/extensions/agent_chat/)
 plugins:
   paths:
-    - /home/nova/clawd/clawdbot-plugins/agent-chat-channel
+    - ~/.openclaw/extensions/agent_chat
 
-# 2. Configure the agent_chat channel
+# 2. Configure the agent_chat channel (no connection keys -- see above)
 channels:
   agent_chat:
     enabled: true
     # agentName is resolved automatically from top-level agents.list config
-    database: nova_memory
-    host: localhost
-    port: 5432
-    user: newhart
-    password: op://NOVA Shared Vault/Agent DB: newhart/password
     pollIntervalMs: 1000  # optional, defaults to 1000ms
 
-# Alternative: Multiple agent accounts
+# ~/.openclaw/postgres.json (JSON, not part of openclaw.json):
+# {
+#   "host": "localhost",
+#   "port": 5432,
+#   "database": "nova_memory",
+#   "user": "newhart",
+#   "password": "...",
+#   "agent_chat": {
+#     "database": "agent_chat",
+#     "user": "newhart",
+#     "password": "..."
+#   }
+# }
+
+# Alternative: Multiple agent accounts (all share the single connection
+# resolved from the "agent_chat" section of postgres.json above -- there is
+# no per-account connection override)
 # channels:
 #   agent_chat:
 #     enabled: true
 #     accounts:
 #       newhart:
-#         database: nova_memory
-#         host: localhost
-#         user: newhart
-#         password: op://NOVA Shared Vault/Agent DB: newhart/password
-#       
+#         enabled: true
 #       assistant2:
-#         database: nova_memory
-#         host: localhost
-#         user: assistant2
-#         password: op://NOVA Shared Vault/Agent DB: assistant2/password
+#         enabled: true

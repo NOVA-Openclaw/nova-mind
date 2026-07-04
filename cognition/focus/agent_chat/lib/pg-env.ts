@@ -10,6 +10,18 @@ import { readFileSync } from "fs";
 import { homedir, userInfo } from "os";
 import { join } from "path";
 
+/**
+ * PostgreSQL connection options interface that matches
+ * the pg.Client constructor options.
+ */
+export interface PgConnectionConfig {
+  host?: string;
+  port?: number;
+  database?: string;
+  user?: string;
+  password?: string;
+}
+
 interface PgConfig {
   host?: string | null;
   port?: string | number | null;
@@ -19,7 +31,7 @@ interface PgConfig {
   [key: string]: unknown;
 }
 
-const FIELD_MAP: Array<[keyof PgConfig, string]> = [
+const FIELD_MAP: Array<[keyof PgConnectionConfig, string]> = [
   ["host", "PGHOST"],
   ["port", "PGPORT"],
   ["database", "PGDATABASE"],
@@ -32,18 +44,6 @@ const DEFAULTS: Record<string, string | (() => string)> = {
   PGPORT: "5432",
   PGUSER: () => userInfo().username,
 };
-
-/**
- * PostgreSQL connection options interface that matches
- * the pg.Client constructor options.
- */
-export interface PgConnectionConfig {
-  host?: string;
-  port?: number;
-  database?: string;
-  user?: string;
-  password?: string;
-}
 
 /**
  * Load PostgreSQL config with resolution: ENV → section → config file → defaults.

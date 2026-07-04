@@ -161,7 +161,7 @@ run_agents_json_logic() {
 @test "TC-252-B-03: Never write [] when psql fails (no existing agents.json)" {
     # No agents.json exists, psql fails
     run run_agents_json_logic 0 "FAIL"
-    [ "$status" -eq 0 ]
+    [ "$status" -ne 0 ]
 
     # agents.json must NOT exist with [] content
     if [ -f "$FAKE_AGENTS_JSON" ]; then
@@ -180,7 +180,7 @@ run_agents_json_logic() {
     [ ! -f "$FAKE_AGENTS_JSON" ]
 
     run run_agents_json_logic 0 "FAIL"
-    [ "$status" -eq 0 ]
+    [ "$status" -ne 0 ]
 
     # Must not have created an agents.json with [] content
     if [ -f "$FAKE_AGENTS_JSON" ]; then

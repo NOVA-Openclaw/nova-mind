@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+    branches: [main, 'issue-*', 'feat/*', 'fix/*']
+  pull_request:
+    branches: [main]
+
+jobs:
+  shell-tests:
+    name: Shell / Installer Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install shellcheck and bats
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq shellcheck bats
+
+      - name: Syntax check agent-install.sh
+        run: bash -n agent-install.sh
+
+      - name: ShellCheck agent-install.sh
+        run: shellcheck agent-install.sh
+
+      - name: Run installer BATS tests
+        run: bats tests/install/test_agent_chat_installer.bats tests/install/test_agents_json_safety.bats

@@ -1,5 +1,30 @@
 # Changelog
 
+### Batch: agent-chat-dedicated-db-320 (Issue #320)
+
+#### Added
+- **Dedicated `agent_chat` database** (#320) — `agent_chat` and `agent_chat_processed` (tables, `send_agent_message()`, triggers, views, grants) moved out of `nova_memory` into their own dedicated `agent_chat` PostgreSQL database, shared directly by all agents. Schema lives in `database/agent-chat/schema.sql`; table shapes and the `send_agent_message()`-only write path are unchanged by the move.
+- **Nested `postgres.json` section support** — `loadPgEnv()` (TypeScript, `lib/pg-env.ts`) and `load_pg_env()` (Python, `lib/pg_env.py`) both gained an optional `section` parameter so callers can resolve a named nested connection (e.g. `agent_chat`) alongside the existing flat top-level keys, with resolution order ENV → section → flat top-level → defaults. See `memory/docs/database-config.md`.
+- **`agent-install.sh` auto-provisioning** — the installer now idempotently writes/merges the nested `agent_chat` section of `~/.openclaw/postgres.json`, adds `.pgpass` entries for both `nova_memory` and `agent_chat` on `localhost`/`127.0.0.1`, and strips dead `database`/`host`/`port`/`user`/`password` connection keys from `channels.agent_chat` and `plugins.entries.agent_chat.config` (those keys are no longer read by the plugin).
+- **`pg-notify-listener.py` + systemd user service** — deployed by the installer to `~/.openclaw/workspace/scripts/` with a user-level systemd unit, using `pg_env.py` at `~/.openclaw/lib/pg_env.py` for its DSN resolution.
+- **`agent_chat` migration tooling** (`scripts/agent-chat-migration/`) — `migrate.sh`, `delta_check_and_migrate.py`, `pre_drop_gate_check.sh` (six-gate pre-decommission checklist), `decommission.sh`, and `audit_rollout.py` (rollout-status audit reporting which database each agent's config currently resolves to). Full runbook in `scripts/agent-chat-migration/README.md`.
+- **`proactive-gate-check.py` agent_chat DSN resolution** (commit `cf323da`) — Step 1 (unacknowledged `agent_chat` messages) now connects via `load_pg_env(section="agent_chat")` instead of the default `nova_memory` connection.
+
+#### Changed
+- Documentation across `cognition/`, `memory/`, `motivation/`, `scripts/`, `skills/`, and the repo-root `README.md`/`database/schema-reference.md` updated to reflect the dedicated-database model (see `~/.openclaw/workspace/se-runs/run-334-step9-docs-audit.md` for the full list). The `embed_chat_message()` trigger that auto-embedded new `agent_chat` rows into `memory_embeddings` was dropped as part of the migration (cross-database triggers aren't supported in plain PostgreSQL); new `agent_chat` messages are not currently auto-embedded for semantic recall — tracked as a known gap, not a design decision.
+- The pre-#320 cross-database logical-replication design for `agent_chat` (per-agent memory database ↔ per-agent memory database, e.g. `nova_memory` ↔ `graybeard_memory`) is superseded: all agents now connect to the single shared `agent_chat` database directly. `agent-install.sh` no longer configures or detects `agent_chat` replication.
+
+#### Fixed
+- **Installer ordering bug** (fix cycle `c5fa491`/tested in `4c812d3`) — an earlier version of the installer's `agent_chat` postgres.json provisioning and listener deployment ran *after* an early exit in the `agent_chat` extension build step, so on some install paths the provisioning never executed. Fixed by moving provisioning/deployment before the extension build's early-exit paths; covered by new BATS tests for idempotency and listener deployment.
+- **`lib/pg-env.ts` strict-TypeScript compile failure (#377)** — the section-key loader introduced for #320 failed to compile under the project's `strict` TypeScript settings (TS7053 implicit-any index access) when resolving `PgConnectionConfig`; masked in earlier verification because a stale prebuilt `dist/` was being reused instead of a clean build. Fixed on this branch.
+
+#### Known Issues (open, not yet resolved on this branch)
+- **#375** — `pre_drop_gate_check.sh` Gate 4's delta check only detects *new* unmigrated `agent_chat_processed` rows, not rows updated after migration on already-migrated chat_ids; disagrees with `delta_check_and_migrate.py`'s two-part logic. Blocks trusting the decommission runbook for a live cutover; does not block merge or staging testing.
+- **#379** — `agent-install.sh`'s `systemctl --user enable --now pg-notify-listener.service` step silently degrades to a warning when the installer is run under `sudo` (no D-Bus user session for the target user), leaving the listener deployed but not running. Documented as a post-install manual-verification step in `scripts/agent-chat-migration/README.md`. Workaround: run `systemctl --user enable --now pg-notify-listener.service` as the target user after install.
+- Deferred to live cutover (not yet actioned): #376 Gate 5 dependency logic, peer-credential independence, and an incomplete gateway plugin-load investigation (TC-38, possibly related to the #377 stale-`dist/` issue above).
+
+---
+
 ### Batch: blocker-outreach-356 (Issues #356, #358)
 
 #### Added

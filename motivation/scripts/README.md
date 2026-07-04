@@ -92,7 +92,7 @@ lists). Error conditions appear as `{ "actionable": false, "error": "..." }`.
 
 | Dependency | How It Is Used |
 |------------|----------------|
-| `psycopg2` | PostgreSQL queries (agent_chat, tasks, entities, unsolved_problems). Loaded from the nova venv at `~/.local/share/nova/venv/` — no manual activation required. |
+| `psycopg2` | PostgreSQL queries against `nova_memory` (tasks, entities, unsolved_problems) and, separately, the dedicated `agent_chat` database (#320) via `load_pg_env(section="agent_chat")` — see `memory/docs/database-config.md`. Loaded from the nova venv at `~/.local/share/nova/venv/` — no manual activation required. |
 | `gh` CLI | Lists open GitHub issues across NOVA-Openclaw repos (Step 7) and enumerates repos. |
 | `~/.openclaw/agents/nova/sessions/sessions.json` + per-session JSONL files | Detects unanswered user messages directly from session state (Step 2). |
 

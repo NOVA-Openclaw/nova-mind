@@ -23,11 +23,13 @@ WARNING="${YELLOW}⚠️${NC}"
 INFO="${BLUE}ℹ️${NC}"
 
 # Verification results
+# shellcheck disable=SC2034
 VERIFICATION_PASSED=0
 VERIFICATION_WARNINGS=0
 VERIFICATION_ERRORS=0
 
 # Track if gateway restart is needed
+# shellcheck disable=SC2034
 GATEWAY_RESTART_NEEDED=0
 
 # Temp file cleanup
@@ -43,6 +45,7 @@ if [ ! -f "$PG_ENV" ]; then
     echo -e "  ${RED}❌${NC} $PG_ENV not found"
     exit 1
 fi
+# shellcheck disable=SC1090,SC1091
 source "$PG_ENV"
 
 # ============================================
@@ -64,10 +67,17 @@ fi
 # Derived variables
 DB_USER="${PGUSER:-$(whoami)}"
 DB_NAME="${PGDATABASE:-${DB_USER//-/_}_memory}"
+AGENT_CHAT_DB_NAME="agent_chat"
+
+# PostgreSQL password file path
+PGPASS_FILE="${HOME}/.pgpass"
+
 WORKSPACE="${OPENCLAW_WORKSPACE:-$HOME/.openclaw/workspace-coder}"
 OPENCLAW_DIR="$HOME/.openclaw"
+# shellcheck disable=SC2034
 OPENCLAW_PROJECTS="$OPENCLAW_DIR/projects"
 EXTENSIONS_DIR="$OPENCLAW_DIR/extensions"
+# shellcheck disable=SC2034
 NOVA_DIR="$HOME/.local/share/nova"
 
 # Superuser connection helper for DDL operations
@@ -102,6 +112,128 @@ _superuser_pgschema() {
         "$PGSCHEMA_BIN" "$@"
     else
         sudo -u "$PG_SUPERUSER" "$PGSCHEMA_BIN" "$@"
+    fi
+}
+
+# Ensure a ~/.pgpass entry exists for a given connection.
+# Removes any existing entry with the same host:port:database:user prefix
+# and appends the current password, so re-runs are idempotent and password
+# rotations are picked up.
+_ensure_pgpass_entry() {
+    local host="$1"
+    local port="$2"
+    local database="$3"
+    local user="$4"
+    local password="$5"
+    local pgpass="$PGPASS_FILE"
+    local prefix="${host}:${port}:${database}:${user}:"
+    local line="${prefix}${password}"
+
+    if [ ! -f "$pgpass" ]; then
+        touch "$pgpass"
+        chmod 600 "$pgpass"
+    fi
+
+    # Already correct? Nothing to do.
+    if grep -qxF "$line" "$pgpass" 2>/dev/null; then
+        return 1
+    fi
+
+    local tmpfile
+    tmpfile=$(mktemp)
+    TMPFILES+=("$tmpfile")
+    chmod 600 "$tmpfile"
+    # Drop any stale entry with the same prefix, then append the new one.
+    if [ -s "$pgpass" ]; then
+        grep -vF "$prefix" "$pgpass" >"$tmpfile" 2>/dev/null || cat "$pgpass" >"$tmpfile"
+    fi
+    printf '%s\n' "$line" >>"$tmpfile"
+    mv "$tmpfile" "$pgpass"
+    chmod 600 "$pgpass"
+    return 0
+}
+
+# Write the nested agent_chat section to ~/.openclaw/postgres.json.
+# Host/port fall back to the flat keys at runtime, so only database/user/password
+# are written in the nested block.  Idempotent: if the section already exists as
+# an object, missing keys are merged in and existing keys are preserved (no
+# clobber).  If it is missing or not an object, the section is created from the
+# supplied values.
+_ensure_agent_chat_postgres_json() {
+    local pg_config="$1"
+    local database="$2"
+    local user="$3"
+    local password="$4"
+
+    if [ ! -f "$pg_config" ] || ! command -v jq &>/dev/null; then
+        return 1
+    fi
+
+    local new_json
+    new_json=$(jq --arg db "$database" --arg user "$user" --arg pass "$password" \
+        'if (.agent_chat // null) | type == "object" then
+            .agent_chat |= . + {
+                database: (.database // $db),
+                user: (.user // $user),
+                password: (.password // $pass)
+            }
+         else
+            .agent_chat = {"database": $db, "user": $user, "password": $pass}
+         end' "$pg_config" 2>/dev/null) || return 1
+
+    # Only write if something changed.
+    if [ "$(printf '%s\n' "$new_json" | jq -Sc .)" = "$(jq -Sc . < "$pg_config")" ]; then
+        return 1
+    fi
+
+    printf '%s\n' "$new_json" >"${pg_config}.tmp" && \
+        mv "${pg_config}.tmp" "$pg_config" && \
+        chmod 600 "$pg_config"
+}
+
+# Install the PostgreSQL NOTIFY listener as a systemd --user service.
+# Parameters: source_script source_service target_dir service_dir logs_dir
+_install_pg_notify_listener() {
+    local source_script="$1"
+    local source_service="$2"
+    local target_dir="$3"
+    local service_dir="$4"
+    local logs_dir="$5"
+
+    if [ ! -f "$source_script" ] || [ ! -f "$source_service" ]; then
+        echo -e "  ${WARNING} pg-notify-listener source files not found (skipping)"
+        return 1
+    fi
+
+    mkdir -p "$target_dir"
+    mkdir -p "$service_dir"
+    mkdir -p "$logs_dir"
+
+    cp "$source_script" "$target_dir/pg-notify-listener.py"
+    chmod +x "$target_dir/pg-notify-listener.py"
+    echo -e "  ${CHECK_MARK} Installed pg-notify-listener.py → $target_dir"
+
+    cp "$source_service" "$service_dir/pg-notify-listener.service"
+    echo -e "  ${CHECK_MARK} Installed pg-notify-listener.service → $service_dir"
+
+    if command -v systemctl &>/dev/null; then
+        systemctl --user daemon-reload
+        if systemctl --user is-active pg-notify-listener.service &>/dev/null; then
+            if systemctl --user restart pg-notify-listener.service; then
+                echo -e "  ${CHECK_MARK} Restarted pg-notify-listener.service"
+            else
+                echo -e "  ${WARNING} pg-notify-listener.service restart failed"
+            fi
+        else
+            if systemctl --user enable pg-notify-listener.service &>/dev/null && \
+               systemctl --user start pg-notify-listener.service; then
+                echo -e "  ${CHECK_MARK} Enabled and started pg-notify-listener.service"
+            else
+                echo -e "  ${WARNING} pg-notify-listener.service enable/start failed"
+            fi
+        fi
+    else
+        echo -e "  ${WARNING} systemctl not available — service not started"
     fi
 }
 
@@ -246,7 +378,8 @@ fi
 if [ $VERIFY_ONLY -eq 0 ]; then
     if command -v node &>/dev/null; then
         NODE_VERSION=$(node --version)
-        NODE_MAJOR=$(echo "$NODE_VERSION" | sed 's/v\([0-9]*\).*/\1/')
+        NODE_VERSION_NO_V="${NODE_VERSION#v}"
+        NODE_MAJOR="${NODE_VERSION_NO_V%%.*}"
         if [ "$NODE_MAJOR" -ge 18 ]; then
             echo -e "  ${CHECK_MARK} Node.js installed ($NODE_VERSION)"
         else
@@ -479,7 +612,7 @@ install_skills() {
             else
                 local needs_update=0
                 while IFS= read -r -d '' source_file; do
-                    local rel_path="${source_file#$skill_dir}"
+                    local rel_path="${source_file#"$skill_dir"}"
                     local target_file="$target_skill/$rel_path"
                     if [ ! -f "$target_file" ]; then
                         needs_update=1; break
@@ -629,17 +762,25 @@ verify_cognition() {
         VERIFICATION_ERRORS=$((VERIFICATION_ERRORS + 1))
     fi
 
-    local required_tables=("agent_chat" "agent_chat_processed")
-    for table in "${required_tables[@]}"; do
-        local TABLE_EXISTS
-        TABLE_EXISTS=$(psql -U "$DB_USER" -d "$DB_NAME" -tAc "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name = '$table'" | tr -d '[:space:]')
-        if [ "$TABLE_EXISTS" -eq 0 ]; then
-            echo -e "  ${WARNING} Table '$table' not yet created (will be created by extension)"
-            VERIFICATION_WARNINGS=$((VERIFICATION_WARNINGS + 1))
-        else
-            echo -e "  ${CHECK_MARK} Table '$table' exists"
-        fi
-    done
+    # agent_chat tables live in the dedicated agent_chat DB, not the memory DB.
+    local agent_chat_db
+    agent_chat_db=$(jq -r '.agent_chat.database // "agent_chat"' "$PG_CONFIG" 2>/dev/null || echo "agent_chat")
+    if psql -U "$DB_USER" -d "$agent_chat_db" -c '\q' >/dev/null 2>&1; then
+        local required_tables=("agent_chat" "agent_chat_processed")
+        for table in "${required_tables[@]}"; do
+            local TABLE_EXISTS
+            TABLE_EXISTS=$(psql -U "$DB_USER" -d "$agent_chat_db" -tAc "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name = '$table'" | tr -d '[:space:]')
+            if [ "$TABLE_EXISTS" -eq 0 ]; then
+                echo -e "  ${WARNING} Table '$table' not yet created in '$agent_chat_db'"
+                VERIFICATION_WARNINGS=$((VERIFICATION_WARNINGS + 1))
+            else
+                echo -e "  ${CHECK_MARK} Table '$table' exists in '$agent_chat_db'"
+            fi
+        done
+    else
+        echo -e "  ${WARNING} Cannot verify agent_chat tables (database '$agent_chat_db' unreachable)"
+        VERIFICATION_WARNINGS=$((VERIFICATION_WARNINGS + 1))
+    fi
 }
 
 verify_config() {
@@ -929,6 +1070,7 @@ fi
 RENAMES_FILE="$SCRIPT_DIR/memory/database/renames.json"
 if [ -f "$RENAMES_FILE" ]; then
     echo "  Processing renames.json (Step 1.5)..."
+    # shellcheck disable=SC2034
     RENAME_COUNT=$(jq '[.renames[] | select(.column.from? != null)] | length' "$RENAMES_FILE" 2>/dev/null || echo "0")
     APPLIED=0
     SKIPPED=0
@@ -1415,26 +1557,53 @@ else
 fi
 
 # --- agent_chat runtime configuration ---
-# Schema is managed by pgschema via database/schema.sql
-# This section only configures triggers for logical replication
+# The agent_chat messaging bus now lives in a dedicated `agent_chat` database.
+# Schema/objects for that database are managed by database/agent-chat/schema.sql
+# and applied by scripts/agent-chat-migration/migrate.sh, not by this installer.
+# Logical replication for agent_chat (#64/#67) was superseded by the shared-DB
+# design and is no longer configured here.
 echo ""
 echo "Agent chat schema..."
+echo -e "  ${INFO} agent_chat bus is a dedicated database; trigger/schema config lives in database/agent-chat/schema.sql"
 
-# Configure triggers for logical replication if subscriptions exist
-echo "  Checking for logical replication subscriptions..."
-SUBSCRIPTION_COUNT=$(psql -U "$DB_USER" -d "$DB_NAME" -tAc "SELECT COUNT(*) FROM pg_subscription WHERE subname LIKE '%agent_chat%'" 2>/dev/null || echo "0")
+# --- Configure PostgreSQL password file and agent_chat DB config ---
+echo ""
+echo "PostgreSQL password file and agent_chat DB config..."
 
-if [ "$SUBSCRIPTION_COUNT" -gt 0 ]; then
-    echo -e "  ${CHECK_MARK} Found $SUBSCRIPTION_COUNT agent_chat subscription(s)"
-    psql -U "$DB_USER" -d "$DB_NAME" -c "ALTER TABLE agent_chat ENABLE ALWAYS TRIGGER trg_notify_agent_chat;" >/dev/null 2>&1 && \
-        echo -e "  ${CHECK_MARK} Notification trigger configured (ALWAYS)" || \
-        echo -e "  ${WARNING} Failed to configure notification trigger"
-    psql -U "$DB_USER" -d "$DB_NAME" -c "ALTER TABLE agent_chat DISABLE TRIGGER trg_embed_chat_message;" >/dev/null 2>&1 && \
-        echo -e "  ${CHECK_MARK} Embedding trigger DISABLED (source-only embeddings)" || \
-        echo -e "  ${WARNING} Failed to configure embedding trigger"
+if [ -n "${PGPASSWORD:-}" ]; then
+    pgpass_changed=0
+    _ensure_pgpass_entry "localhost" "5432" "$DB_NAME" "$DB_USER" "$PGPASSWORD" && pgpass_changed=1
+    _ensure_pgpass_entry "127.0.0.1" "5432" "$DB_NAME" "$DB_USER" "$PGPASSWORD" && pgpass_changed=1
+    _ensure_pgpass_entry "localhost" "5432" "$AGENT_CHAT_DB_NAME" "$DB_USER" "$PGPASSWORD" && pgpass_changed=1
+    _ensure_pgpass_entry "127.0.0.1" "5432" "$AGENT_CHAT_DB_NAME" "$DB_USER" "$PGPASSWORD" && pgpass_changed=1
+    if [ "$pgpass_changed" -eq 1 ]; then
+        echo -e "  ${CHECK_MARK} Updated ~/.pgpass with memory and agent_chat DB entries"
+    else
+        echo -e "  ${CHECK_MARK} ~/.pgpass entries already correct"
+    fi
 else
-    echo "  No agent_chat subscriptions found — using default trigger configuration"
+    echo -e "  ${WARNING} PGPASSWORD not set — skipping ~/.pgpass provisioning"
 fi
+
+if _ensure_agent_chat_postgres_json "$PG_CONFIG" "$AGENT_CHAT_DB_NAME" "$DB_USER" "${PGPASSWORD:-}"; then
+    echo -e "  ${CHECK_MARK} Wrote nested agent_chat section to $PG_CONFIG"
+else
+    echo -e "  ${CHECK_MARK} Nested agent_chat section already correct in $PG_CONFIG (or could not update)"
+fi
+
+# --- PostgreSQL NOTIFY listener ---
+# Local listener that reacts to postgres channels (schema_changed, gambling_changed,
+# etc.). Runs as a systemd --user service under the installing unix account so it
+# authenticates with that account's DB role. Issue: nova-mind #320 / #251.
+echo ""
+echo "PostgreSQL NOTIFY listener..."
+
+_install_pg_notify_listener \
+    "$SCRIPT_DIR/cognition/scripts/pg-notify-listener.py" \
+    "$SCRIPT_DIR/cognition/systemd/pg-notify-listener.service" \
+    "$HOME/.openclaw/workspace/scripts" \
+    "$HOME/.config/systemd/user" \
+    "$HOME/.openclaw/workspace/logs"
 
 # --- agent_chat extension ---
 echo ""
@@ -1511,6 +1680,7 @@ if [ -d "$EXTENSION_SOURCE" ]; then
         exit 1
     fi
 
+    # shellcheck disable=SC2015
     [ -f "dist/index.js" ] && echo -e "  ${CHECK_MARK} Build output verified: dist/index.js" || \
         { echo -e "  ${CROSS_MARK} Build output not found"; exit 1; }
 
@@ -1539,6 +1709,7 @@ for old_hook in "semantic-recall" "agent-turn-context"; do
     if [ -d "$OLD_HOOK_DIR" ]; then
         rm -rf "$OLD_HOOK_DIR"
         echo -e "  ${CHECK_MARK} Removed old hook: $old_hook"
+        # shellcheck disable=SC2034
         GATEWAY_RESTART_NEEDED=1
     fi
 done
@@ -1643,7 +1814,7 @@ install_metacognition_plugin() {
     for f in package.json openclaw.plugin.json tsconfig.json src; do
         if [ -e "$plugin_source/$f" ]; then
             if [ -d "$plugin_source/$f" ]; then
-                rm -rf "$plugin_target/$f"
+                rm -rf "${plugin_target:?}/$f"
                 cp -r "$plugin_source/$f" "$plugin_target/$f"
             else
                 cp "$plugin_source/$f" "$plugin_target/$f"
@@ -1656,7 +1827,7 @@ install_metacognition_plugin() {
     cd "$plugin_target"
     if [ ! -d "node_modules" ] || [ "$FORCE_INSTALL" -eq 1 ]; then
         echo "    Installing dependencies..."
-        NPM_INSTALL_LOG=$(mktemp /tmp/npm-install-${plugin_name}-XXXXXX.log)
+        NPM_INSTALL_LOG=$(mktemp "/tmp/npm-install-${plugin_name}-XXXXXX.log")
         TMPFILES+=("$NPM_INSTALL_LOG")
         if npm install >"$NPM_INSTALL_LOG" 2>&1; then
             echo -e "    ${CHECK_MARK} Dependencies installed"
@@ -1670,7 +1841,7 @@ install_metacognition_plugin() {
     # Build TypeScript
     if [ -d "$plugin_target/src" ]; then
         echo "    Building TypeScript..."
-        BUILD_LOG=$(mktemp /tmp/build-${plugin_name}-XXXXXX.log)
+        BUILD_LOG=$(mktemp "/tmp/build-${plugin_name}-XXXXXX.log")
         TMPFILES+=("$BUILD_LOG")
         if npx tsc >"$BUILD_LOG" 2>&1; then
             echo -e "    ${CHECK_MARK} Build completed"
@@ -1942,6 +2113,7 @@ if [ -d "$AGENT_CONFIG_SYNC_SOURCE" ]; then
         if AGENTS_DATA=$(psql -U "$DB_USER" -d "$DB_NAME" -tAc "$INITIAL_SYNC_QUERY" 2>/dev/null); then
             if [ -n "$AGENTS_DATA" ] && [ "$AGENTS_DATA" != "null" ] && [ "$AGENTS_DATA" != "" ]; then
                 if echo "$AGENTS_DATA" | jq '.' >"$AGENTS_JSON_TMP" 2>/dev/null; then
+                    # shellcheck disable=SC2015
                     mv "$AGENTS_JSON_TMP" "$AGENTS_JSON" && \
                         echo -e "  ${CHECK_MARK} Generated agents.json from DB" || \
                         { echo -e "  ${WARNING} Could not write agents.json"; rm -f "$AGENTS_JSON_TMP"; return 1; }
@@ -2007,7 +2179,7 @@ fi
 echo ""
 echo "  Ensuring agent_system_config table..."
 
-psql -U "$DB_USER" -d "$DB_NAME" -q <<'SYSTEM_CONFIG_TABLE_SQL'
+if psql -U "$DB_USER" -d "$DB_NAME" -q <<'SYSTEM_CONFIG_TABLE_SQL'
 CREATE TABLE IF NOT EXISTS agent_system_config (
     key        TEXT PRIMARY KEY,
     value      TEXT NOT NULL,
@@ -2016,9 +2188,11 @@ CREATE TABLE IF NOT EXISTS agent_system_config (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 SYSTEM_CONFIG_TABLE_SQL
-
-[ $? -eq 0 ] && echo -e "  ${CHECK_MARK} agent_system_config table ready" || \
+then
+    echo -e "  ${CHECK_MARK} agent_system_config table ready"
+else
     echo -e "  ${WARNING} Could not ensure agent_system_config table"
+fi
 
 # --- System config notification trigger ---
 echo "  Installing system config notification trigger..."
@@ -2035,7 +2209,7 @@ if [ -f "$SYSTEM_CONFIG_MIGRATION" ]; then
         rm -f "$MIGRATION_ERR"
     fi
 else
-    psql -U "$DB_USER" -d "$DB_NAME" -q <<'INLINE_MIGRATION_SQL'
+    if psql -U "$DB_USER" -d "$DB_NAME" -q <<'INLINE_MIGRATION_SQL'
 CREATE OR REPLACE FUNCTION notify_system_config_changed()
 RETURNS trigger AS $$
 BEGIN
@@ -2059,14 +2233,17 @@ INSERT INTO agent_system_config (key, value, value_type)
 VALUES ('max_spawn_depth', '5', 'integer')
 ON CONFLICT (key) DO NOTHING;
 INLINE_MIGRATION_SQL
-    [ $? -eq 0 ] && echo -e "  ${CHECK_MARK} System config trigger installed (inline)" || \
+    then
+        echo -e "  ${CHECK_MARK} System config trigger installed (inline)"
+    else
         echo -e "  ${WARNING} Inline migration had issues"
+    fi
 fi
 
 # --- agent config notification trigger ---
 echo "  Installing agent config notification trigger..."
 
-psql -U "$DB_USER" -d "$DB_NAME" -q <<'TRIGGER_SQL'
+if psql -U "$DB_USER" -d "$DB_NAME" -q <<'TRIGGER_SQL'
 CREATE OR REPLACE FUNCTION notify_agent_config_changed()
 RETURNS trigger AS $$
 BEGIN
@@ -2084,9 +2261,11 @@ CREATE TRIGGER agent_config_changed
     AFTER INSERT OR UPDATE OR DELETE ON agents
     FOR EACH ROW EXECUTE FUNCTION notify_agent_config_changed();
 TRIGGER_SQL
-
-[ $? -eq 0 ] && echo -e "  ${CHECK_MARK} Agent config notification trigger installed" || \
+then
+    echo -e "  ${CHECK_MARK} Agent config notification trigger installed"
+else
     echo -e "  ${CROSS_MARK} Failed to install agent config notification trigger"
+fi
 
 # --- Shell environment setup (cognition dotfiles) ---
 echo ""
@@ -2123,6 +2302,7 @@ else
 fi
 
 if [ -f "$BASH_ENV_SOURCE" ]; then
+    # shellcheck disable=SC2088
     if [ -f "$BASH_ENV_FILE" ] && grep -qF '~/.local/share/nova/shell-aliases.sh' "$BASH_ENV_FILE"; then
         echo -e "  ${CHECK_MARK} ~/.bash_env already sources shell-aliases.sh"
     else
@@ -2157,41 +2337,19 @@ echo "Configuring agent_chat channel..."
 
 OPENCLAW_CONFIG="$OPENCLAW_DIR/openclaw.json"
 if [ -f "$OPENCLAW_CONFIG" ] && command -v jq &>/dev/null; then
-    # Read DB password from postgres.json (may be empty for peer auth)
-    AGENT_CHAT_PASSWORD=""
-    if [ -f "$PG_CONFIG" ]; then
-        AGENT_CHAT_PASSWORD=$(jq -r '.password // empty' "$PG_CONFIG" 2>/dev/null || true)
-    fi
-
-    jq --arg db "$DB_NAME" --arg user "$DB_USER" --arg pass "$AGENT_CHAT_PASSWORD" \
-        '.channels.agent_chat = (.channels.agent_chat // {}) * {
-            "enabled": true,
-            "database": $db,
-            "host": "localhost",
-            "port": 5432,
-            "user": $user,
-            "password": $pass
-        }' \
+    # The plugin now resolves agent_chat DB credentials from ~/.openclaw/postgres.json.
+    # Keep only the operational keys here; drop the dead connection keys that the
+    # installer used to write (and that agent_config_sync could otherwise misread).
+    jq '.channels.agent_chat |= ((. // {}) | del(.database, .host, .port, .user, .password) + {"enabled": true})' \
         "$OPENCLAW_CONFIG" >"$OPENCLAW_CONFIG.tmp" && \
         mv "$OPENCLAW_CONFIG.tmp" "$OPENCLAW_CONFIG" && \
-        echo -e "  ${CHECK_MARK} Configured channels.agent_chat (db=$DB_NAME, user=$DB_USER)" || \
+        echo -e "  ${CHECK_MARK} Configured channels.agent_chat (connection keys removed, enabled=true)" || \
         echo -e "  ${WARNING} Could not configure agent_chat channel"
 
-    jq --arg db "$DB_NAME" --arg user "$DB_USER" --arg pass "$AGENT_CHAT_PASSWORD" \
-        '.plugins.entries.agent_chat = (.plugins.entries.agent_chat // {}) * {
-            "enabled": true,
-            "config": ((.plugins.entries.agent_chat.config // {}) * {
-                "database": $db,
-                "host": "localhost",
-                "port": 5432,
-                "user": $user,
-                "password": $pass,
-                "routeToSession": "main"
-            })
-        }' \
+    jq '.plugins.entries.agent_chat |= (. + {"enabled": true} | .config |= ((. // {}) | del(.database, .host, .port, .user, .password) + {"routeToSession": "main"}))' \
         "$OPENCLAW_CONFIG" >"$OPENCLAW_CONFIG.tmp" && \
         mv "$OPENCLAW_CONFIG.tmp" "$OPENCLAW_CONFIG" && \
-        echo -e "  ${CHECK_MARK} Configured plugins.entries.agent_chat (db=$DB_NAME, user=$DB_USER)" || \
+        echo -e "  ${CHECK_MARK} Configured plugins.entries.agent_chat (connection keys removed, routeToSession=main)" || \
         echo -e "  ${WARNING} Could not configure agent_chat plugin"
 else
     echo -e "  ${WARNING} Cannot configure agent_chat (missing config or jq)"

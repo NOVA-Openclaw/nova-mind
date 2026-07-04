@@ -177,7 +177,7 @@ The `memory_type_priorities` table controls which memory types surface first dur
 | tasks | 1.20 | Active work items |
 | entity_fact | 1.00 | Baseline — entity knowledge |
 | daily_log | 0.90 | Recent session history |
-| agent_chat | 0.70 | Inter-agent messages (often verbose) |
+| agent_chat | 0.70 | Inter-agent messages (often verbose). **Note (#320):** the trigger that embedded new `agent_chat` messages was dropped when `agent_chat` moved to its own dedicated database (cross-database triggers aren't supported); this priority weight currently only affects any embeddings from before that migration. See `memory/docs/semantic-search-guide.md`. |
 
 Semantic search results are scored as `vector_similarity × priority_weight`. Adjust priorities via:
 ```sql

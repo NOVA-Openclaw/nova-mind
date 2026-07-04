@@ -1,13 +1,26 @@
 /**
- * pg-env.ts — Centralized PostgreSQL config loader for TypeScript/Node.js.
+ * pg-env.ts — Centralized PostgreSQL config loader for TypeScript/Node.js
+ * with optional nested-section support.
  *
- * Resolution order: ENV vars → ~/.openclaw/postgres.json → defaults
- * Issue: nova-memory #94, nova-mind #330
+ * Resolution order: ENV vars → section → ~/.openclaw/postgres.json (flat keys) → defaults
+ * Issue: nova-memory #94, nova-mind #330, nova-mind #320
  */
 
 import { readFileSync } from "fs";
 import { homedir, userInfo } from "os";
 import { join } from "path";
+
+/**
+ * PostgreSQL connection options interface that matches
+ * the pg.Client constructor options.
+ */
+export interface PgConnectionConfig {
+  host?: string;
+  port?: number;
+  database?: string;
+  user?: string;
+  password?: string;
+}
 
 interface PgConfig {
   host?: string | null;
@@ -15,9 +28,10 @@ interface PgConfig {
   database?: string | null;
   user?: string | null;
   password?: string | null;
+  [key: string]: unknown;
 }
 
-const FIELD_MAP: Array<[keyof PgConfig, string]> = [
+const FIELD_MAP: Array<[keyof PgConnectionConfig, string]> = [
   ["host", "PGHOST"],
   ["port", "PGPORT"],
   ["database", "PGDATABASE"],
@@ -32,19 +46,7 @@ const DEFAULTS: Record<string, string | (() => string)> = {
 };
 
 /**
- * PostgreSQL connection options interface that matches
- * the pg.Client constructor options.
- */
-export interface PgConnectionConfig {
-  host?: string;
-  port?: number;
-  database?: string;
-  user?: string;
-  password?: string;
-}
-
-/**
- * Load PostgreSQL config with resolution: ENV → config file → defaults.
+ * Load PostgreSQL config with resolution: ENV → section → config file → defaults.
  *
  * Returns connection config object suitable for pg.Client / pg.Pool constructor,
  * without modifying process.env to avoid pollution of the environment
@@ -52,9 +54,13 @@ export interface PgConnectionConfig {
  * Empty ENV strings are treated as unset.
  * Null values in JSON are treated as absent.
  * Malformed JSON is caught and warned about (falls through to defaults).
+ *
+ * If `section` is provided and the parsed config contains a valid object for that
+ * key, section fields take precedence over top-level keys (ENV still wins).
  */
 export function loadPgEnv(
-  configPath?: string
+  configPath?: string,
+  section?: string
 ): PgConnectionConfig {
   const cfgPath =
     configPath ?? join(homedir(), ".openclaw", "postgres.json");
@@ -81,6 +87,20 @@ export function loadPgEnv(
     }
   }
 
+  // Resolve nested section if requested. A non-object section mirrors the
+  // top-level object-type guard: warn and fall back to top-level keys.
+  let sectionConfig: PgConfig | undefined;
+  if (section) {
+    const sectionValue = config[section];
+    if (sectionValue && typeof sectionValue === "object" && !Array.isArray(sectionValue)) {
+      sectionConfig = sectionValue as PgConfig;
+    } else if (sectionValue !== undefined) {
+      console.error(
+        `WARNING: ${cfgPath}.${section} is not a JSON object, ignoring`
+      );
+    }
+  }
+
   const result: PgConnectionConfig = {};
 
   for (const [jsonKey, envVar] of FIELD_MAP) {
@@ -96,7 +116,24 @@ export function loadPgEnv(
       continue;
     }
 
-    // 2. Check config file (null/undefined = absent, empty string = absent)
+    // 2. Check section config (null/undefined = absent, empty string = absent)
+    if (sectionConfig) {
+      const sectionVal = sectionConfig[jsonKey];
+      if (sectionVal != null) {
+        const strVal = String(sectionVal);
+        if (strVal) {
+          if (jsonKey === "port") {
+            const portNum = Number(strVal);
+            if (!isNaN(portNum)) result[jsonKey] = portNum;
+          } else {
+            result[jsonKey] = strVal;
+          }
+          continue;
+        }
+      }
+    }
+
+    // 3. Check top-level config file (null/undefined = absent, empty string = absent)
     const cfgVal = config[jsonKey];
     if (cfgVal != null) {
       const strVal = String(cfgVal);
@@ -111,7 +148,7 @@ export function loadPgEnv(
       }
     }
 
-    // 3. Apply default
+    // 4. Apply default
     const def = DEFAULTS[envVar];
     if (def !== undefined) {
       const defaultVal = typeof def === "function" ? def() : def;

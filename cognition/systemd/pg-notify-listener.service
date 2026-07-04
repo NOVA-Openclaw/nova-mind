@@ -1,0 +1,15 @@
+[Unit]
+Description=PostgreSQL Notify Listener (%u)
+After=network.target postgresql.service
+
+[Service]
+Type=simple
+ExecStart=%h/.local/share/%u/venv/bin/python %h/.openclaw/workspace/scripts/pg-notify-listener.py
+WorkingDirectory=%h/.openclaw/workspace/scripts
+StandardOutput=append:%h/.openclaw/workspace/logs/pg-notify-listener.log
+StandardError=append:%h/.openclaw/workspace/logs/pg-notify-listener.log
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

@@ -99,7 +99,7 @@ OpenClaw heartbeat fires
   → Bootstrap context loads HEARTBEAT.md
   → NOVA runs proactive-gate-check.py    ← deterministic, no LLM
       → reads sessions.json              ← idle check
-      → queries nova_memory DB           ← agent_chat, tasks, entities, unsolved_problems
+      → queries nova_memory + agent_chat DBs ← agent_chat (own DB, #320), tasks, entities, unsolved_problems
       → reads state files                ← heartbeat-state.json, memory-maintenance-last-run.json
       → calls gh CLI                     ← open GitHub issues
       → reads sessions.json + JSONL      ← unanswered user messages
@@ -116,7 +116,8 @@ owns that role entirely — the LLM only sees the output, never the gate logic.
 | Source | What It Checks |
 |--------|----------------|
 | `~/.openclaw/agents/nova/sessions/sessions.json` | Idle detection (last interaction timestamp across user-facing sessions) |
-| PostgreSQL `nova_memory` | `agent_chat` unacknowledged messages, `tasks` (pending/unblocked), `entities` dedup candidates, `unsolved_problems` |
+| PostgreSQL `nova_memory` | `tasks` (pending/unblocked), `entities` dedup candidates, `unsolved_problems` |
+| PostgreSQL `agent_chat` (dedicated DB, #320) | `agent_chat` unacknowledged messages — `proactive-gate-check.py` resolves this connection via `load_pg_env(section="agent_chat")` (see `memory/docs/database-config.md`), separately from the `nova_memory` connection above |
 | `~/.openclaw/workspace/memory/heartbeat-state.json` | Introspection state (last run timestamp, daily log line count, session transcript bytes) |
 | `~/.openclaw/state/memory-maintenance-last-run.json` | Memory maintenance cooldown state |
 | `~/.openclaw/workspace/.last-fs-audit` | Filesystem audit staleness marker |

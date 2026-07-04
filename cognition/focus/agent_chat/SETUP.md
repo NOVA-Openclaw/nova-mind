@@ -1,5 +1,12 @@
 # Quick Setup Guide
 
+> **As of #320:** `agent_chat` lives in its own dedicated PostgreSQL database (named
+> `agent_chat`), not in the same database as the rest of nova-memory. If you are
+> setting up via the unified `agent-install.sh` installer, steps 2–3 below are handled
+> automatically (schema application via the migration tooling, and `postgres.json`
+> provisioning) — this guide documents what the installer does and how to verify or
+> reproduce it manually.
+
 ## 1. Install Dependencies
 
 ```bash
@@ -9,21 +16,19 @@ npm install
 
 ## 2. Set Up Database
 
-Connect to your PostgreSQL database and run the schema:
+Create the dedicated `agent_chat` database and apply its schema (see
+`scripts/agent-chat-migration/README.md` for the full migration runbook if migrating
+an existing installation):
 
 ```bash
-psql -h localhost -U <db_user> -d <database_name> -f schema.sql
+createdb agent_chat
+psql -h localhost -U <db_user> -d agent_chat -f database/agent-chat/schema.sql
 ```
 
-Or manually:
-
-```sql
--- See schema.sql for full details
-CREATE TABLE agent_chat (...);
-CREATE TABLE agent_chat_processed (...);
-CREATE FUNCTION notify_agent_chat() ...;
-CREATE TRIGGER agent_chat_notify ...;
-```
+The canonical schema (tables, `send_agent_message()`, triggers, views, grants) lives
+in `database/agent-chat/schema.sql` at the repo root — not in this directory's local
+`schema.sql`, which predates the dedicated-database design and is kept only for
+historical/local-dev reference.
 
 ### Required Permissions
 
@@ -37,26 +42,47 @@ GRANT SELECT, INSERT ON agent_chat TO <db_user>;
 GRANT USAGE, SELECT ON SEQUENCE agent_chat_id_seq TO <db_user>;
 ```
 
+(`database/agent-chat/schema.sql` already grants the full matrix for all
+nova-ecosystem roles; the above is for a manually-added user.)
+
 ## 3. Configure OpenClaw
 
-Edit your `openclaw.json` (or equivalent config):
+Connection details for `agent_chat` are **not** set in `openclaw.json`. They are
+resolved from the nested `agent_chat` section of `~/.openclaw/postgres.json`:
+
+```json
+{
+  "host": "localhost",
+  "port": 5432,
+  "database": "nova_memory",
+  "user": "<db_user>",
+  "password": "<db_password>",
+  "agent_chat": {
+    "database": "agent_chat",
+    "user": "<db_user>",
+    "password": "<db_password>"
+  }
+}
+```
+
+`agent-install.sh` writes/merges this nested section automatically and is idempotent
+(re-running reports the section is already correct — no clobber of existing values).
+
+Then in `openclaw.json`, enable the channel (no connection keys here):
 
 ```json
 {
   "channels": {
     "agent_chat": {
-      "enabled": true,
-      "database": "<database_name>",
-      "host": "localhost",
-      "port": 5432,
-      "user": "<db_user>",
-      "password": "<db_password>"
+      "enabled": true
     }
   }
 }
 ```
 
-**Important:** The `password` field must not be empty. The plugin's configuration check requires a truthy password value. Store credentials securely using your preferred secrets management solution.
+**Important:** `database`/`host`/`port`/`user`/`password` under `channels.agent_chat`
+are no longer read by the plugin — `agent-install.sh` strips them on install/upgrade.
+Store the password securely; the `postgres.json` file should be mode `600`.
 
 See `example-config.yaml` for more options.
 
@@ -93,9 +119,10 @@ The agent should receive and respond to the message.
 
 ### Database connection errors
 
-- Verify credentials work via TCP: `psql -h localhost -U <db_user> -d <database_name>`
-- Check that database and tables exist
-- Ensure your password is non-empty in the config
+- Verify credentials work via TCP: `psql -h localhost -U <db_user> -d agent_chat`
+- Check that the `agent_chat` database and its tables exist (`\dt` should show `agent_chat`, `agent_chat_processed`)
+- Confirm the nested `agent_chat` section in `~/.openclaw/postgres.json` has a non-empty `password`
+- Run `scripts/agent-chat-migration/audit_rollout.py` to check which database a given agent's config actually resolves to
 
 ### Messages not received
 

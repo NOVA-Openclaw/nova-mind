@@ -52,18 +52,36 @@ CREATE TABLE agents (
     updated_at TIMESTAMPTZ DEFAULT now()
 );
 
--- Inter-agent communication
--- Column history (#106): mentions → recipients, created_at → "timestamp", channel dropped
--- All inserts via send_agent_message(sender, message, recipients)
-CREATE TABLE agent_chat (
-    id          SERIAL PRIMARY KEY,
-    sender      TEXT NOT NULL,
-    message     TEXT NOT NULL,
-    recipients  TEXT[] NOT NULL CHECK (array_length(recipients, 1) > 0),
-    reply_to    INTEGER REFERENCES agent_chat(id),
-    "timestamp" TIMESTAMPTZ NOT NULL DEFAULT now()
-);
 ```
+
+> **`agent_chat` lives in its own database (#320), not here.** As of the #320
+> migration, `agent_chat` and `agent_chat_processed` are NOT part of the main
+> memory database above — they live in a separate, dedicated `agent_chat`
+> database on the same PostgreSQL instance. Create and schema it separately:
+>
+> ```bash
+> createdb agent_chat
+> psql -d agent_chat -f database/agent-chat/schema.sql
+> ```
+>
+> See `scripts/agent-chat-migration/README.md` for the full migration runbook
+> (including grants, sequence alignment, and rollout) and
+> `memory/docs/database-config.md` for how agents resolve which database to
+> connect to. The table shape itself (columns, `send_agent_message()` as the only
+> insert path, column history from #106) is unchanged by the database move:
+>
+> ```sql
+> -- Column history (#106): mentions → recipients, created_at → "timestamp", channel dropped
+> -- All inserts via send_agent_message(sender, message, recipients)
+> CREATE TABLE agent_chat (
+>     id          SERIAL PRIMARY KEY,
+>     sender      TEXT NOT NULL,
+>     message     TEXT NOT NULL,
+>     recipients  TEXT[] NOT NULL CHECK (array_length(recipients, 1) > 0),
+>     reply_to    INTEGER REFERENCES agent_chat(id),
+>     "timestamp" TIMESTAMPTZ NOT NULL DEFAULT now()
+> );
+> ```
 
 ## Step 2: OpenClaw Configuration
 
@@ -116,7 +134,7 @@ In `~/.openclaw/openclaw.json`, add agents to the `agents.list` array:
 1. **Primary agent** must have `subagents.allowAgents` listing spawnable agents
 2. **Each subagent** needs an entry in `agents.list` with at least `id` and `model`
 3. **Fallbacks** are optional but recommended for reliability
-4. **Agent chat requires dual config** — both `channels.agent_chat` and `plugins.entries.agent_chat.config` must contain the database connection details. The `agent-install.sh` script handles this automatically, but manual setups must configure both or the gateway will fail plugin validation
+4. **Agent chat connection details do NOT live in `openclaw.json` (as of #320)** — `channels.agent_chat` and `plugins.entries.agent_chat.config` should be config-free of `database`/`host`/`port`/`user`/`password`; `agent-install.sh` actively strips those keys if present. The plugin resolves its connection from the nested `agent_chat` section of `~/.openclaw/postgres.json` instead (see `memory/docs/database-config.md`). Manual setups must provision that `postgres.json` section rather than the `openclaw.json` config keys
 
 ## Step 3: Workspace Setup
 
@@ -193,18 +211,28 @@ sessions_spawn(agentId="scout", task="Test: confirm you can spawn and respond")
 
 ## Advanced Configuration
 
-### Cross-Database Replication
+### Cross-Database Replication (superseded by #320 for `agent_chat`)
 
-For setups where agents use separate databases but need to share message history, see the [Cross-Database Replication Guide](cross-database-replication.md). This covers:
-
-- PostgreSQL logical replication setup
-- Trigger configuration for replicated data  
-- Automatic detection and configuration via `agent-install.sh`
-
-> **Note:** `agent-install.sh` configures both `channels.agent_chat` (channel definition) and `plugins.entries.agent_chat.config` (plugin configuration) with identical connection details. Both are required — the gateway validates plugin config separately from channel config.
-- Troubleshooting replication issues
-
-Example: Graybeard agent using `graybeard_memory` database while replicating messages from `nova_memory`.
+> **This section describes a pre-#320 architecture.** Logical replication of
+> `agent_chat` between per-agent memory databases (e.g. `nova_memory` ↔
+> `graybeard_memory`) has been **superseded** by the #320 shared dedicated
+> `agent_chat` database design — all agents now connect to the same `agent_chat`
+> database directly, so there is nothing to replicate for that table anymore.
+> `agent-install.sh` no longer configures `agent_chat` replication (see the
+> "agent_chat runtime configuration" section of `agent-install.sh` itself, which
+> notes the shared-DB design supersedes it). The [Cross-Database Replication
+> Guide](cross-database-replication.md) is kept for historical reference and in
+> case other tables still need cross-database replication in some deployments,
+> but do **not** follow it for `agent_chat` on a #320-or-later install. It
+> previously covered:
+>
+> - PostgreSQL logical replication setup
+> - Trigger configuration for replicated data
+> - Automatic detection and configuration via `agent-install.sh` (no longer true for `agent_chat`)
+> - Troubleshooting replication issues
+>
+> (Prior example: Graybeard agent using `graybeard_memory` database while
+> replicating `agent_chat` messages from `nova_memory` — no longer how this works.)
 
 ## Next Steps
 

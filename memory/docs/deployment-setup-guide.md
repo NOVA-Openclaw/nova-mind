@@ -303,10 +303,12 @@ openclaw plugins enable agent-chat-channel
 
 ### 2. Configure NOTIFY/LISTEN
 
+> **As of nova-mind#320, `agent_chat` lives in its own dedicated `agent_chat` database, not `nova_memory`.** Every `psql` command in this section (and the rest of this guide's `agent_chat` references) must target that database explicitly — e.g. `psql -d agent_chat -c ...` — rather than relying on the default connection database used elsewhere in this guide. See `memory/docs/database-config.md` and `scripts/agent-chat-migration/README.md`.
+
 PostgreSQL configuration for inter-agent messaging:
 
 ```sql
--- Verify NOTIFY works
+-- Verify NOTIFY works (run against the agent_chat database)
 NOTIFY agent_chat, 'test message';
 
 -- Check for listening connections
@@ -316,11 +318,11 @@ SELECT * FROM pg_stat_activity WHERE state = 'idle in transaction';
 ### 3. Test Inter-Agent Communication
 
 ```bash
-# Terminal 1: Start listener
-psql -c "LISTEN agent_chat;"
+# Terminal 1: Start listener (against the agent_chat database)
+psql -d agent_chat -c "LISTEN agent_chat;"
 
 # Terminal 2: Send message via send_agent_message() (direct INSERT is blocked)
-psql -c "SELECT send_agent_message('nova', 'Hello world', ARRAY['test_agent']);"
+psql -d agent_chat -c "SELECT send_agent_message('nova', 'Hello world', ARRAY['test_agent']);"
 ```
 
 ## Performance Optimization
@@ -332,6 +334,8 @@ psql -c "SELECT send_agent_message('nova', 'Hello world', ARRAY['test_agent']);"
 CREATE INDEX CONCURRENTLY idx_entities_name ON entities(name);
 CREATE INDEX CONCURRENTLY idx_entity_facts_entity_id ON entity_facts(entity_id);
 CREATE INDEX CONCURRENTLY idx_events_date ON events(date);
+-- agent_chat lives in the dedicated agent_chat database (#320); run this one
+-- against `-d agent_chat`, not alongside the other indexes above.
 CREATE INDEX CONCURRENTLY idx_agent_chat_recipients ON agent_chat USING gin(recipients);
 
 -- Update table statistics
@@ -412,7 +416,11 @@ fi
 
 # Schema integrity
 echo -n "Schema integrity: "
-EXPECTED_TABLES=("entities" "entity_facts" "projects" "agents" "agent_chat" "sops" "lessons")
+# NOTE (#320): agent_chat now lives in its own dedicated `agent_chat` database,
+# not in nova_memory. It is intentionally excluded from EXPECTED_TABLES below
+# since this health check runs against the default (nova_memory) connection.
+# To also check agent_chat, run a separate `psql -d agent_chat -c '\dt agent_chat'`.
+EXPECTED_TABLES=("entities" "entity_facts" "projects" "agents" "sops" "lessons")
 MISSING_TABLES=()
 
 for table in "${EXPECTED_TABLES[@]}"; do
@@ -481,17 +489,15 @@ UNION ALL
 SELECT 'events', COUNT(*), 
        COUNT(*) FILTER (WHERE created_at > NOW() - INTERVAL '24 hours'),
        COUNT(*) FILTER (WHERE created_at > NOW() - INTERVAL '1 hour')
-FROM events
-UNION ALL  
-SELECT 'agent_chat', COUNT(*),
-       COUNT(*) FILTER (WHERE "timestamp" > NOW() - INTERVAL '24 hours'),
-       COUNT(*) FILTER (WHERE "timestamp" > NOW() - INTERVAL '1 hour')
-FROM agent_chat;
+FROM events;
+-- NOTE (#320): the `agent_chat` UNION branch that used to appear here has been
+-- removed -- agent_chat now lives in its own dedicated `agent_chat` database and
+-- can no longer be UNIONed into a view running against nova_memory. Query its
+-- stats separately, against the agent_chat database:
+--   psql -d agent_chat -c "SELECT * FROM v_agent_chat_stats;"
 
--- Query system health
+-- Query system health (nova_memory only)
 SELECT * FROM system_stats;
--- Or use the built-in view:
-SELECT * FROM v_agent_chat_stats;
 ```
 
 ## Security Configuration

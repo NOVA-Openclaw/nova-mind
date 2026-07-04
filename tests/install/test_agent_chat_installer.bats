@@ -13,6 +13,11 @@ BATS_TEST_DIRNAME="$(cd "$(dirname "$BATS_TEST_FILENAME")" && pwd)"
 REPO_ROOT="$(cd "$BATS_TEST_DIRNAME/../.." && pwd)"
 INSTALLER="$REPO_ROOT/agent-install.sh"
 
+# Mirrors the status symbols used by agent-install.sh so the inline helpers
+# produce familiar output without sourcing the whole script.
+CHECK_MARK="✅"
+WARNING="⚠️"
+
 # Inline copies of the helper functions under test.  They are isolated here so
 # the test does not have to source the entire installer (which executes script
 # body code on source).
@@ -57,19 +62,70 @@ _ensure_agent_chat_postgres_json() {
         return 1
     fi
 
-    local already_correct
-    already_correct=$(jq --arg db "$database" --arg user "$user" --arg pass "$password" \
-        '(.agent_chat // {}) | {database, user, password} == {database: $db, user: $user, password: $pass}' \
-        "$pg_config" 2>/dev/null || echo "false")
-    if [ "$already_correct" = "true" ]; then
+    local new_json
+    new_json=$(jq --arg db "$database" --arg user "$user" --arg pass "$password" \
+        'if (.agent_chat // null) | type == "object" then
+            .agent_chat |= . + {
+                database: (.database // $db),
+                user: (.user // $user),
+                password: (.password // $pass)
+            }
+         else
+            .agent_chat = {"database": $db, "user": $user, "password": $pass}
+         end' "$pg_config" 2>/dev/null) || return 1
+
+    # Only write if something changed.
+    if [ "$(printf '%s\n' "$new_json" | jq -Sc .)" = "$(jq -Sc . < "$pg_config")" ]; then
         return 1
     fi
 
-    jq --arg db "$database" --arg user "$user" --arg pass "$password" \
-        '.agent_chat = {"database": $db, "user": $user, "password": $pass}' \
-        "$pg_config" >"${pg_config}.tmp" && \
+    printf '%s\n' "$new_json" >"${pg_config}.tmp" && \
         mv "${pg_config}.tmp" "$pg_config" && \
         chmod 600 "$pg_config"
+}
+
+_install_pg_notify_listener() {
+    local source_script="$1"
+    local source_service="$2"
+    local target_dir="$3"
+    local service_dir="$4"
+    local logs_dir="$5"
+
+    if [ ! -f "$source_script" ] || [ ! -f "$source_service" ]; then
+        echo -e "  ${WARNING} pg-notify-listener source files not found (skipping)"
+        return 1
+    fi
+
+    mkdir -p "$target_dir"
+    mkdir -p "$service_dir"
+    mkdir -p "$logs_dir"
+
+    cp "$source_script" "$target_dir/pg-notify-listener.py"
+    chmod +x "$target_dir/pg-notify-listener.py"
+    echo -e "  ${CHECK_MARK} Installed pg-notify-listener.py → $target_dir"
+
+    cp "$source_service" "$service_dir/pg-notify-listener.service"
+    echo -e "  ${CHECK_MARK} Installed pg-notify-listener.service → $service_dir"
+
+    if command -v systemctl &>/dev/null; then
+        systemctl --user daemon-reload
+        if systemctl --user is-active pg-notify-listener.service &>/dev/null; then
+            if systemctl --user restart pg-notify-listener.service; then
+                echo -e "  ${CHECK_MARK} Restarted pg-notify-listener.service"
+            else
+                echo -e "  ${WARNING} pg-notify-listener.service restart failed"
+            fi
+        else
+            if systemctl --user enable pg-notify-listener.service &>/dev/null && \
+               systemctl --user start pg-notify-listener.service; then
+                echo -e "  ${CHECK_MARK} Enabled and started pg-notify-listener.service"
+            else
+                echo -e "  ${WARNING} pg-notify-listener.service enable/start failed"
+            fi
+        fi
+    else
+        echo -e "  ${WARNING} systemctl not available — service not started"
+    fi
 }
 
 setup() {
@@ -166,6 +222,54 @@ EOF
     [ "$status" -eq 1 ]
 }
 
+@test "agent_chat: merges missing keys without clobbering existing section" {
+    local pg_config="$FAKE_HOME/postgres.json"
+    cat > "$pg_config" <<'EOF'
+{
+  "host": "localhost",
+  "database": "nova_memory",
+  "user": "nova",
+  "password": "secret1",
+  "agent_chat": {
+    "database": "agent_chat",
+    "user": "nova"
+  }
+}
+EOF
+
+    run _ensure_agent_chat_postgres_json "$pg_config" "agent_chat" "nova" "secret1"
+    [ "$status" -eq 0 ]
+
+    [ "$(jq -r '.agent_chat.database' "$pg_config")" = "agent_chat" ]
+    [ "$(jq -r '.agent_chat.user' "$pg_config")" = "nova" ]
+    [ "$(jq -r '.agent_chat.password' "$pg_config")" = "secret1" ]
+    [ "$(jq -r '.database' "$pg_config")" = "nova_memory" ]
+}
+
+@test "agent_chat: preserves existing section with different password (no clobber)" {
+    local pg_config="$FAKE_HOME/postgres.json"
+    cat > "$pg_config" <<'EOF'
+{
+  "host": "localhost",
+  "database": "nova_memory",
+  "user": "nova",
+  "password": "secret1",
+  "agent_chat": {
+    "database": "agent_chat",
+    "user": "nova",
+    "password": "manual-password",
+    "host": "db.internal"
+  }
+}
+EOF
+
+    run _ensure_agent_chat_postgres_json "$pg_config" "agent_chat" "nova" "secret1"
+    [ "$status" -eq 1 ]
+
+    [ "$(jq -r '.agent_chat.password' "$pg_config")" = "manual-password" ]
+    [ "$(jq -r '.agent_chat.host' "$pg_config")" = "db.internal" ]
+}
+
 # ─── TC-67 ──────────────────────────────────────────────────────────────────
 
 @test "TC-67: openclaw.json dead connection keys removed, live keys preserved" {
@@ -221,6 +325,71 @@ EOF
     [ "$(jq -r '.plugins.entries.agent_chat.config.password' "$config")" = "null" ]
 }
 
+# ─── pg-notify-listener deployment ─────────────────────────────────────────
+
+@test "TC-listener: installs script, service unit, and starts service" {
+    local fake_bin="$FAKE_HOME/bin"
+    local calls_log="$FAKE_HOME/systemctl-calls.log"
+    mkdir -p "$fake_bin"
+
+    # The installer redirects stdout of some systemctl calls, so append to a
+    # fixed log file directly rather than relying on stdout capture.
+    cat > "$fake_bin/systemctl" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$calls_log"
+if [ "\$2" = "is-active" ]; then
+    exit 1
+fi
+exit 0
+EOF
+    chmod +x "$fake_bin/systemctl"
+
+    local src_dir="$FAKE_HOME/src"
+    local tgt_dir="$FAKE_HOME/scripts"
+    local svc_dir="$FAKE_HOME/systemd/user"
+    local logs_dir="$FAKE_HOME/logs"
+    mkdir -p "$src_dir"
+    printf '#!/usr/bin/env python3\nprint("listen")\n' > "$src_dir/pg-notify-listener.py"
+    printf '[Service]\nExecStart=python listener.py\n' > "$src_dir/pg-notify-listener.service"
+
+    PATH="$fake_bin:$PATH" run _install_pg_notify_listener \
+        "$src_dir/pg-notify-listener.py" \
+        "$src_dir/pg-notify-listener.service" \
+        "$tgt_dir" "$svc_dir" "$logs_dir"
+    [ "$status" -eq 0 ]
+
+    [ -x "$tgt_dir/pg-notify-listener.py" ]
+    [ -f "$svc_dir/pg-notify-listener.service" ]
+    [ -d "$logs_dir" ]
+
+    grep -qxF -- "--user daemon-reload" "$calls_log"
+    grep -qxF -- "--user is-active pg-notify-listener.service" "$calls_log"
+    grep -qxF -- "--user enable pg-notify-listener.service" "$calls_log"
+    grep -qxF -- "--user start pg-notify-listener.service" "$calls_log"
+}
+
+@test "TC-listener: skips install when source files are missing" {
+    local tgt_dir="$FAKE_HOME/scripts"
+    local svc_dir="$FAKE_HOME/systemd/user"
+    local logs_dir="$FAKE_HOME/logs"
+
+    run _install_pg_notify_listener \
+        "$FAKE_HOME/no-such-script.py" \
+        "$FAKE_HOME/no-such.service" \
+        "$tgt_dir" "$svc_dir" "$logs_dir"
+    [ "$status" -eq 1 ]
+
+    [ ! -f "$tgt_dir/pg-notify-listener.py" ]
+    [ ! -f "$svc_dir/pg-notify-listener.service" ]
+}
+
+@test "TC-listener: pg-notify-listener.py imports pg_env from installed lib" {
+    local listener="$REPO_ROOT/cognition/scripts/pg-notify-listener.py"
+    grep -q 'sys.path.insert.*\.openclaw.*lib' "$listener"
+    run grep -qF 'openclaw/workspace/nova-mind/lib' "$listener"
+    [ "$status" -ne 0 ]
+}
+
 # ─── TC-68-adjacent / ordering / static checks ─────────────────────────────
 
 @test "TC-68-adjacent: installer derives agent_chat DB from postgres.json" {
@@ -235,6 +404,26 @@ EOF
     [ -n "$sync_line" ]
     [ -n "$chat_line" ]
     [ "$sync_line" -lt "$chat_line" ]
+}
+
+@test "Ordering: agent_chat DB config is provisioned before extension build" {
+    local config_line
+    local build_line
+    config_line=$(grep -n "PostgreSQL password file and agent_chat DB config" "$INSTALLER" | head -1 | cut -d: -f1)
+    build_line=$(grep -n "Building agent_chat TypeScript" "$INSTALLER" | head -1 | cut -d: -f1)
+    [ -n "$config_line" ]
+    [ -n "$build_line" ]
+    [ "$config_line" -lt "$build_line" ]
+}
+
+@test "Ordering: pg-notify-listener is deployed before extension build" {
+    local listener_line
+    local build_line
+    listener_line=$(grep -n "PostgreSQL NOTIFY listener" "$INSTALLER" | head -1 | cut -d: -f1)
+    build_line=$(grep -n "Building agent_chat TypeScript" "$INSTALLER" | head -1 | cut -d: -f1)
+    [ -n "$listener_line" ]
+    [ -n "$build_line" ]
+    [ "$listener_line" -lt "$build_line" ]
 }
 
 @test "agent-install.sh passes bash -n" {

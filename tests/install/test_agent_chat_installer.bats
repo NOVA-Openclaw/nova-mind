@@ -106,9 +106,9 @@ teardown() {
 # ─── TC-64 ──────────────────────────────────────────────────────────────────
 
 @test "TC-64: .pgpass provisioning is idempotent — no duplicate lines" {
-    _ensure_pgpass_entry "localhost" "5432" "agent_chat" "nova" "secret1"
-    _ensure_pgpass_entry "localhost" "5432" "agent_chat" "nova" "secret1"
-    _ensure_pgpass_entry "localhost" "5432" "agent_chat" "nova" "secret1"
+    run _ensure_pgpass_entry "localhost" "5432" "agent_chat" "nova" "secret1"
+    run _ensure_pgpass_entry "localhost" "5432" "agent_chat" "nova" "secret1"
+    run _ensure_pgpass_entry "localhost" "5432" "agent_chat" "nova" "secret1"
 
     local count
     count=$(grep -cF "localhost:5432:agent_chat:nova:secret1" "$PGPASS_FILE" || true)
@@ -224,7 +224,7 @@ EOF
 # ─── TC-68-adjacent / ordering / static checks ─────────────────────────────
 
 @test "TC-68-adjacent: installer derives agent_chat DB from postgres.json" {
-    grep -q "agent_chat_db=.*jq -r '.agent_chat.database'" "$INSTALLER"
+    grep -q "agent_chat_db=.*jq -r '.agent_chat.database" "$INSTALLER"
 }
 
 @test "Ordering: agent_config_sync is configured before agent_chat channel cleanup" {

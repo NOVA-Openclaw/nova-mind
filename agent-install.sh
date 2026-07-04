@@ -155,7 +155,10 @@ _ensure_pgpass_entry() {
 
 # Write the nested agent_chat section to ~/.openclaw/postgres.json.
 # Host/port fall back to the flat keys at runtime, so only database/user/password
-# are written in the nested block.
+# are written in the nested block.  Idempotent: if the section already exists as
+# an object, missing keys are merged in and existing keys are preserved (no
+# clobber).  If it is missing or not an object, the section is created from the
+# supplied values.
 _ensure_agent_chat_postgres_json() {
     local pg_config="$1"
     local database="$2"
@@ -166,19 +169,72 @@ _ensure_agent_chat_postgres_json() {
         return 1
     fi
 
-    local already_correct
-    already_correct=$(jq --arg db "$database" --arg user "$user" --arg pass "$password" \
-        '(.agent_chat // {}) | {database, user, password} == {database: $db, user: $user, password: $pass}' \
-        "$pg_config" 2>/dev/null || echo "false")
-    if [ "$already_correct" = "true" ]; then
+    local new_json
+    new_json=$(jq --arg db "$database" --arg user "$user" --arg pass "$password" \
+        'if (.agent_chat // null) | type == "object" then
+            .agent_chat |= . + {
+                database: (.database // $db),
+                user: (.user // $user),
+                password: (.password // $pass)
+            }
+         else
+            .agent_chat = {"database": $db, "user": $user, "password": $pass}
+         end' "$pg_config" 2>/dev/null) || return 1
+
+    # Only write if something changed.
+    if [ "$(printf '%s\n' "$new_json" | jq -Sc .)" = "$(jq -Sc . < "$pg_config")" ]; then
         return 1
     fi
 
-    jq --arg db "$database" --arg user "$user" --arg pass "$password" \
-        '.agent_chat = {"database": $db, "user": $user, "password": $pass}' \
-        "$pg_config" >"${pg_config}.tmp" && \
+    printf '%s\n' "$new_json" >"${pg_config}.tmp" && \
         mv "${pg_config}.tmp" "$pg_config" && \
         chmod 600 "$pg_config"
+}
+
+# Install the PostgreSQL NOTIFY listener as a systemd --user service.
+# Parameters: source_script source_service target_dir service_dir logs_dir
+_install_pg_notify_listener() {
+    local source_script="$1"
+    local source_service="$2"
+    local target_dir="$3"
+    local service_dir="$4"
+    local logs_dir="$5"
+
+    if [ ! -f "$source_script" ] || [ ! -f "$source_service" ]; then
+        echo -e "  ${WARNING} pg-notify-listener source files not found (skipping)"
+        return 1
+    fi
+
+    mkdir -p "$target_dir"
+    mkdir -p "$service_dir"
+    mkdir -p "$logs_dir"
+
+    cp "$source_script" "$target_dir/pg-notify-listener.py"
+    chmod +x "$target_dir/pg-notify-listener.py"
+    echo -e "  ${CHECK_MARK} Installed pg-notify-listener.py → $target_dir"
+
+    cp "$source_service" "$service_dir/pg-notify-listener.service"
+    echo -e "  ${CHECK_MARK} Installed pg-notify-listener.service → $service_dir"
+
+    if command -v systemctl &>/dev/null; then
+        systemctl --user daemon-reload
+        if systemctl --user is-active pg-notify-listener.service &>/dev/null; then
+            if systemctl --user restart pg-notify-listener.service; then
+                echo -e "  ${CHECK_MARK} Restarted pg-notify-listener.service"
+            else
+                echo -e "  ${WARNING} pg-notify-listener.service restart failed"
+            fi
+        else
+            if systemctl --user enable pg-notify-listener.service &>/dev/null && \
+               systemctl --user start pg-notify-listener.service; then
+                echo -e "  ${CHECK_MARK} Enabled and started pg-notify-listener.service"
+            else
+                echo -e "  ${WARNING} pg-notify-listener.service enable/start failed"
+            fi
+        fi
+    else
+        echo -e "  ${WARNING} systemctl not available — service not started"
+    fi
 }
 
 echo "  Agent DB user: $DB_USER"
@@ -1510,6 +1566,45 @@ echo ""
 echo "Agent chat schema..."
 echo -e "  ${INFO} agent_chat bus is a dedicated database; trigger/schema config lives in database/agent-chat/schema.sql"
 
+# --- Configure PostgreSQL password file and agent_chat DB config ---
+echo ""
+echo "PostgreSQL password file and agent_chat DB config..."
+
+if [ -n "${PGPASSWORD:-}" ]; then
+    pgpass_changed=0
+    _ensure_pgpass_entry "localhost" "5432" "$DB_NAME" "$DB_USER" "$PGPASSWORD" && pgpass_changed=1
+    _ensure_pgpass_entry "127.0.0.1" "5432" "$DB_NAME" "$DB_USER" "$PGPASSWORD" && pgpass_changed=1
+    _ensure_pgpass_entry "localhost" "5432" "$AGENT_CHAT_DB_NAME" "$DB_USER" "$PGPASSWORD" && pgpass_changed=1
+    _ensure_pgpass_entry "127.0.0.1" "5432" "$AGENT_CHAT_DB_NAME" "$DB_USER" "$PGPASSWORD" && pgpass_changed=1
+    if [ "$pgpass_changed" -eq 1 ]; then
+        echo -e "  ${CHECK_MARK} Updated ~/.pgpass with memory and agent_chat DB entries"
+    else
+        echo -e "  ${CHECK_MARK} ~/.pgpass entries already correct"
+    fi
+else
+    echo -e "  ${WARNING} PGPASSWORD not set — skipping ~/.pgpass provisioning"
+fi
+
+if _ensure_agent_chat_postgres_json "$PG_CONFIG" "$AGENT_CHAT_DB_NAME" "$DB_USER" "${PGPASSWORD:-}"; then
+    echo -e "  ${CHECK_MARK} Wrote nested agent_chat section to $PG_CONFIG"
+else
+    echo -e "  ${CHECK_MARK} Nested agent_chat section already correct in $PG_CONFIG (or could not update)"
+fi
+
+# --- PostgreSQL NOTIFY listener ---
+# Local listener that reacts to postgres channels (schema_changed, gambling_changed,
+# etc.). Runs as a systemd --user service under the installing unix account so it
+# authenticates with that account's DB role. Issue: nova-mind #320 / #251.
+echo ""
+echo "PostgreSQL NOTIFY listener..."
+
+_install_pg_notify_listener \
+    "$SCRIPT_DIR/cognition/scripts/pg-notify-listener.py" \
+    "$SCRIPT_DIR/cognition/systemd/pg-notify-listener.service" \
+    "$HOME/.openclaw/workspace/scripts" \
+    "$HOME/.config/systemd/user" \
+    "$HOME/.openclaw/workspace/logs"
+
 # --- agent_chat extension ---
 echo ""
 echo "Agent Chat extension installation..."
@@ -2066,57 +2161,6 @@ else
     echo -e "  ${WARNING} cognition/focus/agent-config-sync not found (skipping)"
 fi
 
-# --- PostgreSQL NOTIFY listener ---
-# Local listener that reacts to postgres channels (schema_changed, gambling_changed,
-# etc.). Runs as a systemd --user service under the installing unix account so it
-# authenticates with that account's DB role. Issue: nova-mind #320 / #251.
-echo ""
-echo "PostgreSQL NOTIFY listener..."
-
-NOTIFY_LISTENER_SOURCE="$SCRIPT_DIR/cognition/scripts/pg-notify-listener.py"
-NOTIFY_LISTENER_SERVICE_SOURCE="$SCRIPT_DIR/cognition/systemd/pg-notify-listener.service"
-# Intentionally uses the canonical workspace path (not $WORKSPACE) because the
-# live listener has always lived at ~/.openclaw/workspace/scripts and the
-# service file is shared across peer agents with different WORKSPACE values.
-NOTIFY_LISTENER_DIR="$HOME/.openclaw/workspace/scripts"
-NOTIFY_LISTENER_SERVICE_DIR="$HOME/.config/systemd/user"
-NOTIFY_LISTENER_SERVICE_TARGET="$NOTIFY_LISTENER_SERVICE_DIR/pg-notify-listener.service"
-
-if [ -f "$NOTIFY_LISTENER_SOURCE" ] && [ -f "$NOTIFY_LISTENER_SERVICE_SOURCE" ]; then
-    mkdir -p "$NOTIFY_LISTENER_DIR"
-    mkdir -p "$NOTIFY_LISTENER_SERVICE_DIR"
-    mkdir -p "$HOME/.openclaw/workspace/logs"
-
-    cp "$NOTIFY_LISTENER_SOURCE" "$NOTIFY_LISTENER_DIR/pg-notify-listener.py"
-    chmod +x "$NOTIFY_LISTENER_DIR/pg-notify-listener.py"
-    echo -e "  ${CHECK_MARK} Installed pg-notify-listener.py → $NOTIFY_LISTENER_DIR"
-
-    cp "$NOTIFY_LISTENER_SERVICE_SOURCE" "$NOTIFY_LISTENER_SERVICE_TARGET"
-    echo -e "  ${CHECK_MARK} Installed pg-notify-listener.service → $NOTIFY_LISTENER_SERVICE_DIR"
-
-    if command -v systemctl &>/dev/null; then
-        systemctl --user daemon-reload
-        if systemctl --user is-active pg-notify-listener.service &>/dev/null; then
-            if systemctl --user restart pg-notify-listener.service; then
-                echo -e "  ${CHECK_MARK} Restarted pg-notify-listener.service"
-            else
-                echo -e "  ${WARNING} pg-notify-listener.service restart failed"
-            fi
-        else
-            if systemctl --user enable pg-notify-listener.service &>/dev/null && \
-               systemctl --user start pg-notify-listener.service; then
-                echo -e "  ${CHECK_MARK} Enabled and started pg-notify-listener.service"
-            else
-                echo -e "  ${WARNING} pg-notify-listener.service enable/start failed"
-            fi
-        fi
-    else
-        echo -e "  ${WARNING} systemctl not available — service not started"
-    fi
-else
-    echo -e "  ${WARNING} pg-notify-listener source files not found (skipping)"
-fi
-
 # --- Ensure agent_system_config table ---
 echo ""
 echo "  Ensuring agent_system_config table..."
@@ -2271,31 +2315,6 @@ if [ -f "$OPENCLAW_CONFIG" ] && command -v jq &>/dev/null; then
             echo -e "  ${CHECK_MARK} Added BASH_ENV to OpenClaw config" || \
             echo -e "  ${WARNING} Could not update config with BASH_ENV"
     fi
-fi
-
-# --- Configure PostgreSQL password file and agent_chat DB config ---
-echo ""
-echo "PostgreSQL password file and agent_chat DB config..."
-
-if [ -n "${PGPASSWORD:-}" ]; then
-    pgpass_changed=0
-    _ensure_pgpass_entry "localhost" "5432" "$DB_NAME" "$DB_USER" "$PGPASSWORD" && pgpass_changed=1
-    _ensure_pgpass_entry "127.0.0.1" "5432" "$DB_NAME" "$DB_USER" "$PGPASSWORD" && pgpass_changed=1
-    _ensure_pgpass_entry "localhost" "5432" "$AGENT_CHAT_DB_NAME" "$DB_USER" "$PGPASSWORD" && pgpass_changed=1
-    _ensure_pgpass_entry "127.0.0.1" "5432" "$AGENT_CHAT_DB_NAME" "$DB_USER" "$PGPASSWORD" && pgpass_changed=1
-    if [ "$pgpass_changed" -eq 1 ]; then
-        echo -e "  ${CHECK_MARK} Updated ~/.pgpass with memory and agent_chat DB entries"
-    else
-        echo -e "  ${CHECK_MARK} ~/.pgpass entries already correct"
-    fi
-else
-    echo -e "  ${WARNING} PGPASSWORD not set — skipping ~/.pgpass provisioning"
-fi
-
-if _ensure_agent_chat_postgres_json "$PG_CONFIG" "$AGENT_CHAT_DB_NAME" "$DB_USER" "${PGPASSWORD:-}"; then
-    echo -e "  ${CHECK_MARK} Wrote nested agent_chat section to $PG_CONFIG"
-else
-    echo -e "  ${CHECK_MARK} Nested agent_chat section already correct in $PG_CONFIG (or could not update)"
 fi
 
 # --- Configure agent_chat channel ---

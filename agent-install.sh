@@ -1482,10 +1482,24 @@ if [ -d "$EXTENSION_SOURCE" ]; then
         fi
     fi
 
+    # Install extension dependencies
+    echo ""
+    echo "  Installing agent_chat extension dependencies..."
+    cd "$EXTENSION_TARGET"
+
+    NPM_INSTALL_LOG="${TMPDIR:-/tmp}/npm-install-agent-chat-$$.log"
+    if npm install >"$NPM_INSTALL_LOG" 2>&1; then
+        echo -e "  ${CHECK_MARK} Extension dependencies installed"
+        rm -f "$NPM_INSTALL_LOG"
+    else
+        echo -e "  ${CROSS_MARK} npm install failed for agent_chat"
+        tail -20 "$NPM_INSTALL_LOG"
+        exit 1
+    fi
+
     # Build TypeScript
     echo ""
     echo "  Building agent_chat TypeScript..."
-    cd "$EXTENSION_TARGET"
 
     NPM_BUILD_LOG="${TMPDIR:-/tmp}/npm-build-agent-chat-$$.log"
     if npm run build >"$NPM_BUILD_LOG" 2>&1; then

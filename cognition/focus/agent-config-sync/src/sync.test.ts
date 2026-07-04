@@ -1312,19 +1312,19 @@ describe("TC-273-U-05: TypeScript type guard — heartbeat is HeartbeatConfig | 
     const entry = result.find((e) => e.id === "coder");
     assert.ok(entry !== undefined);
     assert.strictEqual(entry.heartbeat, undefined);
-    assert.notStrictEqual(entry.heartbeat, false);
+    assert.ok(typeof entry.heartbeat !== "boolean", "heartbeat must not be the boolean false");
   });
 
   it("gem: heartbeat is undefined, not false", () => {
     const entry = result.find((e) => e.id === "gem");
     assert.ok(entry !== undefined);
     assert.strictEqual(entry.heartbeat, undefined);
-    assert.notStrictEqual(entry.heartbeat, false);
+    assert.ok(typeof entry.heartbeat !== "boolean", "heartbeat must not be the boolean false");
   });
 
   it("no disabled agent's heartbeat is strictly false (boolean)", () => {
     for (const entry of result) {
-      assert.ok(entry.heartbeat !== false, `Entry '${entry.id}' must not have heartbeat === false`);
+      assert.ok(typeof entry.heartbeat !== "boolean", `Entry '${entry.id}' must not have heartbeat === false`);
     }
   });
 });
@@ -1455,8 +1455,8 @@ describe("TC-273-U-09: All-enabled scenario — every agent has heartbeat object
 
   it("no entry heartbeat is a boolean (false or true)", () => {
     for (const entry of result) {
-      assert.ok(entry.heartbeat !== false, `Entry '${entry.id}' heartbeat must not be false`);
-      assert.ok(entry.heartbeat !== true, `Entry '${entry.id}' heartbeat must not be true`);
+      assert.ok(typeof entry.heartbeat !== "boolean", `Entry '${entry.id}' heartbeat must not be false`);
+      assert.ok(typeof entry.heartbeat !== "boolean", `Entry '${entry.id}' heartbeat must not be true`);
     }
   });
 });

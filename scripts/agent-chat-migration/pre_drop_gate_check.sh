@@ -175,6 +175,13 @@ fi
 # ---------------------------------------------------------------------------
 # Gate 4: Zero unresolved delta rows
 # ---------------------------------------------------------------------------
+# Delegate to delta_check_and_migrate.py in report-only mode. The Python
+# script implements the authoritative two-part delta check:
+#   A) agent_chat rows with id > cutoff_id
+#   B) agent_chat_processed rows updated after cutoff_ts for chat_ids already
+#      migrated (chat_id <= cutoff_id).
+# Re-implementing this logic in shell/SQL caused the original Gate 4 bug
+# (NOVA-Openclaw/nova-mind#375): the SQL-only check missed part B.
 echo "== Gate 4: Zero unresolved delta rows =="
 
 if [[ -z "${DELTA_CUTOFF_ID}" ]]; then
@@ -187,23 +194,33 @@ fi
 echo "   Delta cutoff id: ${DELTA_CUTOFF_ID}"
 echo "   Delta cutoff ts: ${DELTA_CUTOFF_TS}"
 
-DELTA_SQL=$(cat <<EOF
-SELECT
-    (SELECT count(*)::bigint FROM public.agent_chat WHERE id > ${DELTA_CUTOFF_ID}) || '|' ||
-    (SELECT count(*)::bigint FROM public.agent_chat_processed WHERE chat_id > ${DELTA_CUTOFF_ID});
-EOF
+DELTA_CHECK_ARGS=(
+    "--source-db" "${SOURCE_DB}"
+    "--target-db" "${TARGET_DB}"
+    "--host" "${HOST}"
+    "--port" "${PORT}"
+    "--user" "${USER}"
+    "--cutoff-id" "${DELTA_CUTOFF_ID}"
+    "--cutoff-ts" "${DELTA_CUTOFF_TS}"
 )
-DELTA_RESULT=$(run_sql_value "${SOURCE_DB}" "${DELTA_SQL}")
-DELTA_CHAT=$(echo "${DELTA_RESULT}" | cut -d'|' -f1)
-DELTA_PROC=$(echo "${DELTA_RESULT}" | cut -d'|' -f2)
 
-echo "   Source agent_chat delta rows: ${DELTA_CHAT}"
-echo "   Source agent_chat_processed delta rows (for new chat ids): ${DELTA_PROC}"
+echo "   Delegating delta check to delta_check_and_migrate.py (report-only)..."
+DELTA_RC=0
+DELTA_OUT=$("${SCRIPT_DIR}/delta_check_and_migrate.py" "${DELTA_CHECK_ARGS[@]}" 2>&1) || DELTA_RC=$?
 
-if [[ "${DELTA_CHAT}" -ne 0 || "${DELTA_PROC}" -ne 0 ]]; then
-    fail_gate 4 "Unresolved delta rows remain in ${SOURCE_DB}. Run delta_check_and_migrate.py before decommission."
+# delta_check_and_migrate.py returns:
+#   0 = no delta rows
+#   1 = delta rows found (report-only mode)
+#   2 = id-space collision
+#   3 = sequence misalignment after migration (only possible with --migrate)
+# Any non-zero result means the gate fails.
+if [[ ${DELTA_RC} -ne 0 ]]; then
+    echo "   delta_check_and_migrate.py exited with code ${DELTA_RC}:" >&2
+    echo "${DELTA_OUT}" >&2
+    fail_gate 4 "Unresolved delta rows remain in ${SOURCE_DB}. Run delta_check_and_migrate.py --migrate before decommission."
     GATES_PASSED=false
 else
+    echo "${DELTA_OUT}"
     echo "   PASS"
 fi
 

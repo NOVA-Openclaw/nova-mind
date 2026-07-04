@@ -1,5 +1,12 @@
 # Issue #148: Ensure agent_chat Setup Scripts Grant Complete Database Permissions
 
+> **Status note (post-#320):** The dedicated `agent_chat` database's schema file
+> (`database/agent-chat/schema.sql`) now grants the full permission matrix
+> (SELECT/INSERT plus sequence USAGE/SELECT) for all nova-ecosystem roles as part
+> of schema application, satisfying the spirit of this request for the new database.
+> Left as historical record of the original ask against the old `nova_memory`-hosted
+> table.
+
 ## Context
 When setting up a new agent's database user for the `agent_chat` plugin, the required sequence permissions are not automatically granted. This causes agents to receive and process messages but fail silently when attempting to reply.
 

@@ -198,20 +198,16 @@ _ensure_agent_chat_postgres_json() {
         chmod 600 "$pg_config"
 }
 
-# Install daily memory log cron entries into the current user's crontab.
+# Install or verify daily memory log cron entries into the current user's crontab.
+# In install mode missing entries are appended. In --verify-only mode the crontab
+# is never modified; the function reports installed / missing / drifted status.
 # Uses globals: DAILY_LOG_CRON_MARKER, DAILY_LOG_CRON_NIGHTLY, DAILY_LOG_CRON_INTRADAY,
-#               DAILY_LOG_SCRIPT, VERIFICATION_WARNINGS
+#               DAILY_LOG_SCRIPT, VERIFICATION_WARNINGS, VERIFICATION_ERRORS, VERIFY_ONLY
 # Sets global: DAILY_LOG_CRON_STATUS
 _install_daily_log_cron() {
     if [ "${NO_CRON:-0}" -eq 1 ]; then
         echo -e "  ${INFO} Cron installation skipped (--no-cron)"
         DAILY_LOG_CRON_STATUS="skipped by --no-cron"
-        return 0
-    fi
-
-    if [ "${VERIFY_ONLY:-0}" -eq 1 ]; then
-        echo -e "  ${INFO} Cron installation skipped (--verify-only)"
-        DAILY_LOG_CRON_STATUS="skipped by --verify-only"
         return 0
     fi
 
@@ -240,10 +236,17 @@ _install_daily_log_cron() {
             done
             VERIFICATION_WARNINGS=$((VERIFICATION_WARNINGS + 1))
             DAILY_LOG_CRON_STATUS="drift detected (review required)"
+        elif [ "${VERIFY_ONLY:-0}" -eq 1 ]; then
+            echo -e "  ${CHECK_MARK} Daily memory log cron entries installed"
+            DAILY_LOG_CRON_STATUS="installed"
         else
             echo -e "  ${CHECK_MARK} Daily memory log cron entries verified"
             DAILY_LOG_CRON_STATUS="verified"
         fi
+    elif [ "${VERIFY_ONLY:-0}" -eq 1 ]; then
+        echo -e "  ${CROSS_MARK} Daily memory log cron entries missing"
+        DAILY_LOG_CRON_STATUS="missing"
+        VERIFICATION_ERRORS=$((VERIFICATION_ERRORS + 1))
     else
         (crontab -l 2>/dev/null || true; echo "$DAILY_LOG_CRON_NIGHTLY"; echo "$DAILY_LOG_CRON_INTRADAY") | crontab -
         echo -e "  ${CHECK_MARK} Installed daily memory log cron entries (nightly + intraday)"
@@ -902,9 +905,22 @@ if [ $VERIFY_ONLY -eq 1 ]; then
     verify_config
 
     echo ""
+    echo "Memory scripts verification..."
+    _install_daily_log_cron
+
+    echo ""
     echo "═══════════════════════════════════════════"
     echo "  Verification Summary"
     echo "═══════════════════════════════════════════"
+
+    cron_symbol="$CHECK_MARK"
+    if [[ "$DAILY_LOG_CRON_STATUS" == missing* ]]; then
+        cron_symbol="$CROSS_MARK"
+    elif [[ "$DAILY_LOG_CRON_STATUS" == drift* ]]; then
+        cron_symbol="$WARNING"
+    fi
+    echo -e "  ${cron_symbol} Daily memory log cron: $DAILY_LOG_CRON_STATUS"
+
     if [ $VERIFICATION_ERRORS -gt 0 ]; then
         echo -e "  ${CROSS_MARK} $VERIFICATION_ERRORS errors found"
         exit 1

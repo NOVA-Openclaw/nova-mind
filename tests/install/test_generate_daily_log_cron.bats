@@ -22,12 +22,6 @@ _install_daily_log_cron() {
         return 0
     fi
 
-    if [ "${VERIFY_ONLY:-0}" -eq 1 ]; then
-        echo "Cron installation skipped (--verify-only)"
-        DAILY_LOG_CRON_STATUS="skipped by --verify-only"
-        return 0
-    fi
-
     local cron_drift_lines=()
     local current_crontab
     current_crontab=$(crontab -l 2>/dev/null || true)
@@ -52,10 +46,17 @@ _install_daily_log_cron() {
             done
             VERIFICATION_WARNINGS=$((VERIFICATION_WARNINGS + 1))
             DAILY_LOG_CRON_STATUS="drift detected (review required)"
+        elif [ "${VERIFY_ONLY:-0}" -eq 1 ]; then
+            echo "Daily memory log cron entries installed"
+            DAILY_LOG_CRON_STATUS="installed"
         else
             echo "Daily memory log cron entries verified"
             DAILY_LOG_CRON_STATUS="verified"
         fi
+    elif [ "${VERIFY_ONLY:-0}" -eq 1 ]; then
+        echo "Daily memory log cron entries missing"
+        DAILY_LOG_CRON_STATUS="missing"
+        VERIFICATION_ERRORS=$((VERIFICATION_ERRORS + 1))
     else
         (crontab -l 2>/dev/null || true; echo "$DAILY_LOG_CRON_NIGHTLY"; echo "$DAILY_LOG_CRON_INTRADAY") | crontab -
         echo "Installed daily memory log cron entries (nightly + intraday)"
@@ -148,6 +149,47 @@ teardown() {
     [ "$status" -eq 0 ]
     [[ "$output" == *"Cron installation skipped (--no-cron)"* ]]
     [ ! -s "$CRONTAB_FILE" ]
+}
+
+@test "TC-052: --verify-only with cron installed reports installed and does not modify crontab" {
+    VERIFY_ONLY=1
+    export VERIFY_ONLY
+
+    # Seed expected cron entries.
+    printf '%s\n%s\n' "$DAILY_LOG_CRON_NIGHTLY" "$DAILY_LOG_CRON_INTRADAY" > "$CRONTAB_FILE"
+    local before
+    before="$(cat "$CRONTAB_FILE")"
+
+    run _install_daily_log_cron
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Daily memory log cron entries installed"* ]]
+    [ "$(cat "$CRONTAB_FILE")" = "$before" ]
+}
+
+@test "TC-053: --verify-only with empty crontab reports missing and does not modify crontab" {
+    VERIFY_ONLY=1
+    export VERIFY_ONLY
+
+    [ ! -s "$CRONTAB_FILE" ]
+    run _install_daily_log_cron
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Daily memory log cron entries missing"* ]]
+    [ ! -s "$CRONTAB_FILE" ]
+}
+
+@test "TC-054: --verify-only with drifted schedule reports drifted and does not modify crontab" {
+    VERIFY_ONLY=1
+    export VERIFY_ONLY
+
+    # Seed a crontab with a line referencing the script but wrong schedule.
+    echo '0 0 * * * '"$DAILY_LOG_CRON_MARKER"' >> /dev/null 2>&1' > "$CRONTAB_FILE"
+    local before
+    before="$(cat "$CRONTAB_FILE")"
+
+    run _install_daily_log_cron
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"drift detected"* ]]
+    [ "$(cat "$CRONTAB_FILE")" = "$before" ]
 }
 
 @test "agent-install.sh --help mentions --no-cron option" {

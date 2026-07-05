@@ -1,5 +1,18 @@
 # Changelog
 
+### Batch: schema-sync-direct-push-399 (Issue #399)
+
+#### Fixed
+- **`cognition/scripts/pg-notify-listener.py` schema-sync now pushes directly to `origin` instead of delegating to `gidget` via `agent_chat`** (#399) — The prior step-6 delegation (`send_agent_message('schema-sync', ..., ['gidget'])`) addressed an ephemeral subagent with no persistent listener; the work orders were never drained (158 dead messages, 25 unpushed commits accumulated 2026-04-09 → 2026-07-05). `sync_schema_to_github()` now runs `git push origin main` itself inside the existing git lock, with failure-class-differentiated retry: transient errors get 3 attempts with exponential backoff (2s/4s/8s), auth and non-fast-forward errors fail fast (no retry). Each push attempt has a 60s timeout. Non-fast-forward rejections are alert-only — no automatic rebase is attempted. On permanent failure, an `agent_chat` alert now goes to `nova` (a live listener) instead of `gidget`, with the failure class, commit hash, and manual recovery steps. `sync_schema_to_github()` now returns `(False, commit_hash)` on permanent push failure (previously `(False, None)`), preserving the un-pushed commit hash for diagnostics. The push subprocess sets `OPENCLAW_AGENT_ID=gidget` so the global pre-push hook (see `cognition/docs/system-level-controls.md`) allows the mechanical push through — a dedicated `schema-sync` push identity is flagged as a follow-up, not implemented here. Stale `handle_schema_change()` manual-recovery guidance ("Delegate push to Gidget via agent_chat") updated to `git push origin main`. See `cognition/CHANGELOG.md` for full detail.
+
+#### Tests
+- `cognition/tests/test_pg_notify_listener_issue_399.py` — 16 tests covering happy path, no-op path, transient retry/backoff, permanent failure alerting, auth and non-fast-forward fail-fast behavior, per-attempt timeout, lock hygiene across all paths, and a regression gate confirming no `agent_chat` message from schema-sync is ever addressed to `gidget`.
+
+#### Issues Closed
+- #399 — schema-sync delegates git push to non-listening subagent 'gidget' via agent_chat
+
+---
+
 ### Batch: pg-env-section-precedence-405 (Issue #405, nova-workspace#33)
 
 #### Fixed

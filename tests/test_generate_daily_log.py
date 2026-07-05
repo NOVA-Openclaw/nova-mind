@@ -59,13 +59,25 @@ class TestResolveWorkspace:
         monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
         assert generate_daily_log.resolve_workspace() == tmp_path.resolve()
 
-    def test_falls_back_to_workspace_coder(self, tmp_path, monkeypatch):
+    def test_openclaw_agent_id_resolves_workspace_xyz(self, tmp_path, monkeypatch):
         monkeypatch.delenv("OPENCLAW_WORKSPACE", raising=False)
+        monkeypatch.setenv("OPENCLAW_AGENT_ID", "xyz")
         home = tmp_path / "home"
-        workspace = home / ".openclaw" / "workspace-coder"
+        workspace = home / ".openclaw" / "workspace-xyz"
         workspace.mkdir(parents=True)
         monkeypatch.setenv("HOME", str(home))
         assert generate_daily_log.resolve_workspace() == workspace.resolve()
+
+    def test_stray_workspace_coder_is_ignored_without_agent_id(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("OPENCLAW_WORKSPACE", raising=False)
+        monkeypatch.delenv("OPENCLAW_AGENT_ID", raising=False)
+        home = tmp_path / "home"
+        stray = home / ".openclaw" / "workspace-coder"
+        stray.mkdir(parents=True)
+        fallback = home / ".openclaw" / "workspace"
+        fallback.mkdir(parents=True)
+        monkeypatch.setenv("HOME", str(home))
+        assert generate_daily_log.resolve_workspace() == fallback.resolve()
 
     def test_falls_back_to_workspace(self, tmp_path, monkeypatch):
         monkeypatch.delenv("OPENCLAW_WORKSPACE", raising=False)

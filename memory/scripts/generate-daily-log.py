@@ -39,12 +39,20 @@ class DailyLogError(Exception):
 
 
 def resolve_workspace() -> Path:
-    """Resolve workspace directory per multi-tenant fallback chain."""
+    """Resolve workspace directory per multi-tenant fallback chain.
+
+    Resolution order:
+      1. $OPENCLAW_WORKSPACE
+      2. ~/.openclaw/workspace-$OPENCLAW_AGENT_ID (only when OPENCLAW_AGENT_ID is set)
+      3. ~/.openclaw/workspace
+    """
     candidates: list[str] = []
     if "OPENCLAW_WORKSPACE" in os.environ:
         candidates.append(os.environ["OPENCLAW_WORKSPACE"])
     home = os.path.expanduser("~")
-    candidates.append(os.path.join(home, ".openclaw", "workspace-coder"))
+    agent_id = os.environ.get("OPENCLAW_AGENT_ID")
+    if agent_id:
+        candidates.append(os.path.join(home, ".openclaw", f"workspace-{agent_id}"))
     candidates.append(os.path.join(home, ".openclaw", "workspace"))
 
     for candidate in candidates:

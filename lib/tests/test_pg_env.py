@@ -27,7 +27,10 @@ def assert_eq(desc, expected, actual):
         print(f"  PASS: {desc}")
         PASS += 1
     else:
-        print(f"  FAIL: {desc} (expected='{expected}', got='{actual}')")
+        if "PASSWORD" in desc:
+            print(f"  FAIL: {desc} (expected='<masked>', got='<masked>')")
+        else:
+            print(f"  FAIL: {desc} (expected='{expected}', got='{actual}')")
         FAIL += 1
 
 
@@ -38,7 +41,10 @@ def assert_env_eq(desc, env_var, expected):
         print(f"  PASS: {desc}")
         PASS += 1
     else:
-        print(f"  FAIL: {desc} (expected='{expected}', got='{actual}')")
+        if "PASSWORD" in env_var:
+            print(f"  FAIL: {desc} (expected='<masked>', got='<masked>')")
+        else:
+            print(f"  FAIL: {desc} (expected='{expected}', got='{actual}')")
         FAIL += 1
 
 
@@ -80,16 +86,29 @@ def reload_pg_env():
     return pg_env
 
 
-def run_isolated(config_data, env_updates, snippet):
+def run_isolated(config_data, env_updates, snippet, stale_home_lib=False):
     """Run a Python snippet in a subprocess with isolated $HOME and PG env.
 
     The snippet receives `config_path` pointing at a freshly-written
     postgres.json under a temp directory that is also $HOME, so loaders using
     the default ~/.openclaw/postgres.json path pick up the fixture.
+
+    When stale_home_lib=True, also creates $HOME/.openclaw/lib/pg_env.py with
+    a sentinel load_pg_env that returns a stale value. This exercises whether
+    a script resolves pg_env repo-relatively or accidentally imports the
+    deployed copy from ~/.openclaw/lib.
     """
     tmpdir = tempfile.mkdtemp()
     try:
         cfg_path = write_config(tmpdir, config_data)
+        if stale_home_lib:
+            stale_lib_dir = os.path.join(tmpdir, ".openclaw", "lib")
+            os.makedirs(stale_lib_dir, exist_ok=True)
+            with open(os.path.join(stale_lib_dir, "pg_env.py"), "w") as f:
+                f.write(
+                    "def load_pg_env(config_path=None, section=None):\n"
+                    "    return {'PGDATABASE': 'STALE_HOME_LIB_IMPORT'}\n"
+                )
         env = os.environ.copy()
         for v in ("PGHOST", "PGPORT", "PGDATABASE", "PGUSER", "PGPASSWORD"):
             env.pop(v, None)
@@ -546,6 +565,8 @@ print(mod._dsn_from_pg_env(section=None))""",
         assert_true("DSN contains dbname=nova_memory", "dbname=nova_memory" in dsn)
 
     # TC-50: domain integration — pg-notify-listener clean env
+    # Creates a fake $HOME/.openclaw/lib/pg_env.py so the test fails if the
+    # script still hardcodes the deployed path instead of resolving repo-relatively.
     print("TC-50: pg-notify-listener resolves both sections in clean env")
     notify_script = repo_root / "cognition" / "scripts" / "pg-notify-listener.py"
     result = run_isolated(
@@ -561,6 +582,7 @@ mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mod)
 print(mod._pg_env.get("PGDATABASE"))
 print(mod._agent_chat_env.get("PGDATABASE"))""",
+        stale_home_lib=True,
     )
     if result.returncode != 0:
         print(f"  FAIL: subprocess error: {result.stderr.strip()}")
@@ -569,8 +591,10 @@ print(mod._agent_chat_env.get("PGDATABASE"))""",
         lines = [ln for ln in result.stdout.strip().splitlines() if ln]
         assert_eq("_pg_env PGDATABASE", "nova_memory", lines[0] if lines else None)
         assert_eq("_agent_chat_env PGDATABASE", "agent_chat", lines[1] if len(lines) > 1 else None)
+        assert_true("did not import stale $HOME/.openclaw/lib pg_env", "STALE_HOME_LIB_IMPORT" not in result.stdout)
 
     # TC-51: domain integration — pg-notify-listener with gateway ENV export
+    # Same stale-home-lib sentinel as TC-50 to exercise actual import resolution.
     print("TC-51: pg-notify-listener agent_chat ignores gateway PGDATABASE")
     result = run_isolated(
         {
@@ -585,6 +609,7 @@ mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mod)
 print(mod._pg_env.get("PGDATABASE"))
 print(mod._agent_chat_env.get("PGDATABASE"))""",
+        stale_home_lib=True,
     )
     if result.returncode != 0:
         print(f"  FAIL: subprocess error: {result.stderr.strip()}")
@@ -593,6 +618,7 @@ print(mod._agent_chat_env.get("PGDATABASE"))""",
         lines = [ln for ln in result.stdout.strip().splitlines() if ln]
         assert_eq("_pg_env PGDATABASE", "nova_memory", lines[0] if lines else None)
         assert_eq("_agent_chat_env PGDATABASE", "agent_chat", lines[1] if len(lines) > 1 else None)
+        assert_true("did not import stale $HOME/.openclaw/lib pg_env", "STALE_HOME_LIB_IMPORT" not in result.stdout)
 
 print()
 print("═══════════════════════════════════════════")

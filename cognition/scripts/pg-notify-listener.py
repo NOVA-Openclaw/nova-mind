@@ -26,8 +26,14 @@ from datetime import datetime, timezone
 _git_lock_fd = None
 _git_lock_path = os.path.expanduser('~/.openclaw/workspace/scripts/.pg-notify-git.lock')
 
-# Load PG config from postgres.json (central config, not hardcoded)
-sys.path.insert(0, os.path.join(os.path.expanduser("~"), ".openclaw", "lib"))
+# Load PG config from postgres.json (repo-relative so production does not
+# silently load a stale deployed copy from ~/.openclaw/lib).
+_PG_ENV_DIR = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "..", "lib"
+)
+if os.path.isdir(_PG_ENV_DIR) and _PG_ENV_DIR not in sys.path:
+    sys.path.insert(0, _PG_ENV_DIR)
+
 from pg_env import load_pg_env
 _pg_env = load_pg_env()
 _agent_chat_env = load_pg_env(section="agent_chat")

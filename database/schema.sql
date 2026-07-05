@@ -3038,6 +3038,50 @@ COMMENT ON COLUMN skills.domain_name IS 'Required when source_type=DOMAIN. Match
 CREATE UNIQUE INDEX IF NOT EXISTS idx_skills_unique ON skills (skill_name, source_type, COALESCE(agent_name, ''::text), COALESCE(domain_name, ''::text));
 
 --
+-- Name: social_interactions; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS social_interactions (
+    id SERIAL,
+    platform text NOT NULL,
+    mention_id text NOT NULL,
+    thread_id text,
+    author_handle text,
+    content text,
+    status text DEFAULT 'seen' NOT NULL,
+    draft_response text,
+    response_id text,
+    approved_by text,
+    approved_at timestamptz,
+    responded_at timestamptz,
+    dismissed_reason text,
+    notes text,
+    created_at timestamptz DEFAULT now() NOT NULL,
+    updated_at timestamptz DEFAULT now() NOT NULL,
+    CONSTRAINT social_interactions_pkey PRIMARY KEY (id),
+    CONSTRAINT social_interactions_platform_mention_id_key UNIQUE (platform, mention_id),
+    CONSTRAINT social_interactions_status_check CHECK (status IN ('seen'::text, 'needs_response'::text, 'drafted'::text, 'approved'::text, 'posted'::text, 'dismissed'::text))
+);
+
+
+COMMENT ON TABLE social_interactions IS 'Tracks the full lifecycle of inbound social media mentions: seen → needs_response → drafted → approved → posted (or dismissed). Enforces the approval gate for outbound social media responses. Hermes comms check writes new entries; NOVA updates status on approval and posting. Domain: NOVA Operations.';
+
+
+COMMENT ON COLUMN social_interactions.status IS 'Lifecycle: seen (just noticed), needs_response (verified no existing reply in thread), drafted (proposed response written), approved (I)ruid approved), posted (response sent), dismissed (no response needed).';
+
+--
+-- Name: idx_social_interactions_created; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_social_interactions_created ON social_interactions (created_at DESC);
+
+--
+-- Name: idx_social_interactions_platform_status; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_social_interactions_platform_status ON social_interactions (platform, status);
+
+--
 -- Name: tags; Type: TABLE; Schema: -; Owner: -
 --
 
@@ -3130,6 +3174,34 @@ COMMENT ON TABLE unsolved_problems IS 'Humanity''s unsolved problems for NOVA to
 --
 
 CREATE INDEX IF NOT EXISTS idx_unsolved_problems_priority ON unsolved_problems (priority DESC);
+
+--
+-- Name: user_domains; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS user_domains (
+    id SERIAL,
+    entity_id integer NOT NULL,
+    domain_topic varchar(255) NOT NULL,
+    priority integer DEFAULT 1,
+    notes text,
+    created_at timestamp DEFAULT now(),
+    CONSTRAINT user_domains_pkey PRIMARY KEY (id),
+    CONSTRAINT user_domains_entity_domain_key UNIQUE (entity_id, domain_topic),
+    CONSTRAINT user_domains_entity_id_fkey FOREIGN KEY (entity_id) REFERENCES entities (id) ON DELETE CASCADE
+);
+
+--
+-- Name: idx_user_domains_entity; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_user_domains_entity ON user_domains (entity_id);
+
+--
+-- Name: idx_user_domains_topic; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_user_domains_topic ON user_domains (domain_topic);
 
 --
 -- Name: user_insights; Type: TABLE; Schema: -; Owner: -

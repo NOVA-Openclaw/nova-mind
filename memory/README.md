@@ -907,7 +907,7 @@ The separate embedding scripts (`embed-full-database.py`, `embed-memories.py`, `
 | Phase | Description |
 |-------|-------------|
 | 1. Cooldown check | 4-hour gate; `--force` to bypass |
-| 2. Embed | Replaces all old embedding scripts |
+| 2. Embed | Replaces all old embedding scripts; memory files are chunked with the boundary-aware chunker (see [Text Chunking](#text-chunking) below) |
 | 3. Cross-key consolidation | pgvector cosine similarity ≥0.92 |
 | 4. Same-key dedup | pg_trgm similarity, 3-tier |
 | 5. Confidence decay | Exponential, durability-based rates |
@@ -916,13 +916,51 @@ The separate embedding scripts (`embed-full-database.py`, `embed-memories.py`, `
 | 8. Clean orphaned embeddings | Remove embeddings with no source |
 | 9. Archive & purge | Remove low-confidence archived facts |
 
-**Flags:** `--dry-run`, `--verbose`, `--force`, `--state-file`, `--skip-embed`, `--skip-consolidation`, `--skip-dedup`, `--skip-decay`, `--skip-ghost-cleanup`, `--skip-entity-dedup`
+**Flags:** `--dry-run`, `--verbose`, `--force`, `--state-file`, `--skip-embed`, `--skip-consolidation`, `--skip-dedup`, `--skip-decay`, `--skip-ghost-cleanup`, `--skip-entity-dedup`, `--skip-lesson-dedup`, `--reindex-files`
 
 **New DB Objects:**
 - `merge_entities(survivor_id, absorbed_id)` — dynamically discovers FK references, merges facts, transfers nicknames, handles embeddings
 - `uq_memory_embeddings_source` — unique index on `memory_embeddings(source_type, source_id)`
 
 **Scheduling:** Removed from crontab. Now triggered from the HEARTBEAT idle cascade as priority #2 (after peer agent messages, before pending tasks). The 4-hour cooldown prevents redundant runs.
+
+### Text Chunking
+
+Memory files (`memory/*.md` daily logs and `MEMORY.md`) are split into chunks before embedding (Phase 2 above) by `_chunk_text()` in `memory-maintenance.py`. As of nova-mind#341, this is a **paragraph/section-boundary chunker**, replacing the previous hard 1000-character split (which routinely started chunks mid-sentence).
+
+**Boundary strategy:**
+- Text is split into units on markdown headers (`#` through `######`) and paragraph breaks (blank lines).
+- Adjacent short paragraphs are merged greedily until the running chunk reaches roughly **80% of the target `chunk_size`** (default 1000 chars) — this leaves headroom so a merge rarely needs to split a paragraph that would otherwise fit.
+- A header always starts a new chunk and stays attached to the content that follows it; chunks never merge across a header boundary.
+- Paragraphs that are still oversized after merging are split at sentence boundaries, then word boundaries, as a fallback.
+- Overlap between consecutive chunks (default 200 chars) is boundary-aligned — the carried-over suffix starts at a sentence/paragraph boundary where possible, so a chunk may run up to `chunk_size + overlap` chars.
+
+**Oversized atomic exception:** Fenced code blocks (` ``` `) and single unbroken tokens (no whitespace) longer than `chunk_size` are never split internally — they're emitted whole as a single oversized chunk, and `memory-maintenance.py` logs a warning (`Oversized atomic chunk emitted whole: length=N chunk_size=N`) each time this happens. This is a documented limitation, not a bug: preserving a code block or unbroken token intact is judged more valuable than enforcing the size ceiling.
+
+**Structure-dependent boundaries — re-chunking after edits:** Because chunk boundaries depend on the surrounding document structure, appending or editing content in a previously-embedded file can shift where earlier chunks start and end, leaving stale/misaligned embeddings for that file until it's fully re-chunked. Use `--reindex-files` (below) after editing a file that has already been embedded. (Fast-follow nova-mind#389 tracks automatic content-hash-based staleness detection so this doesn't have to be a manual judgment call.)
+
+#### `--reindex-files`
+
+`--reindex-files` forces a full re-chunk and re-embed of all memory files:
+
+1. Deletes all existing `memory_file` embeddings and stale `daily_log` embeddings from `memory_embeddings`.
+2. Re-reads every file in `~/.openclaw/workspace/memory/*.md` plus `MEMORY.md`, re-chunks them with the current boundary logic, and re-embeds every chunk.
+
+**All-or-nothing guarantee:** The entire delete-then-reinsert sequence runs inside a single `SAVEPOINT reindex_files`. If any step fails (a database error or an Ollama connection error), the transaction rolls back to that savepoint and the database is left exactly as it was before the run — no partial deletes, no orphaned chunk ids.
+
+**Dry-run semantics:** `--reindex-files --dry-run` performs **zero** database mutations and **zero** Ollama calls — it logs what would be deleted and re-embedded and returns immediately, without touching `memory_embeddings` or re-reading files for embedding.
+
+**Interaction with `--skip-embed`:** `--reindex-files` logic lives inside the embed phase (`phase_embed_files()`, called from `phase_embed()`). Passing `--skip-embed` skips the entire embed phase, so `--reindex-files --skip-embed` is a no-op for reindexing — nothing is deleted and nothing is re-embedded.
+
+**When to use it:** Run `--reindex-files` after any edit to a file under `memory/` or `MEMORY.md` that was embedded before the edit — appends, in-place edits, or reformatting can all shift boundaries for chunks after the edit point. It's a full rebuild for those files, not an incremental update, so expect it to make one Ollama call per chunk in the file set.
+
+```bash
+# Preview what a reindex would touch, no DB/Ollama calls
+python3 ~/.openclaw/scripts/memory-maintenance.py --reindex-files --dry-run --verbose
+
+# Actually reindex all memory files
+python3 ~/.openclaw/scripts/memory-maintenance.py --reindex-files --verbose
+```
 
 ### Running Embedding (if you need only embedding)
 

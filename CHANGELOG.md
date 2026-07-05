@@ -1,5 +1,22 @@
 # Changelog
 
+### Batch: paragraph-boundary-chunking-341 (Issue #341)
+
+#### Changed
+- **`memory-maintenance.py` memory-file chunker replaced with paragraph/section-boundary chunking** (#341) — `_chunk_text()` no longer splits memory files (`memory/*.md` daily logs, `MEMORY.md`) on a hard 1000-character boundary. It now splits on markdown headers (`#` through `######`) and paragraph breaks, greedily merges adjacent short paragraphs up to ~80% of `chunk_size`, and never merges across a header; oversized paragraphs fall back to sentence-boundary then word-boundary splits. Measured improvement on a realistic fixture set: 86.67% → 7.69% of chunk boundaries starting mid-sentence (78.97 percentage point improvement), verified against live staging Ollama embedding calls in addition to 36 new unit tests. Fenced code blocks and single unbroken tokens longer than `chunk_size` are a documented exception — emitted whole as oversized atomic chunks with a logged warning, since preserving them intact is judged more valuable than enforcing the size ceiling. See `memory/README.md#text-chunking` for the full boundary-strategy writeup.
+
+#### Added
+- **`--reindex-files` flag** (#341) — Forces a full delete-and-regenerate of all memory-file embeddings (`memory_file` + stale `daily_log` rows in `memory_embeddings`), then re-chunks and re-embeds every file under `memory/` plus `MEMORY.md`. The full delete-then-reinsert sequence runs inside one `SAVEPOINT reindex_files`, rolling back cleanly on any database or Ollama error. `--dry-run` combined with `--reindex-files` makes zero database mutations and zero Ollama calls. Because the new chunker's boundaries are structure-dependent, editing a previously-embedded file can shift earlier chunk boundaries — `--reindex-files` is the supported way to regenerate clean, consistent boundaries for that file after an edit.
+
+#### Issues Closed
+- #341 — Replace hard 1000-character memory-file chunking with paragraph/section-boundary-aware chunking
+
+#### Fast-Follows (open)
+- #389 — Content-hash-based freshness detection, so files needing `--reindex-files` after an edit can be identified automatically instead of by manual judgment.
+- #391 — Permanent mocked-cursor CI regression tests for the `--reindex-files` forced-failure/rollback paths (TC-REINDEX-07/08/09); currently covered by one-time live-staging verification only, not a standing CI safeguard.
+
+---
+
 ### Batch: agent-chat-dedicated-db-320 (Issue #320)
 
 #### Added

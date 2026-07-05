@@ -487,7 +487,15 @@ def _chunk_text(text, chunk_size=1000, overlap=200):
 
     split_chunks = []
     for chunk_text, is_atomic in candidate_chunks:
-        if is_atomic or len(chunk_text) <= chunk_size:
+        if is_atomic:
+            if len(chunk_text) > chunk_size:
+                logger.warning(
+                    "Oversized atomic chunk emitted whole: length=%d chunk_size=%d",
+                    len(chunk_text),
+                    chunk_size,
+                )
+            split_chunks.append(chunk_text)
+        elif len(chunk_text) <= chunk_size:
             split_chunks.append(chunk_text)
         else:
             split_chunks.extend(_split_oversized(chunk_text, chunk_size))
@@ -656,6 +664,14 @@ def _split_oversized(text, chunk_size):
             final.append(chunk)
         else:
             final.extend(_split_at_word_boundary(chunk, chunk_size))
+
+    for chunk in final:
+        if len(chunk) > chunk_size and " " not in chunk:
+            logger.warning(
+                "Oversized atomic chunk emitted whole: length=%d chunk_size=%d",
+                len(chunk),
+                chunk_size,
+            )
     return final
 
 

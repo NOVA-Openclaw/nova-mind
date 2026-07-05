@@ -542,6 +542,154 @@ class TestReindexFlag:
 
 
 # ---------------------------------------------------------------------------
+# §2.7 Integration
+# ---------------------------------------------------------------------------
+
+class TestIntegration:
+    """End-to-end tests for ``phase_embed_files()`` call sites.
+
+    These tests are database-free per decision D8: they monkeypatch
+    ``Path.home()`` so the function reads from a temp directory, and they
+    replace the embedding/store helpers with mocks that record calls.
+    """
+
+    def _setup_workspace(self, tmp_path):
+        """Create a fake ~/.openclaw/workspace layout under tmp_path."""
+        workspace = tmp_path / ".openclaw" / "workspace"
+        memory_dir = workspace / "memory"
+        memory_dir.mkdir(parents=True)
+        return workspace, memory_dir
+
+    def _make_daily_log(self):
+        """Return a multi-section daily-log-shaped fixture."""
+        sections = []
+        for hour in (9, 13, 17):
+            sections.append(f"## {hour:02d}:00")
+            sections.append(
+                f"At {hour:02d}:00 I worked on the memory pipeline. "
+                "The new chunker keeps sections together."
+            )
+            if hour == 13:
+                sections.extend([
+                    "- Reviewed pull requests.",
+                    "- Wrote regression tests.",
+                ])
+        return "\n\n".join(sections)
+
+    def _make_memory_md(self):
+        """Return a MEMORY.md-shaped fixture with multiple sections."""
+        return "\n\n".join([
+            "# Long-term Memory",
+            "## Projects",
+            "I am working on the nova-mind embedding pipeline.",
+            "## Notes",
+            "Chunking should preserve paragraph boundaries.",
+        ])
+
+    def test_phase_embed_files_daily_log_call_site(self, monkeypatch, tmp_path):
+        """TC-INTEG-01: ``phase_embed_files()`` chunks daily-log files correctly."""
+        workspace, memory_dir = self._setup_workspace(tmp_path)
+        (memory_dir / "2026-07-05.md").write_text(self._make_daily_log(), encoding="utf-8")
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+        recorded = []
+
+        def fake_embed_single(text, cfg):
+            return [0.0] * 1024
+
+        def fake_already_embedded(cur, source_type, source_id):
+            return False
+
+        def fake_store_embeddings(cur, source_type, rows, embeddings):
+            recorded.extend((row["id"], row["text"]) for row in rows)
+
+        monkeypatch.setattr(_memory_maintenance, "embed_single", fake_embed_single)
+        monkeypatch.setattr(_memory_maintenance, "_already_embedded", fake_already_embedded)
+        monkeypatch.setattr(_memory_maintenance, "_store_embeddings", fake_store_embeddings)
+
+        class FakeConn:
+            def cursor(self):
+                return None
+
+        cfg = {"model": "snowflake-arctic-embed2", "dimensions": 1024}
+        count = _memory_maintenance.phase_embed_files(
+            FakeConn(), cfg, dry_run=False, verbose=False, reindex_files=False
+        )
+
+        assert count > 0
+        source_ids = [sid for sid, _ in recorded]
+        assert source_ids == [f"2026-07-05.md#{i}" for i in range(len(source_ids))]
+
+        # Every recorded chunk should start at a paragraph or header boundary.
+        # Strip overlap before measuring so we check the start of new content.
+        chunk_texts = [text for _, text in recorded]
+        stripped = [chunk_texts[0]]
+        for prev, chunk in zip(chunk_texts, chunk_texts[1:]):
+            stripped.append(_strip_overlap(prev, chunk, overlap_param=200))
+        full_text = "".join(stripped)
+        boundary_positions = (
+            {0}
+            | set(_sentence_boundary_positions(full_text))
+            | set(_paragraph_boundary_positions(full_text))
+            | set(_header_boundary_positions(full_text))
+        )
+        pos = 0
+        for piece in stripped:
+            assert pos in boundary_positions, f"chunk at position {pos} does not start on a boundary"
+            pos += len(piece)
+
+    def test_phase_embed_files_memory_md_call_site(self, monkeypatch, tmp_path):
+        """TC-INTEG-02: ``MEMORY.md`` call site satisfies the same guarantees."""
+        workspace, _memory_dir = self._setup_workspace(tmp_path)
+        (workspace / "MEMORY.md").write_text(self._make_memory_md(), encoding="utf-8")
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+        recorded = []
+
+        def fake_embed_single(text, cfg):
+            return [0.0] * 1024
+
+        def fake_already_embedded(cur, source_type, source_id):
+            return False
+
+        def fake_store_embeddings(cur, source_type, rows, embeddings):
+            recorded.extend((row["id"], row["text"]) for row in rows)
+
+        monkeypatch.setattr(_memory_maintenance, "embed_single", fake_embed_single)
+        monkeypatch.setattr(_memory_maintenance, "_already_embedded", fake_already_embedded)
+        monkeypatch.setattr(_memory_maintenance, "_store_embeddings", fake_store_embeddings)
+
+        class FakeConn:
+            def cursor(self):
+                return None
+
+        cfg = {"model": "snowflake-arctic-embed2", "dimensions": 1024}
+        count = _memory_maintenance.phase_embed_files(
+            FakeConn(), cfg, dry_run=False, verbose=False, reindex_files=False
+        )
+
+        assert count > 0
+        source_ids = [sid for sid, _ in recorded]
+        assert source_ids == [f"MEMORY.md#{i}" for i in range(len(source_ids))]
+
+        chunk_texts = [text for _, text in recorded]
+        stripped = [chunk_texts[0]]
+        for prev, chunk in zip(chunk_texts, chunk_texts[1:]):
+            stripped.append(_strip_overlap(prev, chunk, overlap_param=200))
+        full_text = "".join(stripped)
+        boundary_positions = (
+            {0}
+            | set(_sentence_boundary_positions(full_text))
+            | set(_paragraph_boundary_positions(full_text))
+            | set(_header_boundary_positions(full_text))
+        )
+        pos = 0
+        for piece in stripped:
+            assert pos in boundary_positions, f"chunk at position {pos} does not start on a boundary"
+            pos += len(piece)
+
+
+# ---------------------------------------------------------------------------
 # §2.8 Performance
 # ---------------------------------------------------------------------------
 

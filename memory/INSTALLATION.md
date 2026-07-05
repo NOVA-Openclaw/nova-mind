@@ -59,6 +59,15 @@ The installer is **idempotent** — safe to run multiple times. Use `./agent-ins
 
 ## Recent Changes
 
+### 2026-07-05: Script-Generated Daily Memory Log (#397)
+
+Added `memory/scripts/generate-daily-log.py`, which generates/updates the current day's `memory/YYYY-MM-DD.md` from live database state (agent_chat activity, workflow_runs, lessons, events, tasks) inside a delimited generated block, preserving agent-written narrative outside the markers byte-for-byte. Full docs: `memory/docs/daily-log-generation.md`.
+
+**What Changed:**
+- `memory/scripts/generate-daily-log.py` — new script (`--date`, `--dry-run` flags; exit 0/1/2)
+- `agent-install.sh` — installs the script plus two default-on cron entries (nightly `5 0 * * *`, intraday `0 6,12,18 * * *`); `--no-cron` opts out; `--verify-only` reports cron status (installed/missing/drifted) without modifying the crontab; drift is detected and warned on, never auto-corrected
+- `tests/test_generate_daily_log.py` (32 tests), `tests/install/test_generate_daily_log_cron.bats`, `pytest.ini` — new test coverage
+
 ### 2026-05-12: Turn-Context Plugin Replaces Old Hooks (#182)
 
 The old `semantic-recall` and `agent-turn-context` hooks have been removed and consolidated into a single **turn-context plugin** at `memory/plugins/turn-context/`. The plugin uses the OpenClaw Plugin SDK and registers `before_prompt_build` and `message_received` hooks.
@@ -240,6 +249,7 @@ Created `install.sh` - a fully idempotent installer that:
 - Makes all `.sh` and `.py` files executable
 - Verifies Python dependencies (psycopg2, anthropic, openai)
 - Reports missing dependencies with install command
+- Installs `generate-daily-log.py` plus two cron entries (nightly + intraday) by default — opt out with `--no-cron`. See [Daily Log Generation](docs/daily-log-generation.md).
 
 #### Verification
 - Tests database connection

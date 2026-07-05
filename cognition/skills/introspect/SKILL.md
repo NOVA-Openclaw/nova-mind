@@ -513,6 +513,17 @@ python3 ~/.openclaw/scripts/memory-maintenance.py 2>/dev/null || true
 
 The memory maintenance script embeds journal entries along with other pending records. It has a 4-hour cooldown gate, but will always process new un-embedded records when it runs.
 
+### 13. Update Heartbeat State
+
+**Every full introspection run must do this, regardless of trigger** (heartbeat, post_workflow, manual, backstop). The 8h introspection time backstop reads `~/.openclaw/workspace/memory/heartbeat-state.json` — a run that skips this update causes the backstop to double-fire a redundant introspection hours later (observed 2026-07-04: post-workflow run at 06:33 skipped it; backstop re-fired at 11:38).
+
+Update `lastIntrospection` in `~/.openclaw/workspace/memory/heartbeat-state.json`:
+- `timestamp` — now, ISO UTC
+- `dailyLogLines` — `wc -l < ~/.openclaw/workspace/memory/$(date -u +%Y-%m-%d).md`
+- `sessionTranscriptBytes` — `du -sb ~/.openclaw/agents/nova/sessions/*.jsonl | awk '{sum+=$1} END {print sum}'`
+
+Preserve all other JSON fields. Keep any top-level mirror fields (`timestamp`, `dailyLogLines`, `sessionTranscriptBytes`) in sync with `lastIntrospection`.
+
 ## Constraints
 
 - Do not delete workflow steps — only add, refine, or normalize.

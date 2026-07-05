@@ -79,6 +79,13 @@ OPENCLAW_PROJECTS="$OPENCLAW_DIR/projects"
 EXTENSIONS_DIR="$OPENCLAW_DIR/extensions"
 # shellcheck disable=SC2034
 NOVA_DIR="$HOME/.local/share/nova"
+OPENCLAW_LOGS_DIR="$HOME/.openclaw/logs"
+
+# Daily memory log cron configuration
+DAILY_LOG_SCRIPT="generate-daily-log.py"
+DAILY_LOG_CRON_MARKER="$HOME/.openclaw/scripts/$DAILY_LOG_SCRIPT"
+DAILY_LOG_CRON_NIGHTLY='5 0 * * *    '"$DAILY_LOG_CRON_MARKER"' >> '"$OPENCLAW_LOGS_DIR"'/generate-daily-log.log 2>&1'
+DAILY_LOG_CRON_INTRADAY='0 6,12,18 * * * '"$DAILY_LOG_CRON_MARKER"' >> '"$OPENCLAW_LOGS_DIR"'/generate-daily-log.log 2>&1'
 
 # Superuser connection helper for DDL operations
 PG_SUPERUSER="${PG_SUPERUSER:-$DB_USER}"
@@ -191,6 +198,59 @@ _ensure_agent_chat_postgres_json() {
         chmod 600 "$pg_config"
 }
 
+# Install daily memory log cron entries into the current user's crontab.
+# Uses globals: DAILY_LOG_CRON_MARKER, DAILY_LOG_CRON_NIGHTLY, DAILY_LOG_CRON_INTRADAY,
+#               DAILY_LOG_SCRIPT, VERIFICATION_WARNINGS
+# Sets global: DAILY_LOG_CRON_STATUS
+_install_daily_log_cron() {
+    if [ "${NO_CRON:-0}" -eq 1 ]; then
+        echo -e "  ${INFO} Cron installation skipped (--no-cron)"
+        DAILY_LOG_CRON_STATUS="skipped by --no-cron"
+        return 0
+    fi
+
+    if [ "${VERIFY_ONLY:-0}" -eq 1 ]; then
+        echo -e "  ${INFO} Cron installation skipped (--verify-only)"
+        DAILY_LOG_CRON_STATUS="skipped by --verify-only"
+        return 0
+    fi
+
+    local cron_drift_lines=()
+    local current_crontab
+    current_crontab=$(crontab -l 2>/dev/null || true)
+
+    if echo "$current_crontab" | grep -qF "$DAILY_LOG_CRON_MARKER"; then
+        # Script path is present; check for drift from expected entries.
+        local line
+        while IFS= read -r line; do
+            case "$line" in
+                *"$DAILY_LOG_CRON_MARKER"*)
+                    if [ "$line" != "$DAILY_LOG_CRON_NIGHTLY" ] && [ "$line" != "$DAILY_LOG_CRON_INTRADAY" ]; then
+                        cron_drift_lines+=("$line")
+                    fi
+                    ;;
+            esac
+        done <<< "$current_crontab"
+
+        if [ ${#cron_drift_lines[@]} -gt 0 ]; then
+            echo -e "  ${WARNING} Existing cron entry for $DAILY_LOG_SCRIPT differs from expected schedule (drift detected):"
+            local drift_line
+            for drift_line in "${cron_drift_lines[@]}"; do
+                echo "      $drift_line"
+            done
+            VERIFICATION_WARNINGS=$((VERIFICATION_WARNINGS + 1))
+            DAILY_LOG_CRON_STATUS="drift detected (review required)"
+        else
+            echo -e "  ${CHECK_MARK} Daily memory log cron entries verified"
+            DAILY_LOG_CRON_STATUS="verified"
+        fi
+    else
+        (crontab -l 2>/dev/null || true; echo "$DAILY_LOG_CRON_NIGHTLY"; echo "$DAILY_LOG_CRON_INTRADAY") | crontab -
+        echo -e "  ${CHECK_MARK} Installed daily memory log cron entries (nightly + intraday)"
+        DAILY_LOG_CRON_STATUS="installed"
+    fi
+}
+
 # Install the PostgreSQL NOTIFY listener as a systemd --user service.
 # Parameters: source_script source_service target_dir service_dir logs_dir
 _install_pg_notify_listener() {
@@ -248,8 +308,10 @@ fi
 VERIFY_ONLY=0
 FORCE_INSTALL=0
 NO_RESTART=0
+NO_CRON=0
 DB_NAME_OVERRIDE=""
 REGENERATE_AGENTS_JSON=0
+DAILY_LOG_CRON_STATUS="not installed"
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -269,6 +331,10 @@ while [[ $# -gt 0 ]]; do
             NO_RESTART=1
             shift
             ;;
+        --no-cron)
+            NO_CRON=1
+            shift
+            ;;
         --database|-d)
             DB_NAME_OVERRIDE="$2"
             shift 2
@@ -280,6 +346,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --verify-only              Check installation without modifying anything"
             echo "  --force                    Force overwrite existing files (skip file verification)"
             echo "  --no-restart               Skip automatic gateway restart after install"
+            echo "  --no-cron                  Skip installation of the daily-log cron entries"
             echo "  --database, -d NAME        Override database name (default: \${USER}_memory)"
             echo "  --regenerate-agents-json   Backup and regenerate ~/.openclaw/agents.json from DB"
             echo "  --help                     Show this help message"
@@ -1287,7 +1354,6 @@ echo "Memory scripts setup..."
 SCRIPTS_SOURCE="$SCRIPT_DIR/memory/scripts"
 SCRIPTS_TARGET_WORKSPACE="$WORKSPACE/scripts"
 SCRIPTS_TARGET_OPENCLAW="$HOME/.openclaw/scripts"
-OPENCLAW_LOGS_DIR="$HOME/.openclaw/logs"
 
 mkdir -p "$OPENCLAW_LOGS_DIR"
 echo -e "  ${INFO} Logs directory: $OPENCLAW_LOGS_DIR"
@@ -1410,6 +1476,9 @@ if [ -d "$SCRIPTS_SOURCE" ]; then
             echo -e "  ${CHECK_MARK} Python dependencies verified"
         fi
     fi
+
+    # --- Daily memory log cron entries ---
+    _install_daily_log_cron
 else
     echo -e "  ${WARNING} Scripts directory not found at $SCRIPTS_SOURCE (skipping)"
 fi
@@ -2419,6 +2488,7 @@ fi
 echo "  [memory]"
 echo "    • Shared PG loader libraries → ~/.openclaw/lib/"
 echo "    • Schema managed via pgschema (database/schema.sql)"
+echo "    • Daily memory log cron → $DAILY_LOG_CRON_STATUS"
 if [ ${#INSTALLED_HOOKS[@]} -gt 0 ]; then
     for hook in "${INSTALLED_HOOKS[@]}"; do
         echo "    • Hook: $hook"

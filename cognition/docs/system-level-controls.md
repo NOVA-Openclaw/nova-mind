@@ -112,6 +112,16 @@ This provides an observable record of attempted policy violations — useful for
 
 ---
 
+## Known Exception: Mechanical Callers Spoofing `OPENCLAW_AGENT_ID`
+
+The hook's identity check assumes `OPENCLAW_AGENT_ID` reflects which *agent* is pushing. As of nova-mind [#399](https://github.com/NOVA-Openclaw/nova-mind/issues/399), one caller breaks that assumption on purpose: `cognition/scripts/pg-notify-listener.py`'s schema-sync path (`sync_schema_to_github()`) sets `OPENCLAW_AGENT_ID=gidget` on its own `git push` subprocess so the hook lets a mechanical, unattended background push through, even though no Gidget-spawned process is actually running.
+
+This is a deliberate, narrow workaround — schema-sync previously delegated pushes to Gidget via `agent_chat`, but Gidget is an ephemeral subagent with no persistent listener, so that delegation silently accumulated undrained work orders (see `cognition/CHANGELOG.md`, Issue #399). Pushing directly and reusing Gidget's push identity was judged safer than leaving the push undelegated entirely. **This is flagged as a known follow-up, not a closed decision:** a dedicated `schema-sync` identity with its own pre-push hook allowlist entry would be more correct than reusing Gidget's, and is expected to replace this workaround in a future change.
+
+If you are auditing pre-push hook behavior or investigating why a push attributed to `gidget` didn't originate from an actual Gidget-spawned process, check whether it came from the schema-sync path first.
+
+---
+
 ## Design History: Removing the Token Bypass
 
 An earlier version of this hook included a **token file bypass mechanism**: if a file matching `/tmp/.gidget-push-token-*` existed and was recent (within 5 minutes), the hook would allow the push regardless of agent identity. This was used when Gidget could not reliably distinguish itself via environment variable.

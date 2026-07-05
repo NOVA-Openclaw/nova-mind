@@ -125,13 +125,20 @@ This file is **auto-generated** by `shell-install.sh` after database setup. You 
 
 ### Resolution order
 
-All scripts and hooks follow the same precedence:
+The config file also supports nested, named sections for additional databases
+(e.g. `agent_chat` — see `memory/docs/database-config.md#nested-sections-multiple-databases`),
+and **the precedence between environment variables and a nested section now
+differs by language**: as of #405, Python's `load_pg_env(section=...)` gives a
+section-defined field precedence over ENV for that field; Bash (no section
+support at all) and TypeScript's `loadPgEnv()` still let ENV win over the
+section (TS parity tracked in #403). For top-level flat keys (no section
+involved), all three loaders agree:
 
 1. **Environment variables** (`PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGPASSWORD`) — checked first
-2. **Config file** (`~/.openclaw/postgres.json`) — fills in any vars not set by the environment
+2. **Config file** (`~/.openclaw/postgres.json`, flat top-level keys) — fills in any vars not set by the environment
 3. **Built-in defaults** — `localhost:5432`, current OS username (no defaults for database or password)
 
-This means OpenClaw's `env.vars` in `openclaw.json` will always take priority. For standalone usage (cron, manual scripts), the config file provides the connection details automatically.
+This means OpenClaw's `env.vars` in `openclaw.json` will always take priority over flat config-file keys. For standalone usage (cron, manual scripts), the config file provides the connection details automatically. See `memory/docs/database-config.md` for the full per-language resolution order, including the section-vs-ENV precedence rules.
 
 ### Shared loader functions
 

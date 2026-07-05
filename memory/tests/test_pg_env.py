@@ -21,7 +21,10 @@ def assert_eq(desc, expected, actual):
         print(f"  PASS: {desc}")
         PASS += 1
     else:
-        print(f"  FAIL: {desc} (expected='{expected}', got='{actual}')")
+        if "PASSWORD" in desc:
+            print(f"  FAIL: {desc} (expected='<masked>', got='<masked>')")
+        else:
+            print(f"  FAIL: {desc} (expected='{expected}', got='{actual}')")
         FAIL += 1
 
 

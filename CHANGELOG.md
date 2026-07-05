@@ -1,5 +1,31 @@
 # Changelog
 
+### Batch: schema-sync-direct-push-399 (Issue #399)
+
+#### Fixed
+- **`cognition/scripts/pg-notify-listener.py` schema-sync now pushes directly to `origin` instead of delegating to `gidget` via `agent_chat`** (#399) — The prior step-6 delegation (`send_agent_message('schema-sync', ..., ['gidget'])`) addressed an ephemeral subagent with no persistent listener; the work orders were never drained (158 dead messages, 25 unpushed commits accumulated 2026-04-09 → 2026-07-05). `sync_schema_to_github()` now runs `git push origin main` itself inside the existing git lock, with failure-class-differentiated retry: transient errors get 3 attempts with exponential backoff (2s/4s/8s), auth and non-fast-forward errors fail fast (no retry). Each push attempt has a 60s timeout. Non-fast-forward rejections are alert-only — no automatic rebase is attempted. On permanent failure, an `agent_chat` alert now goes to `nova` (a live listener) instead of `gidget`, with the failure class, commit hash, and manual recovery steps. `sync_schema_to_github()` now returns `(False, commit_hash)` on permanent push failure (previously `(False, None)`), preserving the un-pushed commit hash for diagnostics. The push subprocess sets `OPENCLAW_AGENT_ID=gidget` so the global pre-push hook (see `cognition/docs/system-level-controls.md`) allows the mechanical push through — a dedicated `schema-sync` push identity is flagged as a follow-up, not implemented here. Stale `handle_schema_change()` manual-recovery guidance ("Delegate push to Gidget via agent_chat") updated to `git push origin main`. See `cognition/CHANGELOG.md` for full detail.
+
+#### Tests
+- `cognition/tests/test_pg_notify_listener_issue_399.py` — 16 tests covering happy path, no-op path, transient retry/backoff, permanent failure alerting, auth and non-fast-forward fail-fast behavior, per-attempt timeout, lock hygiene across all paths, and a regression gate confirming no `agent_chat` message from schema-sync is ever addressed to `gidget`.
+
+#### Issues Closed
+- #399 — schema-sync delegates git push to non-listening subagent 'gidget' via agent_chat
+
+---
+
+### Batch: pg-env-section-precedence-405 (Issue #405, nova-workspace#33)
+
+#### Fixed
+- **`load_pg_env(section=...)` per-field precedence — section values now win over pre-exported ENV vars** (#405, originally reported as [nova-workspace#33](https://github.com/NOVA-Openclaw/nova-workspace/issues/33)) — Previously, `lib/pg_env.py` checked `ENV → section → flat-config → defaults` for *every* field, so a gateway-exported ambient var (e.g. `PGDATABASE=nova_memory` set in the shell environment) silently overrode a value explicitly defined in a requested config section, such as `section="agent_chat"`. This caused `agent_chat`-section callers to resolve the wrong database whenever the gateway shell had already exported a conflicting `PG*` var. The resolution order is now **per-field**: if the section dict explicitly defines a field (non-null, non-empty), that section value wins over ENV *for that field only*; fields the section omits keep the existing `ENV → flat-config → default` chain unchanged. `lib/pg_env.py` and `memory/lib/pg_env.py` were updated identically (byte-for-byte) and remain the canonical Python implementation. See `memory/docs/database-config.md` for the corrected precedence table and per-language loader details.
+- **`cognition/scripts/pg-notify-listener.py` now resolves `pg_env` repo-relatively** (#405) — Previously hardcoded `sys.path.insert(0, ~/.openclaw/lib)`, which imports whichever `pg_env.py` happens to be deployed in the home directory rather than the repo copy — meaning the listener could keep running pre-fix behavior until the next `agent-install.sh` redeploy. It now resolves the `lib/` directory relative to its own file location, matching the pattern already used by `motivation/scripts/proactive-gate-check.py`. **Note:** several other scripts still use the hardcoded-home-path pattern; a systemic cleanup across those callers is tracked separately in #406 (out of scope for this fix).
+- **Test coverage** — `lib/tests/test_pg_env.py` TC-29 rewritten (previously asserted the old ENV-wins behavior; now asserts per-field section precedence) and TC-30 through TC-51 added, including subprocess-isolated integration tests for `proactive-gate-check.py` and `pg-notify-listener.py`, and credential-shape masking in `assert_eq`/`assert_env_eq` failure output so `PASSWORD`-named fields never leak into test failure text. `memory/tests/test_pg_env.py` (legacy suite, no `section=` coverage) was left unchanged — extending or retiring it is tracked in #406.
+
+#### Known Follow-Ups (not part of this fix)
+- **#403** — TypeScript implementations (`lib/pg-env.ts`, `memory/lib/pg-env.ts`, `cognition/focus/agent_chat/lib/pg-env.ts`) still use the old `ENV → section → flat-config → defaults` order and have **not** been updated to match. `cognition/focus/agent_chat/src/channel.ts` is a confirmed affected caller (`loadPgEnv(undefined, "agent_chat")`) until #403 lands — same-sprint priority per that issue, not resolved here.
+- **#406** — Systemic hardcoded `~/.openclaw/lib` import-path pattern in several `memory/scripts/*.py` and `memory/templates/memory-maintenance.py` callers; only the `pg-notify-listener.py` instance was fixed as part of this change.
+
+---
+
 ### Batch: daily-log-script-397 (Issue #397)
 
 #### Added

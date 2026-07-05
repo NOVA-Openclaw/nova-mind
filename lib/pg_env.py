@@ -1,8 +1,8 @@
 """
 pg_env.py — Centralized PostgreSQL config loader for Python.
 
-Resolution order: ENV vars → section → ~/.openclaw/postgres.json (flat keys) → defaults
-Issue: nova-memory #94, nova-mind #320
+Per-field resolution order: section (when field is explicitly defined) → ENV vars → ~/.openclaw/postgres.json (flat keys) → defaults
+Issue: nova-memory #94, nova-mind #320, nova-workspace #33
 """
 
 import json
@@ -57,7 +57,7 @@ def _restore_external_env() -> None:
 
 def load_pg_env(config_path: Optional[str] = None, section: Optional[str] = None) -> dict:
     """
-    Load PostgreSQL env vars with resolution: ENV → section → config file → defaults.
+    Load PostgreSQL env vars with per-field resolution.
 
     Sets os.environ for each PG* var and returns the resulting dict.
     Empty ENV strings are treated as unset.
@@ -65,7 +65,9 @@ def load_pg_env(config_path: Optional[str] = None, section: Optional[str] = None
     Malformed JSON is caught and warned about (falls through to defaults).
 
     If `section` is provided and the config file contains a valid object for that
-    key, section fields take precedence over top-level keys (ENV still wins).
+    key, a field defined in the section (non-null, non-empty) wins over ENV and
+    top-level keys for that field only. Fields absent from the section preserve
+    the existing ENV → flat-config → default chain.
 
     Because this function mutates os.environ, a later call with a different
     `section` fully overwrites any PG* vars set by an earlier call — no stale
@@ -107,19 +109,22 @@ def load_pg_env(config_path: Optional[str] = None, section: Optional[str] = None
     result = {}
 
     for json_key, env_var in _FIELD_MAP.items():
-        # 1. Check ENV (empty string = unset)
-        env_val = os.environ.get(env_var, "")
-        if env_val:
-            result[env_var] = env_val
-            continue
-
-        # 2. Check section config (None/null = absent, empty string = absent)
+        # 1. Check section config first when the section explicitly defines
+        #    this field. Per-field precedence: a non-null, non-empty section
+        #    value wins over ENV for that field. Fields absent from the section
+        #    fall through to the ENV -> flat-config -> default chain below.
         section_val = section_config.get(json_key) if section_config else None
         if section_val is not None:
             str_val = str(section_val)
             if str_val:
                 result[env_var] = str_val
                 continue
+
+        # 2. Check ENV (empty string = unset)
+        env_val = os.environ.get(env_var, "")
+        if env_val:
+            result[env_var] = env_val
+            continue
 
         # 3. Check top-level config file (None/null = absent, empty string = absent)
         cfg_val = config.get(json_key)

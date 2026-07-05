@@ -383,9 +383,17 @@ EOF
     [ ! -f "$svc_dir/pg-notify-listener.service" ]
 }
 
-@test "TC-listener: pg-notify-listener.py imports pg_env from installed lib" {
+@test "TC-listener: pg-notify-listener.py resolves pg_env repo-relative" {
     local listener="$REPO_ROOT/cognition/scripts/pg-notify-listener.py"
-    grep -q 'sys.path.insert.*\.openclaw.*lib' "$listener"
+    # Resolves pg_env.py relative to the listener script (repo lib/), not from a
+    # deployed ~/.openclaw/lib copy.
+    grep -q 'os.path.dirname(os.path.abspath(__file__))' "$listener"
+    grep -q 'sys.path.insert(0, _PG_ENV_DIR)' "$listener"
+    grep -q 'from pg_env import load_pg_env' "$listener"
+    # Must not regress to the old hardcoded ~/.openclaw/lib path.
+    run grep -qE 'sys.path.insert.*\.openclaw.*lib' "$listener"
+    [ "$status" -ne 0 ]
+    # Must not hardcode an absolute workspace path.
     run grep -qF 'openclaw/workspace/nova-mind/lib' "$listener"
     [ "$status" -ne 0 ]
 }

@@ -46,8 +46,12 @@ Only `database`, `user`, and `password` are typically needed inside a nested
 section — `host` and `port` fall back to the top-level flat keys (or their
 defaults) if omitted from the section. Every loader function accepts an
 optional `section` parameter; when given, fields inside that named object take
-precedence over the top-level flat keys (environment variables still win over
-both). See "Loader Functions" below for the exact call signature per language.
+precedence over the top-level flat keys. **Whether environment variables can
+still override a section value depends on the language** — see "Resolution
+Order" below: Python (as of #405) gives a section-defined field precedence
+over ENV, while Bash/TypeScript still let ENV win over the section (TS parity
+fix tracked in #403). See "Loader Functions" below for the exact call
+signature per language.
 
 `agent-install.sh` provisions the `agent_chat` section automatically and is
 idempotent — re-running it reports the section is already correct rather than
@@ -56,14 +60,33 @@ the full rollout runbook.
 
 ## Resolution Order
 
-Every loader follows the same precedence:
+**As of nova-mind#405 (originally reported as [nova-workspace#33](https://github.com/NOVA-Openclaw/nova-workspace/issues/33)), the Python loader's resolution order differs from Bash and TypeScript.** The three loaders are no longer identical — see the per-language notes below before assuming a shared precedence.
 
-1. **Environment variables** — `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGPASSWORD`
-2. **Nested section** (if a `section` name is passed to the loader and the config file has a matching object at that key)
+### Python (`lib/pg_env.py` / `memory/lib/pg_env.py`) — per-field precedence
+
+Resolution happens **per field**, not once for the whole config:
+
+1. **Nested section field** (if a `section` name is passed to the loader, the config file has a matching object at that key, **and that object explicitly defines this specific field** as non-null/non-empty) — wins over ENV for that field only
+2. **Environment variables** — `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGPASSWORD`
 3. **Config file top-level (flat) keys** — `~/.openclaw/postgres.json`
 4. **Defaults** — `localhost` for host, `5432` for port, current OS user for username
 
-Empty environment strings are treated as unset (fall through to step 2/3).  
+A field the section **omits** is unaffected by the section at all — it falls through to the normal ENV → flat-config → default chain, exactly as if no section had been requested. This is why it's a *per-field* rule rather than a single global switch: a section that only sets `database` still lets ENV win for `host`/`port`/`user`/`password`.
+
+### Bash (`pg-env.sh`) and TypeScript (`pg-env.ts`) — ENV-first (no per-field section override)
+
+Bash has no section support at all (see the Bash loader note below). TypeScript's `loadPgEnv()` still uses the older, simpler order for every field:
+
+1. **Environment variables** — `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGPASSWORD`
+2. **Nested section** (TypeScript only; if a `section` name is passed to the loader and the config file has a matching object at that key)
+3. **Config file top-level (flat) keys** — `~/.openclaw/postgres.json`
+4. **Defaults** — `localhost` for host, `5432` for port, current OS user for username
+
+**Known gap:** because ENV wins first here, a pre-exported ambient var (e.g. a gateway shell already exporting `PGDATABASE=nova_memory`) can still override a TypeScript-side `section` value — the same class of bug fixed in Python by #405. Porting the per-field fix to TypeScript is tracked in **#403**; `cognition/focus/agent_chat/src/channel.ts` (`loadPgEnv(undefined, "agent_chat")`) is a confirmed affected caller until that lands.
+
+### Shared rules (all languages)
+
+Empty environment strings are treated as unset (fall through to the next applicable step).  
 Null/missing JSON values are treated as absent (fall through to the next step).  
 If a `section` value exists but is not a JSON object, a warning is printed and
 the loader falls back to the top-level flat keys.  
@@ -106,6 +129,17 @@ load_pg_env(section="agent_chat")
 # A later call with a different (or no) section fully overwrites these -- no stale values leak.
 conn = psycopg2.connect()
 ```
+
+> **Import path: deployed copy vs. repo-relative.** The `sys.path.insert(0,
+> "~/.openclaw/lib")` pattern above imports whichever `pg_env.py` is currently
+> *deployed* to the home directory by `agent-install.sh` — fine for scripts
+> that only ever run post-install. Repo-internal scripts that must always run
+> against the current repo checkout (e.g. `motivation/scripts/proactive-gate-check.py`
+> and, as of #405, `cognition/scripts/pg-notify-listener.py`) instead resolve
+> `lib/` relative to their own file location so they never silently pick up a
+> stale deployed copy. **#406** tracks migrating the remaining hardcoded-path
+> callers under `memory/scripts/` and `memory/templates/` to the same
+> repo-relative pattern.
 
 ### TypeScript
 

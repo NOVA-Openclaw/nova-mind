@@ -1,5 +1,21 @@
 # Changelog
 
+### Batch: daily-log-script-397 (Issue #397)
+
+#### Added
+- **Script-generated daily memory log** (#397) — `memory/scripts/generate-daily-log.py` generates/updates the current day's `memory/YYYY-MM-DD.md` from live database state (agent_chat activity, workflow_runs, lessons, events, tasks) inside a delimited generated block, preserving agent-written narrative outside the markers byte-for-byte. Flags: `--date YYYY-MM-DD` (backfill, past dates only, future rejected exit 2), `--dry-run`. Exit codes: 0 success / 1 hard-fail (DB error or marker corruption, no partial writes) / 2 usage. True no-op idempotency on re-run with no DB changes (file `mtime` preserved). Workspace resolution: `$OPENCLAW_WORKSPACE` → `~/.openclaw/workspace-$OPENCLAW_AGENT_ID` (only when set) → `~/.openclaw/workspace`. Credential hygiene: drops any inherited `PGPASSWORD`, reads only host/port/database from `postgres.json`, authenticates via `.pgpass`. See `memory/docs/daily-log-generation.md` for the full marker contract, cron schedule, and backfill runbook.
+- **`agent-install.sh` cron installation for the daily-log script** (#397) — Installs `generate-daily-log.py` plus two cron entries (nightly `5 0 * * *`, intraday `0 6,12,18 * * *`), default-on with a `--no-cron` opt-out. Dedupes by script path on re-install; drift is detected and warned on but never auto-corrected. `--verify-only` reports cron status (installed/missing/drifted) read-only.
+
+#### Tests
+- `tests/test_generate_daily_log.py` — 32 tests (marker handling, idempotency, date validation, workspace resolution, PGPASSWORD hygiene, live-DB integration).
+- `tests/install/test_generate_daily_log_cron.bats` — cron install/verify/drift/opt-out coverage.
+- `pytest.ini` — new at repo root; registers the `integration` marker.
+
+#### Issues Closed
+- #397 — Script-generated daily memory log
+
+---
+
 ### Batch: paragraph-boundary-chunking-341 (Issue #341)
 
 #### Changed

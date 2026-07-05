@@ -135,13 +135,16 @@ WHERE context_type IN ('GLOBAL', 'DOMAIN') AND file_key ILIKE '%WORKFLOW%';
 
 **Location:** `~/.openclaw/workspace/memory/YYYY-MM-DD.md`
 
-**Purpose:** Raw session logs and scratch space.
+**Purpose:** Raw session logs and scratch space — **plus, as of nova-mind#397, an auto-generated system-activity summary.**
+
+Each day's file is no longer purely hand-written. `memory/scripts/generate-daily-log.py` runs from cron (nightly + 3x intraday, installed by `agent-install.sh`) and writes/updates a delimited **generated block** (marked by `<!-- BEGIN GENERATED DAILY LOG -->` / `<!-- END GENERATED DAILY LOG -->` HTML comments) summarizing that day's `agent_chat` activity, `workflow_runs`, `lessons`, `events`, and `tasks` — pulled directly from the database. Agent-written narrative outside the markers is preserved byte-for-byte on every run. See `memory/docs/daily-log-generation.md` for the full marker contract, flags, cron schedule, and backfill runbook.
 
 **Lifecycle:** 
-1. Log notable events during the day
-2. Review periodically
-3. Extract significant items to database
-4. Archive old daily files
+1. Generated block auto-populates/refreshes from DB state (cron-driven)
+2. Log notable events during the day (agents/humans write narrative outside the generated block)
+3. Review periodically
+4. Extract significant items to database
+5. Archive old daily files
 
 ### 4. Periodic Reminders (REMINDERS.md) — Every 30 Minutes
 

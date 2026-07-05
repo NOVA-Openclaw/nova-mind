@@ -433,48 +433,451 @@ def phase_embed_research(conn, cfg, dry_run=False, verbose=False):
 
 
 # ---- Embed memory files ----
+_HEADER_RE = re.compile(r"^#{1,6}\s")
+_SENTENCE_RE = re.compile(r"(?<=[.!?])\s+(?=\S)")
+
+
 def _chunk_text(text, chunk_size=1000, overlap=200):
+    """Boundary-aware chunker for memory file embeddings.
+
+    Splits text on paragraph breaks and markdown headers (# through ######),
+    merges adjacent short paragraphs greedily up to ~80% of ``chunk_size``,
+    and splits oversized paragraphs at sentence boundaries, then word
+    boundaries, then single-token boundaries as a last resort.
+
+    Headers always start a new chunk and stay attached to the following
+    content. Fenced code blocks (`` ``` ``) are treated as atomic units:
+    they are never split internally, even if they exceed ``chunk_size``.
+    Single unbroken tokens (no whitespace) longer than ``chunk_size`` are
+    likewise emitted as single oversized chunks. These two cases are the
+    only documented atomic exceptions to the nominal chunk-size ceiling.
+
+    Overlap is boundary-aware: the suffix of the previous chunk that is
+    prepended to the next chunk begins at a sentence or paragraph boundary
+    where possible. Consequently a chunk may be up to ``chunk_size + overlap``
+    characters long.
+
+    Because chunking is structure-dependent (paragraph/header boundaries),
+    appending content to a previously-embedded file can shift earlier chunk
+    boundaries. After editing a file that has already been embedded, run with
+    ``--reindex-files`` to delete the old embeddings and regenerate clean
+    boundaries for the whole file.
+
+    Args:
+        text: Input text to chunk.
+        chunk_size: Target maximum chunk size (default 1000).
+        overlap: Target overlap between consecutive chunks (default 200).
+
+    Returns:
+        List of chunk strings. Empty or whitespace-only input returns ``[]``.
+    """
+    if text is None:
+        return []
+
+    # Normalize line endings and discard leading/trailing whitespace.
+    text = text.replace("\r\n", "\n").strip()
+    if not text:
+        return []
+
+    units = _parse_units(text)
+    if not units:
+        return []
+
+    candidate_chunks = _merge_units(units, chunk_size)
+
+    split_chunks = []
+    for chunk_text, is_atomic in candidate_chunks:
+        if is_atomic or len(chunk_text) <= chunk_size:
+            split_chunks.append(chunk_text)
+        else:
+            split_chunks.extend(_split_oversized(chunk_text, chunk_size))
+
+    return _apply_overlap(split_chunks, overlap, chunk_size)
+
+
+def _parse_units(text):
+    """Parse text into semantic units for chunk assembly.
+
+    Returns a list of ``(text, kind)`` tuples where ``kind`` is one of
+    ``header``, ``paragraph``, or ``code``.
+    """
+    lines = text.split("\n")
+    units = []
+    i = 0
+    n = len(lines)
+
+    while i < n:
+        line = lines[i]
+        stripped = line.lstrip()
+
+        # Skip blank lines between units.
+        if not stripped:
+            i += 1
+            continue
+
+        # Fenced code block: keep everything from the opening fence to the
+        # matching closing fence in a single atomic unit.
+        if stripped.startswith("```"):
+            fence_match = re.match(r"^`+", stripped)
+            fence = fence_match.group(0) if fence_match else "```"
+            block_lines = [line]
+            i += 1
+            closed = False
+            while i < n:
+                block_lines.append(lines[i])
+                if lines[i].strip() == fence:
+                    closed = True
+                    i += 1
+                    break
+                i += 1
+            if not closed:
+                # Unclosed fence: treat remainder as code to avoid splitting
+                # inside what is clearly intended as a code block.
+                pass
+            units.append(("\n".join(block_lines), "code"))
+            continue
+
+        # Markdown header (# through ######).
+        if _HEADER_RE.match(stripped):
+            units.append((line, "header"))
+            i += 1
+            continue
+
+        # Paragraph: lines until a blank line, header, or code fence.
+        para_lines = [line]
+        i += 1
+        while i < n:
+            next_line = lines[i]
+            next_stripped = next_line.lstrip()
+            if not next_stripped:
+                break
+            if _HEADER_RE.match(next_stripped) or next_stripped.startswith("```"):
+                break
+            para_lines.append(next_line)
+            i += 1
+        units.append(("\n".join(para_lines), "paragraph"))
+
+    return units
+
+
+def _merge_units(units, chunk_size):
+    """Merge adjacent units greedily, stopping at header boundaries.
+
+    Adjacent paragraphs are merged until the running total reaches roughly
+    80% of ``chunk_size``. A header always starts a new chunk and remains
+    attached to the content that follows it.
+
+    Finalized chunks (except the very last) append the original paragraph
+    separator (``\\n\\n``) so that concatenating the chunks reconstructs the
+    source text.
+
+    Returns a list of ``(text, is_atomic)`` tuples. A chunk is marked atomic
+    if it contains a fenced code block, which prevents later sentence/word
+    splitting from breaking it apart.
+    """
+    target = int(chunk_size * 0.8)
     chunks = []
-    start = 0
-    while start < len(text):
-        end = min(start + chunk_size, len(text))
-        chunks.append(text[start:end])
-        start += chunk_size - overlap
-        if start >= len(text):
-            break
+    current = []
+    current_len = 0
+    has_code = False
+
+    for text, kind in units:
+        if kind == "header":
+            if current:
+                chunks.append(("\n\n".join(current) + "\n\n", has_code))
+                current = []
+                current_len = 0
+                has_code = False
+            current.append(text)
+            current_len += len(text)
+            continue
+
+        # ``kind`` is ``paragraph`` or ``code``.
+        is_code = kind == "code"
+        separator_len = 2 if current else 0
+        add_len = len(text) + separator_len
+
+        if not current or current_len + add_len <= target:
+            current.append(text)
+            current_len += add_len
+            if is_code:
+                has_code = True
+        else:
+            chunks.append(("\n\n".join(current) + "\n\n", has_code))
+            current = [text]
+            current_len = len(text)
+            has_code = is_code
+
+    if current:
+        chunks.append(("\n\n".join(current), has_code))
+
     return chunks
 
 
-def phase_embed_files(conn, cfg, dry_run=False, verbose=False):
+def _split_oversized(text, chunk_size):
+    """Split non-atomic text at sentence boundaries, then word boundaries.
+
+    Falls back to an oversized single chunk only when an individual token
+    contains no whitespace and exceeds ``chunk_size``.
+    """
+    if len(text) <= chunk_size:
+        return [text]
+
+    boundaries = [0]
+    for match in _SENTENCE_RE.finditer(text):
+        boundaries.append(match.end())
+    if boundaries[-1] != len(text):
+        boundaries.append(len(text))
+
+    chunks = []
+    start = 0
+    prev_end = 0
+    for end in boundaries[1:]:
+        if end - start > chunk_size:
+            # Current chunk would exceed the limit; flush what fits so far.
+            if start < prev_end:
+                chunks.append(text[start:prev_end])
+                start = prev_end
+
+            # The sentence at [start:end] is itself too long; split it.
+            if end - start > chunk_size:
+                sentence = text[start:end]
+                chunks.extend(_split_at_word_boundary(sentence, chunk_size))
+                start = end
+        prev_end = end
+
+    if start < len(text):
+        chunks.append(text[start:])
+
+    # Final safety pass: split any remaining oversized chunk at word bounds.
+    final = []
+    for chunk in chunks:
+        if len(chunk) <= chunk_size:
+            final.append(chunk)
+        else:
+            final.extend(_split_at_word_boundary(chunk, chunk_size))
+    return final
+
+
+def _split_at_word_boundary(text, chunk_size):
+    """Split text at whitespace, emitting an oversized chunk for huge tokens."""
+    if len(text) <= chunk_size:
+        return [text]
+
+    chunks = []
+    start = 0
+    n = len(text)
+    while start < n:
+        remaining = n - start
+        if remaining <= chunk_size:
+            chunks.append(text[start:])
+            break
+
+        end = start + chunk_size
+        space_idx = text.rfind(" ", start, end)
+        if space_idx <= start:
+            # No whitespace within the window: find the end of this token.
+            next_space = text.find(" ", end)
+            if next_space == -1:
+                chunks.append(text[start:])
+                break
+            chunks.append(text[start:next_space])
+            start = next_space + 1
+        else:
+            # Include the space in the current chunk so content is not lost.
+            chunks.append(text[start : space_idx + 1])
+            start = space_idx + 1
+
+    return chunks
+
+
+def _apply_overlap(chunks, overlap, chunk_size):
+    """Prepend boundary-aligned trailing context from the previous chunk.
+
+    The overlap region is taken from the end of the previous chunk and is
+    aligned to start at the latest sentence or paragraph boundary that falls
+    within the overlap window. If no boundary is available, a word boundary
+    is used. The resulting chunks may therefore be up to ``chunk_size +
+    overlap`` characters long.
+    """
+    if not chunks:
+        return []
+
+    result = [chunks[0]]
+    for i in range(1, len(chunks)):
+        prev = chunks[i - 1]
+        boundary = _find_overlap_boundary(prev, overlap)
+        overlap_text = prev[boundary:]
+        if overlap_text:
+            result.append(overlap_text + chunks[i])
+        else:
+            result.append(chunks[i])
+    return result
+
+
+def _find_overlap_boundary(text, overlap):
+    """Return the start index of a boundary-aligned overlap suffix.
+
+    Searches the last ``overlap`` characters of ``text`` for the latest
+    sentence or paragraph boundary. Falls back to a word boundary, then to
+    the earliest position that keeps the overlap within the requested size.
+    """
+    min_pos = max(0, len(text) - overlap)
+    max_pos = len(text)
+
+    candidates = []
+    for match in _SENTENCE_RE.finditer(text):
+        pos = match.end()
+        if min_pos <= pos < max_pos:
+            candidates.append(pos)
+
+    idx = text.find("\n\n")
+    while idx != -1:
+        boundary = idx + 2
+        # Exclude the trailing end-of-chunk position; it yields zero overlap.
+        if min_pos <= boundary < max_pos:
+            candidates.append(boundary)
+        idx = text.find("\n\n", idx + 1)
+
+    if candidates:
+        return max(candidates)
+
+    # Word boundary fallback: latest space within the window that yields a
+    # non-empty overlap region.
+    for i in range(max_pos - 1, min_pos - 1, -1):
+        if text[i] == " ":
+            candidate = i + 1
+            if candidate < max_pos:
+                return candidate
+
+    return min_pos
+
+
+def _embed_file_chunks(cur, cfg, source_name, text, dry_run=False, verbose=False):
+    """Embed chunks for a single memory file. Returns count embedded."""
+    chunks = _chunk_text(text)
+    total = 0
+    for idx, chunk in enumerate(chunks):
+        source_id = f"{source_name}#{idx}"
+        if _already_embedded(cur, "memory_file", source_id):
+            continue
+        if dry_run:
+            if verbose:
+                logger.info(f"    DRY RUN would embed {source_id}")
+            total += 1
+            continue
+        emb = embed_single(chunk, cfg)
+        if emb:
+            _store_embeddings(cur, "memory_file", [{"id": source_id, "text": chunk}], [emb])
+            total += 1
+    return total
+
+
+def _delete_file_embeddings(cur, source_types, verbose=False):
+    """Delete file-based embeddings for reindexing.
+
+    ``source_types`` is an iterable of source_type strings to remove.
+    Returns a dict mapping source_type to deleted row count.
+    """
+    counts = {}
+    for source_type in source_types:
+        cur.execute(
+            "DELETE FROM memory_embeddings WHERE source_type = %s",
+            (source_type,),
+        )
+        counts[source_type] = cur.rowcount
+    if verbose:
+        for source_type, count in counts.items():
+            logger.info(f"  Reindex: deleted {count} {source_type} embeddings")
+    return counts
+
+
+def phase_embed_files(conn, cfg, dry_run=False, verbose=False, reindex_files=False):
+    """Embed memory files (daily logs and MEMORY.md).
+
+    When ``reindex_files`` is True, all existing ``memory_file`` and stale
+    ``daily_log`` embeddings are deleted inside a single SAVEPOINT before
+    re-chunking and re-embedding. A failure at any point during the delete or
+    reinsert rolls back to that savepoint, leaving the database in its
+    pre-run state.
+
+    ``dry_run`` with ``reindex_files`` performs no database mutations and
+    makes no Ollama calls.
+    """
     cur = conn.cursor()
     total = 0
 
-    memory_dir = Path.home() / ".openclaw" / "workspace" / "memory"
-    if memory_dir.exists():
-        for md_file in sorted(memory_dir.glob("*.md")):
-            text = md_file.read_text(encoding="utf-8")
-            chunks = _chunk_text(text)
-            for idx, chunk in enumerate(chunks):
-                source_id = f"{md_file.name}#{idx}"
-                if _already_embedded(cur, "memory_file", source_id):
-                    continue
-                emb = embed_single(chunk, cfg)
-                if emb:
-                    _store_embeddings(cur, "memory_file", [{"id": source_id, "text": chunk}], [emb])
-                    total += 1
+    if reindex_files and dry_run:
+        if verbose:
+            logger.info(
+                "DRY RUN: --reindex-files would delete all memory_file and "
+                "daily_log embeddings, then re-chunk and re-embed files."
+            )
+        return 0
 
+    memory_dir = Path.home() / ".openclaw" / "workspace" / "memory"
     memory_md = Path.home() / ".openclaw" / "workspace" / "MEMORY.md"
-    if memory_md.exists():
-        text = memory_md.read_text(encoding="utf-8")
-        chunks = _chunk_text(text)
-        for idx, chunk in enumerate(chunks):
-            source_id = f"MEMORY.md#{idx}"
-            if _already_embedded(cur, "memory_file", source_id):
-                continue
-            emb = embed_single(chunk, cfg)
-            if emb:
-                _store_embeddings(cur, "memory_file", [{"id": source_id, "text": chunk}], [emb])
-                total += 1
+
+    if reindex_files:
+        cur.execute("SAVEPOINT reindex_files")
+        try:
+            _delete_file_embeddings(
+                cur, ("memory_file", "daily_log"), verbose=verbose
+            )
+        except psycopg2.Error as e:
+            try:
+                cur.execute("ROLLBACK TO SAVEPOINT reindex_files")
+            except psycopg2.Error:
+                pass
+            logger.error(f"[ERROR] Reindex deletion failed: {e}")
+            raise
+
+        try:
+            if memory_dir.exists():
+                for md_file in sorted(memory_dir.glob("*.md")):
+                    text = md_file.read_text(encoding="utf-8")
+                    total += _embed_file_chunks(
+                        cur, cfg, md_file.name, text,
+                        dry_run=dry_run, verbose=verbose
+                    )
+
+            if memory_md.exists():
+                text = memory_md.read_text(encoding="utf-8")
+                total += _embed_file_chunks(
+                    cur, cfg, "MEMORY.md", text,
+                    dry_run=dry_run, verbose=verbose
+                )
+
+            cur.execute("RELEASE SAVEPOINT reindex_files")
+        except psycopg2.Error as e:
+            try:
+                cur.execute("ROLLBACK TO SAVEPOINT reindex_files")
+            except psycopg2.Error:
+                pass
+            logger.error(f"[ERROR] Reindex insert failed: {e}")
+            raise
+        except OllamaConnectionError as e:
+            try:
+                cur.execute("ROLLBACK TO SAVEPOINT reindex_files")
+            except psycopg2.Error:
+                pass
+            logger.error(f"[ERROR] Reindex embedding failed: {e}")
+            raise
+    else:
+        if memory_dir.exists():
+            for md_file in sorted(memory_dir.glob("*.md")):
+                text = md_file.read_text(encoding="utf-8")
+                total += _embed_file_chunks(
+                    cur, cfg, md_file.name, text,
+                    dry_run=dry_run, verbose=verbose
+                )
+
+        if memory_md.exists():
+            text = memory_md.read_text(encoding="utf-8")
+            total += _embed_file_chunks(
+                cur, cfg, "MEMORY.md", text,
+                dry_run=dry_run, verbose=verbose
+            )
 
     if verbose and total:
         logger.info(f"  Embedded {total} memory file chunks")
@@ -576,7 +979,9 @@ def phase_embed(conn, args):
     total += research_total
     total_warns += research_warns
 
-    total += phase_embed_files(conn, cfg, args.dry_run, args.verbose)
+    total += phase_embed_files(
+        conn, cfg, args.dry_run, args.verbose, reindex_files=args.reindex_files
+    )
 
     if args.verbose:
         logger.info(f"Embed phase complete: {total} items embedded, {total_warns} warning(s)")
@@ -1168,6 +1573,15 @@ def parse_args():
     parser.add_argument("--skip-ghost-cleanup", action="store_true", help="Skip ghost entity cleanup")
     parser.add_argument("--skip-entity-dedup", action="store_true", help="Skip entity deduplication")
     parser.add_argument("--skip-lesson-dedup", action="store_true", help="Skip lessons deduplication phase")
+    parser.add_argument(
+        "--reindex-files",
+        action="store_true",
+        default=False,
+        help=(
+            "Delete all memory_file and stale daily_log embeddings, then "
+            "re-chunk and re-embed all memory files. DESTRUCTIVE: use with care."
+        ),
+    )
     return parser.parse_args()
 
 

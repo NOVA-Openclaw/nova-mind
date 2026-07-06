@@ -8758,7 +8758,13 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE d100_roll_log FROM newhart;
 -- Name: d100_roll_log; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE d100_roll_log FROM nova;
+REVOKE DELETE, INSERT ON TABLE d100_roll_log FROM nova;
+
+--
+-- Name: d100_roll_log; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, UPDATE ON TABLE d100_roll_log TO nova;
 
 --
 -- Name: d100_roll_log; Type: PRIVILEGE; Schema: privileges; Owner: -

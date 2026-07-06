@@ -1,5 +1,22 @@
 # Changelog
 
+### Batch: honorific-guard-421 (Issue #421)
+
+#### Added
+- **Deterministic honorific guard in the turn-context plugin** (#421) — `memory/plugins/turn-context/src/honorific-guard.ts` (new, pure function `buildHonorificGuard(entityId, agentId, preferredName?)`) enforces the "Sir" honorific policy every turn, based on the resolved sender entity and the responding agent: no guard when the sender is I)ruid (`entity_id=2`) and the agent is `nova` (exact, case-sensitive match); a NOVA-exclusivity reminder when the sender is I)ruid but the agent is not `nova`; and a prohibition instruction for every other sender, including unresolved/unknown senders (fail-safe). Wired into `before_prompt_build` as Step 2.6 in `index.ts`, immediately after Step 2.5 entity resolution, and appended to `appendSystemContext` (closest to the user message). **Always runs regardless of message type or `prompt_helper_config` gating** — reuses Step 2.5's resolved entity when `entity_resolver` is gated ON, and calls the new lightweight `resolveEntityForGuard()` helper (added to `entity-resolver.ts`, sharing the same `sessionKey:senderId` cache) only when gating is OFF, so exactly one entity resolution runs per turn with no timeout stacking. `agentId` is read from the raw, undefaulted `ctx.agentId` (not the `?? "nova"`-defaulted value) so a missing/null/empty agent id fails closed to the non-NOVA side rather than silently matching `nova`. See `memory/plugins/turn-context/README.md#honorific-guard` for the full behavior table and binding design decisions (A1–A7).
+
+#### Tests
+- `memory/plugins/turn-context/src/honorific-guard.test.ts` — 27 unit tests (HG-001–HG-027) covering all four guard outcomes, fail-closed `agentId` handling, case/whitespace boundary behavior, `preferredName` interpolation, and entity-id edge cases (0, negative, NaN, float). No prior turn-context test suite existed; this establishes the first one (`npx tsx --test`, `tsx` added as a `devDependency`).
+- 20 integration scenarios (IT-001–IT-020) covering gating-bypass, subagent/no-sender, sender-cache-miss-after-restart, peer-agent-gateway, entity-resolution-timeout, group-session, and `appendSegments`-assembly paths — verified via staging desk review and live gateway checks (not automated; documented in nova-mind#421 Step 6–8 review comments).
+
+#### Issues Closed
+- #421 — Deterministic honorific guard for the "Sir" policy in the turn-context plugin
+
+#### Fast-Follows (open)
+- #425 — Post-merge multi-gateway smoke check: confirm each of the 4 production gateways passes a correctly-cased `ctx.agentId` string to the guard (staging is single-instance per the pre-existing nova-mind#402 workaround, so this couldn't be exercised end-to-end pre-merge).
+
+---
+
 ### Batch: schema-sync-direct-push-399 (Issue #399)
 
 #### Fixed

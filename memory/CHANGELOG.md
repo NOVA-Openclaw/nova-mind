@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Added
+- **Deterministic honorific guard in `memory/plugins/turn-context`** (#421) — New pure function `buildHonorificGuard(entityId, agentId, preferredName?)` in `src/honorific-guard.ts` appends a "Sir" honorific-policy instruction to `appendSystemContext` every turn: no guard for I)ruid (`entity_id=2`) talking to `nova`; a NOVA-exclusivity reminder for I)ruid talking to any other agent; a prohibition instruction for every other sender, including unresolved/unknown senders (fail-safe default). Wired into `before_prompt_build` as Step 2.6 in `src/index.ts`, right after Step 2.5 entity resolution, and is **never gated** by `prompt_helper_config` or message type (unlike every other subsystem in this plugin) — it reuses Step 2.5's resolved entity when `entity_resolver` is ON, or calls the new lightweight `resolveEntityForGuard()` helper (added to `src/entity-resolver.ts`) only when gating is OFF, avoiding both a skipped guard and duplicate/stacked entity resolution. `agentId` matching is exact-match case-sensitive on the literal string `"nova"`, using the raw undefaulted `ctx.agentId` so a missing/null/empty value fails closed away from the NOVA-exclusive case. Full behavior table, fail-closed semantics, and gating interaction documented in `memory/plugins/turn-context/README.md#honorific-guard`.
+
+### Tests
+- `memory/plugins/turn-context/src/honorific-guard.test.ts` (#421) — 27 unit tests (HG-001–HG-027), the first automated test suite for the turn-context plugin, run via `npx tsx --test` (`tsx` added as a `devDependency` in `package.json`). 20 additional integration scenarios (IT-001–IT-020) verified via staging desk review rather than an automated suite — see nova-mind#421 for the full test design and staging results.
+
 ### Fixed
 - **`memory/lib/pg_env.py` per-field section precedence over ENV** (#405, originally [nova-workspace#33](https://github.com/NOVA-Openclaw/nova-workspace/issues/33)) — Updated identically (byte-for-byte) to the canonical `lib/pg_env.py`: a field explicitly defined (non-null, non-empty) in a requested `section` (e.g. `section="agent_chat"`) now wins over a pre-exported ambient ENV var for that field only, instead of ENV winning outright. Fields the section omits are unaffected. See root `CHANGELOG.md` (batch `pg-env-section-precedence-405`) and `memory/docs/database-config.md` for the full precedence table and per-language caveats (TypeScript/Bash unaffected by this fix — TS parity tracked in #403).
 

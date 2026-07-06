@@ -87,7 +87,7 @@ The `entity_facts` table includes privacy and provenance columns that exist in t
 
 #### Turn Context Injection (`agent_turn_context`)
 
-The `agent_turn_context` table stores short, high-priority context records that are injected into **every agent turn** via the `turn-context` plugin's turn-reminders module. Unlike `agent_bootstrap_context` (session-level bootstrap), these records fire before every agent response via the `after_message` hook.
+The `agent_turn_context` table stores short, high-priority context records that are injected into **every agent turn** via the `turn-context` plugin's turn-reminders module. Unlike `agent_bootstrap_context` (session-level bootstrap), these records fire before every agent response via the `before_prompt_build` hook (not a separate `after_message` hook — this repo's only two turn-context plugin hooks are `message_received` and `before_prompt_build`; see `memory/plugins/turn-context/README.md`).
 
 **Key properties:**
 - Each record capped at **500 characters** (CHECK constraint in DB)

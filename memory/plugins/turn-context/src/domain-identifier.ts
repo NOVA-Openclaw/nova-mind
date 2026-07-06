@@ -15,13 +15,29 @@
 import * as http from "http";
 import { getPool } from "./shared/pg-pool.ts";
 
+/**
+ * Minimal client/pool shape used by loadDomains(). Keeps the plugin code free
+ * of a hard pg.Pool dependency and makes unit testing straightforward.
+ */
+interface DomainPoolClient {
+  query<RowType = unknown>(
+    text: string,
+    values?: unknown[]
+  ): Promise<{ rows: RowType[] }>;
+  release(): void;
+}
+
+interface DomainPool {
+  connect(): Promise<DomainPoolClient>;
+}
+
 // ── Configuration ─────────────────────────────────────────────────────────────
 
 const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || "http://localhost:11434";
 const EMBEDDING_MODEL = "snowflake-arctic-embed2";
 const EMBEDDING_DIMS = 1024;
 const EMBEDDING_TIMEOUT_MS = 8000;
-const DOMAIN_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+export const DOMAIN_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 const SIMILARITY_THRESHOLD = parseFloat(
   process.env.DOMAIN_SIMILARITY_THRESHOLD || "0.4"
 );
@@ -60,33 +76,110 @@ interface DomainCacheEntry {
 
 let domainCache: DomainCacheEntry | null = null;
 
-async function loadDomains(): Promise<DomainRow[]> {
+// Caches for the agent_domains.keywords column probe.
+// Only a successful probe result is cached (B1); a probe failure is transient
+// and falls back to the canonical keywords-included query.
+let keywordsColumnPresent: boolean | null = null;
+let keywordsColumnProbePromise: Promise<boolean> | null = null;
+let keywordsMissingWarningEmitted = false;
+
+const KEYWORDS_MISSING_WARNING =
+  "[turn-context] agent_domains.keywords missing — keyword matching disabled; apply nova-mind schema migration";
+
+// Byte-identical to the pre-fix query (B3).
+const DOMAIN_QUERY_WITH_KEYWORDS = `
+      SELECT ad.id, ad.domain_topic, a.name AS agent_name, ad.keywords, ad.notes
+      FROM agent_domains ad
+      JOIN agents a ON ad.agent_id = a.id
+      ORDER BY ad.domain_topic
+    `;
+
+const DOMAIN_QUERY_WITHOUT_KEYWORDS = `
+      SELECT ad.id, ad.domain_topic, a.name AS agent_name, ad.notes
+      FROM agent_domains ad
+      JOIN agents a ON ad.agent_id = a.id
+      ORDER BY ad.domain_topic
+    `;
+
+async function probeKeywordsColumn(client: DomainPoolClient): Promise<boolean> {
+  const result = await client.query<{ column_name: string }>(
+    `SELECT column_name
+       FROM information_schema.columns
+      WHERE table_schema = current_schema()
+        AND table_name = 'agent_domains'
+        AND column_name = 'keywords'`
+  );
+  return result.rows.length > 0;
+}
+
+async function getKeywordsColumnPresent(client: DomainPoolClient): Promise<boolean> {
+  if (keywordsColumnPresent !== null) {
+    return keywordsColumnPresent;
+  }
+  if (!keywordsColumnProbePromise) {
+    keywordsColumnProbePromise = probeKeywordsColumn(client)
+      .then((present) => {
+        keywordsColumnPresent = present;
+        return present;
+      })
+      .catch((err) => {
+        // B1: probe failures are not cached; next call will retry.
+        keywordsColumnProbePromise = null;
+        throw err;
+      });
+  }
+  return keywordsColumnProbePromise;
+}
+
+export async function loadDomains(pool?: DomainPool): Promise<DomainRow[]> {
   const now = Date.now();
   if (domainCache && now - domainCache.timestamp < DOMAIN_CACHE_TTL_MS) {
     return domainCache.domains;
   }
 
-  const pool = getPool();
-  const client = await pool.connect();
+  const client: DomainPoolClient = pool
+    ? await pool.connect()
+    : (await getPool().connect() as DomainPoolClient);
   try {
-    const result = await client.query<{
-      id: number;
-      domain_topic: string;
-      agent_name: string;
-      keywords: string[] | null;
-      notes: string | null;
-    }>(`
-      SELECT ad.id, ad.domain_topic, a.name AS agent_name, ad.keywords, ad.notes
-      FROM agent_domains ad
-      JOIN agents a ON ad.agent_id = a.id
-      ORDER BY ad.domain_topic
-    `);
+    let useKeywords = keywordsColumnPresent;
+
+    if (useKeywords === null) {
+      try {
+        useKeywords = await getKeywordsColumnPresent(client);
+      } catch {
+        // B1: probe failure => assume column present and let the normal query
+        // behave exactly as it did before this fix.
+        useKeywords = true;
+      }
+    }
+
+    let result;
+    if (useKeywords) {
+      result = await client.query<{
+        id: number;
+        domain_topic: string;
+        agent_name: string;
+        keywords: string[] | null;
+        notes: string | null;
+      }>(DOMAIN_QUERY_WITH_KEYWORDS);
+    } else {
+      if (!keywordsMissingWarningEmitted) {
+        keywordsMissingWarningEmitted = true;
+        console.warn(KEYWORDS_MISSING_WARNING);
+      }
+      result = await client.query<{
+        id: number;
+        domain_topic: string;
+        agent_name: string;
+        notes: string | null;
+      }>(DOMAIN_QUERY_WITHOUT_KEYWORDS);
+    }
 
     const domains: DomainRow[] = result.rows.map((row) => ({
       id: row.id,
       domainTopic: row.domain_topic,
       agentName: row.agent_name,
-      keywords: row.keywords ?? [],
+      keywords: useKeywords ? (row.keywords ?? []) : [],
       notes: row.notes ?? "",
     }));
 
@@ -98,6 +191,16 @@ async function loadDomains(): Promise<DomainRow[]> {
   } finally {
     client.release();
   }
+}
+
+/**
+ * Reset caches and the warning-once guard. Intended for tests only.
+ */
+export function resetDomainIdentifierCache(): void {
+  domainCache = null;
+  keywordsColumnPresent = null;
+  keywordsColumnProbePromise = null;
+  keywordsMissingWarningEmitted = false;
 }
 
 // ── Embedding ─────────────────────────────────────────────────────────────────
@@ -171,7 +274,7 @@ function getEmbedding(text: string): Promise<number[]> {
  * Check which domains have keywords present in the message.
  * Returns a Map<domainId, keywordScore>.
  */
-function matchKeywords(
+export function matchKeywords(
   message: string,
   domains: DomainRow[]
 ): Map<number, number> {

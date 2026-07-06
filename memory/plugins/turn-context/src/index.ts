@@ -32,7 +32,8 @@
  */
 
 import { getTurnReminders } from "./turn-reminders.ts";
-import { resolveEntityContext, type SenderInfo } from "./entity-resolver.ts";
+import { resolveEntityContext, resolveEntityForGuard, type SenderInfo } from "./entity-resolver.ts";
+import { buildHonorificGuard } from "./honorific-guard.ts";
 import { runSemanticRecall, type RecallInput } from "./semantic-recall.ts";
 import { classifyMessage, type ClassifierResult, type MessageType } from "./classifier.ts";
 import { identifyDomain, formatDomainContext, type DomainResult } from "./domain-identifier.ts";
@@ -251,7 +252,8 @@ export default function register(api: PluginApi): void {
     async (event: PluginEvent, ctx: PluginContext): Promise<PromptBuildResult | undefined> => {
       const hookStart = Date.now();
       const sessionKey = ctx.sessionKey;
-      const agentId: string = ctx.agentId ?? "nova";
+      const rawAgentId = ctx.agentId;
+      const agentId: string = rawAgentId ?? "nova";
 
       console.info(
         `[turn-context] before_prompt_build START agent=${agentId} session=${sessionKey ?? "none"}`
@@ -336,12 +338,14 @@ export default function register(api: PluginApi): void {
       const entityResolveStart = Date.now();
       let entityContextText: string | null = null;
       let resolvedEntityId: number | null = null;
+      let resolvedDisplayName: string | null = null;
 
       if (helperConfig.entity_resolver && sessionKey) {
         try {
           const entityResult = await resolveEntityContext(sessionKey, senderInfo);
           entityContextText = entityResult.text;
           resolvedEntityId = entityResult.entityId;
+          resolvedDisplayName = entityResult.displayName;
         } catch (err) {
           console.error(
             "[turn-context] Entity resolution error:",
@@ -353,6 +357,42 @@ export default function register(api: PluginApi): void {
         `[turn-context] entity-resolver: ` +
         `${resolvedEntityId != null ? `entityId=${resolvedEntityId}` : "no entity"} ` +
         `elapsed=${Date.now() - entityResolveStart}ms`
+      );
+
+      // ── Step 2.6: Always-on honorific guard (#421) ───────────────────────────
+      // Reuses the Step 2.5 result when entity_resolver is enabled (zero extra
+      // calls). When entity_resolver is gated OFF, performs its own lightweight
+      // resolution so the guard is never skipped. This avoids timeout stacking
+      // because only one resolution path runs per turn.
+      let guardEntityId: number | null = null;
+      let guardDisplayName: string | null = null;
+
+      if (helperConfig.entity_resolver) {
+        guardEntityId = resolvedEntityId;
+        guardDisplayName = resolvedDisplayName;
+      } else if (sessionKey) {
+        try {
+          const guardResult = await resolveEntityForGuard(sessionKey, senderInfo);
+          guardEntityId = guardResult.entityId;
+          guardDisplayName = guardResult.displayName;
+        } catch (err) {
+          console.error(
+            "[turn-context] Honorific guard entity resolution error:",
+            err instanceof Error ? err.message : String(err)
+          );
+        }
+      }
+
+      if (rawAgentId == null) {
+        console.warn(
+          "[turn-context] ctx.agentId missing for honorific guard — treating as non-NOVA (fail closed)"
+        );
+      }
+
+      const honorificGuardText = buildHonorificGuard(
+        guardEntityId,
+        rawAgentId,
+        guardDisplayName ?? undefined
       );
 
       // Build recall input: pass classifier domain hints, resolved entityId, + visibility info
@@ -484,6 +524,10 @@ export default function register(api: PluginApi): void {
 
       if (remindersOk) {
         appendSegments.push((turnRemindersResult as PromiseFulfilledResult<string>).value!);
+      }
+
+      if (honorificGuardText) {
+        appendSegments.push(honorificGuardText);
       }
 
       // ── Assemble result ───────────────────────────────────────────────────

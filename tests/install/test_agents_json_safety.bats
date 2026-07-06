@@ -84,14 +84,13 @@ run_agents_json_logic() {
             else
                 echo "  ${warning} DB query returned no agents — agents.json not written"
                 echo "  ${info} agent_config_sync will generate agents.json when gateway starts"
-                return 1
+                return 0
             fi
         else
             echo "  ${warning} Could not query DB for agents.json — agents.json not written"
             echo "  ${info} agent_config_sync will generate agents.json when gateway starts"
             return 1
         fi
-        return 0
     }
 
     if [ -f "$AGENTS_JSON" ]; then

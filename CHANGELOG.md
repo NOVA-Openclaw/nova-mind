@@ -1,5 +1,30 @@
 # Changelog
 
+### Batch: installer-agents-json-429 (Issue #429)
+
+#### Changed
+- **`agent-install.sh` `_generate_agents_json()` now sources rows from `get_agent_export_rows()`** (#429) — the installer no longer runs its own global `instance_type != 'peer'` query against the `agents` table. It consumes the same `get_agent_export_rows()` function that the `agent_config_sync` plugin uses, so initial `agents.json` generation is scoped to the connecting database role (caller’s own row plus subagents that list `session_user` in `parent_agents`). This fixes peer gateways receiving subagents owned by other gateways.
+- **Inactive-but-modeled agents are now excluded from generated `agents.json`** (#429) — `get_agent_export_rows()` filters to `status = 'active'`, whereas the old inline query had no status filter. This is an intentional behavior change: an inactive agent should not be spawned into a gateway's config.
+- **Initial `agents.json` serialization now byte-matches the plugin** (#429) — final formatting is produced by the same Node `JSON.stringify(data, null, 2) + "\n"` path the plugin uses, with sorting performed by the same `localeCompare` comparator. A `jq -S` fallback exists for environments where Node is temporarily unavailable.
+- **Per-agent heartbeat config is now emitted by the installer** (#429) — mirroring `sync.ts`, a `heartbeat` object is included only when `heartbeat_enabled = true` AND `heartbeat_every` is truthy, with only the non-null sub-fields `target` and `to` included.
+- **`is_default` is now taken from `get_agent_export_rows()` output, not `agents.is_default`** (#429) — the function hard-codes `TRUE` for the caller’s own row and `FALSE` for subagent rows, matching the plugin’s expectation that "default" means "this gateway's identity row".
+
+#### Fixed
+- **Minimal non-fatal guard for empty scoped `agents.json` results** (#429, #402 adjacency) — when the scoped query returns no rows (legitimate for a sparse peer gateway), `_generate_agents_json()` now returns 0 and logs a warning instead of returning 1 and killing the installer under `set -euo pipefail`. `psql` failure and non-JSON data still return 1 and preserve the #252 safety rule of never writing `[]`.
+
+#### Tests
+- `tests/install/test_agents_json_issue_429.bats` — 14 new BATS cases covering fresh-install generation, fallback/subagents/default/heartbeat shape parity, sort order, `thinking` omission, psql-failure/empty/non-JSON guards, and the #402 regression guard.
+- `tests/install/test_agents_json_safety.bats` — updated to reflect that an empty DB result is now non-fatal.
+- Byte-parity smoke test against live `nova_memory` confirmed the installer query + Node serialization path produces identical output to `sync.ts` `buildAgentsList()` for the same `get_agent_export_rows()` input.
+
+#### Issues Closed
+- #429 — `agent-install.sh` `_generate_agents_json()` should source rows from `get_agent_export_rows()`
+
+#### Staging-Only Follow-Up
+- TC-429-S-03/04/05/06/07/10/14/15/16 and TC-429-P-01/P-07 require a live multi-role database and should be executed during Step 7 staging validation (per PL decision D6).
+
+---
+
 ### Batch: honorific-guard-421 (Issue #421)
 
 #### Added

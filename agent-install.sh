@@ -2165,62 +2165,97 @@ if [ -d "$AGENT_CONFIG_SYNC_SOURCE" ]; then
 
     # Helper: generate agents.json from DB into $AGENTS_JSON
     _generate_agents_json() {
+        # Query get_agent_export_rows(), which scopes results to the connecting
+        # role (own row + subagents that list session_user in parent_agents) and
+        # filters to active, modeled agents. Shape logic mirrors sync.ts's
+        # buildAgentsList(); final serialization uses the same
+        # JSON.stringify(data, null, 2) + "\n" the agent_config_sync plugin uses.
         local INITIAL_SYNC_QUERY="
-            SELECT COALESCE(
-                json_agg(entry ORDER BY (entry->>'id'))::text,
-                NULL
-            )
+            SELECT COALESCE(json_agg(entry), NULL)::text
             FROM (
-                SELECT
-                    CASE
-                        WHEN fallback_models IS NOT NULL AND array_length(fallback_models, 1) > 0 THEN
-                            jsonb_strip_nulls(jsonb_build_object('id', name)
-                            || CASE WHEN is_default = true THEN jsonb_build_object('default', true) ELSE '{}'::jsonb END
-                            || jsonb_build_object('model', jsonb_build_object('primary', model, 'fallbacks', to_jsonb(fallback_models)))
-                            || CASE WHEN allowed_subagents IS NOT NULL AND array_length(allowed_subagents, 1) > 0
-                                THEN jsonb_build_object('subagents', jsonb_build_object('allowAgents',
-                                    (SELECT jsonb_agg(s ORDER BY s) FROM unnest(allowed_subagents) s)))
-                                ELSE '{}'::jsonb END)
-                        ELSE
-                            jsonb_strip_nulls(jsonb_build_object('id', name)
-                            || CASE WHEN is_default = true THEN jsonb_build_object('default', true) ELSE '{}'::jsonb END
-                            || jsonb_build_object('model', model)
-                            || CASE WHEN allowed_subagents IS NOT NULL AND array_length(allowed_subagents, 1) > 0
-                                THEN jsonb_build_object('subagents', jsonb_build_object('allowAgents',
-                                    (SELECT jsonb_agg(s ORDER BY s) FROM unnest(allowed_subagents) s)))
-                                ELSE '{}'::jsonb END)
-                    END AS entry
-                FROM agents
-                WHERE instance_type != 'peer' AND model IS NOT NULL
+                SELECT jsonb_strip_nulls(
+                    jsonb_build_object(
+                        'id', name,
+                        'model',
+                        CASE
+                            WHEN fallback_models IS NOT NULL AND array_length(fallback_models, 1) > 0
+                            THEN jsonb_build_object('primary', model, 'fallbacks', to_jsonb(fallback_models))
+                            ELSE to_jsonb(model)
+                        END
+                    )
+                    || CASE WHEN is_default = true THEN jsonb_build_object('default', true) ELSE '{}'::jsonb END
+                    || CASE WHEN allowed_subagents IS NOT NULL AND array_length(allowed_subagents, 1) > 0
+                        THEN jsonb_build_object('subagents', jsonb_build_object('allowAgents',
+                            (SELECT jsonb_agg(s ORDER BY s) FROM unnest(allowed_subagents) s)))
+                        ELSE '{}'::jsonb END
+                    || CASE WHEN heartbeat_enabled = true AND heartbeat_every IS NOT NULL AND heartbeat_every <> ''
+                        THEN jsonb_build_object('heartbeat', jsonb_strip_nulls(
+                            jsonb_build_object('every', heartbeat_every)
+                            || CASE WHEN heartbeat_target IS NOT NULL AND heartbeat_target <> '' THEN jsonb_build_object('target', heartbeat_target) ELSE '{}'::jsonb END
+                            || CASE WHEN heartbeat_to IS NOT NULL AND heartbeat_to <> '' THEN jsonb_build_object('to', heartbeat_to) ELSE '{}'::jsonb END))
+                        ELSE '{}'::jsonb END
+                ) AS entry
+                FROM get_agent_export_rows()
             ) sub
         "
         local AGENTS_DATA
         if AGENTS_DATA=$(psql -U "$DB_USER" -d "$DB_NAME" -tAc "$INITIAL_SYNC_QUERY" 2>/dev/null); then
             if [ -n "$AGENTS_DATA" ] && [ "$AGENTS_DATA" != "null" ] && [ "$AGENTS_DATA" != "" ]; then
-                if echo "$AGENTS_DATA" | jq '.' >"$AGENTS_JSON_TMP" 2>/dev/null; then
-                    # shellcheck disable=SC2015
-                    mv "$AGENTS_JSON_TMP" "$AGENTS_JSON" && \
-                        echo -e "  ${CHECK_MARK} Generated agents.json from DB" || \
-                        { echo -e "  ${WARNING} Could not write agents.json"; rm -f "$AGENTS_JSON_TMP"; return 1; }
+                local FORMAT_OK=0
+                if command -v node &>/dev/null; then
+                    # Preferred: byte-match the plugin's JSON.stringify(data, null, 2) + "\n"
+                    if echo "$AGENTS_DATA" | node -e '
+                        let input = "";
+                        process.stdin.setEncoding("utf8");
+                        process.stdin.on("data", c => input += c);
+                        process.stdin.on("end", () => {
+                            const data = JSON.parse(input);
+                            data.sort((a, b) => a.id.localeCompare(b.id));
+                            process.stdout.write(JSON.stringify(data, null, 2) + "\n");
+                        });
+                    ' >"$AGENTS_JSON_TMP" 2>/dev/null; then
+                        FORMAT_OK=1
+                    fi
                 else
-                    echo -e "  ${WARNING} DB returned non-JSON data for agents.json — not writing"
+                    # Fallback if node is unavailable: jq sorted formatting with trailing newline.
+                    if echo "$AGENTS_DATA" | jq -S 'sort_by(.id)' >"$AGENTS_JSON_TMP" 2>/dev/null; then
+                        if [ -s "$AGENTS_JSON_TMP" ] && [ "$(tail -c 1 "$AGENTS_JSON_TMP" | wc -l)" -eq 0 ]; then
+                            echo >> "$AGENTS_JSON_TMP"
+                        fi
+                        FORMAT_OK=1
+                    fi
+                fi
+
+                if [ "$FORMAT_OK" -eq 1 ]; then
+                    if mv "$AGENTS_JSON_TMP" "$AGENTS_JSON"; then
+                        echo -e "  ${CHECK_MARK} Generated agents.json from DB"
+                        return 0
+                    else
+                        echo -e "  ${WARNING} Could not write agents.json"
+                        rm -f "$AGENTS_JSON_TMP"
+                        return 1
+                    fi
+                else
+                    echo -e "  ${WARNING} Could not serialize agents.json from DB data — not writing"
                     rm -f "$AGENTS_JSON_TMP"
                     return 1
                 fi
             else
-                # DB returned NULL or empty — no agents found, but psql succeeded
-                # Do NOT write '[]' — log a warning instead
+                # DB returned NULL or empty — no agents found, but psql succeeded.
+                # Do NOT write '[]' — log a warning instead. Returning 0 lets the
+                # installer continue under set -e; agent_config_sync will generate
+                # the file later (see #402 adjacency).
                 echo -e "  ${WARNING} DB query returned no agents — agents.json not written"
                 echo -e "  ${INFO} agent_config_sync will generate agents.json when gateway starts"
-                return 1
+                return 0
             fi
         else
             # psql failed — NEVER write '[]'
             echo -e "  ${WARNING} Could not query DB for agents.json — agents.json not written"
             echo -e "  ${INFO} agent_config_sync will generate agents.json when gateway starts"
+            rm -f "$AGENTS_JSON_TMP"
             return 1
         fi
-        return 0
     }
 
     echo "  Checking agents.json status..."

@@ -122,69 +122,11 @@ export interface SenderInfo {
 export async function resolveEntityContext(
   sessionKey: string,
   info: SenderInfo
-): Promise<{ text: string | null; entityId: number | null }> {
-  // Lazy-load entity resolver — graceful degradation if not installed
-  if (!(await ensureEntityResolver())) return { text: null, entityId: null };
-
-  const { senderId, senderName, provider, senderE164 } = info;
-
-  if (!senderId) return { text: null, entityId: null };
-
-  // Cache key includes both sessionKey AND senderId to prevent cross-user collisions
-  // in group channels where sessionKey is shared across all participants.
-  const cacheKey = `${sessionKey}:${senderId}`;
-
-  let entity: Entity | null = null;
-
-  // Check library cache first (keyed by sessionKey:senderId)
-  if (getCachedEntity) {
-    entity = getCachedEntity(cacheKey) as Entity | null;
-  }
+): Promise<{ text: string | null; entityId: number | null; displayName: string | null }> {
+  const entity = await resolveEntityOnly(sessionKey, info);
 
   if (!entity) {
-    const identifiers = extractIdentifiers(provider, senderId, senderE164);
-    if (Object.keys(identifiers).length === 0) {
-      // Unknown provider — no way to resolve
-      console.log(`[turn-context] Unknown provider '${provider}', skipping entity resolution`);
-      return { text: null, entityId: null };
-    }
-
-    try {
-      const resolveResult = await Promise.race([
-        resolveEntityByIdentifiers(identifiers),
-        new Promise<null>((resolve) => setTimeout(() => resolve(null), 2000)),
-      ]);
-
-      if (resolveResult) {
-        if (resolveResult.ok) {
-          entity = resolveResult.entity as Entity;
-        } else {
-          // Conflict: multiple entities matched — safer to skip
-          console.error(
-            `[turn-context] Entity conflict for sender ${senderName || senderId}: ` +
-            `${resolveResult.message}`
-          );
-          return { text: null, entityId: null };
-        }
-      }
-
-      if (entity && setCachedEntity) {
-        setCachedEntity(cacheKey, entity);
-      }
-    } catch (err) {
-      console.error(
-        "[turn-context] Entity resolution error:",
-        err instanceof Error ? err.message : String(err)
-      );
-      return { text: null, entityId: null };
-    }
-  }
-
-  if (!entity) {
-    console.log(
-      `[turn-context] No entity found for sender: ${senderName || senderId}`
-    );
-    return { text: null, entityId: null };
+    return { text: null, entityId: null, displayName: null };
   }
 
   // Load entity facts with a 1s timeout
@@ -203,9 +145,109 @@ export async function resolveEntityContext(
     }
   }
 
+  const displayName = entity.fullName || entity.name;
   const result = formatEntityContext(entity, facts);
   console.log(
-    `[turn-context] Loaded entity context for: ${entity.name} (entityId=${entity.id}) (${senderId})`
+    `[turn-context] Loaded entity context for: ${entity.name} (entityId=${entity.id}) (${info.senderId})`
   );
-  return { text: result, entityId: entity.id as number };
+  return { text: result, entityId: entity.id as number, displayName };
+}
+
+/**
+ * Lightweight entity resolution for the honorific guard.
+ *
+ * Returns only the entity id and display name, skipping the entity-facts
+ * lookup and text formatting. Uses the same cache key as resolveEntityContext
+ * so warm paths hit the same cached entity.
+ *
+ * Issue: nova-mind #421
+ */
+export async function resolveEntityForGuard(
+  sessionKey: string,
+  info: SenderInfo
+): Promise<{ entityId: number | null; displayName: string | null }> {
+  const entity = await resolveEntityOnly(sessionKey, info);
+
+  if (!entity) {
+    return { entityId: null, displayName: null };
+  }
+
+  const displayName = entity.fullName || entity.name;
+  return { entityId: entity.id as number, displayName };
+}
+
+/**
+ * Shared entity resolution logic used by resolveEntityContext and
+ * resolveEntityForGuard. Handles cache lookup, identifier extraction,
+ * database resolution, and caching.
+ */
+async function resolveEntityOnly(
+  sessionKey: string,
+  info: SenderInfo
+): Promise<Entity | null> {
+  // Lazy-load entity resolver — graceful degradation if not installed
+  if (!(await ensureEntityResolver())) return null;
+
+  const { senderId, senderName, provider, senderE164 } = info;
+
+  if (!senderId) return null;
+
+  // Cache key includes both sessionKey AND senderId to prevent cross-user collisions
+  // in group channels where sessionKey is shared across all participants.
+  const cacheKey = `${sessionKey}:${senderId}`;
+
+  let entity: Entity | null = null;
+
+  // Check library cache first (keyed by sessionKey:senderId)
+  if (getCachedEntity) {
+    entity = getCachedEntity(cacheKey) as Entity | null;
+  }
+
+  if (!entity) {
+    const identifiers = extractIdentifiers(provider, senderId, senderE164);
+    if (Object.keys(identifiers).length === 0) {
+      // Unknown provider — no way to resolve
+      console.log(`[turn-context] Unknown provider '${provider}', skipping entity resolution`);
+      return null;
+    }
+
+    try {
+      const resolveResult = await Promise.race([
+        resolveEntityByIdentifiers(identifiers),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 2000)),
+      ]);
+
+      if (resolveResult) {
+        if (resolveResult.ok) {
+          entity = resolveResult.entity as Entity;
+        } else {
+          // Conflict: multiple entities matched — safer to skip
+          console.error(
+            `[turn-context] Entity conflict for sender ${senderName || senderId}: ` +
+            `${resolveResult.message}`
+          );
+          return null;
+        }
+      }
+
+      if (entity && setCachedEntity) {
+        setCachedEntity(cacheKey, entity);
+      }
+    } catch (err) {
+      console.error(
+        "[turn-context] Entity resolution error:",
+        err instanceof Error ? err.message : String(err)
+      );
+      return null;
+    }
+  }
+
+  if (!entity) {
+    console.log(
+      `[turn-context] No entity found for sender: ${senderName || senderId}`
+    );
+    return null;
+  }
+
+  return entity;
 }

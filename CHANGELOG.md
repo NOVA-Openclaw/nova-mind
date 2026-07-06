@@ -17,6 +17,20 @@
 
 ---
 
+### Batch: turn-context-tolerant-keywords-384 (Issue #384)
+
+#### Fixed
+- **`memory/plugins/turn-context/src/domain-identifier.ts` `loadDomains()` tolerates a missing `agent_domains.keywords` column** (#384) — Ecosystem instances whose memory DB predates the `keywords TEXT[]` column (schema drift, e.g. `victoria_memory`) previously threw `column ad.keywords does not exist` on every turn, silently degrading domain identification. `loadDomains()` now runs a one-time `information_schema.columns` probe for `agent_domains.keywords` on the first call in a process's lifetime. **Column present:** executes the original, byte-identical keywords-included query — zero behavior change on healthy schemas (`nova_memory` and other canonical instances), confirmed via exact SQL-text diff against the pre-fix query. **Column absent:** executes a fallback query omitting `ad.keywords`, returning `keywords: []` for every domain (never `null`/`undefined`), which the existing `matchKeywords()` already treats as a no-op — keyword matching is disabled for that process while embedding-similarity matching is unaffected. Exactly **one** warning is logged per process lifetime (not per turn, not per domain-cache refresh cycle) naming the missing column and remediation: `[turn-context] agent_domains.keywords missing — keyword matching disabled; apply nova-mind schema migration`. The column-presence cache is a separate, unbounded-lifetime cache from the existing 5-minute domain-row cache (`DOMAIN_CACHE_TTL_MS`) — once determined, it is not re-probed for the rest of the process's life, even across many domain-cache TTL expirations; a probe *failure* (as opposed to a successful absent/present determination) is not cached and retries on the next cold call, defaulting to "assume column present" in the meantime so a transient probe error never permanently disables keyword matching on a healthy schema. A mid-process schema migration is intentionally not picked up until process restart (documented, accepted tradeoff, not a bug). See `memory/plugins/turn-context/README.md#schema-drift-tolerance-domain-identifier` for the full probe semantics, cache-lifetime table, and remediation guidance.
+- **`memory/plugins/turn-context/package.json` `scripts.test` now self-sufficient on a clean checkout** (#384) — A QA desk-review defect found that `node --test dist/*.test.js` silently reports `0 tests / 0 pass / 0 fail` (exit 0) on a fresh clone without a prior `npm run build`, a false-pass footgun. The test script now runs the suite directly from `src/` via `tsx`, so `npm test` executes all 18 unit tests on a clean checkout without requiring a separate build step first. This also resolved a textual `package.json`/`package-lock.json` merge conflict with the sibling `feature/issue-421-honorific-guard` branch, which independently added the same `scripts.test` key — both branches now use an identical `tsx`-based script and `tsx` devDependency.
+
+#### Tests
+- `memory/plugins/turn-context/src/domain-identifier.test.ts` (#384) — 18 unit tests (DK-001–DK-018) covering the column-present path (byte-identical query, cache behavior), the column-absent fallback path (`keywords: []` guarantee, non-keyword field mapping unchanged, `matchKeywords()` no-op confirmation), warning-once lifecycle (including survival across domain-cache TTL expiry — the highest-risk regression case), and error paths (probe failure fallback, fallback-query failure propagation, `client.release()` guarantee, malformed probe result handling, concurrent-call race safety). 8 integration test cases (IT-001–IT-008) executed against real PostgreSQL on nova-staging (drifted-schema clone + canonical `nova_staging_memory`) — all PASS, including a real 5-minute TTL wall-clock sleep for the warning-once guarantee and a live mid-process `ALTER TABLE ADD COLUMN` schema-flip test confirming the documented restart-required behavior.
+
+#### Issues Closed
+- (none — Part A only; see PR #427. Issue #384 remains open pending Part B: installer coverage for `victoria_memory`, blocked on Victoria access)
+
+---
+
 ### Batch: schema-sync-direct-push-399 (Issue #399)
 
 #### Fixed

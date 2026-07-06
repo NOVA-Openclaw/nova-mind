@@ -21,7 +21,7 @@ before_prompt_build:
 | Subsystem | File | Description |
 |-----------|------|-------------|
 | **Classifier** | `classifier.ts` | Classifies messages into `info_request`, `action`, `conversation`, `continuation`, `command`. Rule-based first pass (~60-70%), Ollama LLM fallback for ambiguous cases. |
-| **Domain Identifier** | `domain-identifier.ts` | Matches messages to subject-matter domains via keyword matching + embedding similarity against `agent_domains` table. Returns top 1-3 domains with assigned agents (via JOIN, not hardcoded). |
+| **Domain Identifier** | `domain-identifier.ts` | Matches messages to subject-matter domains via keyword matching + embedding similarity against `agent_domains` table. Returns top 1-3 domains with assigned agents (via JOIN, not hardcoded). Tolerates a missing `agent_domains.keywords` column on drifted schemas — see [Schema-Drift Tolerance](#schema-drift-tolerance-domain-identifier) below. |
 | **Entity Resolver** | `entity-resolver.ts` | Resolves sender identity via the entity-resolver library. Cache keyed by `sessionKey:senderId` (not just sessionKey) to support group channels. Returns both formatted text and numeric `entityId`. Also exports `resolveEntityForGuard()`, a lightweight resolution (id + display name only, no facts lookup) used by the honorific guard when `entity_resolver` is gated off. |
 | **Semantic Recall** | `semantic-recall.ts` | Spawns `proactive-recall.py` for memory retrieval. Supports tiered recall (domain-scoped first, full fallback) and visibility filtering (group channels → public facts only). |
 | **Turn Reminders** | `turn-reminders.ts` | Queries `agent_turn_context` table for per-turn reminder text. **Always fires regardless of message type** — not gated by prompt_helper_config. |
@@ -115,6 +115,72 @@ See `nova-mind#421` for the full design history and binding decisions (A1–A7).
 - **`memory_embeddings`** — domain description embeddings (`source_type='agent_domain'`)
 - **Entity resolver library** — `~/.openclaw/lib/entity-resolver/index.ts`
 
+## Schema-Drift Tolerance (Domain Identifier)
+
+`domain-identifier.ts`'s `loadDomains()` tolerates ecosystem instances whose `agent_domains` table
+predates the `keywords TEXT[]` column (schema drift — e.g. `victoria_memory`), instead of throwing
+`column ad.keywords does not exist` on every turn.
+
+### Probe semantics
+
+On the first call in a process's lifetime, `loadDomains()` runs a one-time
+`information_schema.columns` probe for `agent_domains.keywords`:
+
+- **Column present:** executes the original, byte-identical keywords-included query. No behavior
+  change from pre-tolerance code — same SQL text, same columns, same join, same ordering.
+- **Column absent:** executes a fallback query that omits `ad.keywords` from the SELECT list.
+  Every returned domain row gets `keywords: []` (never `null`/`undefined`), which downstream
+  keyword matching (`matchKeywords()`) already treats as a no-op — keyword matching is effectively
+  disabled for that process, while embedding-similarity matching is unaffected.
+- **Probe failure** (transient error, permissions issue, etc.): treated as "assume column
+  present" — the plugin proceeds with the normal keywords-included query, exactly as it did
+  before this change. A failed probe is **not** cached, so the next cold call retries it.
+
+### Cache lifetimes — two separate caches
+
+This feature introduces a cache that is **independent of, and longer-lived than**, the existing
+5-minute domain-row cache (`DOMAIN_CACHE_TTL_MS`):
+
+| Cache | Scope | Lifetime | Reset condition |
+|---|---|---|---|
+| Domain row cache (`domainCache`) | Cached `DomainRow[]` results | 5 minutes | Expires and re-queries on every `loadDomains()` call after TTL |
+| Column-presence cache (`keywordsColumnPresent`) | Whether `agent_domains.keywords` exists | Unbounded — full process lifetime | Never re-probed once a **successful** probe result is cached; only re-attempted if the previous probe failed |
+
+Only a *successful* probe result (column present or absent) is ever cached — a probe failure
+leaves the column-presence cache empty so the next call retries. This means the column-presence
+determination outlives multiple domain-cache refresh cycles: once a process determines the column
+is absent, it will not re-probe `information_schema.columns` again for the rest of that process's
+lifetime, even after the 5-minute domain cache has expired and re-queried many times over. A
+mid-process schema migration (column added while the process is still running) is not picked up
+until the next process restart — this is intentional, accepted behavior, not a bug.
+
+### Warning-once behavior
+
+When the column is absent, exactly **one** warning is logged per process lifetime (not per turn,
+not per domain-cache refresh):
+
+```
+[turn-context] agent_domains.keywords missing — keyword matching disabled; apply nova-mind schema migration
+```
+
+The warning-emitted flag is a separate, independently-set module-level flag from both caches above
+— it is set synchronously immediately before the warning is logged, so it holds even under
+concurrent/overlapping `loadDomains()` calls on a cold cache.
+
+### No-change guarantee on canonical schemas
+
+On any instance where `agent_domains.keywords` already exists (the canonical/current schema —
+`nova_memory` and other up-to-date ecosystem databases), this feature is a no-op: the exact same
+query runs, the exact same data is returned, and no warning is ever logged. The tolerance path
+only activates when the probe detects the column is genuinely absent.
+
+### Remediation
+
+If you see the warning above, apply the nova-mind schema migration that adds
+`agent_domains.keywords TEXT[]` to bring the instance back to the canonical schema. Restart the
+process afterward to pick up the change (see [Cache lifetimes](#cache-lifetimes--two-separate-caches)
+above).
+
 ## Migration Notes
 
 Migration `081_prompt_helper_config.sql` must be run in two parts due to table ownership:
@@ -139,3 +205,4 @@ After migration, run `memory/scripts/seed-domain-embeddings.py` to embed domain 
 - #182 — Original plugin consolidation (semantic-recall + agent-turn-context hooks)
 - #421 — Deterministic honorific guard (Step 2.6)
 - #425 — Follow-up: post-merge multi-gateway `agentId` casing/deployment-consistency smoke check for the guard
+- #384 — Domain identifier tolerates missing `agent_domains.keywords` column (schema drift)

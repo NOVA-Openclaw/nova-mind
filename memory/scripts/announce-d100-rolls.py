@@ -32,17 +32,29 @@ if os.path.isdir(_VENV_SITE) and _VENV_SITE not in sys.path:
 
 import psycopg2  # noqa: E402
 
-_PG_ENV_DIR = os.path.join(
+# Load centralized PG config loader. Try the installed location first
+# (~/.openclaw/lib), then fall back to the repo-relative path so tests and
+# repo-based runs continue to work. See nova-mind#437.
+_installed_pg_env_dir = os.path.expanduser("~/.openclaw/lib")
+_repo_pg_env_dir = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "..", "..", "lib"
 )
-if _PG_ENV_DIR not in sys.path:
-    sys.path.insert(0, _PG_ENV_DIR)
+_PG_ENV_AVAILABLE = False
+for _pg_env_dir in (_installed_pg_env_dir, _repo_pg_env_dir):
+    if _pg_env_dir not in sys.path:
+        sys.path.insert(0, _pg_env_dir)
+    try:
+        from pg_env import load_pg_env  # type: ignore
+        _PG_ENV_AVAILABLE = True
+        break
+    except ImportError:
+        # Remove the failed path so the next candidate is tried cleanly.
+        if _pg_env_dir in sys.path:
+            sys.path.remove(_pg_env_dir)
 
-try:
-    from pg_env import load_pg_env  # type: ignore
-    _PG_ENV_AVAILABLE = True
-except ImportError:
-    _PG_ENV_AVAILABLE = False
+# Keep a stable name for backwards compatibility in case anything references
+# _PG_ENV_DIR directly (tests, wrappers, etc.).
+_PG_ENV_DIR = _installed_pg_env_dir if _PG_ENV_AVAILABLE else _repo_pg_env_dir
 
 # ---------------------------------------------------------------------------
 # Constants

@@ -17,8 +17,11 @@ STAGING_ONLY manifest comment at the bottom of this file.
 """
 
 import importlib.util
+import os
 import re
+import subprocess
 import sys
+import textwrap
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from types import ModuleType
@@ -493,6 +496,72 @@ class TestDsn:
         assert "pgport=" not in dsn
         assert "pgdatabase=" not in dsn
         assert "pguser=" not in dsn
+
+
+class TestInstalledLayout:
+    def test_installed_layout_imports_pg_env(self, tmp_path):
+        """nova-mind#437: script copied to ~/.openclaw/scripts must find
+        pg_env at ~/.openclaw/lib, not rely on repo-relative ../../lib.
+
+        This test simulates the installed layout: the script lives in
+        ~/.openclaw/scripts (no ../../lib present) and the shared library is
+        at ~/.openclaw/lib/pg_env.py. It must fail on code that only tries
+        the repo-relative path and pass once the installed path is tried
+        first.
+        """
+        fake_home = tmp_path / "home"
+        fake_lib = fake_home / ".openclaw" / "lib"
+        fake_lib.mkdir(parents=True)
+        fake_scripts = fake_home / ".openclaw" / "scripts"
+        fake_scripts.mkdir(parents=True)
+
+        (fake_lib / "pg_env.py").write_text(textwrap.dedent("""
+            def load_pg_env(section=None):
+                return {
+                    "PGHOST": "installed-host",
+                    "PGPORT": "15432",
+                    "PGDATABASE": "installed_db",
+                    "PGUSER": "installed_user",
+                }
+        """))
+
+        installed_script = fake_scripts / "announce-d100-rolls.py"
+        installed_script.write_bytes(_SCRIPT_PATH.read_bytes())
+
+        # The repo-relative fallback from the installed location points at
+        # ~/lib, which does not exist in this simulated layout.
+        assert not (fake_home / "lib").exists()
+
+        probe = textwrap.dedent(f"""
+            import importlib.util
+            spec = importlib.util.spec_from_file_location(
+                "announcer_installed", {str(installed_script)!r}
+            )
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            print("PG_ENV_AVAILABLE=" + str(mod._PG_ENV_AVAILABLE))
+            env = mod.load_pg_env()
+            print("PGHOST=" + env.get("PGHOST", "MISSING"))
+            print("PGDATABASE=" + env.get("PGDATABASE", "MISSING"))
+        """)
+
+        env = {**os.environ, "HOME": str(fake_home)}
+        result = subprocess.run(
+            [sys.executable, "-c", probe],
+            capture_output=True,
+            text=True,
+            env=env,
+            check=False,
+        )
+
+        print(result.stdout)
+        if result.stderr:
+            print(result.stderr, file=sys.stderr)
+
+        assert result.returncode == 0
+        assert "PG_ENV_AVAILABLE=True" in result.stdout
+        assert "PGHOST=installed-host" in result.stdout
+        assert "PGDATABASE=installed_db" in result.stdout
 
 
 # ---------------------------------------------------------------------------

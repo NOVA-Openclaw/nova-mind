@@ -176,3 +176,29 @@ teardown() {
     [ "$status" -eq 0 ]
     [[ "$output" == *"--no-cron"* ]]
 }
+
+@test "TC-435-CRON-01: wrapper survives cron-like env without USER/LOGNAME" {
+    local tmp_home
+    tmp_home="$(mktemp -d)"
+    local wrapper="$REPO_ROOT/memory/scripts/announce-d100-rolls.sh"
+    local expected_log="$tmp_home/.openclaw/logs/announce-d100-rolls.log"
+
+    # Cron does not set USER or LOGNAME and runs with a minimal PATH.
+    # Run the wrapper in a stripped environment pointed at a temp HOME so
+    # the log is inspectable and we do not touch production logs.
+    run env -u USER -u LOGNAME -i HOME="$tmp_home" SHELL=/bin/sh PATH=/usr/bin:/bin bash "$wrapper" --dry-run
+
+    local status_code=$status
+    local full_output="$output"
+    if [ -f "$expected_log" ]; then
+        full_output="${full_output}$(cat "$expected_log")"
+    fi
+
+    rm -rf "$tmp_home"
+
+    # The wrapper must not crash on an unbound variable before reaching Python.
+    [[ "$full_output" != *"unbound variable"* ]]
+    [[ "$full_output" == *"announce-d100-rolls starting"* ]]
+    # 127 means a required binary (bash, env, id, mkdir, date, etc.) was missing.
+    [ "$status_code" -ne 127 ]
+}

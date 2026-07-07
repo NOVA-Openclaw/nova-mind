@@ -1,5 +1,35 @@
 # Changelog
 
+### Batch: installer-agents-json-429 (Issue #429)
+
+#### Changed
+- **`agent-install.sh` `_generate_agents_json()` now sources rows from `get_agent_export_rows()`** (#429) — the installer no longer runs its own global `instance_type != 'peer'` query against the `agents` table. It consumes the same `get_agent_export_rows()` function that the `agent_config_sync` plugin uses, so initial `agents.json` generation is scoped to the connecting database role (caller’s own row plus subagents that list `session_user` in `parent_agents`). This fixes peer gateways receiving subagents owned by other gateways.
+- **Inactive-but-modeled agents are now excluded from generated `agents.json`** (#429) — `get_agent_export_rows()` filters to `status = 'active'`, whereas the old inline query had no status filter. This is an intentional behavior change: an inactive agent should not be spawned into a gateway's config.
+- **Initial `agents.json` serialization now byte-matches the plugin** (#429) — final formatting is produced by the same Node `JSON.stringify(data, null, 2) + "\n"` path the plugin uses, with sorting performed by the same `localeCompare` comparator. A `jq -S` fallback exists for environments where Node is temporarily unavailable.
+- **Per-agent heartbeat config is now emitted by the installer** (#429) — mirroring `sync.ts`, a `heartbeat` object is included only when `heartbeat_enabled = true` AND `heartbeat_every` is truthy, with only the non-null sub-fields `target` and `to` included.
+- **`is_default` is now taken from `get_agent_export_rows()` output, not `agents.is_default`** (#429) — the function hard-codes `TRUE` for the caller’s own row and `FALSE` for subagent rows, matching the plugin’s expectation that "default" means "this gateway's identity row".
+
+#### Fixed
+- **Minimal non-fatal guard for empty scoped `agents.json` results** (#429, #402 adjacency) — when the scoped query returns no rows (legitimate for a sparse peer gateway), `_generate_agents_json()` now returns 0 and writes an empty `[]` placeholder so the gateway's `agents.list = { "$include": "./agents.json" }` remains valid and the gateway can boot. `psql` failure and non-JSON data still return 1, write nothing, and preserve the #252 safety rule of never writing `[]` to mask a real failure.
+- **Per-entry key order now byte-matches the `agent_config_sync` plugin** (#429) — the Node serialization step reconstructs each entry object in the plugin's exact `buildAgentsList()` insertion order (`id`, `model`, `default`, `subagents`, `heartbeat`; heartbeat sub-fields `every`, `target`, `to`) instead of preserving PostgreSQL's jsonb canonical key order. This makes the installer's `agents.json` byte-identical to the plugin's output for identical DB state, so the plugin's first sync is a no-op and no unnecessary SIGUSR1 reload fires.
+
+#### Tests
+- `tests/install/test_agents_json_issue_429.bats` — 14 new BATS cases covering fresh-install generation, fallback/subagents/default/heartbeat shape parity, sort order, `thinking` omission, psql-failure/empty/non-JSON guards, and the #402 regression guard.
+- `tests/install/test_agents_json_safety.bats` — updated to reflect that an empty DB result is now non-fatal.
+- Byte-parity smoke test against live `nova_memory` confirmed the installer query + Node serialization path produces identical output to `sync.ts` `buildAgentsList()` for the same `get_agent_export_rows()` input.
+
+#### Issues Closed
+- #429 — `agent-install.sh` `_generate_agents_json()` should source rows from `get_agent_export_rows()`
+
+#### Staging Validation (Step 7/Step 8, SE run #364)
+- Live staging runs against multi-role seeded DB confirmed correct `session_user` scoping (TC-429-S-03/04/05/06/07 — including the S-04 core FAIL→PASS regression proof and the S-06 multi-parent fan-out case), shape parity (TC-429-P-02…P-07), and the `--regenerate-agents-json`/NULL-model/inactive-status boundary cases (TC-429-S-10/15/16). All passed.
+- The initial staging run surfaced two defects, both fixed in this batch and re-verified live before merge:
+  - **Byte-parity failure** when an agent entry has both `heartbeat` and `subagents` present simultaneously — PostgreSQL's jsonb canonical key ordering diverged from the plugin's JS insertion order, so the plugin's first sync was not a no-op. Fixed by reconstructing each entry in the plugin's exact key order (see `Fixed` above); re-verified live with hash-stability across two gateway restart cycles (TC-429-P-01).
+  - **Gateway unbootable after a fresh/sparse install** — the empty-guard correctly declined to write `agents.json`, but `openclaw.json`'s `agents.list = { "$include": "./agents.json" }` then failed config validation on the missing file. Fixed by writing a literal `[]` placeholder on the legitimately-empty path only; psql failure and non-JSON-data paths still write nothing. Re-verified live: `openclaw config validate` passes and the gateway boots to `http server listening` against a real zero-rows-in-scope role.
+- TC-429-S-14 (unwritable target directory/file) remains BATS-only — not independently executed live on staging. Low risk since its failure-path mechanism was live-verified twice via the psql-failure and non-JSON forced-failure paths (TC-429-S-11/S-13); folded into #431's future scope rather than filed separately.
+
+---
+
 ### Batch: honorific-guard-421 (Issue #421)
 
 #### Added

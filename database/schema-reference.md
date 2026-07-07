@@ -40,7 +40,7 @@
 | comms_checks | Individual Hermes check run results. Each row = one social/email/digest check. Replaces memory/hermes-*.md files. Owner: Communications domain (hermes). | 11 |
 | comms_digests | Daily/weekly communications digests. Replaces hermes-social-digest-*.md and NOVA_Comms_Digest_*.html. Owner: Communications domain (hermes). | 11 |
 | comms_state | Per-platform communications tracking state (seen IDs, cursors). Replaces hermes-social-state.json. Owner: Communications domain (hermes). | 5 |
-| d100_roll_log | Roll history for motivation_d100 (issue #358), populated by a trigger on motivation_d100. Used by the Proactive Mode gate check to force a D100 roll after 12h regardless of other steps' state. | 3 |
+| d100_roll_log | Roll history for motivation_d100 (issue #358), populated by a trigger on motivation_d100. Used by the Proactive Mode gate check to force a D100 roll after 12h regardless of other steps' state. `announced_at` (issue #432) tracks deterministic cron-based announcement to #proactive-mode, decoupled from the heartbeat LLM turn. | 4 |
 | entities | People, AIs, organizations. NOVA has full access. Use entity_facts for attributes. | 22 |
 | entity_fact_conflicts | Conflicts between entity facts requiring resolution. Part of the truth reconciliation system. | 13 |
 | entity_fact_sources | - | 8 |

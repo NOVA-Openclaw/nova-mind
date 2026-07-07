@@ -2204,21 +2204,48 @@ if [ -d "$AGENT_CONFIG_SYNC_SOURCE" ]; then
                 local FORMAT_OK=0
                 if command -v node &>/dev/null; then
                     # Preferred: byte-match the plugin's JSON.stringify(data, null, 2) + "\n"
+                    # Reconstruct each entry in the exact key order buildAgentsList()
+                    # uses (id, model, default, subagents, heartbeat) so PostgreSQL's
+                    # jsonb canonical ordering does not leak through.
                     if echo "$AGENTS_DATA" | node -e '
                         let input = "";
                         process.stdin.setEncoding("utf8");
                         process.stdin.on("data", c => input += c);
                         process.stdin.on("end", () => {
-                            const data = JSON.parse(input);
-                            data.sort((a, b) => a.id.localeCompare(b.id));
-                            process.stdout.write(JSON.stringify(data, null, 2) + "\n");
+                            const rows = JSON.parse(input);
+                            const list = [];
+                            for (const row of rows) {
+                                const entry = { id: row.id, model: row.model };
+                                if (row.default === true) entry.default = true;
+                                if (row.subagents) entry.subagents = row.subagents;
+                                if (row.heartbeat) {
+                                    const hb = { every: row.heartbeat.every };
+                                    if (row.heartbeat.target) hb.target = row.heartbeat.target;
+                                    if (row.heartbeat.to) hb.to = row.heartbeat.to;
+                                    entry.heartbeat = hb;
+                                }
+                                list.push(entry);
+                            }
+                            list.sort((a, b) => a.id.localeCompare(b.id));
+                            process.stdout.write(JSON.stringify(list, null, 2) + "\n");
                         });
                     ' >"$AGENTS_JSON_TMP" 2>/dev/null; then
                         FORMAT_OK=1
                     fi
                 else
-                    # Fallback if node is unavailable: jq sorted formatting with trailing newline.
-                    if echo "$AGENTS_DATA" | jq -S 'sort_by(.id)' >"$AGENTS_JSON_TMP" 2>/dev/null; then
+                    # Fallback if node is unavailable: jq reconstructs the same key order and sorts.
+                    if echo "$AGENTS_DATA" | jq '
+                        map(
+                            {id: .id, model: .model} +
+                            (if .default == true then {default: true} else {} end) +
+                            (if .subagents then {subagents: .subagents} else {} end) +
+                            (if .heartbeat then {heartbeat: (
+                                {every: .heartbeat.every} +
+                                (if .heartbeat.target then {target: .heartbeat.target} else {} end) +
+                                (if .heartbeat.to then {to: .heartbeat.to} else {} end)
+                            )} else {} end)
+                        ) | sort_by(.id)
+                    ' >"$AGENTS_JSON_TMP" 2>/dev/null; then
                         if [ -s "$AGENTS_JSON_TMP" ] && [ "$(tail -c 1 "$AGENTS_JSON_TMP" | wc -l)" -eq 0 ]; then
                             echo >> "$AGENTS_JSON_TMP"
                         fi
@@ -2241,13 +2268,19 @@ if [ -d "$AGENT_CONFIG_SYNC_SOURCE" ]; then
                     return 1
                 fi
             else
-                # DB returned NULL or empty — no agents found, but psql succeeded.
-                # Do NOT write '[]' — log a warning instead. Returning 0 lets the
-                # installer continue under set -e; agent_config_sync will generate
-                # the file later (see #402 adjacency).
-                echo -e "  ${WARNING} DB query returned no agents — agents.json not written"
-                echo -e "  ${INFO} agent_config_sync will generate agents.json when gateway starts"
-                return 0
+                # DB returned NULL or empty — no agents in scope, but psql succeeded.
+                # Write an empty placeholder so the openclaw.json $include stays valid
+                # and the gateway can boot; agent_config_sync will populate real data
+                # on startup. Failure paths (psql error / non-JSON) still write nothing.
+                printf '[]\n' > "$AGENTS_JSON_TMP"
+                if mv "$AGENTS_JSON_TMP" "$AGENTS_JSON"; then
+                    echo -e "  ${INFO} no agents in scope — wrote empty agents.json placeholder; agent_config_sync will populate on startup"
+                    return 0
+                else
+                    echo -e "  ${WARNING} Could not write empty agents.json placeholder"
+                    rm -f "$AGENTS_JSON_TMP"
+                    return 1
+                fi
             fi
         else
             # psql failed — NEVER write '[]'

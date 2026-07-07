@@ -7,6 +7,7 @@
 #
 # Test cases:
 #   TC-429-S-01: Fresh install generates correct scoped agents.json (mocked DB)
+#   TC-429-P-01: Byte-parity with plugin serialization when heartbeat + subagents coexist
 #   TC-429-P-02: Fallback-models shape parity
 #   TC-429-P-03: allowed_subagents shape parity (sorted, NULL/empty omitted, wildcard)
 #   TC-429-P-04: is_default parity (trust function output, not agents table)
@@ -14,7 +15,7 @@
 #   TC-429-P-06: thinking column never emitted
 #   TC-429-P-07: Sort order parity (JS localeCompare via node)
 #   TC-429-S-11: psql failure never writes file
-#   TC-429-S-12: empty DB result returns 0, no file written
+#   TC-429-S-12: empty DB result returns 0 and writes [] placeholder
 #   TC-429-S-13: non-JSON DB data not written
 #   TC-429-S-17: empty allowed_subagents omits subagents key
 #   TC-429-S-18: empty fallback_models yields bare string
@@ -122,9 +123,15 @@ run_agents_json_logic() {
                     return 1
                 fi
             else
-                echo -e "  ${warning} DB query returned no agents — agents.json not written"
-                echo -e "  ${info} agent_config_sync will generate agents.json when gateway starts"
-                return 0
+                printf '[]\n' > "$AGENTS_JSON_TMP"
+                if mv "$AGENTS_JSON_TMP" "$AGENTS_JSON"; then
+                    echo -e "  ${info} no agents in scope — wrote empty agents.json placeholder; agent_config_sync will populate on startup"
+                    return 0
+                else
+                    echo -e "  ${warning} Could not write empty agents.json placeholder"
+                    rm -f "$AGENTS_JSON_TMP"
+                    return 1
+                fi
             fi
         else
             echo -e "  ${warning} Could not query DB for agents.json — agents.json not written"
@@ -184,6 +191,57 @@ run_agents_json_logic() {
     # Three agents total, sorted.
     run jq -r '.[].id' "$FAKE_AGENTS_JSON"
     [ "$output" = $'coder\ngem\nnova' ]
+}
+
+# ─── TC-429-P-01: Byte-parity when heartbeat + subagents coexist ─────────────
+
+@test "TC-429-P-01: Entry with heartbeat and subagents is byte-identical to plugin serialization" {
+    local rows='[
+        {"name":"nova","model":"anthropic/claude-opus-4","fallback_models":null,"thinking":"high","instance_type":"primary","is_default":true,"allowed_subagents":["gem","coder"],"heartbeat_enabled":true,"heartbeat_every":"5m","heartbeat_target":"discord","heartbeat_to":"channel:1234"}
+    ]'
+
+    run run_agents_json_logic 0 "$rows"
+    [ "$status" -eq 0 ]
+    [ -f "$FAKE_AGENTS_JSON" ]
+
+    # Build the plugin's expected serialization from the same raw row shape.
+    local expected
+    expected=$(echo "$rows" | node -e '
+        let input = "";
+        process.stdin.setEncoding("utf8");
+        process.stdin.on("data", c => input += c);
+        process.stdin.on("end", () => {
+            const rows = JSON.parse(input);
+            const list = [];
+            for (const row of rows) {
+                const hasFallbacks = Array.isArray(row.fallback_models) && row.fallback_models.length > 0;
+                const entry = {
+                    id: row.name,
+                    model: hasFallbacks
+                        ? { primary: row.model, fallbacks: [...row.fallback_models] }
+                        : row.model,
+                };
+                if (row.is_default === true) entry.default = true;
+                if (Array.isArray(row.allowed_subagents) && row.allowed_subagents.length > 0) {
+                    entry.subagents = { allowAgents: [...row.allowed_subagents].sort() };
+                }
+                if (row.heartbeat_enabled === true && row.heartbeat_every) {
+                    const hb = { every: row.heartbeat_every };
+                    if (row.heartbeat_target) hb.target = row.heartbeat_target;
+                    if (row.heartbeat_to) hb.to = row.heartbeat_to;
+                    entry.heartbeat = hb;
+                }
+                list.push(entry);
+            }
+            list.sort((a, b) => a.id.localeCompare(b.id));
+            process.stdout.write(JSON.stringify(list, null, 2) + "\n");
+        });
+    ')
+
+    local actual
+    actual=$(cat "$FAKE_AGENTS_JSON")
+
+    [ "$actual" = "$expected" ]
 }
 
 # ─── TC-429-P-02: Fallback-models shape parity ───────────────────────────────
@@ -326,14 +384,16 @@ run_agents_json_logic() {
 
 # ─── TC-429-S-12 / TC-429-R-02 ───────────────────────────────────────────────
 
-@test "TC-429-S-12 / TC-429-R-02: empty DB result is non-fatal and writes no file" {
+@test "TC-429-S-12 / TC-429-R-02: empty DB result is non-fatal and writes [] placeholder" {
     [ ! -f "$FAKE_AGENTS_JSON" ]
 
     run run_agents_json_logic 0 "__EMPTY__"
     [ "$status" -eq 0 ]
-    [ ! -f "$FAKE_AGENTS_JSON" ]
-    [[ "$output" == *"DB query returned no agents"* ]]
-    [[ "$output" == *"agent_config_sync will generate agents.json"* ]]
+    [[ "$output" == *"no agents in scope"* ]]
+    [[ "$output" == *"agent_config_sync will populate on startup"* ]]
+    [ -f "$FAKE_AGENTS_JSON" ]
+    run jq -c '.' "$FAKE_AGENTS_JSON"
+    [ "$output" = "[]" ]
 }
 
 # ─── TC-429-S-13 ─────────────────────────────────────────────────────────────

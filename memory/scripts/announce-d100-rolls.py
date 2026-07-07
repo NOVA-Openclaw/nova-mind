@@ -21,8 +21,9 @@ from typing import Any
 # even when running outside the venv.
 # ---------------------------------------------------------------------------
 _PY_VER = f"python{sys.version_info.major}.{sys.version_info.minor}"
+_VENV_USER = os.environ.get("USER", "nova")
 _VENV_SITE = os.path.expanduser(
-    f"~/.local/share/nova/venv/lib/{_PY_VER}/site-packages"
+    f"~/.local/share/{_VENV_USER}/venv/lib/{_PY_VER}/site-packages"
 )
 if os.path.isdir(_VENV_SITE) and _VENV_SITE not in sys.path:
     sys.path.insert(0, _VENV_SITE)
@@ -50,7 +51,11 @@ MAX_INDIVIDUAL_MESSAGES = 3
 
 def _dsn() -> str:
     """Build a psycopg2 DSN from pg_env. Password is omitted; libpq reads
-    PGPASSWORD from the environment set by load_pg_env and/or .pgpass."""
+    PGPASSWORD from the environment set by load_pg_env and/or .pgpass.
+
+    Mirrors the explicit per-key mapping used by proactive-gate-check.py so
+    that PGPORT -> port=, PGDATABASE -> dbname=, PGUSER -> user=.
+    """
     if not _PG_ENV_AVAILABLE:
         raise RuntimeError("pg_env loader not importable")
     env = load_pg_env()
@@ -60,9 +65,12 @@ def _dsn() -> str:
         parts.append(f"host={host}")
     else:
         parts.append("host=/var/run/postgresql")
-    for key in ("PGPORT", "PGDATABASE", "PGUSER"):
-        if env.get(key):
-            parts.append(f"{key.lower()}={env[key]}")
+    if env.get("PGPORT"):
+        parts.append(f"port={env['PGPORT']}")
+    if env.get("PGDATABASE"):
+        parts.append(f"dbname={env['PGDATABASE']}")
+    if env.get("PGUSER"):
+        parts.append(f"user={env['PGUSER']}")
     return " ".join(parts)
 
 
@@ -195,7 +203,7 @@ def _build_rows(claimed: list[tuple[Any, ...]], task_map: dict[int, dict[str, An
     return rows
 
 
-def main() -> int:
+def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
         description="Announce unannounced D100 rolls to Discord #proactive-mode."
     )
@@ -204,7 +212,7 @@ def main() -> int:
         action="store_true",
         help="Read rows and print what would be sent without sending or stamping.",
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     try:
         conn = psycopg2.connect(_dsn())

@@ -56,13 +56,15 @@ def _mock_conn(claimed_rows, task_rows=None):
     mock_cur.__exit__ = MagicMock(return_value=False)
 
     def fake_execute(sql, params=None):
-        if "UPDATE d100_roll_log SET announced_at" in sql and "RETURNING" in sql:
+        # The real SQL is multi-line; normalize whitespace before matching.
+        normalized = " ".join(sql.split())
+        if "UPDATE d100_roll_log SET announced_at" in normalized and "RETURNING" in normalized:
             state["last"] = "claim"
-        elif "UPDATE d100_roll_log SET announced_at = NULL" in sql:
+        elif "UPDATE d100_roll_log SET announced_at = NULL" in normalized:
             state["last"] = "unstamp"
-        elif "SELECT id, roll, rolled_at" in sql:
+        elif "SELECT id, roll, rolled_at" in normalized:
             state["last"] = "select"
-        elif "FROM motivation_d100" in sql:
+        elif "FROM motivation_d100" in normalized:
             state["last"] = "tasks"
         else:
             state["last"] = "other"
@@ -108,7 +110,7 @@ class TestSelection:
         with patch.object(m, "psycopg2") as mock_psycopg2, \
              patch.object(m, "_send_message", return_value=True):
             mock_psycopg2.connect.return_value = conn
-            rc = m.main()
+            rc = m.main([])
 
         assert rc == 0
         # Claim query issued
@@ -121,7 +123,7 @@ class TestSelection:
 
         with patch.object(m, "psycopg2") as mock_psycopg2:
             mock_psycopg2.connect.return_value = conn
-            rc = m.main()
+            rc = m.main([])
 
         assert rc == 0
         out, _ = capsys.readouterr()
@@ -140,7 +142,7 @@ class TestIdempotency:
         with patch.object(m, "psycopg2") as mock_psycopg2, \
              patch.object(m, "_send_message") as mock_send:
             mock_psycopg2.connect.return_value = conn
-            rc = m.main()
+            rc = m.main([])
 
         assert rc == 0
         mock_send.assert_not_called()
@@ -158,18 +160,13 @@ class TestIdempotency:
         with patch.object(m, "psycopg2") as mock_psycopg2, \
              patch.object(m, "_send_message", return_value=True) as mock_send:
             mock_psycopg2.connect.return_value = conn
-            m.main()
+            m.main([])
 
         assert mock_send.call_count == 3
 
-    def test_n_rows_parametrized(self, m, n):
-        """TC-432-U-14 equivalence partitioning via parametrization."""
-        pass
-
-
-@pytest.mark.parametrize("n", [1, 2, 5, 10])
+@pytest.mark.parametrize("n", [1, 2, 3])
 def test_n_rows_exactly_n_posts(m, n):
-    """TC-432-U-14: each of N rows gets exactly one post."""
+    """TC-432-U-14: for N <= 3, each row gets its own post."""
     now = datetime.now(timezone.utc)
     claimed = [(i, i, now - timedelta(minutes=n - i)) for i in range(1, n + 1)]
     conn = _mock_conn(claimed)
@@ -177,9 +174,24 @@ def test_n_rows_exactly_n_posts(m, n):
     with patch.object(m, "psycopg2") as mock_psycopg2, \
          patch.object(m, "_send_message", return_value=True) as mock_send:
         mock_psycopg2.connect.return_value = conn
-        m.main()
+        m.main([])
 
     assert mock_send.call_count == n
+
+
+@pytest.mark.parametrize("n", [5, 10])
+def test_n_rows_digest_when_over_three(m, n):
+    """TC-432-U-14 + D3: for N > 3, rolls collapse into a single digest post."""
+    now = datetime.now(timezone.utc)
+    claimed = [(i, i, now - timedelta(minutes=n - i)) for i in range(1, n + 1)]
+    conn = _mock_conn(claimed)
+
+    with patch.object(m, "psycopg2") as mock_psycopg2, \
+         patch.object(m, "_send_message", return_value=True) as mock_send:
+        mock_psycopg2.connect.return_value = conn
+        m.main([])
+
+    assert mock_send.call_count == 1
 
 
 # ---------------------------------------------------------------------------
@@ -197,7 +209,7 @@ class TestFormatting:
         with patch.object(m, "psycopg2") as mock_psycopg2, \
              patch.object(m, "_send_message") as mock_send:
             mock_psycopg2.connect.return_value = conn
-            m.main()
+            m.main([])
 
         text = mock_send.call_args[0][0]
         assert text.startswith('🎲 D100 roll 42: "Write tests"')
@@ -214,7 +226,7 @@ class TestFormatting:
         with patch.object(m, "psycopg2") as mock_psycopg2, \
              patch.object(m, "_send_message") as mock_send:
             mock_psycopg2.connect.return_value = conn
-            m.main()
+            m.main([])
 
         text = mock_send.call_args[0][0]
         assert "Completed" in text
@@ -229,7 +241,7 @@ class TestFormatting:
         with patch.object(m, "psycopg2") as mock_psycopg2, \
              patch.object(m, "_send_message") as mock_send:
             mock_psycopg2.connect.return_value = conn
-            m.main()
+            m.main([])
 
         text = mock_send.call_args[0][0]
         assert "Completed" in text
@@ -244,7 +256,7 @@ class TestFormatting:
         with patch.object(m, "psycopg2") as mock_psycopg2, \
              patch.object(m, "_send_message", return_value=True) as mock_send:
             mock_psycopg2.connect.return_value = conn
-            m.main()
+            m.main([])
 
         text = mock_send.call_args[0][0]
         assert "Task with \"quotes\"" in text
@@ -261,7 +273,7 @@ class TestFormatting:
         with patch.object(m, "psycopg2") as mock_psycopg2, \
              patch.object(m, "_send_message") as mock_send:
             mock_psycopg2.connect.return_value = conn
-            m.main()
+            m.main([])
 
         text = mock_send.call_args[0][0]
         assert "Completed" not in text
@@ -281,7 +293,7 @@ class TestJoinDrift:
         with patch.object(m, "psycopg2") as mock_psycopg2, \
              patch.object(m, "_send_message") as mock_send:
             mock_psycopg2.connect.return_value = conn
-            m.main()
+            m.main([])
 
         text = mock_send.call_args[0][0]
         assert "task unknown (slot 99)" in text
@@ -296,7 +308,7 @@ class TestJoinDrift:
         with patch.object(m, "psycopg2") as mock_psycopg2, \
              patch.object(m, "_send_message") as mock_send:
             mock_psycopg2.connect.return_value = conn
-            m.main()
+            m.main([])
 
         text = mock_send.call_args[0][0]
         assert "task unknown (slot 7)" in text
@@ -316,7 +328,7 @@ class TestFailureSemantics:
         with patch.object(m, "psycopg2") as mock_psycopg2, \
              patch.object(m, "_send_message", return_value=False) as mock_send:
             mock_psycopg2.connect.return_value = conn
-            rc = m.main()
+            rc = m.main([])
 
         assert rc == 0
         execute_calls = [call[0][0] for call in conn.cursor.return_value.execute.call_args_list]
@@ -332,14 +344,14 @@ class TestFailureSemantics:
         with patch.object(m, "psycopg2") as mock_psycopg2, \
              patch.object(m, "_send_message", return_value=False):
             mock_psycopg2.connect.return_value = conn1
-            assert m.main() == 0
+            assert m.main([]) == 0
 
         # Second run: row still unannounced, send succeeds
         conn2 = _mock_conn(claimed)
         with patch.object(m, "psycopg2") as mock_psycopg2, \
              patch.object(m, "_send_message", return_value=True) as mock_send:
             mock_psycopg2.connect.return_value = conn2
-            assert m.main() == 0
+            assert m.main([]) == 0
             mock_send.assert_called_once()
 
     def test_partial_batch_failure(self, m):
@@ -359,7 +371,7 @@ class TestFailureSemantics:
         with patch.object(m, "psycopg2") as mock_psycopg2, \
              patch.object(m, "_send_message", side_effect=send_side_effect) as mock_send:
             mock_psycopg2.connect.return_value = conn
-            rc = m.main()
+            rc = m.main([])
 
         assert rc == 0
         assert mock_send.call_count == 3
@@ -377,7 +389,7 @@ class TestFailureSemantics:
         """TC-432-U-12 DB failure path."""
         with patch.object(m, "psycopg2") as mock_psycopg2:
             mock_psycopg2.connect.side_effect = Exception("connection refused")
-            rc = m.main()
+            rc = m.main([])
         assert rc == 1
 
 
@@ -404,7 +416,7 @@ class TestOrderingBatching:
         with patch.object(m, "psycopg2") as mock_psycopg2, \
              patch.object(m, "_send_message", side_effect=capture):
             mock_psycopg2.connect.return_value = conn
-            m.main()
+            m.main([])
 
         # Extract roll numbers from sent messages in order.
         rolls = [int(re.search(r"roll (\d+):", t).group(1)) for t in sent]
@@ -419,7 +431,7 @@ class TestOrderingBatching:
         with patch.object(m, "psycopg2") as mock_psycopg2, \
              patch.object(m, "_send_message", return_value=True) as mock_send:
             mock_psycopg2.connect.return_value = conn
-            m.main()
+            m.main([])
 
         # Exactly one digest message.
         assert mock_send.call_count == 1
@@ -449,9 +461,38 @@ class TestRegression:
 
     def test_check_step11_d100_not_broken_by_announced_at(self, m):
         """TC-432-R-03, R-04, R-05: announcer's UPDATE only touches announced_at."""
-        # The SQL used by the announcer to stamp rows must not include rolled_at.
-        assert "UPDATE d100_roll_log SET announced_at = now()" in _SCRIPT_PATH.read_text()
-        assert "SET rolled_at" not in _SCRIPT_PATH.read_text()
+        script_text = _SCRIPT_PATH.read_text()
+        # The real stamp SQL is multi-line; normalize before asserting it exists.
+        normalized = " ".join(script_text.split())
+        assert "UPDATE d100_roll_log SET announced_at = now()" in normalized
+        # Load-bearing invariant: the announcer must NEVER write rolled_at.
+        assert "SET rolled_at" not in script_text
+
+
+# ---------------------------------------------------------------------------
+# DSN construction (D-1 regression)
+# ---------------------------------------------------------------------------
+
+class TestDsn:
+    def test_dsn_uses_libpq_keywords(self, m):
+        """D-1: _dsn() maps PGPORT->port, PGDATABASE->dbname, PGUSER->user."""
+        fake_env = {
+            "PGHOST": "localhost",
+            "PGPORT": "5432",
+            "PGDATABASE": "nova_memory",
+            "PGUSER": "coder",
+        }
+        with patch.object(m, "load_pg_env", return_value=fake_env), \
+             patch.object(m, "_PG_ENV_AVAILABLE", True):
+            dsn = m._dsn()
+
+        assert "host=localhost" in dsn
+        assert "port=5432" in dsn
+        assert "dbname=nova_memory" in dsn
+        assert "user=coder" in dsn
+        assert "pgport=" not in dsn
+        assert "pgdatabase=" not in dsn
+        assert "pguser=" not in dsn
 
 
 # ---------------------------------------------------------------------------

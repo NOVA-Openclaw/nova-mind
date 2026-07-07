@@ -40,6 +40,7 @@
 
 #### Fixed
 - **D1 — `d100_roll_log` grants schema drift** (#432) — `database/schema.sql` incorrectly `REVOKE`d even `SELECT` from `nova` on `d100_roll_log`, which a fresh `pgschema apply` would have enforced, breaking both `check_step11_d100()` and the new announcer at the DB layer regardless of application logic correctness. Corrected to `REVOKE DELETE, INSERT ON TABLE d100_roll_log FROM nova;` followed by `GRANT SELECT, UPDATE ON TABLE d100_roll_log TO nova;` — `SELECT` for gate-check reads and announcer row selection, `UPDATE` for the `announced_at` stamp only, no `INSERT`/`DELETE` (the trigger inserts via its own `SECURITY DEFINER` path). All other agent roles remain `SELECT`-only.
+- **Cron wrapper `USER` unbound-variable crash** (#435) — `memory/scripts/announce-d100-rolls.sh` now derives the username with `$(id -un)` instead of `${USER}` (cron does not set `USER` per POSIX, so `set -u` fatally expanded it to an empty string before any logging or DB work), exports a `PATH` covering the `openclaw` binary location (`~/.npm-global/bin`, `~/.local/bin`, `~/bin`, plus system directories), and logs the resolved username on startup. `memory/scripts/announce-d100-rolls.py` now falls back from `USER` to `LOGNAME` to `getpass.getuser()` for venv-path bootstrap and verifies `openclaw` is resolvable on `PATH` before invoking it, failing with a clear diagnostic instead of a `FileNotFoundError` under a minimal cron environment. Adds BATS regression test `TC-435-CRON-01` that runs the wrapper under a stripped cron-like environment (`env -u USER -u LOGNAME -i HOME=... PATH=/usr/bin:/bin`) and asserts it does not crash on an unbound variable.
 
 #### Fix Round (QA desk-review defects, all closed)
 - **D-1 (S2/P1) — Invalid libpq DSN keywords.** `_dsn()` originally built a DSN using non-libpq keys (e.g. `pgport=`); corrected to the explicit `host=`/`port=`/`dbname=`/`user=` key mapping already used by `proactive-gate-check.py`. Verified live: `psycopg2.connect()` + `SELECT 1` against a real `PGPORT`-configured environment; added `TestDsn::test_dsn_uses_libpq_keywords`.
@@ -53,7 +54,7 @@
 
 #### Tests
 - `motivation/tests/test_announce_d100_rolls.py` — 26 tests covering unannounced-row selection, idempotency, message formatting (roll-only vs. roll+completed, inclusive `>=` boundary), digest-collapse boundary (individual ≤3 vs. digest >3), failure semantics (CLI non-zero exit → compensating un-stamp, per-row independence, retry-ability), chronological ordering, `LEFT JOIN` degrade (missing/disabled task), and the DSN keyword regression (D-1).
-- `tests/install/test_announce_d100_rolls_cron.bats` — 7 cases: fresh install, idempotent re-run, drift detection (crontab left untouched), `--no-cron` opt-out, `--verify-only` installed/missing reporting, and a `--help` text check.
+- `tests/install/test_announce_d100_rolls_cron.bats` — 8 cases: fresh install, idempotent re-run, drift detection (crontab left untouched), `--no-cron` opt-out, `--verify-only` installed/missing reporting, `--help` text check, and cron-environment `USER`/`LOGNAME` unbound-variable regression coverage (TC-435-CRON-01).
 
 #### Issues Closed
 - #432 — Deterministic D100 roll announcements to #proactive-mode

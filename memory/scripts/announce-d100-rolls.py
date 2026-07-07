@@ -10,7 +10,9 @@ See: nova-mind#432
 """
 
 import argparse
+import getpass
 import os
+import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -21,7 +23,7 @@ from typing import Any
 # even when running outside the venv.
 # ---------------------------------------------------------------------------
 _PY_VER = f"python{sys.version_info.major}.{sys.version_info.minor}"
-_VENV_USER = os.environ.get("USER", "nova")
+_VENV_USER = os.environ.get("USER") or os.environ.get("LOGNAME") or getpass.getuser()
 _VENV_SITE = os.path.expanduser(
     f"~/.local/share/{_VENV_USER}/venv/lib/{_PY_VER}/site-packages"
 )
@@ -108,8 +110,17 @@ def _send_message(text: str, dry_run: bool) -> bool:
         print(f"[DRY-RUN] would send: {text[:200]}...")
         return True
 
+    openclaw_bin = shutil.which("openclaw")
+    if not openclaw_bin:
+        print(
+            "openclaw CLI not found in PATH; ensure the cron wrapper exports a PATH "
+            "containing the openclaw binary (e.g. ~/.npm-global/bin).",
+            file=sys.stderr,
+        )
+        return False
+
     cmd = [
-        "openclaw", "message", "send",
+        openclaw_bin, "message", "send",
         "--channel", "discord",
         "--target", f"channel:{DISCORD_CHANNEL}",
         "-m", text,

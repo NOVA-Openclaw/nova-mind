@@ -21,8 +21,12 @@
 #### Issues Closed
 - #429 — `agent-install.sh` `_generate_agents_json()` should source rows from `get_agent_export_rows()`
 
-#### Staging-Only Follow-Up
-- TC-429-S-03/04/05/06/07/10/14/15/16 and TC-429-P-01/P-07 require a live multi-role database and should be executed during Step 7 staging validation (per PL decision D6).
+#### Staging Validation (Step 7/Step 8, SE run #364)
+- Live staging runs against multi-role seeded DB confirmed correct `session_user` scoping (TC-429-S-03/04/05/06/07 — including the S-04 core FAIL→PASS regression proof and the S-06 multi-parent fan-out case), shape parity (TC-429-P-02…P-07), and the `--regenerate-agents-json`/NULL-model/inactive-status boundary cases (TC-429-S-10/15/16). All passed.
+- The initial staging run surfaced two defects, both fixed in this batch and re-verified live before merge:
+  - **Byte-parity failure** when an agent entry has both `heartbeat` and `subagents` present simultaneously — PostgreSQL's jsonb canonical key ordering diverged from the plugin's JS insertion order, so the plugin's first sync was not a no-op. Fixed by reconstructing each entry in the plugin's exact key order (see `Fixed` above); re-verified live with hash-stability across two gateway restart cycles (TC-429-P-01).
+  - **Gateway unbootable after a fresh/sparse install** — the empty-guard correctly declined to write `agents.json`, but `openclaw.json`'s `agents.list = { "$include": "./agents.json" }` then failed config validation on the missing file. Fixed by writing a literal `[]` placeholder on the legitimately-empty path only; psql failure and non-JSON-data paths still write nothing. Re-verified live: `openclaw config validate` passes and the gateway boots to `http server listening` against a real zero-rows-in-scope role.
+- TC-429-S-14 (unwritable target directory/file) remains BATS-only — not independently executed live on staging. Low risk since its failure-path mechanism was live-verified twice via the psql-failure and non-JSON forced-failure paths (TC-429-S-11/S-13); folded into #431's future scope rather than filed separately.
 
 ---
 

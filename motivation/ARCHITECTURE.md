@@ -52,7 +52,10 @@ and additionally **forced** actionable whenever more than 12h have elapsed since
 recorded roll, regardless of other steps' state (issue #358). Managed via `roll_d100()` and
 `complete_d100(roll)` SECURITY DEFINER functions. Roll history (used for the forced-D100
 check) is tracked in `d100_roll_log`, populated by a trigger on `motivation_d100` (migration
-082).
+082). Roll announcements to `#proactive-mode` are handled by a dedicated cron script
+(`memory/scripts/announce-d100-rolls.py`, issue #432), not by the heartbeat LLM turn — see
+`motivation/README.md#d100-roll-announcer` for details. This is independent of the gate
+check logic below, which is unaffected.
 
 ### 6. Unsolved Problems Research Workflow (id=32)
 

@@ -28,6 +28,10 @@ VERIFICATION_PASSED=0
 VERIFICATION_WARNINGS=0
 VERIFICATION_ERRORS=0
 
+# Cron install status tracking
+# shellcheck disable=SC2034
+ANNOUNCE_D100_CRON_STATUS="not installed"
+
 # Track if gateway restart is needed
 # shellcheck disable=SC2034
 GATEWAY_RESTART_NEEDED=0
@@ -86,6 +90,11 @@ DAILY_LOG_SCRIPT="generate-daily-log.py"
 DAILY_LOG_CRON_MARKER="$HOME/.openclaw/scripts/$DAILY_LOG_SCRIPT"
 DAILY_LOG_CRON_NIGHTLY='5 0 * * *    '"$DAILY_LOG_CRON_MARKER"' >> '"$OPENCLAW_LOGS_DIR"'/generate-daily-log.log 2>&1'
 DAILY_LOG_CRON_INTRADAY='0 6,12,18 * * * '"$DAILY_LOG_CRON_MARKER"' >> '"$OPENCLAW_LOGS_DIR"'/generate-daily-log.log 2>&1'
+
+# D100 roll announcer cron configuration
+ANNOUNCE_D100_SCRIPT="announce-d100-rolls.sh"
+ANNOUNCE_D100_CRON_MARKER="$HOME/.openclaw/scripts/$ANNOUNCE_D100_SCRIPT"
+ANNOUNCE_D100_CRON_ENTRY='*/15 * * * * '"$ANNOUNCE_D100_CRON_MARKER"' >> '"$OPENCLAW_LOGS_DIR"'/announce-d100-rolls.log 2>&1'
 
 # Superuser connection helper for DDL operations
 PG_SUPERUSER="${PG_SUPERUSER:-$DB_USER}"
@@ -254,6 +263,60 @@ _install_daily_log_cron() {
     fi
 }
 
+# Install or verify the D100 roll announcer cron entry.
+# Uses globals: ANNOUNCE_D100_CRON_MARKER, ANNOUNCE_D100_CRON_ENTRY,
+#               ANNOUNCE_D100_SCRIPT, VERIFICATION_WARNINGS, VERIFICATION_ERRORS,
+#               VERIFY_ONLY, NO_CRON
+# Sets global: ANNOUNCE_D100_CRON_STATUS
+_install_announce_d100_cron() {
+    if [ "${NO_CRON:-0}" -eq 1 ]; then
+        echo -e "  ${INFO} D100 announcer cron installation skipped (--no-cron)"
+        ANNOUNCE_D100_CRON_STATUS="skipped by --no-cron"
+        return 0
+    fi
+
+    local cron_drift_lines=()
+    local current_crontab
+    current_crontab=$(crontab -l 2>/dev/null || true)
+
+    if echo "$current_crontab" | grep -qF "$ANNOUNCE_D100_CRON_MARKER"; then
+        local line
+        while IFS= read -r line; do
+            case "$line" in
+                *"$ANNOUNCE_D100_CRON_MARKER"*)
+                    if [ "$line" != "$ANNOUNCE_D100_CRON_ENTRY" ]; then
+                        cron_drift_lines+=("$line")
+                    fi
+                    ;;
+            esac
+        done <<< "$current_crontab"
+
+        if [ ${#cron_drift_lines[@]} -gt 0 ]; then
+            echo -e "  ${WARNING} Existing cron entry for $ANNOUNCE_D100_SCRIPT differs from expected schedule (drift detected):"
+            local drift_line
+            for drift_line in "${cron_drift_lines[@]}"; do
+                echo "      $drift_line"
+            done
+            VERIFICATION_WARNINGS=$((VERIFICATION_WARNINGS + 1))
+            ANNOUNCE_D100_CRON_STATUS="drift detected (review required)"
+        elif [ "${VERIFY_ONLY:-0}" -eq 1 ]; then
+            echo -e "  ${CHECK_MARK} D100 announcer cron entry installed"
+            ANNOUNCE_D100_CRON_STATUS="installed"
+        else
+            echo -e "  ${CHECK_MARK} D100 announcer cron entry verified"
+            ANNOUNCE_D100_CRON_STATUS="verified"
+        fi
+    elif [ "${VERIFY_ONLY:-0}" -eq 1 ]; then
+        echo -e "  ${CROSS_MARK} D100 announcer cron entry missing"
+        ANNOUNCE_D100_CRON_STATUS="missing"
+        VERIFICATION_ERRORS=$((VERIFICATION_ERRORS + 1))
+    else
+        (crontab -l 2>/dev/null || true; echo "$ANNOUNCE_D100_CRON_ENTRY") | crontab -
+        echo -e "  ${CHECK_MARK} Installed D100 announcer cron entry (every 15 minutes)"
+        ANNOUNCE_D100_CRON_STATUS="installed"
+    fi
+}
+
 # Install the PostgreSQL NOTIFY listener as a systemd --user service.
 # Parameters: source_script source_service target_dir service_dir logs_dir
 _install_pg_notify_listener() {
@@ -315,6 +378,7 @@ NO_CRON=0
 DB_NAME_OVERRIDE=""
 REGENERATE_AGENTS_JSON=0
 DAILY_LOG_CRON_STATUS="not installed"
+ANNOUNCE_D100_CRON_STATUS="not installed"
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -907,6 +971,7 @@ if [ $VERIFY_ONLY -eq 1 ]; then
     echo ""
     echo "Memory scripts verification..."
     _install_daily_log_cron
+    _install_announce_d100_cron
 
     echo ""
     echo "═══════════════════════════════════════════"
@@ -920,6 +985,14 @@ if [ $VERIFY_ONLY -eq 1 ]; then
         cron_symbol="$WARNING"
     fi
     echo -e "  ${cron_symbol} Daily memory log cron: $DAILY_LOG_CRON_STATUS"
+
+    announce_symbol="$CHECK_MARK"
+    if [[ "$ANNOUNCE_D100_CRON_STATUS" == missing* ]]; then
+        announce_symbol="$CROSS_MARK"
+    elif [[ "$ANNOUNCE_D100_CRON_STATUS" == drift* ]]; then
+        announce_symbol="$WARNING"
+    fi
+    echo -e "  ${announce_symbol} D100 announcer cron: $ANNOUNCE_D100_CRON_STATUS"
 
     if [ $VERIFICATION_ERRORS -gt 0 ]; then
         echo -e "  ${CROSS_MARK} $VERIFICATION_ERRORS errors found"
@@ -1495,6 +1568,9 @@ if [ -d "$SCRIPTS_SOURCE" ]; then
 
     # --- Daily memory log cron entries ---
     _install_daily_log_cron
+
+    # --- D100 roll announcer cron entry ---
+    _install_announce_d100_cron
 else
     echo -e "  ${WARNING} Scripts directory not found at $SCRIPTS_SOURCE (skipping)"
 fi
@@ -2573,6 +2649,7 @@ echo "  [memory]"
 echo "    • Shared PG loader libraries → ~/.openclaw/lib/"
 echo "    • Schema managed via pgschema (database/schema.sql)"
 echo "    • Daily memory log cron → $DAILY_LOG_CRON_STATUS"
+echo "    • D100 announcer cron → $ANNOUNCE_D100_CRON_STATUS"
 if [ ${#INSTALLED_HOOKS[@]} -gt 0 ]; then
     for hook in "${INSTALLED_HOOKS[@]}"; do
         echo "    • Hook: $hook"

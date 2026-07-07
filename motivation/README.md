@@ -14,7 +14,7 @@ The motivation system is **entirely configuration-driven** — there is no custo
 2. **HEARTBEAT bootstrap context** — Database record (`agent_bootstrap_context`, file_key='HEARTBEAT') that defines idle detection logic and gates proactive mode on 1+ hour of channel inactivity
 3. **Proactive Mode workflow** (id=27) — 11-step priority cascade defining what NOVA does when idle, evaluated deterministically by `motivation/scripts/proactive-gate-check.py`
 4. **`blockers` registry table** — Curated registry of items blocked on another entity's action, populated by Steps 6/7, consumed by the dedicated Step 8 Blocker Outreach step (issue #356)
-5. **D100 motivation table** (`motivation_d100`) — 100-slot random task roller for variety in autonomous work, backed by `d100_roll_log` roll-history and forced past 12h staleness (issue #358)
+5. **D100 motivation table** (`motivation_d100`) — 100-slot random task roller for variety in autonomous work, backed by `d100_roll_log` roll-history and forced past 12h staleness (issue #358). Roll results are announced to `#proactive-mode` deterministically by a dedicated cron script (`memory/scripts/announce-d100-rolls.py`, issue #432) — not by the heartbeat LLM turn; see [D100 Roll Announcer](#d100-roll-announcer) below.
 6. **Unsolved Problems Research workflow** (id=32) — Structured research workflow that delegates data gathering to Scout and reserves reasoning/synthesis for NOVA
 7. **`unsolved_problems` table** — NOVA's notebook for 8 humanity-scale research problems
 
@@ -112,7 +112,34 @@ The HEARTBEAT record in `agent_bootstrap_context` (file_key='HEARTBEAT', agent_n
 - Idle detection method (sessions_list, message read, inbound metadata)
 - Idle threshold (1 hour)
 - Proactive mode dispatch to workflow id=27
-- Rules (don't compete with active conversation, report to #proactive-mode)
+- Rules (don't compete with active conversation, report Steps 1–10 summaries to #proactive-mode)
+
+> **Note:** Step 11 (D100) is the one exception to LLM-driven reporting — its roll result is
+> announced by a dedicated cron script, not by the heartbeat session. See
+> [D100 Roll Announcer](#d100-roll-announcer) below.
+
+## D100 Roll Announcer
+
+D100 roll results were previously reported to `#proactive-mode` by the heartbeat LLM turn
+itself, which proved unreliable — subject to session skipping, reasoning drift, and no
+retry mechanism on failure. As of issue #432, announcements are handled by a dedicated,
+zero-LLM cron script instead:
+
+- **`memory/scripts/announce-d100-rolls.py`** — runs every 15 minutes via cron (installed
+  by `agent-install.sh`), atomically claims unannounced `d100_roll_log` rows
+  (`announced_at IS NULL`) via `UPDATE ... RETURNING`, and posts to `#proactive-mode`
+  (`channel:1504054635231445112`) via `openclaw message send` — no webhook, no secret.
+- One message per roll; more than 3 rolls claimed in a single cycle (e.g. after an outage)
+  collapse into a single digest message.
+- On post failure, the affected row's `announced_at` is un-stamped (compensating rollback)
+  so it retries on the next cron tick — failures are never silently dropped.
+- Historical rows (from the pre-#432 LLM-reporting era) were backfilled with
+  `announced_at = rolled_at` in `database/pre-migrations/005-backfill-d100-roll-log-announced-at.sql`,
+  so the first cron run does not burst-post history.
+
+This does **not** change Step 11's gate-check logic (whether D100 is actionable each
+cycle) — `check_step11_d100()` in `proactive-gate-check.py` is unaffected and still owns
+that decision. It changes only how a completed roll gets reported to the channel.
 
 ### Workflows
 

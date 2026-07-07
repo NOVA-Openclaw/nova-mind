@@ -1,5 +1,18 @@
 # Changelog
 
+### Batch: d100-roll-announcer-437 (Issue #437)
+
+#### Fixed
+- **Installed-path `pg_env` import failure** (#437) — `memory/scripts/announce-d100-rolls.py` previously resolved the `pg_env` loader relative to `__file__` (`../../lib`), which works in the repo layout (`memory/scripts/...` → repo `lib/`) but fails when the script is installed at `~/.openclaw/scripts/` (`../../lib` → `~/lib`, nonexistent). The installed library lives at `~/.openclaw/lib/pg_env.py`. The bootstrap now tries `~/.openclaw/lib` first (matching `confidence_helper.py`, `dedup_helper.py`, and `extract_memories.py`) and keeps the repo-relative path as a fallback so repo-based tests and runs continue to work.
+
+#### Tests
+- `motivation/tests/test_announce_d100_rolls.py::TestInstalledLayout::test_installed_layout_imports_pg_env` — simulates the installed layout by copying the script to a temp `~/.openclaw/scripts/` directory (with no `../../lib` present), creating a stub `~/.openclaw/lib/pg_env.py`, and asserting the copied script can import it. Fails on the old repo-relative-only code and passes with the installed-path-first fix.
+
+#### Issues Closed
+- #437 — `announce-d100-rolls.py` cannot import `pg_env` from installed location
+
+---
+
 ### Batch: installer-agents-json-429 (Issue #429)
 
 #### Changed

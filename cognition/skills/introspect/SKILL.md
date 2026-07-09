@@ -45,6 +45,31 @@ Build a list of **significant actions taken** — installs, config changes, new 
 
 > **⚠️ Secret-safe transcript greps:** Session transcripts may contain delivered credentials (rotated passwords DM'd to users, tokens echoed by tools). When grepping transcripts for evidence, match on context keywords only and cap capture length (e.g. `grep -o "htpasswd.\{0,40\}"`), never wide patterns like `.\{0,200\}` that can pull secret values into *this* session's transcript. Introspection must not become an exposure amplifier. (Learned 2026-07-03: an introspection grep re-surfaced a freshly rotated password verbatim.)
 
+#### Recent Lessons Review
+
+Review the lesson *stream* itself — not just lessons keyed to current findings (that keyword search happens later, in gap analysis). This closes the loop on the lessons table as a whole: new entries get sanity-checked against the existing corpus while they're fresh, and old entries get periodically re-validated.
+
+```sql
+-- Lessons added since the last introspection (use lastIntrospection timestamp
+-- from heartbeat-state.json; fallback: last 7 days)
+SELECT id, lesson, source, learned_at FROM lessons
+WHERE learned_at > '<lastIntrospection timestamp>'
+ORDER BY learned_at DESC;
+
+-- Staleness spot-check: 5 random older lessons
+SELECT id, lesson, learned_at, confidence, last_referenced FROM lessons
+WHERE learned_at < now() - interval '30 days'
+ORDER BY random() LIMIT 5;
+```
+
+**For each recent lesson ask:**
+- Does it duplicate or contradict an existing lesson? (Quick semantic check: `SELECT id, lesson FROM lessons WHERE lesson ILIKE '%<key term>%' AND id != <new id>;`) Dupes → note for the maintenance dedup pass. Contradictions → flag in the report; both persist (testimony, not truth), but the tension is a signal worth surfacing.
+- Is it part of a recurring theme? Three or more related lessons = a **promotion candidate**. Promotion targets, in order of preference: enforcement code (validation/gate script that makes the failure impossible), workflow step, bootstrap context record, skill file, consolidated principle (see nova-mind#197 for the full taxonomy). Don't execute the promotion here — capture it as a task or feed it to the Design Origination review.
+
+**For each spot-checked older lesson ask:** Is it still true? Still followed? Superseded by a structural fix that makes it moot? If obsolete, lower its `confidence` and note it as an archive candidate in the report.
+
+**Scope cap:** review at most ~20 recent lessons per introspection. If more accumulated since the last run, review the newest 20 and note the overflow in the report — do not silently skip, do not blow the token budget reading all 600+.
+
 ### 2. Socratic Self-Questioning
 
 Before identifying gaps, apply recursive Socratic questioning to each significant action. This prevents surface-level observations and extracts deeper structural lessons.
@@ -397,6 +422,12 @@ Summarize what was reviewed and updated:
 - [lesson id]: <lesson summary>
 - Embedding status: [confirmed/pending]
 
+### Lessons Reviewed
+- [N recent lessons reviewed, M spot-checked]
+- Recurring themes / promotion candidates: [theme — target, or none]
+- Contradictions flagged: [ids, or none]
+- Stale/archive candidates: [ids, or none]
+
 ### Bugs Filed
 - [repo#number]: <title> — <brief description of the defect>
 
@@ -520,7 +551,7 @@ The memory maintenance script embeds journal entries along with other pending re
 Update `lastIntrospection` in `~/.openclaw/workspace/memory/heartbeat-state.json`:
 - `timestamp` — now, ISO UTC
 - `dailyLogLines` — `wc -l < ~/.openclaw/workspace/memory/$(date -u +%Y-%m-%d).md`
-- `sessionTranscriptBytes` — `du -sb ~/.openclaw/agents/nova/sessions/*.jsonl | awk '{sum+=$1} END {print sum}'`
+- `sessionTranscriptBytes` — `find ~/.openclaw/agents/nova/sessions -name '*.jsonl' -printf '%s\n' | awk '{s+=$1} END {print s}'` (do NOT use a `du ...*.jsonl` shell glob — with thousands of session files it silently returns empty → writes 0 and corrupts the transcript-growth trigger; observed 2026-07-08)
 
 Preserve all other JSON fields. Keep any top-level mirror fields (`timestamp`, `dailyLogLines`, `sessionTranscriptBytes`) in sync with `lastIntrospection`.
 

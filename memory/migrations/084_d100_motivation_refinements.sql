@@ -123,6 +123,11 @@ CREATE TRIGGER trg_set_populated_at
 -- ---------------------------------------------------------------------------
 -- 6. roll_d100() — generative empty slots, anti-repeat window, dynamic cap.
 -- ---------------------------------------------------------------------------
+-- Return type changes from the legacy 14-column shape to the 15-column shape
+-- that includes is_populate_me. PostgreSQL refuses to CREATE OR REPLACE across
+-- a return-type change, so drop first and restore the EXECUTE grant.
+DROP FUNCTION IF EXISTS roll_d100();
+
 CREATE OR REPLACE FUNCTION roll_d100()
 RETURNS TABLE(
     roll integer,
@@ -251,6 +256,9 @@ BEGIN
     END LOOP;
 END;
 $$;
+
+-- Restore nova EXECUTE grant after drop/create.
+GRANT EXECUTE ON FUNCTION roll_d100() TO nova;
 
 -- ---------------------------------------------------------------------------
 -- 7. Monthly completion-rate flagging.

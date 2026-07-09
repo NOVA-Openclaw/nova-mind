@@ -299,8 +299,12 @@ class TestFormatting:
         assert "populate & execute" in text.lower()
         assert "task unknown" not in text
 
-    def test_reserved_empty_slot_uses_unknown_fallback(self, m):
-        """TC-444-CONTRACT-08: reserved empty stays integrity-error fallback."""
+    def test_reserved_empty_slot_not_rendered_as_populate_me(self, m):
+        """TC-444-CONTRACT-06: reserved-empty input must never be advertised as
+        a populate-me origination slot, even if it somehow reaches the
+        announcer (the normal path never emits a d100_roll_log row for a
+        reserved-empty roll).
+        """
         now = datetime.now(timezone.utc)
         claimed = [(1, 51, now)]
         task = (51, None, None, None, now, None, True)
@@ -313,6 +317,25 @@ class TestFormatting:
 
         text = mock_send.call_args[0][0]
         assert "task unknown (slot 51)" in text
+        assert "ORIGINATION SLOT" not in text
+
+    def test_corrupted_row_uses_unknown_fallback(self, m):
+        """TC-444-CONTRACT-08: genuine integrity-error fallback still fires for
+        an inconsistent row that is neither a valid populated task nor a
+        valid populate-me state (e.g. task_name IS NULL with reserved IS NULL).
+        """
+        now = datetime.now(timezone.utc)
+        claimed = [(1, 52, now)]
+        task = (52, None, None, None, now, None, None)
+        conn = _mock_conn(claimed, [task])
+
+        with patch.object(m, "psycopg2") as mock_psycopg2, \
+             patch.object(m, "_send_message") as mock_send:
+            mock_psycopg2.connect.return_value = conn
+            m.main([])
+
+        text = mock_send.call_args[0][0]
+        assert "task unknown (slot 52)" in text
         assert "ORIGINATION SLOT" not in text
 
 

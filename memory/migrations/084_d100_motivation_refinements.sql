@@ -320,3 +320,11 @@ BEGIN
         WHERE workflow_id = 27 AND step_order = 11;
     END IF;
 END $$;
+
+-- ---------------------------------------------------------------------------
+-- 9. Grant nova direct SELECT/UPDATE on d100_roll_log for the announcer.
+--    This closes a pre-existing privilege gap from issue #432; the announcer
+--    script runs as nova and needs to claim/unstamp rows directly.
+-- ---------------------------------------------------------------------------
+REVOKE DELETE, INSERT ON TABLE d100_roll_log FROM nova;
+GRANT SELECT, UPDATE ON TABLE d100_roll_log TO nova;

@@ -26,6 +26,10 @@ ALTER TABLE motivation_d100
     ADD COLUMN IF NOT EXISTS reserved boolean NOT NULL DEFAULT false,
     ADD COLUMN IF NOT EXISTS populated_at timestamptz;
 
+-- nova is the table owner but operates under column-level UPDATE grants.
+-- Ensure the new columns are updatable before the backfill runs.
+GRANT UPDATE (reserved, populated_at) ON TABLE motivation_d100 TO nova;
+
 -- ---------------------------------------------------------------------------
 -- 2. Backfill populated_at for existing populated slots to created_at.
 --    GAP-3 resolution: backfill to created_at, not NULL, so legacy slots

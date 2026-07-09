@@ -6,7 +6,11 @@ Claims unannounced rows from d100_roll_log, joins motivation_d100 for task
 detail, and posts to Discord via the openclaw CLI. Idempotent: re-running
 only processes rows where announced_at IS NULL.
 
-See: nova-mind#432
+Handles normal task rows, populate-me rows (empty non-reserved slots, #444),
+and the genuine-integrity-error "task unknown" fallback for inconsistent
+states.
+
+See: nova-mind#432, nova-mind#444
 """
 
 import argparse
@@ -95,24 +99,32 @@ def _now_utc() -> datetime:
 def _format_roll(row: dict[str, Any]) -> str:
     """Format a single roll announcement."""
     roll = row["roll"]
-    task_name = row["task_name"] or ""
-    estimated = row["estimated_minutes"]
-    difficulty = row["difficulty"] or ""
+    task_name = row["task_name"]
+    estimated = row.get("estimated_minutes")
+    difficulty = row.get("difficulty") or ""
     last_rolled = row["last_rolled"]
     last_completed = row["last_completed"]
+    reserved = row.get("reserved")
 
-    task_display = task_name.strip() if task_name and task_name.strip() else f"task unknown (slot {roll})"
+    # Valid populate-me state: task_name IS NULL and the slot is non-reserved.
+    if task_name is None:
+        if reserved is False:
+            return (
+                f"🎲 D100 roll {roll}: [ORIGINATION SLOT — populate & execute] — rolled"
+            )
+        return f"🎲 D100 roll {roll}: task unknown (slot {roll}) — rolled"
+
+    task_display = task_name.strip()
+    if not task_display:
+        return f"🎲 D100 roll {roll}: task unknown (slot {roll}) — rolled"
 
     if estimated and difficulty:
         status = f"rolled ({estimated}m, difficulty {difficulty})"
     else:
         status = "rolled"
-
     lines = [f'🎲 D100 roll {roll}: "{task_display}" — {status}']
-
     if last_completed is not None and last_rolled is not None and last_completed >= last_rolled:
         lines.append("✅ Completed")
-
     return "\n".join(lines)
 
 
@@ -181,7 +193,7 @@ def _fetch_task_details(conn, rolls: list[int]) -> dict[int, dict[str, Any]]:
         return {}
     with conn.cursor() as cur:
         cur.execute("""
-            SELECT roll, task_name, estimated_minutes, difficulty, last_rolled, last_completed
+            SELECT roll, task_name, estimated_minutes, difficulty, last_rolled, last_completed, reserved
             FROM motivation_d100
             WHERE roll = ANY(%s)
         """, (rolls,))
@@ -192,6 +204,7 @@ def _fetch_task_details(conn, rolls: list[int]) -> dict[int, dict[str, Any]]:
                 "difficulty": row[3],
                 "last_rolled": row[4],
                 "last_completed": row[5],
+                "reserved": row[6],
             }
             for row in cur.fetchall()
         }
@@ -222,6 +235,7 @@ def _build_rows(claimed: list[tuple[Any, ...]], task_map: dict[int, dict[str, An
             "difficulty": details.get("difficulty"),
             "last_rolled": details.get("last_rolled"),
             "last_completed": details.get("last_completed"),
+            "reserved": details.get("reserved"),
         })
     return rows
 

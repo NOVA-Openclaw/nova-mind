@@ -89,7 +89,7 @@ def _mock_conn(claimed_rows, task_rows=None):
     return mock_conn
 
 
-def _task_row(roll, task_name="Task", estimated=10, difficulty="medium", last_rolled=None, last_completed=None):
+def _task_row(roll, task_name="Task", estimated=10, difficulty="medium", last_rolled=None, last_completed=None, reserved=False):
     return {
         "roll": roll,
         "task_name": task_name,
@@ -97,6 +97,7 @@ def _task_row(roll, task_name="Task", estimated=10, difficulty="medium", last_ro
         "difficulty": difficulty,
         "last_rolled": last_rolled,
         "last_completed": last_completed,
+        "reserved": reserved,
     }
 
 
@@ -206,7 +207,7 @@ class TestFormatting:
         """TC-432-U-05"""
         now = datetime.now(timezone.utc)
         claimed = [(1, 42, now)]
-        task = (42, "Write tests", 15, "medium", now, None)
+        task = (42, "Write tests", 15, "medium", now, None, False)
         conn = _mock_conn(claimed, [task])
 
         with patch.object(m, "psycopg2") as mock_psycopg2, \
@@ -223,7 +224,7 @@ class TestFormatting:
         """TC-432-U-06"""
         now = datetime.now(timezone.utc)
         claimed = [(1, 42, now - timedelta(minutes=5))]
-        task = (42, "Write tests", 15, "medium", now - timedelta(minutes=5), now)
+        task = (42, "Write tests", 15, "medium", now - timedelta(minutes=5), now, False)
         conn = _mock_conn(claimed, [task])
 
         with patch.object(m, "psycopg2") as mock_psycopg2, \
@@ -238,7 +239,7 @@ class TestFormatting:
         """TC-432-U-07"""
         now = datetime.now(timezone.utc)
         claimed = [(1, 42, now)]
-        task = (42, "Write tests", 15, "medium", now, now)
+        task = (42, "Write tests", 15, "medium", now, now, False)
         conn = _mock_conn(claimed, [task])
 
         with patch.object(m, "psycopg2") as mock_psycopg2, \
@@ -253,7 +254,7 @@ class TestFormatting:
         """TC-432-U-08"""
         now = datetime.now(timezone.utc)
         claimed = [(1, 42, now)]
-        task = (42, 'Task with "quotes" *bold* `_code_`', 15, "medium", now, None)
+        task = (42, 'Task with "quotes" *bold* `_code_`', 15, "medium", now, None, False)
         conn = _mock_conn(claimed, [task])
 
         with patch.object(m, "psycopg2") as mock_psycopg2, \
@@ -270,7 +271,7 @@ class TestFormatting:
         claimed = [(1, 42, now)]
         # times_completed > 0 cannot be represented in the join; we only get
         # last_completed here. The script must use a NULL-safe comparison.
-        task = (42, "Write tests", 15, "medium", now, None)
+        task = (42, "Write tests", 15, "medium", now, None, False)
         conn = _mock_conn(claimed, [task])
 
         with patch.object(m, "psycopg2") as mock_psycopg2, \
@@ -280,6 +281,39 @@ class TestFormatting:
 
         text = mock_send.call_args[0][0]
         assert "Completed" not in text
+
+    def test_populate_me_formatting(self, m):
+        """TC-444-CONTRACT-05: empty non-reserved slot renders populate-me."""
+        now = datetime.now(timezone.utc)
+        claimed = [(1, 50, now)]
+        task = (50, None, None, None, now, None, False)
+        conn = _mock_conn(claimed, [task])
+
+        with patch.object(m, "psycopg2") as mock_psycopg2, \
+             patch.object(m, "_send_message") as mock_send:
+            mock_psycopg2.connect.return_value = conn
+            m.main([])
+
+        text = mock_send.call_args[0][0]
+        assert "ORIGINATION SLOT" in text
+        assert "populate & execute" in text.lower()
+        assert "task unknown" not in text
+
+    def test_reserved_empty_slot_uses_unknown_fallback(self, m):
+        """TC-444-CONTRACT-08: reserved empty stays integrity-error fallback."""
+        now = datetime.now(timezone.utc)
+        claimed = [(1, 51, now)]
+        task = (51, None, None, None, now, None, True)
+        conn = _mock_conn(claimed, [task])
+
+        with patch.object(m, "psycopg2") as mock_psycopg2, \
+             patch.object(m, "_send_message") as mock_send:
+            mock_psycopg2.connect.return_value = conn
+            m.main([])
+
+        text = mock_send.call_args[0][0]
+        assert "task unknown (slot 51)" in text
+        assert "ORIGINATION SLOT" not in text
 
 
 # ---------------------------------------------------------------------------
@@ -305,7 +339,7 @@ class TestJoinDrift:
         """TC-432-U-16 variant"""
         now = datetime.now(timezone.utc)
         claimed = [(1, 7, now)]
-        task = (7, "", 10, "low", now, None)
+        task = (7, "", 10, "low", now, None, False)
         conn = _mock_conn(claimed, [task])
 
         with patch.object(m, "psycopg2") as mock_psycopg2, \

@@ -3345,6 +3345,8 @@ CREATE TABLE IF NOT EXISTS motivation_d100 (
     last_rolled timestamp,
     last_completed timestamp,
     created_at timestamp DEFAULT now(),
+    reserved boolean DEFAULT false NOT NULL,
+    populated_at timestamp,
     notes text,
     CONSTRAINT motivation_d100_pkey PRIMARY KEY (roll),
     CONSTRAINT motivation_d100_workflow_id_fkey FOREIGN KEY (workflow_id) REFERENCES workflows (id),
@@ -3353,9 +3355,10 @@ CREATE TABLE IF NOT EXISTS motivation_d100 (
 
 
 COMMENT ON TABLE motivation_d100 IS 'D100 motivation system. Roll via roll_d100(), mark complete via complete_d100(roll). 
-Tracking columns (times_rolled, times_completed, last_rolled, last_completed) are 
-write-protected — only the SECURITY DEFINER functions can update them. 
-Content columns are open for nova to maintain. DELETE revoked to prevent accidental row loss.';
+Tracking columns (times_rolled, times_completed, last_rolled, last_completed, populated_at) are 
+write-protected — only the SECURITY DEFINER functions/triggers can update them. 
+`populated_at` is set automatically when a slot transitions from empty to real content.
+Content columns (including reserved) are open for nova to maintain. DELETE revoked to prevent accidental row loss.';
 
 
 COMMENT ON COLUMN motivation_d100.roll IS 'Die value 1-100';
@@ -3488,6 +3491,30 @@ BEGIN
     IF NEW.last_rolled IS DISTINCT FROM OLD.last_rolled AND NEW.last_rolled IS NOT NULL THEN
         INSERT INTO d100_roll_log (roll, rolled_at)
         VALUES (NEW.roll, NEW.last_rolled);
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+--
+-- Name: _trg_set_populated_at(); Type: FUNCTION; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE FUNCTION _trg_set_populated_at()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        IF NEW.task_name IS NOT NULL AND NEW.populated_at IS NULL THEN
+            NEW.populated_at := NOW();
+        END IF;
+    ELSIF TG_OP = 'UPDATE' THEN
+        IF OLD.task_name IS NULL AND NEW.task_name IS NOT NULL AND NEW.populated_at IS NULL THEN
+            NEW.populated_at := NOW();
+        END IF;
     END IF;
     RETURN NEW;
 END;
@@ -5669,16 +5696,17 @@ $$;
 --
 
 CREATE OR REPLACE FUNCTION roll_d100()
-RETURNS TABLE(roll integer, task_name varchar, task_description text, workflow_id integer, skill_name varchar, tool_name varchar, difficulty varchar, energy_required varchar, estimated_minutes integer, times_rolled integer, times_completed integer, last_rolled timestamp, last_completed timestamp, notes text)
+RETURNS TABLE(roll integer, task_name varchar, task_description text, workflow_id integer, skill_name varchar, tool_name varchar, difficulty varchar, energy_required varchar, estimated_minutes integer, times_rolled integer, times_completed integer, last_rolled timestamp, last_completed timestamp, notes text, is_populate_me boolean)
 LANGUAGE plpgsql
 VOLATILE
 SECURITY DEFINER
 SET search_path = public
 AS $$
 DECLARE
-    picked_roll integer;
-    attempts    integer := 0;
-    max_attempts integer := 20;
+    picked_roll    integer;
+    attempts       integer := 0;
+    max_attempts   integer := 20;
+    v_now          timestamp := CURRENT_TIMESTAMP::timestamp;
 BEGIN
     LOOP
         attempts := attempts + 1;
@@ -5686,33 +5714,135 @@ BEGIN
             RAISE EXCEPTION 'roll_d100: no populated+enabled tasks found after % attempts', max_attempts;
         END IF;
 
-        -- Pure random 1-100
+        -- Pure random 1-100.
         picked_roll := floor(random() * 100 + 1)::integer;
 
-        -- Check if this slot is populated and enabled
+        -- Terminal path A: non-reserved empty + enabled => populate-me.
+        -- Anti-repeat window/cap never applies to empty-slot draws.
+        IF EXISTS (
+            SELECT 1 FROM motivation_d100 m
+            WHERE m.roll = picked_roll
+              AND m.task_name IS NULL
+              AND m.reserved = false
+              AND m.enabled = true
+        ) THEN
+            UPDATE motivation_d100 m
+            SET times_rolled = COALESCE(m.times_rolled, 0) + 1,
+                last_rolled  = v_now
+            WHERE m.roll = picked_roll;
+
+            RETURN QUERY
+            SELECT m.roll, m.task_name, m.task_description, m.workflow_id,
+                   m.skill_name, m.tool_name, m.difficulty, m.energy_required,
+                   m.estimated_minutes, m.times_rolled, m.times_completed,
+                   m.last_rolled, m.last_completed, m.notes,
+                   true
+            FROM motivation_d100 m
+            WHERE m.roll = picked_roll;
+            RETURN;
+        END IF;
+
+        -- Terminal path B: populated + enabled => apply anti-repeat rules.
         IF EXISTS (
             SELECT 1 FROM motivation_d100 m
             WHERE m.roll = picked_roll
               AND m.task_name IS NOT NULL
               AND m.enabled = true
         ) THEN
-            -- Update tracking columns
-            UPDATE motivation_d100 m
-            SET times_rolled = COALESCE(m.times_rolled, 0) + 1,
-                last_rolled = NOW()
-            WHERE m.roll = picked_roll;
+            -- Eligibility: not rolled in last 7 days, unless the cap forces
+            -- re-admission of the oldest recently-rolled slots.
+            IF EXISTS (
+                WITH pop AS (
+                    SELECT m.roll, m.last_rolled
+                    FROM motivation_d100 m
+                    WHERE m.task_name IS NOT NULL
+                      AND m.enabled = true
+                ),
+                counts AS (
+                    SELECT
+                        (SELECT count(*) FROM pop) AS total_pop,
+                        (SELECT count(*) FROM pop WHERE last_rolled >= v_now - interval '7 days') AS recent_pop
+                ),
+                admit AS (
+                    SELECT p.roll
+                    FROM pop p, counts c
+                    WHERE p.last_rolled >= v_now - interval '7 days'
+                    ORDER BY p.last_rolled ASC, p.roll ASC
+                    LIMIT GREATEST(c.recent_pop - (floor(c.total_pop * 0.5))::integer, 0)
+                )
+                SELECT 1
+                FROM pop p
+                WHERE p.roll = picked_roll
+                  AND (
+                      p.last_rolled IS NULL
+                      OR p.last_rolled < v_now - interval '7 days'
+                      OR p.roll IN (SELECT roll FROM admit)
+                  )
+            ) THEN
+                UPDATE motivation_d100 m
+                SET times_rolled = COALESCE(m.times_rolled, 0) + 1,
+                    last_rolled  = v_now
+                WHERE m.roll = picked_roll;
 
-            -- Return the task
-            RETURN QUERY
-            SELECT m.roll, m.task_name, m.task_description, m.workflow_id,
-                   m.skill_name, m.tool_name, m.difficulty, m.energy_required,
-                   m.estimated_minutes, m.times_rolled, m.times_completed,
-                   m.last_rolled, m.last_completed, m.notes
-            FROM motivation_d100 m
-            WHERE m.roll = picked_roll;
-            RETURN;
+                RETURN QUERY
+                SELECT m.roll, m.task_name, m.task_description, m.workflow_id,
+                       m.skill_name, m.tool_name, m.difficulty, m.energy_required,
+                       m.estimated_minutes, m.times_rolled, m.times_completed,
+                       m.last_rolled, m.last_completed, m.notes,
+                       false
+                FROM motivation_d100 m
+                WHERE m.roll = picked_roll;
+                RETURN;
+            END IF;
+
+            -- Excluded by anti-repeat window/cap; try again.
+            CONTINUE;
         END IF;
+
+        -- All other draws (reserved empty, disabled) => re-roll.
+        CONTINUE;
     END LOOP;
+END;
+$$;
+
+--
+-- Name: flag_d100_low_completion(); Type: FUNCTION; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE FUNCTION flag_d100_low_completion()
+RETURNS TABLE(roll integer, task_name varchar, rolls_since_pop bigint, times_completed integer, completion_rate numeric)
+LANGUAGE plpgsql
+VOLATILE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+    -- Completion-rate flag for the monthly maintenance pass.
+    -- Rolls are counted only after the slot was populated (rolled_at >= populated_at).
+    -- Completions need no populated_at filter: complete_d100() requires task_name
+    -- IS NOT NULL, so every recorded completion is post-population by construction
+    -- (GAP-1 resolution).
+    RETURN QUERY
+    WITH rolls_since AS (
+        SELECT m.roll, count(*) AS cnt
+        FROM motivation_d100 m
+        JOIN d100_roll_log r
+             ON r.roll = m.roll
+            AND r.rolled_at >= m.populated_at
+        WHERE m.task_name IS NOT NULL
+          AND m.populated_at IS NOT NULL
+        GROUP BY m.roll
+    )
+    SELECT m.roll,
+           m.task_name,
+           rs.cnt,
+           m.times_completed,
+           round((m.times_completed::numeric / rs.cnt) * 100, 2)
+    FROM motivation_d100 m
+    JOIN rolls_since rs ON rs.roll = m.roll
+    WHERE rs.cnt >= 10
+      AND (m.times_completed::numeric / rs.cnt) < 0.6
+    ORDER BY m.roll;
 END;
 $$;
 
@@ -6872,6 +7002,15 @@ CREATE OR REPLACE TRIGGER trg_log_d100_roll
     AFTER UPDATE ON motivation_d100
     FOR EACH ROW
     EXECUTE FUNCTION _trg_log_d100_roll();
+
+--
+-- Name: trg_set_populated_at; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER trg_set_populated_at
+    BEFORE INSERT OR UPDATE ON motivation_d100
+    FOR EACH ROW
+    EXECUTE FUNCTION _trg_set_populated_at();
 
 --
 -- Name: trg_music_works_search; Type: TRIGGER; Schema: -; Owner: -
@@ -8639,7 +8778,9 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE d100_roll_log FROM newhart;
 -- Name: d100_roll_log; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE d100_roll_log FROM nova;
+REVOKE DELETE, INSERT ON TABLE d100_roll_log FROM nova;
+
+GRANT SELECT, UPDATE ON TABLE d100_roll_log TO nova;
 
 --
 -- Name: d100_roll_log; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -20093,5 +20234,5 @@ GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE workflow_steps_detail TO ticker;
 -- Name: motivation_d100; Type: COLUMN_PRIVILEGE; Schema: column_privileges; Owner: -
 --
 
-GRANT UPDATE (difficulty, enabled, energy_required, estimated_minutes, notes, skill_name, task_description, task_name, tool_name, workflow_id) ON TABLE motivation_d100 TO nova;
+GRANT UPDATE (difficulty, enabled, energy_required, estimated_minutes, notes, reserved, skill_name, task_description, task_name, tool_name, workflow_id) ON TABLE motivation_d100 TO nova;
 

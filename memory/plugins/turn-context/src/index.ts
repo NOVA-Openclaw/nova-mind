@@ -170,7 +170,10 @@ function isGroupSession(sessionKey: string | undefined): boolean {
  * The loader calls module.default(api) to register hooks.
  */
 export default function register(api: PluginApi): void {
-  console.info("[turn-context] Plugin registered — hooks: message_received, before_prompt_build");
+  const placement = resolvePlacement(api.pluginConfig as Record<string, unknown> | undefined);
+  console.info(
+    `[turn-context] Plugin registered — hooks: message_received, before_prompt_build, placement=${placement}`
+  );
 
   // ── Hook 1: message_received (observation, fire-and-forget) ──────────────
   //
@@ -532,13 +535,7 @@ export default function register(api: PluginApi): void {
 
       // ── Assemble result ───────────────────────────────────────────────────
 
-      const result: PromptBuildResult = {};
-      if (prependSegments.length > 0) {
-        result.prependSystemContext = prependSegments.join("\n\n");
-      }
-      if (appendSegments.length > 0) {
-        result.appendSystemContext = appendSegments.join("\n\n");
-      }
+      const result = buildPromptResult(placement, prependSegments, appendSegments);
 
       const totalMs = Date.now() - hookStart;
 
@@ -551,11 +548,12 @@ export default function register(api: PluginApi): void {
         return undefined;
       }
 
-      const prependLen = result.prependSystemContext?.length ?? 0;
+      const prependLen =
+        (result.prependSystemContext?.length ?? 0) || (result.prependContext?.length ?? 0);
       const appendLen = result.appendSystemContext?.length ?? 0;
       console.info(
         `[turn-context] before_prompt_build DONE in ${totalMs}ms —` +
-        ` injecting prepend=${prependLen}chars append=${appendLen}chars` +
+        ` placement=${placement} injecting prepend=${prependLen}chars append=${appendLen}chars` +
         ` classifier=${classification.type}/${classification.method}` +
         ` tier=${classification.domainHints?.length ? "domain" : "full_nodomain"}` +
         ` isGroup=${isGroup}`
@@ -567,11 +565,59 @@ export default function register(api: PluginApi): void {
   );
 }
 
+
+// ── Placement helpers ───────────────────────────────────────────────────────
+
+/** Valid placements for the dynamic context block. */
+type Placement = "system-prepend" | "turn-prepend";
+
+/**
+ * Resolve the configured placement value.
+ * Defaults to "system-prepend". Unknown values fall back to the default
+ * rather than failing, so a misconfigured plugin never breaks prompts.
+ */
+function resolvePlacement(config: Record<string, unknown> | undefined): Placement {
+  const raw = config?.placement;
+  if (raw === "turn-prepend") return "turn-prepend";
+  return "system-prepend";
+}
+
+/**
+ * Assemble the before_prompt_build return object based on placement.
+ *
+ * - system-prepend: dynamic entity/domain/recall block -> prependSystemContext
+ * - turn-prepend:   dynamic block -> prependContext
+ * In both cases turn reminders + honorific guard -> appendSystemContext.
+ */
+export function buildPromptResult(
+  placement: Placement,
+  prependSegments: string[],
+  appendSegments: string[]
+): PromptBuildResult {
+  const result: PromptBuildResult = {};
+
+  if (prependSegments.length > 0) {
+    const joined = prependSegments.join("\n\n");
+    if (placement === "turn-prepend") {
+      result.prependContext = joined;
+    } else {
+      result.prependSystemContext = joined;
+    }
+  }
+
+  if (appendSegments.length > 0) {
+    result.appendSystemContext = appendSegments.join("\n\n");
+  }
+
+  return result;
+}
+
 // ── Plugin API type stubs ─────────────────────────────────────────────────────
 // Minimal type declarations for the Plugin SDK surface we use.
 // The actual types come from the OpenClaw plugin loader at runtime.
 
 interface PluginApi {
+  pluginConfig?: Record<string, unknown>;
   on(
     hook: string,
     handler: (event: PluginEvent, ctx: PluginContext) => Promise<void | PromptBuildResult | undefined>,
@@ -597,4 +643,6 @@ interface PluginContext {
 interface PromptBuildResult {
   prependSystemContext?: string;
   appendSystemContext?: string;
+  prependContext?: string;
+  appendContext?: string;
 }

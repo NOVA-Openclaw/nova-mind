@@ -576,7 +576,7 @@ type Placement = "system-prepend" | "turn-prepend";
  * Defaults to "system-prepend". Unknown values fall back to the default
  * rather than failing, so a misconfigured plugin never breaks prompts.
  */
-function resolvePlacement(config: Record<string, unknown> | undefined): Placement {
+export function resolvePlacement(config: Record<string, unknown> | undefined): Placement {
   const raw = config?.placement;
   if (raw === "turn-prepend") return "turn-prepend";
   return "system-prepend";

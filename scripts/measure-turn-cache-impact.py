@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -177,7 +178,45 @@ def format_metrics(metrics: dict, label: str) -> str:
     return "\n".join(lines)
 
 
-def compare_metrics(before: dict, after: dict) -> str:
+# Regex to extract the prepend block size emitted by the turn-context plugin:
+#   [turn-context] before_prompt_build DONE ... injecting prepend=<N>chars ...
+PREPEND_BLOCK_RE = re.compile(r"prepend=(\d+)chars")
+
+
+def parse_prepend_block_size(path: Path | None) -> int | None:
+    """
+    Parse the average dynamic prepend block size (in chars) from a turn-context
+    log file. The plugin emits lines like:
+
+      [turn-context] before_prompt_build DONE ... injecting prepend=1234chars ...
+
+    Returns the average prepend size across all matched lines, or None if no
+    matching log lines are found. The regex works for plain logs and for JSONL
+    entries where the log message is embedded in a JSON object.
+    """
+    if not path:
+        return None
+
+    sizes: list[int] = []
+    try:
+        with path.open("r", encoding="utf-8") as fh:
+            for raw_line in fh:
+                if "[turn-context]" not in raw_line or "before_prompt_build DONE" not in raw_line:
+                    continue
+                match = PREPEND_BLOCK_RE.search(raw_line)
+                if match:
+                    sizes.append(int(match.group(1)))
+    except OSError as err:
+        print(f"Warning: could not read turn-context log {path}: {err}", file=sys.stderr)
+        return None
+
+    if not sizes:
+        return None
+
+    return round(sum(sizes) / len(sizes))
+
+
+def compare_metrics(before: dict, after: dict, prepend_block_size: int | None = None) -> str:
     before_write = before["steady_state"]["cache_write_per_turn"]
     after_write = after["steady_state"]["cache_write_per_turn"]
     write_delta = after_write - before_write
@@ -195,15 +234,30 @@ def compare_metrics(before: dict, after: dict) -> str:
         f"(Δ {ratio_delta_pp:+.2f} pp)",
     ]
 
+    if prepend_block_size is not None:
+        lines.append(f"  prepend_block_size (chars):    {prepend_block_size}")
+
     ac1_met = write_delta_pct <= -80.0
     ac2_met = ratio_delta_pp >= 15.0 or (
         after["total_cache_read"] + after["total_cache_write"] > 0
         and after["total_cache_read"] / (after["total_cache_read"] + after["total_cache_write"]) >= 0.90
     )
 
+    # AC-3 sanity check: the measured drop in cacheWrite/turn should be within
+    # ±10% of the dynamic prepend block size reported by turn-context. This
+    # catches the false positive where cacheWrite dropped because the block was
+    # shrunk rather than moved out of the cached prefix.
+    actual_drop = before_write - after_write
+    if prepend_block_size is not None and prepend_block_size > 0:
+        ac3_met = abs(actual_drop - prepend_block_size) / prepend_block_size <= 0.10
+    else:
+        ac3_met = False
+
     lines.append(f"  AC-1 (cacheWrite drop >= 80%): {'PASS' if ac1_met else 'FAIL'}")
     lines.append(f"  AC-2 (ratio improvement >= 15pp or turns 3+ cacheRead/(read+write) >= 90%): "
                  f"{'PASS' if ac2_met else 'FAIL'}")
+    lines.append(f"  AC-3 (cacheWrite drop within ±10% of prepend block size): "
+                 f"{'PASS' if ac3_met else 'FAIL'}")
 
     return "\n".join(lines)
 
@@ -215,6 +269,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("session", nargs="?", type=Path, help="Path to session JSONL file")
     parser.add_argument("--before", type=Path, help="Baseline session JSONL")
     parser.add_argument("--after", type=Path, help="Experiment session JSONL")
+    parser.add_argument(
+        "--turn-context-log",
+        type=Path,
+        dest="turn_context_log",
+        help=(
+            "Path to a turn-context log file (or JSONL containing turn-context log lines). "
+            "Used to extract the average prepend=<N>chars block size for the AC-3 sanity check."
+        ),
+    )
     args = parser.parse_args(argv)
 
     if args.before and args.after:
@@ -222,11 +285,12 @@ def main(argv: list[str] | None = None) -> int:
         after_turns = parse_session_jsonl(args.after)
         before_metrics = compute_metrics(before_turns)
         after_metrics = compute_metrics(after_turns)
+        prepend_block_size = parse_prepend_block_size(args.turn_context_log)
         print(format_metrics(before_metrics, "Before"))
         print()
         print(format_metrics(after_metrics, "After"))
         print()
-        print(compare_metrics(before_metrics, after_metrics))
+        print(compare_metrics(before_metrics, after_metrics, prepend_block_size))
         return 0
 
     if not args.session:

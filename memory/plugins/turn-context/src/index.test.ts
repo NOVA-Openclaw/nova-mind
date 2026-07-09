@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { buildPromptResult } from "./index.ts";
+import { buildPromptResult, resolvePlacement } from "./index.ts";
 
 /**
  * Unit tests for the placement-aware prompt assembly in turn-context.
@@ -71,5 +71,31 @@ describe("buildPromptResult", () => {
     const result = buildPromptResult("turn-prepend", [], []);
 
     assert.deepEqual(result, {});
+  });
+});
+
+describe("resolvePlacement", () => {
+  it("TC-439-007: undefined config defaults to system-prepend", () => {
+    assert.equal(resolvePlacement(undefined), "system-prepend");
+  });
+
+  it("TC-439-008: empty object defaults to system-prepend", () => {
+    assert.equal(resolvePlacement({}), "system-prepend");
+  });
+
+  it("TC-439-009: bogus placement string falls back to system-prepend", () => {
+    assert.equal(resolvePlacement({ placement: "bogus" }), "system-prepend");
+  });
+
+  it("TC-439-010: non-string placement (number) falls back to system-prepend", () => {
+    assert.equal(resolvePlacement({ placement: 123 }), "system-prepend");
+  });
+
+  it("TC-439-011: explicit turn-prepend is accepted", () => {
+    assert.equal(resolvePlacement({ placement: "turn-prepend" }), "turn-prepend");
+  });
+
+  it("TC-439-012: explicit system-prepend is accepted", () => {
+    assert.equal(resolvePlacement({ placement: "system-prepend" }), "system-prepend");
   });
 });

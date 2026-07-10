@@ -31,6 +31,7 @@ import pytest
 
 _SCRIPT_PATH = Path(__file__).parent.parent.parent / "memory" / "scripts" / "announce-d100-rolls.py"
 _SCHEMA_PATH = Path(__file__).parent.parent.parent / "database" / "schema.sql"
+_INSTALL_SCRIPT_PATH = Path(__file__).parent.parent.parent / "agent-install.sh"
 
 
 def _load_module() -> ModuleType:
@@ -528,6 +529,19 @@ class TestRegression:
         assert block_start != -1
         block = schema[block_start:block_start + 400]
         assert "GRANT SELECT ON TABLE motivation_d100 TO nova;" in block
+
+    def test_agent_install_reapplies_schema_grants_after_pgschema(self):
+        """#452 regression: after pgschema apply, agent-install.sh must reconcile
+        explicit GRANT/REVOKE lines from schema.sql so #448/#449 grants survive
+        fresh installs.
+        """
+        script = _INSTALL_SCRIPT_PATH.read_text()
+        apply_idx = script.find("Schema applied successfully")
+        assert apply_idx != -1, "agent-install.sh missing pgschema apply success marker"
+        tail = script[apply_idx:]
+        assert "Reconciling explicit schema grants" in tail
+        assert "_superuser_psql" in tail
+        assert re.search(r"GRANT|REVOKE", tail) is not None
 
     def test_check_step11_d100_not_broken_by_announced_at(self, m):
         """TC-432-R-03, R-04, R-05: announcer's UPDATE only touches announced_at."""

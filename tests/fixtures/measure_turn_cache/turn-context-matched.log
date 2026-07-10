@@ -1,0 +1,2 @@
+2026-07-09T12:00:00.000Z [turn-context] before_prompt_build DONE in 87ms — placement=turn-prepend injecting prepend=3600chars append=239chars classifier=info_request/default tier=full_nodomain isGroup=false
+2026-07-09T12:00:01.000Z [turn-context] before_prompt_build DONE in 85ms — placement=turn-prepend injecting prepend=3600chars append=239chars classifier=info_request/default tier=full_nodomain isGroup=false

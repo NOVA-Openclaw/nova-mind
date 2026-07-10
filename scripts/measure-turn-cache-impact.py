@@ -29,6 +29,13 @@ from pathlib import Path
 from typing import Iterable
 
 
+# Approximate characters per token for English-like text. This is a coarse
+# heuristic used to compare the turn-context prepend block (measured in
+# characters by the plugin) against provider cacheWrite deltas (measured in
+# tokens). Actual tokenization depends on model and language mix.
+CHARS_PER_TOKEN_ESTIMATE = 4
+
+
 @dataclass(frozen=True)
 class TurnUsage:
     turn_number: int
@@ -183,6 +190,11 @@ def format_metrics(metrics: dict, label: str) -> str:
 PREPEND_BLOCK_RE = re.compile(r"prepend=(\d+)chars")
 
 
+def estimate_tokens_from_chars(chars: int) -> int:
+    """Estimate token count from a character count using the English-text heuristic."""
+    return round(chars / CHARS_PER_TOKEN_ESTIMATE)
+
+
 def parse_prepend_block_size(path: Path | None) -> int | None:
     """
     Parse the average dynamic prepend block size (in chars) from a turn-context
@@ -234,8 +246,11 @@ def compare_metrics(before: dict, after: dict, prepend_block_size: int | None = 
         f"(Δ {ratio_delta_pp:+.2f} pp)",
     ]
 
+    prepend_tokens: int | None = None
     if prepend_block_size is not None:
-        lines.append(f"  prepend_block_size (chars):    {prepend_block_size}")
+        lines.append(f"  prepend_block_size (chars):       {prepend_block_size}")
+        prepend_tokens = estimate_tokens_from_chars(prepend_block_size)
+        lines.append(f"  prepend_block_size (est. tokens): {prepend_tokens}")
 
     ac1_met = write_delta_pct <= -80.0
     ac2_met = ratio_delta_pp >= 15.0 or (
@@ -243,13 +258,14 @@ def compare_metrics(before: dict, after: dict, prepend_block_size: int | None = 
         and after["total_cache_read"] / (after["total_cache_read"] + after["total_cache_write"]) >= 0.90
     )
 
-    # AC-3 sanity check: the measured drop in cacheWrite/turn should be within
-    # ±10% of the dynamic prepend block size reported by turn-context. This
-    # catches the false positive where cacheWrite dropped because the block was
-    # shrunk rather than moved out of the cached prefix.
+    # AC-3 sanity check: the measured drop in cacheWrite/turn (in tokens)
+    # should be within ±10% of the dynamic prepend block size estimated from
+    # the turn-context character count. This catches the false positive where
+    # cacheWrite dropped because the block was shrunk rather than moved out of
+    # the cached prefix.
     actual_drop = before_write - after_write
-    if prepend_block_size is not None and prepend_block_size > 0:
-        ac3_met = abs(actual_drop - prepend_block_size) / prepend_block_size <= 0.10
+    if prepend_tokens is not None and prepend_tokens > 0:
+        ac3_met = abs(actual_drop - prepend_tokens) / prepend_tokens <= 0.10
     else:
         ac3_met = False
 

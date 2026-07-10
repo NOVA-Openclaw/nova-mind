@@ -238,6 +238,8 @@ nova‑mind integrates with OpenClaw via hooks that run on gateway events:
 | **turn-context** (Plugin SDK) | `before_prompt_build` | Consolidates old `semantic-recall` + `agent-turn-context` hooks. Runs entity resolution, vector search, and turn-reminder injection in parallel. [Source](memory/plugins/turn-context/) |
 
 > **Note:** The old `semantic-recall` and `agent-turn-context` hooks were removed and replaced by the `turn-context` Plugin SDK plugin at `memory/plugins/turn-context/` ([#182](https://github.com/NOVA-Openclaw/nova-mind/issues/182)). The installer removes stale hook directories from `~/.openclaw/hooks/` before installing the plugin.
+>
+> **Config surface:** `turn-context` accepts a `placement` option (`system-prepend` default | `turn-prepend`) controlling whether the dynamic entity/domain/recall block is returned as `prependSystemContext` (ahead of the base system prompt) or `prependContext` (adjacent to the current turn, to preserve prompt-cache hits) — see `memory/plugins/turn-context/README.md#placement` ([#439](https://github.com/NOVA-Openclaw/nova-mind/issues/439)).
 
 ### Cognition Hooks (`cognition/focus/`)
 

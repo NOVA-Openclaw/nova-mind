@@ -867,6 +867,46 @@ To remove the turn-context plugin:
 openclaw plugins remove turn-context
 ```
 
+### Turn-Context Placement & Prompt-Cache Impact Measurement
+
+The turn-context plugin's `placement` config option (`system-prepend` default | `turn-prepend`)
+controls whether the plugin's dynamic entity/domain/recall block sits ahead of the base system
+prompt or adjacent to the current turn — see `plugins/turn-context/README.md#placement` for the
+full option reference and configuration example (nova-mind#439).
+
+To measure the actual prompt-cache effect of a `placement` change (steady-state cacheWrite/turn,
+cache-hit ratio), use `scripts/measure-turn-cache-impact.py` (repo root `scripts/`) against
+OpenClaw session JSONL logs:
+
+```bash
+# Single session summary
+python3 scripts/measure-turn-cache-impact.py ~/.openclaw/agents/nova/sessions/<uuid>.jsonl
+
+# Before/after comparison (e.g. system-prepend baseline vs. turn-prepend experiment)
+python3 scripts/measure-turn-cache-impact.py \
+  --before baseline.jsonl \
+  --after experiment.jsonl \
+  --turn-context-log turn-context.log
+```
+
+The comparison mode reports three acceptance-criteria checks:
+
+- **AC-1** — steady-state `cacheWrite`/turn drops by ≥80%
+- **AC-2** — cache-hit ratio improves by ≥15 percentage points, or reaches ≥90% from turn 3 on
+- **AC-3** — the measured `cacheWrite`/turn drop (in tokens) is within ±10% of the dynamic
+  prepend block's size, estimated from its character count via a **`chars ÷ 4`** English-text
+  heuristic (`CHARS_PER_TOKEN_ESTIMATE = 4` in the script)
+
+**⚠️ AC-3 token-estimate caveat:** the `chars ÷ 4` conversion is a coarse approximation, not an
+exact tokenizer. Actual tokens-per-character varies by model and language mix. Use AC-3 to catch
+gross mismatches — e.g. `cacheWrite` dropping because the block was *shrunk* rather than *moved*
+out of the cached prefix — not as a precise token-accounting tool. `--turn-context-log` is
+optional; without it, AC-3 always reports FAIL (no prepend-block size to compare against) while
+AC-1/AC-2 are unaffected.
+
+Installer wiring for this script is tracked separately in nova-mind#445 (out of scope for #439)
+— for now, run it directly from a repo checkout.
+
 ### Security Best Practices
 
 To prevent shell injection vulnerabilities, all hooks now use safe patterns:

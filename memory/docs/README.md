@@ -190,7 +190,7 @@ Research/library ingestion is owned by the Library domain (Athena) via the `libr
 ### Integration Failures
 1. **Verify OpenClaw hooks:** `openclaw hooks list`
 2. **Test agent communication:** Insert test message in `agent_chat` table
-3. **Check environment variables:** `env | grep NOVA_MEMORY`
+3. **Check database environment variables:** `env | grep '^PG'` (there is no `NOVA_MEMORY*` env var convention — connection config comes from `~/.openclaw/postgres.json` / `PG*` vars, see [database-config.md](database-config.md))
 4. **Review plugin logs:** `tail -f ~/.openclaw/logs/plugin-*.log`
 
 ## Development Workflow

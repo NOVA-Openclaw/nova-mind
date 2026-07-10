@@ -1,5 +1,24 @@
 # Agent Delegation as Memory
 
+> **Status correction (current as of this audit):** This document's original
+> "Status: Design complete, ready for implementation" footer is stale — parts
+> of this design **have** shipped, just not exactly as originally sketched:
+> - The delegation extraction prompt lives directly inside
+>   `memory/scripts/extract_memories.py` (see the `DELEGATION CONTEXT` section
+>   of its extraction prompt) — there is no separate `extract-memories.sh`
+>   script (that shell pipeline was removed with the grammar-parser removal,
+>   #174; see `SOURCE-AUTHORITY.md`).
+> - `memory/scripts/embed-delegation-facts.sh` **does exist** and matches the
+>   "Embedding Sync" description below.
+> - `scripts/seed-delegation-knowledge.sql` does **not** exist in the repo,
+>   despite still being referenced by `memory/scripts/test-delegation-memory.sh`
+>   (a pre-existing inconsistency in that script, not this doc — flagged here,
+>   not fixed, since it's a code file).
+> - The command examples further down (e.g. `./scripts/extract-memories.sh`)
+>   describe the original design and do not match the current single-script
+>   pipeline. Treat the Architecture/Schema sections as accurate design intent
+>   and the specific script names/commands in "Usage Examples" as historical.
+
 ## Problem Statement
 
 Agent delegation is CORE to how NOVA operates, but it was previously handled as runtime hints (keyword matching). This is fragile and doesn't learn from experience. 
@@ -202,9 +221,6 @@ No breaking changes — both systems can coexist during transition.
 
 ---
 
-**Status:** Design complete, ready for implementation  
-**Next Steps:** 
-1. Create seed script
-2. Update memory extractor prompt
-3. Create embedding sync script
-4. Test with sample queries
+**Status:** Partially implemented — see the status correction note at the
+top of this document. The extraction prompt update and embedding sync script
+exist; the standalone seed script does not.

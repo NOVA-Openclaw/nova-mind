@@ -723,19 +723,21 @@ class BulkEntityProcessor {
 ### Environment Variables
 
 ```bash
-# Database configuration
-POSTGRES_HOST=localhost
+# Database configuration (standard PG* variables; loaded via pg-env.ts
+# from ~/.openclaw/postgres.json, with these as overrides — see
+# ARCHITECTURE-entity-resolver.md)
+PGHOST=localhost
 # Database name is automatically derived from OS username: {username}_memory
 # Examples: nova → nova_memory, nova-staging → nova_staging_memory
 # Hyphens in usernames are replaced with underscores
-# Override with POSTGRES_DB if needed (e.g., POSTGRES_DB=custom_memory)
-POSTGRES_USER=nova
-POSTGRES_PASSWORD=secure_password
+# Override with PGDATABASE if needed (e.g., PGDATABASE=custom_memory)
+PGUSER=nova
+PGPASSWORD=secure_password
 
-# Entity resolver configuration
-ENTITY_CACHE_TTL_MS=1800000          # 30 minutes
-DB_POOL_SIZE=10                      # Connection pool size
-DB_IDLE_TIMEOUT_MS=30000            # 30 seconds
+# NOTE: Entity resolver cache TTL and connection-pool sizing are currently
+# hardcoded in lib/entity-resolver/{cache,resolver}.ts (30-min cache TTL,
+# pool max 5). There are no ENTITY_CACHE_TTL_MS, DB_POOL_SIZE, or
+# DB_IDLE_TIMEOUT_MS environment variables read by the library.
 
 # Certificate configuration
 NOVA_CA_CERT=/path/to/nova-ca.crt
@@ -776,12 +778,11 @@ services:
   nova-api:
     build: .
     environment:
-      POSTGRES_HOST: nova-db
-      # Database name automatically derived from OS username or POSTGRES_USER
-      # Will use: {POSTGRES_USER}_memory → nova_memory 
-      POSTGRES_USER: nova
-      POSTGRES_PASSWORD: secure_password
-      ENTITY_CACHE_TTL_MS: 1800000
+      PGHOST: nova-db
+      # Database name automatically derived from OS username or PGUSER
+      # Will use: {PGUSER}_memory → nova_memory
+      PGUSER: nova
+      PGPASSWORD: secure_password
     volumes:
       - ./certs:/app/certs:ro
     ports:
@@ -793,7 +794,7 @@ services:
     build: .
     command: npm run start:signal
     environment:
-      POSTGRES_HOST: nova-db
+      PGHOST: nova-db
       SIGNAL_PHONE: "+1234567890"
     volumes:
       - ./certs:/app/certs:ro

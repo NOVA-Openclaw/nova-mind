@@ -448,12 +448,15 @@ PGHOST=localhost                 # Database host
 # Override with PGDATABASE if needed (e.g., PGDATABASE=custom_memory)
 PGUSER=nova                      # Database user (defaults to OS username)
 PGPASSWORD=secret                # Database password
-
-# Optional tuning
-ENTITY_CACHE_TTL_MS=1800000      # Cache TTL (30 minutes)
-DB_POOL_SIZE=5                   # Connection pool size
-DB_IDLE_TIMEOUT_MS=30000         # Connection idle timeout
 ```
+
+**Note:** Cache TTL (30 minutes) and pool sizing (`max: 5`, 30s idle timeout,
+5s connection timeout) are currently hardcoded in
+`relationships/lib/entity-resolver/{cache,resolver}.ts`. There are no
+`ENTITY_CACHE_TTL_MS`, `DB_POOL_SIZE`, or `DB_IDLE_TIMEOUT_MS` environment
+variables read by the library — if you need different values, pass a
+`ttlMs` argument to `getCachedEntity()` per-call, or edit the hardcoded
+constants in source.
 
 ### Database Setup
 
@@ -482,15 +485,31 @@ CREATE INDEX idx_entity_facts_entity_id ON entity_facts(entity_id);
 
 ### Connection Pool Tuning
 
+The library loads its connection settings via the shared `pg-env.ts` helper
+(`loadPgEnv()`, resolved dynamically from `~/.openclaw/lib/pg-env.ts` at
+runtime — see [nova-mind#330](https://github.com/NOVA-Openclaw/nova-mind/issues/330)),
+not by reading `process.env` directly in `resolver.ts` itself. `pg-env.ts`'s
+own resolution order is **ENV vars → `~/.openclaw/postgres.json` → built-in
+defaults** — so `PGHOST`/`PGPORT`/`PGDATABASE`/`PGUSER`/`PGPASSWORD` env vars
+take priority over the config file when set, matching the "Standard PG*
+variables override the config file" note above. The `POSTGRES_*`-prefixed
+variables shown in the old code sample below never existed in this library —
+that was a doc error, not a deprecated feature. Pool sizing (`max: 5`,
+`idleTimeoutMillis: 30000`, `connectionTimeoutMillis: 5000`) is currently
+hardcoded in `getDbPool()`, not configurable via `DB_POOL_SIZE` or
+`DB_IDLE_TIMEOUT_MS` env vars — those two variables in the Environment
+Variables section above are aspirational/not yet wired up.
+
 ```typescript
-// Custom pool configuration
-const customPool = new Pool({
-  host: process.env.POSTGRES_HOST,
-  database: process.env.POSTGRES_DB,
-  user: process.env.POSTGRES_USER,
-  password: process.env.POSTGRES_PASSWORD,
-  max: parseInt(process.env.DB_POOL_SIZE || '5'),
-  idleTimeoutMillis: parseInt(process.env.DB_IDLE_TIMEOUT_MS || '30000'),
+// Actual pool construction (relationships/lib/entity-resolver/resolver.ts)
+dbPool = new Pool({
+  host: pgConfig.host || "localhost",
+  port: pgConfig.port,
+  database: getDatabaseName(), // pgConfig.database, or "<user>_memory"
+  user: pgConfig.user || os.userInfo().username,
+  password: pgConfig.password,
+  max: 5,
+  idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 5000,
 });
 ```

@@ -31,7 +31,7 @@ The NOVA Relationships System is a unified platform that merged the original Ent
    - Session-aware caching for performance
    - Profile management and fact storage
    - Cross-platform integration (Discord, Telegram, Slack, Signal, email, web, certificates, devices)
-   - Installed to `~/.openclaw/lib/entity-resolver/` by `agent-install.sh` for runtime use by hooks
+   - `agent-install.sh` runs `npm install` in place under `lib/entity-resolver/` (it does not copy the library elsewhere); hooks import it directly from wherever the repo is checked out, e.g. `<checkout-path>/lib/entity-resolver`
 
 2. **Certificate Authority** (`nova-ca/`)
    - Private CA for mTLS authentication
@@ -263,14 +263,15 @@ PGHOST=localhost
 PGUSER=nova
 PGPASSWORD=your_password
 
-# Entity resolver tuning
-ENTITY_CACHE_TTL_MS=1800000  # 30 minutes
-DB_POOL_SIZE=5
-DB_IDLE_TIMEOUT_MS=30000
-
 # Certificate authority
 NOVA_CA_PATH=/path/to/nova-ca
 ```
+
+**Note:** Entity resolver cache TTL and connection-pool sizing are currently
+hardcoded in `lib/entity-resolver/{cache,resolver}.ts` (30-minute cache TTL,
+pool max 5, 30s idle timeout). There are no `ENTITY_CACHE_TTL_MS`,
+`DB_POOL_SIZE`, or `DB_IDLE_TIMEOUT_MS` environment variables read by the
+library — see `ARCHITECTURE-entity-resolver.md` for details.
 
 ### Entity Resolver Installation
 ```bash

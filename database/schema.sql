@@ -8790,9 +8790,9 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE d100_roll_log FROM newhart;
 -- Name: d100_roll_log; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE ON TABLE d100_roll_log FROM nova;
+REVOKE DELETE, INSERT ON TABLE d100_roll_log FROM nova;
 
-GRANT SELECT, INSERT, UPDATE ON TABLE d100_roll_log TO nova;
+GRANT SELECT, UPDATE ON TABLE d100_roll_log TO nova;
 
 --
 -- Name: d100_roll_log; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9681,6 +9681,8 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE memory_type_priorities FROM nova;
 --
 
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE motivation_d100 FROM nova;
+
+GRANT SELECT ON TABLE motivation_d100 TO nova;
 
 --
 -- Name: music_analysis; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -20246,5 +20248,5 @@ GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE workflow_steps_detail TO ticker;
 -- Name: motivation_d100; Type: COLUMN_PRIVILEGE; Schema: column_privileges; Owner: -
 --
 
-GRANT UPDATE (difficulty, enabled, energy_required, estimated_minutes, last_completed, last_rolled, notes, reserved, skill_name, task_description, task_name, times_completed, times_rolled, tool_name, workflow_id) ON TABLE motivation_d100 TO nova;
+GRANT UPDATE (difficulty, enabled, energy_required, estimated_minutes, last_completed, last_rolled, notes, populated_at, reserved, skill_name, task_description, task_name, times_completed, times_rolled, tool_name, workflow_id) ON TABLE motivation_d100 TO nova;
 

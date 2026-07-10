@@ -35,6 +35,10 @@ GRANT UPDATE (reserved, populated_at) ON TABLE motivation_d100 TO nova;
 -- explicit grants are required.
 GRANT UPDATE (times_rolled, last_rolled, times_completed, last_completed) ON TABLE motivation_d100 TO nova;
 
+-- Nova needs SELECT on motivation_d100 to read task details when announcing
+-- rolls and marking completions.
+GRANT SELECT ON TABLE motivation_d100 TO nova;
+
 -- ---------------------------------------------------------------------------
 -- 2. Backfill populated_at for existing populated slots to created_at.
 --    GAP-3 resolution: backfill to created_at, not NULL, so legacy slots
@@ -339,10 +343,11 @@ BEGIN
 END $$;
 
 -- ---------------------------------------------------------------------------
--- 9. Grant nova direct SELECT/INSERT/UPDATE on d100_roll_log for the
---    announcer and the trg_log_d100_roll trigger. This closes pre-existing
---    privilege gaps from issues #432 and #444; the announcer script and the
---    trigger both run as nova and need to insert/claim/unstamp rows.
+-- 9. Grant nova direct SELECT/UPDATE on d100_roll_log for the announcer.
+--    The trigger which writes roll-log rows executes under roll_d100()'s
+--    SECURITY DEFINER context, not nova's session, so nova never needs
+--    direct INSERT. This closes pre-existing privilege gaps from issues
+--    #432 and #444.
 -- ---------------------------------------------------------------------------
-REVOKE DELETE ON TABLE d100_roll_log FROM nova;
-GRANT SELECT, INSERT, UPDATE ON TABLE d100_roll_log TO nova;
+REVOKE DELETE, INSERT ON TABLE d100_roll_log FROM nova;
+GRANT SELECT, UPDATE ON TABLE d100_roll_log TO nova;

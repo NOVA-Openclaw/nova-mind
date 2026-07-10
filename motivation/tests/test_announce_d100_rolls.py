@@ -518,6 +518,16 @@ class TestRegression:
         assert block_start != -1
         block = schema[block_start:block_start + 400]
         assert "GRANT SELECT, UPDATE ON TABLE d100_roll_log TO nova;" in block
+        # INSERT must not be re-introduced.
+        assert "GRANT SELECT, INSERT, UPDATE ON TABLE d100_roll_log TO nova;" not in block
+
+    def test_nova_grant_select_on_motivation_d100(self):
+        """#448 regression: nova must hold SELECT on motivation_d100."""
+        schema = _SCHEMA_PATH.read_text()
+        block_start = schema.find("REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE motivation_d100 FROM nova;")
+        assert block_start != -1
+        block = schema[block_start:block_start + 400]
+        assert "GRANT SELECT ON TABLE motivation_d100 TO nova;" in block
 
     def test_check_step11_d100_not_broken_by_announced_at(self, m):
         """TC-432-R-03, R-04, R-05: announcer's UPDATE only touches announced_at."""

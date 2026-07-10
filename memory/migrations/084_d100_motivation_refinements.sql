@@ -30,6 +30,11 @@ ALTER TABLE motivation_d100
 -- Ensure the new columns are updatable before the backfill runs.
 GRANT UPDATE (reserved, populated_at) ON TABLE motivation_d100 TO nova;
 
+-- roll_d100() and complete_d100() are SECURITY DEFINER and update the
+-- tracking columns. Nova operates under column-level UPDATE grants, so
+-- explicit grants are required.
+GRANT UPDATE (times_rolled, last_rolled, times_completed, last_completed) ON TABLE motivation_d100 TO nova;
+
 -- ---------------------------------------------------------------------------
 -- 2. Backfill populated_at for existing populated slots to created_at.
 --    GAP-3 resolution: backfill to created_at, not NULL, so legacy slots
@@ -216,11 +221,23 @@ BEGIN
                         (SELECT count(*) FROM pop WHERE pop.last_rolled >= v_now - interval '7 days') AS recent_pop
                 ),
                 admit AS (
-                    SELECT p.roll
-                    FROM pop p, counts c
-                    WHERE p.last_rolled >= v_now - interval '7 days'
-                    ORDER BY p.last_rolled ASC, p.roll ASC
-                    LIMIT GREATEST(c.recent_pop - (floor(c.total_pop * 0.5))::integer, 0)
+                    SELECT ranked.roll
+                    FROM (
+                        SELECT
+                            p.roll,
+                            row_number() OVER (
+                                ORDER BY p.last_rolled ASC, p.roll ASC
+                            ) AS rn
+                        FROM pop p
+                        WHERE p.last_rolled >= v_now - interval '7 days'
+                    ) ranked
+                    WHERE rn <= (
+                        SELECT GREATEST(
+                            c.recent_pop - (floor(c.total_pop * 0.5))::integer,
+                            0
+                        )
+                        FROM counts c
+                    )
                 )
                 SELECT 1
                 FROM pop p
@@ -322,9 +339,10 @@ BEGIN
 END $$;
 
 -- ---------------------------------------------------------------------------
--- 9. Grant nova direct SELECT/UPDATE on d100_roll_log for the announcer.
---    This closes a pre-existing privilege gap from issue #432; the announcer
---    script runs as nova and needs to claim/unstamp rows directly.
+-- 9. Grant nova direct SELECT/INSERT/UPDATE on d100_roll_log for the
+--    announcer and the trg_log_d100_roll trigger. This closes pre-existing
+--    privilege gaps from issues #432 and #444; the announcer script and the
+--    trigger both run as nova and need to insert/claim/unstamp rows.
 -- ---------------------------------------------------------------------------
-REVOKE DELETE, INSERT ON TABLE d100_roll_log FROM nova;
-GRANT SELECT, UPDATE ON TABLE d100_roll_log TO nova;
+REVOKE DELETE ON TABLE d100_roll_log FROM nova;
+GRANT SELECT, INSERT, UPDATE ON TABLE d100_roll_log TO nova;

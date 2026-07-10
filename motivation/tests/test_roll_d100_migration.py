@@ -128,3 +128,57 @@ def test_roll_d100_from_migration_returns_row():
     finally:
         conn.rollback()
         conn.close()
+
+
+@pytest.mark.skipif(os.environ.get("SKIP_DB_TESTS"), reason="SKIP_DB_TESTS set")
+def test_roll_d100_from_migration_anti_repeat_no_ambiguous_column():
+    """
+    #453 regression: the anti-repeat CTE must expose an aliased column
+    (admitted_roll) so that `p.roll IN (SELECT admit.admitted_roll FROM admit)`
+    does not collide with roll_d100()'s output column `roll`.
+
+    This test forces the populated-slot path with a recently-rolled row so the
+    admit CTE is evaluated.
+    """
+    migration_sql = MIGRATION_PATH.read_text()
+    function_sql = _extract_roll_d100_block(migration_sql)
+
+    conn = _connect()
+    conn.autocommit = False
+    try:
+        with conn.cursor() as cur:
+            cur.execute(function_sql)
+
+            # Seed one populated+enabled row, mark it rolled very recently, and
+            # disable all empty slots so the draw must take the anti-repeat path.
+            cur.execute(
+                """
+                INSERT INTO motivation_d100 (
+                    roll, task_name, task_description, enabled, populated_at,
+                    times_rolled, last_rolled
+                ) VALUES (
+                    %s, 'Anti-repeat ambiguity regression task',
+                    'Temporary row for anti-repeat ambiguity test', true, now(),
+                    1, now()
+                )
+                ON CONFLICT (roll) DO UPDATE SET
+                    task_name = EXCLUDED.task_name,
+                    task_description = EXCLUDED.task_description,
+                    enabled = true,
+                    populated_at = COALESCE(motivation_d100.populated_at, now()),
+                    times_rolled = EXCLUDED.times_rolled,
+                    last_rolled = EXCLUDED.last_rolled;
+                """,
+                (TEST_ROLL,),
+            )
+            cur.execute("UPDATE motivation_d100 SET enabled = false WHERE task_name IS NULL;")
+
+            cur.execute("SELECT * FROM roll_d100() LIMIT 1;")
+            row = cur.fetchone()
+
+            assert row is not None, "roll_d100() returned no row"
+            assert isinstance(row[0], int), f"expected integer roll, got {row[0]!r}"
+            assert 1 <= row[0] <= 100, f"roll {row[0]} out of 1-100 range"
+    finally:
+        conn.rollback()
+        conn.close()

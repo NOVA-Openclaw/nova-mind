@@ -457,8 +457,8 @@ sudo systemctl status postgresql
 # Check connection (database name derived from username)
 psql -U nova -d nova_memory -c "SELECT 1;"
 
-# Check environment variables
-echo $POSTGRES_HOST $POSTGRES_DB $POSTGRES_USER
+# Check environment variables (migrated from POSTGRES_* to standard PG* names, see CHANGELOG.md)
+echo $PGHOST $PGDATABASE $PGUSER
 ```
 
 #### Certificate Issues

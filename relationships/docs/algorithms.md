@@ -1,5 +1,12 @@
 # Analysis Algorithms
 
+> **Status: Design phase — not yet implemented.** None of the TypeScript
+> below exists in `lib/entity-resolver/` or anywhere else in this repo. This
+> document is a design sketch for the "Analysis Algorithms" and
+> "Relationship Management" roadmap items tracked as 📋 Planned in
+> `README.md`'s Status & Roadmap section. Treat function signatures and
+> types here as proposals, not an API reference.
+
 ## Overview
 
 The NOVA Relationships system employs sophisticated algorithms to analyze entity data and extract meaningful patterns. These algorithms enable intelligent context weighting, behavioral prediction, and relationship strength assessment.

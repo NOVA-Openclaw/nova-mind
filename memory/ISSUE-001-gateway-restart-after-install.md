@@ -1,5 +1,12 @@
 # Issue: agent-install.sh should restart or warn about gateway restart
 
+> **Status: Resolved.** `agent-install.sh` now implements this behavior
+> (gateway-running detection, `--no-restart` flag / `NO_RESTART` env var,
+> auto-restart via `systemctl --user restart openclaw-gateway`, clean exit
+> when the gateway isn't running) — see the "Gateway restart" section near
+> the end of `agent-install.sh`. Retained here as historical record of the
+> original problem/fix design.
+
 ## Context
 
 When `agent-install.sh` runs while the gateway is already running, installed changes (hooks, skills, config) are not picked up until the gateway is manually restarted. Plugins and hooks are loaded once at startup and cached for the process lifetime — config hot-reload does not reload them.
@@ -32,7 +39,7 @@ fi
 
 ## Acceptance Criteria
 
-- [ ] Running gateway detected at end of install
-- [ ] Gateway auto-restarts by default after successful install
-- [ ] `--no-restart` flag (or `NO_RESTART=1` env var) suppresses auto-restart and prints manual command instead
-- [ ] No error if gateway is not running (script exits cleanly)
+- [x] Running gateway detected at end of install
+- [x] Gateway auto-restarts by default after successful install
+- [x] `--no-restart` flag (or `NO_RESTART=1` env var) suppresses auto-restart and prints manual command instead
+- [x] No error if gateway is not running (script exits cleanly)

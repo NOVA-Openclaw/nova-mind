@@ -2,7 +2,18 @@
 
 Model capabilities and recommendations for agent deployment.
 
-## Model Registry
+> ⚠️ **This table is a static snapshot and is already out of date.** The live,
+> authoritative model registry is the `ai_models` table in the nova-mind database
+> (see `database/schema-reference.md` or `\d ai_models` on a live install). Current
+> agent configs already reference newer models not listed below (e.g.
+> `anthropic/claude-sonnet-4.6`, `anthropic/claude-opus-4.6`,
+> `google/gemini-3-flash-preview`, `openai/gpt-5.2-codex` — see
+> `cognition/README.md`'s Agent Config Sync section). Query `ai_models` directly
+> for current model IDs, cost tiers, and availability rather than relying on the
+> table below, which is kept only for the general tier/selection *reasoning*, not
+> for specific model IDs.
+
+## Model Registry (illustrative snapshot — see warning above)
 
 | Model ID | Provider | Display Name | Context | Cost | Strengths |
 |----------|----------|--------------|---------|------|-----------|

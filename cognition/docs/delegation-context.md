@@ -38,7 +38,17 @@ ORDER BY workflow_name, step_order;
 ```
 
 #### Spawn Instructions
+
+> **Stale query — `agents.seed_context` no longer exists.** The column was renamed
+> to `bootstrap_context` and then removed entirely as agent context migrated to
+> the dedicated `agent_bootstrap_context` table (see
+> `cognition/focus/bootstrap-context/`). The query below is kept for historical
+> reference only; confirm the current source of per-agent spawn guidance
+> (likely an `agent_bootstrap_context` row with `context_type = 'AGENT'` for the
+> relevant `agent_name`) before relying on it.
+
 ```sql
+-- Historical/pre-migration shape — do not run against a current install:
 SELECT nickname, seed_context->>'spawn_instructions' as instructions
 FROM agents
 WHERE instance_type = 'subagent' AND seed_context->>'spawn_instructions' IS NOT NULL;
@@ -108,7 +118,7 @@ Both should be loaded together for full delegation awareness.
 
 - Update agent definitions in `agents` table
 - Modify workflows in `workflows` and `workflow_steps` tables
-- Add spawn instructions to agent `seed_context` JSON field
+- Add spawn instructions via the `agent_bootstrap_context` table (see note above — the old `agents.seed_context` field no longer exists)
 
 ## Related
 

@@ -1,5 +1,11 @@
 # Agent Workflow Language - Quick Start
 
+> ⚠️ **Status: Design proposal, not yet implemented.** There is no `nova-workflow` CLI,
+> no workflow executor, and no `workflow_executions`/`workflow_gates` tables in this repo.
+> See `agent-workflow-language.md` for the current AWL spec status. Treat the commands and
+> output below as a design mockup of the intended developer experience, not something you
+> can run today.
+
 ## What is AWL?
 
 Agent Workflow Language (AWL) is a declarative way to define multi-agent processes. Think of it as "infrastructure as code" for agent orchestration.

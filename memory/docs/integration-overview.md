@@ -1,6 +1,26 @@
 # Integration Overview: Nova-Memory + Nova-Cognition
 
-This guide explains how nova-memory integrates with nova-cognition to create a complete AI agent ecosystem with persistent memory, agent delegation, and sophisticated workflow patterns.
+> **Audit note (current as of this pass):** This document predates the merge
+> of the separate `nova-memory` and `nova-cognition` repos into this unified
+> `nova-mind` monorepo (`memory/` and `cognition/` subtrees today — there is
+> no standalone `nova-cognition` repo or `nova-cognition/hooks/job-system` to
+> `git clone` or `cp`). Some SQL below is genuinely accurate — the `agent_jobs`
+> table exists with the columns shown in most examples — but a few details are
+> stale or invented:
+> - `entity_facts` has **no bare `source` column** — attribution lives in the
+>   separate `entity_fact_sources` table (see `fact-judgement-model.md`).
+> - `agent_jobs` has **no `context_id` column**; there is no `memory_contexts`
+>   table anywhere in the schema.
+> - The "Combined Setup Script" and "1. Database Transaction Management" /
+>   "3. Performance Optimization" code samples reference repo layouts,
+>   scripts, and helper tables (`memory_contexts`, standalone `nova-memory`/
+>   `nova-cognition` git repos) that do not exist in the current monorepo.
+> - Treat the architectural narrative and `agent_jobs`-based examples as
+>   directionally useful; verify any specific column/table/file name against
+>   `database/schema.sql` and the current `memory/`/`cognition/` trees before
+>   relying on this doc for exact syntax.
+>
+> This guide explains how nova-memory integrates with nova-cognition to create a complete AI agent ecosystem with persistent memory, agent delegation, and sophisticated workflow patterns.
 
 ## System Architecture
 

@@ -13,6 +13,14 @@
   },
   "configSchema": {
     "type": "object",
-    "additionalProperties": false
+    "additionalProperties": false,
+    "properties": {
+      "placement": {
+        "type": "string",
+        "enum": ["system-prepend", "turn-prepend"],
+        "description": "Where to inject the dynamic entity/domain/recall block. system-prepend keeps it before the base system prompt (default, no behavior change). turn-prepend moves it adjacent to the current user turn to preserve prompt-cache hits.",
+        "default": "system-prepend"
+      }
+    }
   }
 }

@@ -4,6 +4,12 @@
 **Date:** 2026-02-08  
 **Status:** Design → Implementation
 
+> ⚠️ **Status: Design proposal, not yet implemented.** As of this audit, none of the
+> `workflow_executions` / `workflow_gates` tables, the `WorkflowExecutor` engine, or the
+> `nova-workflow` CLI described below exist in this repo. See `agent-workflow-language.md`,
+> `awl-getting-started.md`, and `awl-quick-reference.md` for the current AWL spec status.
+> Treat everything below as an implementation plan/sketch, not a description of working code.
+
 ## Overview
 
 This document provides technical guidance for implementing the Agent Workflow Language (AWL) execution engine.

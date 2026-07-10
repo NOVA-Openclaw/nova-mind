@@ -13,7 +13,9 @@ before_prompt_build:
   2.5. Entity resolution (gated) → resolvedEntityId, for prependSystemContext + recall input
   2.6. Honorific guard (always-on) → reuses 2.5's result if gated ON, own lightweight call if OFF
   3.   Run remaining subsystems in parallel (Promise.allSettled)
-  4.   Assemble prependSystemContext + appendSystemContext
+  4.   Assemble the dynamic block (entity + domain + recall) and the reminders/guard
+       block (turn reminders + honorific guard), then place the dynamic block
+       according to `placement` (see [Configuration → placement](#placement) below)
 ```
 
 ## Subsystems
@@ -196,6 +198,44 @@ After migration, run `memory/scripts/seed-domain-embeddings.py` to embed domain 
 - Helper config cache TTL: 5 minutes
 - Ollama classifier timeout: 2000ms
 - Embedding model: configured via `memory/scripts/embedding-config.json`
+- `placement`: where the dynamic entity/domain/recall block is injected relative to the
+  prompt-cache boundary — see [placement](#placement) below (#439)
+
+### `placement`
+
+`openclaw.plugin.json`'s `configSchema` exposes a single `placement` option controlling where
+the **dynamic** block (entity identity + domain routing + semantic recall — the segments built
+in Step 4 above) is injected relative to the base system prompt. This does **not** affect turn
+reminders or the honorific guard, which always land in `appendSystemContext` regardless of
+`placement`.
+
+| Value | Return key used for the dynamic block | Behavior |
+|---|---|---|
+| `system-prepend` (default) | `prependSystemContext` | Dynamic block is placed before the base system prompt, exactly as before this option existed — **no behavior change** for instances that do not set `placement`. |
+| `turn-prepend` | `prependContext` | Dynamic block is placed adjacent to the current user turn instead of before the base system prompt. Because the base system prompt (which is comparatively static across turns) is no longer preceded by a per-turn-varying dynamic block, this preserves prompt-cache hits on the system-prompt prefix — the cache boundary no longer moves every turn just because entity/domain/recall content changed. |
+
+Unknown or malformed `placement` values (missing config, wrong type, unrecognized string) fall
+back to `system-prepend` rather than throwing — a misconfigured plugin never breaks prompt
+assembly. See `resolvePlacement()` and `buildPromptResult()` in `src/index.ts`.
+
+Set it in the plugin's OpenClaw config block, e.g.:
+
+```json
+{
+  "plugins": {
+    "turn-context": {
+      "config": {
+        "placement": "turn-prepend"
+      }
+    }
+  }
+}
+```
+
+To measure the actual prompt-cache impact of switching `placement` (cache-read/write deltas
+before vs. after), see `scripts/measure-turn-cache-impact.py` (repo root `scripts/`) documented
+in the root `README.md` and `CHANGELOG.md`. Installer wiring for that script is tracked
+separately in nova-mind#445 (not yet installed automatically — run it directly from the repo).
 
 ## Issues
 
@@ -206,3 +246,5 @@ After migration, run `memory/scripts/seed-domain-embeddings.py` to embed domain 
 - #421 — Deterministic honorific guard (Step 2.6)
 - #425 — Follow-up: post-merge multi-gateway `agentId` casing/deployment-consistency smoke check for the guard
 - #384 — Domain identifier tolerates missing `agent_domains.keywords` column (schema drift)
+- #439 — Configurable placement for the dynamic context block (prepend vs. turn-adjacent) to preserve prompt-cache hits, plus `scripts/measure-turn-cache-impact.py` for measuring the effect
+- #445 — Follow-up (open, out of scope for #439): installer wiring for `scripts/measure-turn-cache-impact.py`

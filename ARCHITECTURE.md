@@ -265,7 +265,7 @@ The unified installer (`agent‑install.sh`) is idempotent and declarative:
 ### Key Features
 
 - **Hash‑Based File Sync:** Copies only new/changed files; skips identical content
-- **Declarative Schema Management:** Uses `pgschema` to diff `schema.sql` against live database; applies only needed changes
+- **Declarative Schema Management:** Uses `pgschema` to diff `schema.sql` against live database; applies only needed changes. `pgschema` deliberately ignores privilege statements (`GRANT`/`REVOKE`), so a dedicated post-apply reconciliation step (issue #452) extracts `GRANT`/`REVOKE` lines from the staged schema file and re-applies them via the superuser connection after a successful `pgschema apply` — otherwise explicit grants added directly to `schema.sql` are silently lost on fresh installs.
 - **Shared Library Installation:** Installs `pg‑env.sh`, `pg_env.py`, `pg‑env.ts` to `~/.openclaw/lib/` for consistent PostgreSQL connection loading
 - **Environment‑Aware:** Works for both interactive human installs (`shell‑install.sh`) and pre‑configured agent environments
 - **Gateway Integration:** Automatically restarts the OpenClaw gateway after installation (unless `--no‑restart`)
@@ -303,7 +303,7 @@ All database‑connected scripts use these loaders, ensuring consistent connecti
 
 **Why:** Manual `ALTER TABLE` scripts are error‑prone and hard to roll back.
 
-**Outcome:** `pgschema` diffs the desired schema (`schema.sql`) against live database, generating safe migration plans. Destructive changes are blocked unless explicitly allowed.
+**Outcome:** `pgschema` diffs the desired schema (`schema.sql`) against live database, generating safe migration plans. Destructive changes are blocked unless explicitly allowed. **Caveat:** `pgschema` does not manage privileges — `GRANT`/`REVOKE` statements in `schema.sql` are applied by a separate post-apply reconciliation step in the installer (issue #452), not by `pgschema` itself.
 
 ### 4. LISTEN/NOTIFY for Real‑Time Sync
 

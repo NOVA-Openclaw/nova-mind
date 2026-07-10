@@ -49,13 +49,21 @@ WHERE workflow_id = 27`.
 **Role:** 100-slot random task roller providing variety in autonomous work. Used by
 cascade Step 11, which is the mandatory catch-all when no other steps are actionable —
 and additionally **forced** actionable whenever more than 12h have elapsed since the last
-recorded roll, regardless of other steps' state (issue #358). Managed via `roll_d100()` and
-`complete_d100(roll)` SECURITY DEFINER functions. Roll history (used for the forced-D100
-check) is tracked in `d100_roll_log`, populated by a trigger on `motivation_d100` (migration
-082). Roll announcements to `#proactive-mode` are handled by a dedicated cron script
+recorded roll, regardless of other steps' state (issue #358). Managed via `roll_d100()`,
+`complete_d100(roll)`, and `flag_d100_low_completion()` SECURITY DEFINER functions. As of
+issue #444, `roll_d100()` returns an additive `is_populate_me boolean` column: non-reserved
+empty slots are **generative** — NOVA invents the task content on the spot rather than
+executing a pre-written one — while a `reserved boolean` column lets specific empty slots
+opt out of that generative path. Populated-slot rolls are subject to a 7-day anti-repeat
+window with a dynamic 50%-floor cap (oldest `last_rolled` re-admitted first, stateless
+per-invocation). See `motivation/README.md#d100-roll-mechanics` for the full algorithm,
+including the `populated_at` subsection for the completion-rate audit design. Roll history
+(used for the forced-D100 check) is tracked in
+`d100_roll_log`, populated by a trigger on `motivation_d100` (migration 082). Roll
+announcements to `#proactive-mode` are handled by a dedicated cron script
 (`memory/scripts/announce-d100-rolls.py`, issue #432), not by the heartbeat LLM turn — see
-`motivation/README.md#d100-roll-announcer` for details. This is independent of the gate
-check logic below, which is unaffected.
+`motivation/README.md#d100-roll-announcer` for details, including the #444 populate-me
+rendering branch. This is independent of the gate check logic below, which is unaffected.
 
 ### 6. Unsolved Problems Research Workflow (id=32)
 

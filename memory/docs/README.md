@@ -197,22 +197,24 @@ Research/library ingestion is owned by the Library domain (Athena) via the `libr
 
 ### Making Schema Changes
 ```bash
-# 1. Edit the declarative schema file (source of truth)
-vim ~/.openclaw/workspace/nova-memory/schema/schema.sql
+# 1. Edit the declarative schema file — the ROOT database/schema.sql is
+#    authoritative (memory/schema/schema.sql, if present, is reference-only —
+#    see the "Adding New Extraction Categories" note below).
+vim ~/.openclaw/workspace/nova-mind/database/schema.sql
 
 # 2. Preview the plan against your local database (optional)
 pgschema plan --host localhost --db nova_memory --user nova \
-  --schema public --file schema/schema.sql \
+  --schema public --file database/schema.sql \
   --plan-db nova_memory
 
 # 3. Apply via the installer (plans, hazard-checks, and applies)
 ./agent-install.sh
 
 # 4. Update documentation
-vim docs/database-schema-guide.md
+vim memory/docs/database-schema-guide.md
 
 # 5. Commit changes
-git add schema/schema.sql docs/
+git add database/schema.sql memory/docs/
 git commit -m "feat: add new table for feature X"
 ```
 

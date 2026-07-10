@@ -213,7 +213,7 @@ BEGIN
                 counts AS (
                     SELECT
                         (SELECT count(*) FROM pop) AS total_pop,
-                        (SELECT count(*) FROM pop WHERE last_rolled >= v_now - interval '7 days') AS recent_pop
+                        (SELECT count(*) FROM pop WHERE pop.last_rolled >= v_now - interval '7 days') AS recent_pop
                 ),
                 admit AS (
                     SELECT p.roll
@@ -228,7 +228,7 @@ BEGIN
                   AND (
                       p.last_rolled IS NULL
                       OR p.last_rolled < v_now - interval '7 days'
-                      OR p.roll IN (SELECT roll FROM admit)
+                      OR p.roll IN (SELECT admit.roll FROM admit)
                   )
             ) THEN
                 UPDATE motivation_d100 m

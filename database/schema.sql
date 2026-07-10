@@ -5761,14 +5761,26 @@ BEGIN
                 counts AS (
                     SELECT
                         (SELECT count(*) FROM pop) AS total_pop,
-                        (SELECT count(*) FROM pop WHERE last_rolled >= v_now - interval '7 days') AS recent_pop
+                        (SELECT count(*) FROM pop WHERE pop.last_rolled >= v_now - interval '7 days') AS recent_pop
                 ),
                 admit AS (
-                    SELECT p.roll
-                    FROM pop p, counts c
-                    WHERE p.last_rolled >= v_now - interval '7 days'
-                    ORDER BY p.last_rolled ASC, p.roll ASC
-                    LIMIT GREATEST(c.recent_pop - (floor(c.total_pop * 0.5))::integer, 0)
+                    SELECT ranked.roll
+                    FROM (
+                        SELECT
+                            p.roll,
+                            row_number() OVER (
+                                ORDER BY p.last_rolled ASC, p.roll ASC
+                            ) AS rn
+                        FROM pop p
+                        WHERE p.last_rolled >= v_now - interval '7 days'
+                    ) ranked
+                    WHERE rn <= (
+                        SELECT GREATEST(
+                            c.recent_pop - (floor(c.total_pop * 0.5))::integer,
+                            0
+                        )
+                        FROM counts c
+                    )
                 )
                 SELECT 1
                 FROM pop p
@@ -8778,9 +8790,9 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE d100_roll_log FROM newhart;
 -- Name: d100_roll_log; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT ON TABLE d100_roll_log FROM nova;
+REVOKE DELETE ON TABLE d100_roll_log FROM nova;
 
-GRANT SELECT, UPDATE ON TABLE d100_roll_log TO nova;
+GRANT SELECT, INSERT, UPDATE ON TABLE d100_roll_log TO nova;
 
 --
 -- Name: d100_roll_log; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -20234,5 +20246,5 @@ GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE workflow_steps_detail TO ticker;
 -- Name: motivation_d100; Type: COLUMN_PRIVILEGE; Schema: column_privileges; Owner: -
 --
 
-GRANT UPDATE (difficulty, enabled, energy_required, estimated_minutes, notes, reserved, skill_name, task_description, task_name, tool_name, workflow_id) ON TABLE motivation_d100 TO nova;
+GRANT UPDATE (difficulty, enabled, energy_required, estimated_minutes, last_completed, last_rolled, notes, reserved, skill_name, task_description, task_name, times_completed, times_rolled, tool_name, workflow_id) ON TABLE motivation_d100 TO nova;
 

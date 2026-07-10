@@ -243,7 +243,7 @@ Created `install.sh` - a fully idempotent installer that:
 - **Copies** scripts directory to workspace (so hooks can find them via relative paths)
 - OpenClaw wasn't following symlinks reliably
 - Detects workspace from `OPENCLAW_WORKSPACE` env or default
-- Installs: `memory-extract`, `semantic-recall`, `session-init`
+- Installs: `memory-extract`, `session-init` hooks, plus the `turn-context` Plugin SDK plugin (replaces the old `semantic-recall`/`agent-turn-context` hooks, #182)
 
 #### Scripts Setup
 - Makes all `.sh` and `.py` files executable
@@ -282,8 +282,8 @@ Database setup...
 
 Hooks installation...
   ✅ memory-extract installed
-  ✅ semantic-recall installed
   ✅ session-init installed
+  ✅ turn-context plugin installed
 
 Scripts setup...
   ✅ Made 13 scripts executable
@@ -296,8 +296,9 @@ Verification...
   ✅ Test query OK (found 55 tables)
   ✅ Installed hooks:
       • memory-extract
-      • semantic-recall
       • session-init
+  ✅ Installed plugins:
+      • turn-context
 
 ═══════════════════════════════════════════
   Installation complete!
@@ -630,7 +631,7 @@ nova-mind/memory/
 │   └── turn-context/       # Consolidates old semantic-recall + agent-turn-context (#182)
 └── scripts/                # Shell and Python scripts (source)
     ├── process-input.sh    # Entry point for memory extraction
-    ├── extract-memories.sh # Memory extraction logic
+    ├── extract_memories.py # Memory extraction logic (replaces the old extract-memories.sh/store-memories.sh shell pipeline, removed in #174)
     ├── proactive-recall.py # Semantic search
     └── ...                 # Other utility scripts
 ```

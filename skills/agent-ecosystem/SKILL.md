@@ -33,9 +33,10 @@ WHERE ad.domain_topic ILIKE '%<keyword>%' AND a.status = 'active';
 
 ### Peer Agents (instance_type = 'peer')
 
-Peers are persistent agents with their own OpenClaw gateway. **Never spawn them.** Message via `agent_chat`:
+Peers are persistent agents with their own OpenClaw gateway. **Never spawn them.** Message via the `agent_chat` bus, which lives in its own **dedicated database named `agent_chat`** (same PostgreSQL instance — NOT in `nova_memory`). Connect with your own agent DB user:
 
 ```sql
+-- psql -U <your_agent> -d agent_chat
 SELECT send_agent_message(
   'nova',                    -- your agent name (sender)
   'Your message here',       -- message body
@@ -44,14 +45,23 @@ SELECT send_agent_message(
 ```
 
 - Peers process messages asynchronously — don't expect an immediate response.
-- Replies arrive via `agent_chat` (as of nova-mind#320, a single dedicated `agent_chat` database shared by all agents directly — not cross-database replication). Check for responses:
+- Replies arrive via agent_chat. Check for responses:
 
 ```sql
+-- psql -U <your_agent> -d agent_chat
 SELECT id, sender, left(message, 200), timestamp
 FROM agent_chat
 WHERE sender = '<peer_name>'
 ORDER BY timestamp DESC LIMIT 5;
 ```
+
+#### Database Architecture for Peer Agents
+
+The agent_chat bus is a **single dedicated `agent_chat` database** shared by all agents on the PostgreSQL instance. Every agent — NOVA, Newhart, Graybeard, and subagents — connects to it directly with their own database user (`psql -U <agent> -d agent_chat`).
+
+This replaces the old architecture where the `agent_chat` table lived inside `nova_memory` (with logical replication to per-agent memory databases like `graybeard_memory`). The old tables in the memory databases are decommissioned — do not query or write agent_chat objects in `nova_memory`.
+
+Key objects in the `agent_chat` database: the `agent_chat` and `agent_chat_processed` tables, the `send_agent_message()` function (direct INSERT is blocked by trigger), the `agent_chat` NOTIFY channel, and the `v_agent_chat_recent` / `v_agent_chat_stats` views. Python scripts should resolve credentials via `pg_env.py` with `load_pg_env(section="agent_chat")` from `~/.openclaw/postgres.json` (flat keys still point at the memory DB).
 
 ### Subagents (instance_type = 'subagent')
 
@@ -75,6 +85,10 @@ sessions_spawn(
 ```
 
 **Never use default model/thinking.** The agents table defines each agent's configured model. Using defaults wastes budget on expensive models for agents that don't need them.
+
+**Validate the model id against the live catalog before spawning:** `openclaw models list | grep <model>`. The agents table can carry stale or not-yet-cataloged model ids; passing one as an explicit spawn override leaves no fallback chain and the session dies instantly with `model_not_found` (2026-07-02: Gem spawn died on a stale `claude-sonnet-5` table entry). If the table and catalog disagree, the provider's API is the source of truth — verify there, then get the table/catalog fixed before spawning.
+
+**Persistent (mode="session") spawn requirements:** on thread-capable channels (Discord), `mode="session"` requires `thread: true`; cross-agent spawns additionally require `context: "isolated"` (fork contexts are same-agent only). After a session-mode spawn, verify liveness within ~2 minutes — session-mode children do NOT push failure events to the parent, so a spawn that died at launch looks identical to one quietly working.
 
 ### Primary Agent (instance_type = 'primary')
 
@@ -106,3 +120,5 @@ Common routing:
 - **One task per spawn.** Don't overload a subagent with multiple unrelated tasks.
 - **Include sufficient context.** The subagent wakes up fresh — give it everything it needs in the task description.
 - **Don't poll subagents in a loop.** Completion is push-based; they auto-announce when done.
+- **Always use fully-qualified model strings.** When overriding the model string in `sessions_spawn`, always include the provider prefix (e.g. `google/gemini-3.5-flash`). Omitting the provider prefix can lead the gateway to combine the model name with the parent's default provider (e.g. resolving `gemini-3.5-flash` as `anthropic/gemini-3.5-flash` under an Anthropic parent), causing an instant `FailoverError`.
+- **Always prefix Discord numeric IDs in message targets.** When sending messages via any tool or script, always prefix numeric targets with `channel:` or `user:` (e.g. `channel:1504054635231445112`). Pure numeric strings are treated as ambiguous by the Discord target parser and throw an immediate error.

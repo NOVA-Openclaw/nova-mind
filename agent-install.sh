@@ -1409,6 +1409,21 @@ else
                         echo -e "  ${WARNING} Could not reassign ownership (objects may be owned by $PG_SUPERUSER)"
                     fi
                 fi
+
+                # Post-schema grant reconciliation (#452): pgschema deliberately
+                # ignores privilege steps, so explicit GRANT/REVOKE lines in
+                # schema.sql must be applied separately to survive fresh installs.
+                echo "  Reconciling explicit schema grants..."
+                GRANT_COUNT=$(grep -cE '^[[:space:]]*(GRANT|REVOKE)[[:space:]]+' "$SCHEMA_FILE_TMP" 2>/dev/null || echo 0)
+                if [ "$GRANT_COUNT" -gt 0 ] 2>/dev/null; then
+                    if grep -E '^[[:space:]]*(GRANT|REVOKE)[[:space:]]+' "$SCHEMA_FILE_TMP" | _superuser_psql "$DB_NAME" -v ON_ERROR_STOP=1 -f - >/dev/null 2>&1; then
+                        echo -e "  ${CHECK_MARK} Applied $GRANT_COUNT explicit grant/revoke statement(s)"
+                    else
+                        echo -e "  ${WARNING} Grant reconciliation failed (non-fatal)"
+                    fi
+                else
+                    echo -e "  ${INFO} No explicit grant/revoke statements found"
+                fi
             else
                 echo -e "  ${WARNING} Schema apply failed (exit $APPLY_EXIT) — continuing"
                 SCHEMA_DIFF_SKIPPED=1

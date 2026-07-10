@@ -31,6 +31,7 @@ import pytest
 
 _SCRIPT_PATH = Path(__file__).parent.parent.parent / "memory" / "scripts" / "announce-d100-rolls.py"
 _SCHEMA_PATH = Path(__file__).parent.parent.parent / "database" / "schema.sql"
+_INSTALL_SCRIPT_PATH = Path(__file__).parent.parent.parent / "agent-install.sh"
 
 
 def _load_module() -> ModuleType:
@@ -89,7 +90,7 @@ def _mock_conn(claimed_rows, task_rows=None):
     return mock_conn
 
 
-def _task_row(roll, task_name="Task", estimated=10, difficulty="medium", last_rolled=None, last_completed=None):
+def _task_row(roll, task_name="Task", estimated=10, difficulty="medium", last_rolled=None, last_completed=None, reserved=False):
     return {
         "roll": roll,
         "task_name": task_name,
@@ -97,6 +98,7 @@ def _task_row(roll, task_name="Task", estimated=10, difficulty="medium", last_ro
         "difficulty": difficulty,
         "last_rolled": last_rolled,
         "last_completed": last_completed,
+        "reserved": reserved,
     }
 
 
@@ -206,7 +208,7 @@ class TestFormatting:
         """TC-432-U-05"""
         now = datetime.now(timezone.utc)
         claimed = [(1, 42, now)]
-        task = (42, "Write tests", 15, "medium", now, None)
+        task = (42, "Write tests", 15, "medium", now, None, False)
         conn = _mock_conn(claimed, [task])
 
         with patch.object(m, "psycopg2") as mock_psycopg2, \
@@ -223,7 +225,7 @@ class TestFormatting:
         """TC-432-U-06"""
         now = datetime.now(timezone.utc)
         claimed = [(1, 42, now - timedelta(minutes=5))]
-        task = (42, "Write tests", 15, "medium", now - timedelta(minutes=5), now)
+        task = (42, "Write tests", 15, "medium", now - timedelta(minutes=5), now, False)
         conn = _mock_conn(claimed, [task])
 
         with patch.object(m, "psycopg2") as mock_psycopg2, \
@@ -238,7 +240,7 @@ class TestFormatting:
         """TC-432-U-07"""
         now = datetime.now(timezone.utc)
         claimed = [(1, 42, now)]
-        task = (42, "Write tests", 15, "medium", now, now)
+        task = (42, "Write tests", 15, "medium", now, now, False)
         conn = _mock_conn(claimed, [task])
 
         with patch.object(m, "psycopg2") as mock_psycopg2, \
@@ -253,7 +255,7 @@ class TestFormatting:
         """TC-432-U-08"""
         now = datetime.now(timezone.utc)
         claimed = [(1, 42, now)]
-        task = (42, 'Task with "quotes" *bold* `_code_`', 15, "medium", now, None)
+        task = (42, 'Task with "quotes" *bold* `_code_`', 15, "medium", now, None, False)
         conn = _mock_conn(claimed, [task])
 
         with patch.object(m, "psycopg2") as mock_psycopg2, \
@@ -270,7 +272,7 @@ class TestFormatting:
         claimed = [(1, 42, now)]
         # times_completed > 0 cannot be represented in the join; we only get
         # last_completed here. The script must use a NULL-safe comparison.
-        task = (42, "Write tests", 15, "medium", now, None)
+        task = (42, "Write tests", 15, "medium", now, None, False)
         conn = _mock_conn(claimed, [task])
 
         with patch.object(m, "psycopg2") as mock_psycopg2, \
@@ -280,6 +282,62 @@ class TestFormatting:
 
         text = mock_send.call_args[0][0]
         assert "Completed" not in text
+
+    def test_populate_me_formatting(self, m):
+        """TC-444-CONTRACT-05: empty non-reserved slot renders populate-me."""
+        now = datetime.now(timezone.utc)
+        claimed = [(1, 50, now)]
+        task = (50, None, None, None, now, None, False)
+        conn = _mock_conn(claimed, [task])
+
+        with patch.object(m, "psycopg2") as mock_psycopg2, \
+             patch.object(m, "_send_message") as mock_send:
+            mock_psycopg2.connect.return_value = conn
+            m.main([])
+
+        text = mock_send.call_args[0][0]
+        assert "ORIGINATION SLOT" in text
+        assert "populate & execute" in text.lower()
+        assert "task unknown" not in text
+
+    def test_reserved_empty_slot_not_rendered_as_populate_me(self, m):
+        """TC-444-CONTRACT-06: reserved-empty input must never be advertised as
+        a populate-me origination slot, even if it somehow reaches the
+        announcer (the normal path never emits a d100_roll_log row for a
+        reserved-empty roll).
+        """
+        now = datetime.now(timezone.utc)
+        claimed = [(1, 51, now)]
+        task = (51, None, None, None, now, None, True)
+        conn = _mock_conn(claimed, [task])
+
+        with patch.object(m, "psycopg2") as mock_psycopg2, \
+             patch.object(m, "_send_message") as mock_send:
+            mock_psycopg2.connect.return_value = conn
+            m.main([])
+
+        text = mock_send.call_args[0][0]
+        assert "task unknown (slot 51)" in text
+        assert "ORIGINATION SLOT" not in text
+
+    def test_corrupted_row_uses_unknown_fallback(self, m):
+        """TC-444-CONTRACT-08: genuine integrity-error fallback still fires for
+        an inconsistent row that is neither a valid populated task nor a
+        valid populate-me state (e.g. task_name IS NULL with reserved IS NULL).
+        """
+        now = datetime.now(timezone.utc)
+        claimed = [(1, 52, now)]
+        task = (52, None, None, None, now, None, None)
+        conn = _mock_conn(claimed, [task])
+
+        with patch.object(m, "psycopg2") as mock_psycopg2, \
+             patch.object(m, "_send_message") as mock_send:
+            mock_psycopg2.connect.return_value = conn
+            m.main([])
+
+        text = mock_send.call_args[0][0]
+        assert "task unknown (slot 52)" in text
+        assert "ORIGINATION SLOT" not in text
 
 
 # ---------------------------------------------------------------------------
@@ -305,7 +363,7 @@ class TestJoinDrift:
         """TC-432-U-16 variant"""
         now = datetime.now(timezone.utc)
         claimed = [(1, 7, now)]
-        task = (7, "", 10, "low", now, None)
+        task = (7, "", 10, "low", now, None, False)
         conn = _mock_conn(claimed, [task])
 
         with patch.object(m, "psycopg2") as mock_psycopg2, \
@@ -461,6 +519,29 @@ class TestRegression:
         assert block_start != -1
         block = schema[block_start:block_start + 400]
         assert "GRANT SELECT, UPDATE ON TABLE d100_roll_log TO nova;" in block
+        # INSERT must not be re-introduced.
+        assert "GRANT SELECT, INSERT, UPDATE ON TABLE d100_roll_log TO nova;" not in block
+
+    def test_nova_grant_select_on_motivation_d100(self):
+        """#448 regression: nova must hold SELECT on motivation_d100."""
+        schema = _SCHEMA_PATH.read_text()
+        block_start = schema.find("REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE motivation_d100 FROM nova;")
+        assert block_start != -1
+        block = schema[block_start:block_start + 400]
+        assert "GRANT SELECT ON TABLE motivation_d100 TO nova;" in block
+
+    def test_agent_install_reapplies_schema_grants_after_pgschema(self):
+        """#452 regression: after pgschema apply, agent-install.sh must reconcile
+        explicit GRANT/REVOKE lines from schema.sql so #448/#449 grants survive
+        fresh installs.
+        """
+        script = _INSTALL_SCRIPT_PATH.read_text()
+        apply_idx = script.find("Schema applied successfully")
+        assert apply_idx != -1, "agent-install.sh missing pgschema apply success marker"
+        tail = script[apply_idx:]
+        assert "Reconciling explicit schema grants" in tail
+        assert "_superuser_psql" in tail
+        assert re.search(r"GRANT|REVOKE", tail) is not None
 
     def test_check_step11_d100_not_broken_by_announced_at(self, m):
         """TC-432-R-03, R-04, R-05: announcer's UPDATE only touches announced_at."""

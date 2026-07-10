@@ -2,6 +2,12 @@
 
 These scripts must be run in numbered order as part of the SE Run #27 deployment.
 
+> **Not the same directory `agent-install.sh` uses.** The installer's automatic
+> pre-migration step reads only `database/pre-migrations/` (repo root, a sibling
+> directory to this one). This `pre-migrations/` directory holds a separate,
+> point-in-time set of manual portfolio-schema cleanup scripts from SE Run #27 and is
+> **not** executed automatically by the installer — run the commands below by hand.
+
 ## Execution Order
 
 ```

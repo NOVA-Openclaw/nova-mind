@@ -124,7 +124,7 @@ The installer runs these steps in order:
 
 | Step | What happens |
 |------|-------------|
-| Pre-migrations | Runs `*.sql` files in `pre-migrations/` (data transforms before schema diff) |
+| Pre-migrations | Runs `*.sql` files in `database/pre-migrations/` (repo root; data transforms before schema diff — not the unrelated root-level `pre-migrations/` directory, which is not read by the installer) |
 | **Step 1.5** | Reads `memory/database/renames.json` and applies column/table renames idempotently via `ALTER TABLE … RENAME COLUMN`. Drops listed are whitelisted in the pgschema hazard filter. |
 | pgschema plan | Diffs `database/schema.sql` against live DB |
 | Hazard check | Blocks destructive operations (DROP TABLE, DROP COLUMN) unless whitelisted in `renames.json` |

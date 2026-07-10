@@ -709,14 +709,22 @@ Then re-run `./agent-install.sh` and `pgschema` will apply the `ALTER TABLE ... 
 
 ### Data Migration Scripts (pre-migrations)
 
-When a schema change requires a data transformation to happen first (e.g., rename a column with a backfill), place a `.sql` script in `pre-migrations/`:
+When a schema change requires a data transformation to happen first (e.g., rename a column with a backfill), place a `.sql` script in **`database/pre-migrations/`** (not the unrelated root-level `pre-migrations/` directory — see below):
 
 ```
-pre-migrations/
+database/pre-migrations/
 └── 001_rename_old_col_to_new.sql
 ```
 
 Pre-migration scripts run in filename order, **before** `pgschema plan` executes. This ensures the live DB is in the correct state for the declarative diff.
+
+> **Two `pre-migrations` directories exist in this repo — they are not interchangeable.**
+> `agent-install.sh` hardcodes `PRE_MIGRATIONS_DIR="$SCRIPT_DIR/database/pre-migrations"`
+> and reads **only** that directory. The root-level `pre-migrations/` (see its own
+> `pre-migrations/README.md`) holds a separate, point-in-time set of manual data-migration
+> scripts from SE Run #27 (portfolio schema cleanup) that are **not** picked up by the
+> installer and must be run by hand in the order documented there. New pre-migration
+> scripts for schema changes always belong in `database/pre-migrations/`.
 
 ```sql
 -- Example pre-migration: rename a column manually, then schema.sql reflects the new name
@@ -734,7 +742,9 @@ pgschema dump \
   --schema public > schema/schema.sql
 ```
 
-The output contains pure DDL — no `OWNER TO`, no `GRANT/REVOKE`, no `\connect` or `SET ROLE` directives. This keeps the schema file clean and portable across different user setups.
+The raw `pgschema dump` output contains pure DDL — no `OWNER TO`, `GRANT/REVOKE`, `\connect`, or `SET ROLE` directives — which keeps a freshly-generated dump clean and portable across user setups.
+
+**In practice, `database/schema.sql` also contains hand-maintained `GRANT`/`REVOKE` statements** for column- and table-level privileges (e.g., the `motivation_d100`/`d100_roll_log` grants added by issue #444) that are added directly to the file, not produced by `pgschema dump`. **`pgschema plan`/`pgschema apply` silently ignore these privilege statements** — they diff and apply only structural DDL. This means a fresh install running only `pgschema apply` would lose any hand-added grants. To close that gap, `agent-install.sh` runs a **post-apply grant reconciliation step** (issue #452): after a successful `pgschema apply`, it extracts every `GRANT`/`REVOKE` line from the staged `schema.sql` and re-applies them directly via the superuser connection. If you add a `GRANT`/`REVOKE` statement to `schema.sql`, it will take effect on install via this reconciliation step, not via `pgschema` itself.
 
 ### Ignoring Objects
 

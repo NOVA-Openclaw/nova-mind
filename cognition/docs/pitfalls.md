@@ -20,13 +20,13 @@ Mistakes to avoid when setting up and operating the cognition system. Learned th
 }
 ```
 
-**Symptom:** `clawdbot gateway status` shows "Invalid config" and subagent spawning fails silently.
+**Symptom:** `openclaw gateway status` shows "Invalid config" and subagent spawning fails silently.
 
 **Fix:** Only use documented config keys. If you need notes, keep them in a separate file or database.
 
 **How to detect:**
 ```bash
-clawdbot gateway status
+openclaw gateway status
 # Look for "Invalid config" or "Unrecognized key" errors
 ```
 
@@ -143,21 +143,21 @@ sessions_spawn(agentId="agent-id", task="...")
 
 ```bash
 # 1. Check what's wrong
-clawdbot gateway status
+openclaw gateway status
 
-# 2. Fix the config file
-nano ~/.clawdbot/clawdbot.json
+# 2. Fix the config file (see UNIVERSAL/CONFIG_SAFETY for the validate-before-apply workflow)
+nano ~/.openclaw/openclaw.json
 
-# 3. Validate JSON
-cat ~/.clawdbot/clawdbot.json | jq . > /dev/null && echo "Valid"
+# 3. Validate JSON and schema
+openclaw config validate
 
 # 4. Restart gateway
-clawdbot gateway restart
+openclaw gateway restart
 ```
 
 ### Subagent Spawning Broken
 
-1. Run `clawdbot gateway status` - check for config errors
+1. Run `openclaw gateway status` - check for config errors
 2. Run `agents_list` - verify agents show `configured: true`
 3. If empty/false, check config for:
    - Invalid keys
@@ -166,7 +166,7 @@ clawdbot gateway restart
 
 ### Can't Reach Peer Agent
 
-1. Check if peer's gateway is running: `systemctl --user status clawdbot-gateway` (on peer's user)
+1. Check if peer's gateway is running: `systemctl --user status openclaw-gateway` (on peer's user)
 2. Check `agent_chat` table for messages
 3. Verify peer's polling interval
 

@@ -14,7 +14,11 @@ A framework for organizing how multiple AI agents coordinate, delegate, and comm
 
 ### Prerequisites
 
-> **Recommended:** Use the unified `nova-mind` installer (`agent-install.sh` at the repo root) rather than this subsystem installer directly. It installs all three subsystems in the correct order.
+> **cognition/ no longer has its own installer.** Installation was consolidated into
+> the unified `nova-mind` installer (`agent-install.sh` at the repo root), which
+> installs all three subsystems (relationships → memory → cognition) in the
+> correct order. Run the installer from the **repo root**, not from within
+> `cognition/`.
 
 **Required:**
 - Node.js 18+ and npm
@@ -27,6 +31,7 @@ A framework for organizing how multiple AI agents coordinate, delegate, and comm
 
 **For humans (quick wrapper):**
 ```bash
+# From the repo root:
 ./shell-install.sh
 ```
 
@@ -36,8 +41,12 @@ This wrapper:
 - Sets up shell environment
 - Automatically execs `agent-install.sh`
 
+> `cognition/shell-install.sh` still exists for convenience and simply execs the
+> repo-root `agent-install.sh` — it does not run cognition in isolation.
+
 **For AI agents with environment pre-configured:**
 ```bash
+# From the repo root:
 ./agent-install.sh
 ```
 

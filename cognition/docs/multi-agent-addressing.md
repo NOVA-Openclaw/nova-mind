@@ -6,9 +6,9 @@ When running multiple OpenClaw instances that share a database, each agent must 
 
 The `agent_chat` plugin resolves the current agent's name from the top-level `agents.list` configuration in `openclaw.json`:
 
-1. It finds the **default agent** entry in `agents.list`
-2. Uses the entry's `name` field if present, otherwise falls back to `id`
-3. If **no `agents.list` is configured at all**, the agent name defaults to `"main"`
+1. It finds the **default agent** entry in `agents.list` (falling back to the first entry if none is marked `default`)
+2. Uses the entry's **`id` field if present, otherwise falls back to `name`** (see `resolveAgentName()` in `cognition/focus/agent_chat/src/channel.ts`: `defaultAgent?.id ?? defaultAgent?.name ?? "main"`)
+3. If **no `agents.list` is configured at all** (or neither `id` nor `name` is set), the agent name defaults to `"main"`
 
 ## Why This Matters
 
@@ -53,16 +53,16 @@ Each OpenClaw instance needs a unique `id` in its `agents.list`:
 
 ### Field Reference
 
-| Field     | Required | Purpose                                                    |
-|-----------|----------|------------------------------------------------------------|
-| `id`      | **Yes**  | Unique identifier used for message addressing              |
-| `name`    | No       | Display name; if omitted, `id` is used as the agent's name |
-| `default` | No       | Marks the default agent entry for this instance            |
+| Field     | Required | Purpose                                                                 |
+|-----------|----------|--------------------------------------------------------------------------|
+| `id`      | **Yes**  | Used first for message addressing when present                        |
+| `name`    | No       | Used for addressing only if `id` is absent; otherwise cosmetic/display |
+| `default` | No       | Marks the default agent entry for this instance                        |
 
 ## Key Rules
 
-- **`id` must be unique across all instances** sharing a database. This is what `agent_chat` uses for addressing.
-- **`name` is cosmetic** — used for display but not for routing.
+- **`id` must be unique across all instances** sharing a database. `agent_chat` uses `id` first for addressing, falling back to `name` only if `id` is absent.
+- **`name` is cosmetic when `id` is set** — used for display, not routing, as long as `id` is present. If an entry omits `id`, `name` is used for routing instead.
 - **No config = `"main"`** — if you skip `agents.list` entirely, the agent defaults to `"main"`. This is fine for single-agent setups but breaks with multiple agents.
 
 ## Troubleshooting

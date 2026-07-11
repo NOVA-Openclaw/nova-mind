@@ -2,6 +2,16 @@
 
 *How to initialize an agent's knowledge and capabilities.*
 
+> **Note (nova-mind#414 documentation audit, 2026-07-11):** This is a conceptual/
+> design template, not a description of a live database column. There is no
+> `seed_context` column on the `agents` table today (the field name overlaps with
+> `agents.seed_context`, a query dead-column bug fixed in nova-mind#414 — see
+> `cognition/docs/delegation-context.md`). Per-agent bootstrap context is actually
+> stored in the dedicated `agent_bootstrap_context` table (see
+> `cognition/focus/bootstrap-context/README.md`), which has its own shape distinct
+> from the JSON sketched below. Treat the JSON examples in this file as illustrative
+> design intent, not a literal current schema or config file format.
+
 ---
 
 ## What is a Context Seed?

@@ -1,13 +1,20 @@
 # DELEGATION_CONTEXT Auto-Regeneration System
 
-This document describes the auto-regeneration system that keeps `~/.openclaw/workspace/DELEGATION_CONTEXT.md` synchronized with database changes to agents, workflows, and workflow steps.
+This document describes the auto-regeneration system that was designed to keep `~/.openclaw/workspace/DELEGATION_CONTEXT.md` synchronized with database changes to agents, workflows, and workflow steps.
+
+> ⚠️ **Status (confirmed 2026-07-11, nova-mind #414 documentation audit): neither solution below is actually running.**
+>
+> - The **"Short-Term Solution"** section describes a Python listener (`delegation-listener.py`) and a systemd user service (`delegation-listener.service`) that consume the `delegation_changed` NOTIFY channel and re-run the regeneration script. **Neither file exists on the live host** — no `delegation-listener.py`, no systemd unit. The three database triggers themselves (`agents_delegation_notify`, `workflows_delegation_notify`, `workflow_steps_delegation_notify`) **do exist and do fire** `pg_notify('delegation_changed', ...)` on every INSERT/UPDATE/DELETE to `agents`, `workflows`, and `workflow_steps` — but nothing is listening on that channel, so every notification fires into the void.
+> - The **"Long-Term Solution" (Issue #10)** was never implemented either — see the status note further down in that section. `update_universal_context()` doesn't exist in the current schema, and there is no `generate_delegation_context()` PL/pgSQL function.
+> - **Practical result:** `DELEGATION_CONTEXT.md` regeneration today is **manual-only**. Run `cognition/scripts/generate-delegation-context.sh` (or the installed copy at `$HOME/.openclaw/workspace/scripts/generate-delegation-context.sh`) directly whenever the agent roster or workflow definitions change. Nothing regenerates it automatically.
+> - Re-establishing a working listener (or deciding not to, and removing the now-orphaned triggers) is tracked under [#271](https://github.com/NOVA-Openclaw/nova-mind/issues/271) ("Audit and deduplicate PostgreSQL NOTIFY trigger/listener ownership"), which explicitly calls out `delegation_changed` as a channel with triggers but no registered listener. The rest of this document is retained as the design record for what the short-term and long-term solutions were meant to look like, but neither should be assumed live without re-verifying against #271's resolution.
 
 ## Overview
 
-The DELEGATION_CONTEXT file provides agents with real-time awareness of available subagents and active workflows. Two solutions exist:
+The DELEGATION_CONTEXT file provides agents with real-time awareness of available subagents and active workflows. Two solutions were designed (see status warning above — **neither is currently deployed**):
 
-1. **Short-Term Solution** (Currently Active): PostgreSQL NOTIFY triggers + Python listener
-2. **Long-Term Solution** (Issue #10, after PR #9): Bootstrap context system integration
+1. **Short-Term Solution** (Designed, not deployed — see #271): PostgreSQL NOTIFY triggers + Python listener
+2. **Long-Term Solution** (Issue #10, after PR #9 — not implemented): Bootstrap context system integration
 
 ## Architecture Diagram
 
@@ -43,7 +50,7 @@ Long-Term Architecture (Issue #10):
                        └─────────────────┘
 ```
 
-## Short-Term Solution (Currently Active)
+## Short-Term Solution (Designed, not deployed — no listener registered; see #271)
 
 ### Components
 
@@ -132,10 +139,11 @@ WantedBy=default.target
 
 #### 5. Regeneration Script
 
-**Location:** `~/.openclaw/scripts/generate-delegation-context.sh`  
+**Source (tracked):** `cognition/scripts/generate-delegation-context.sh`
+**Installed location:** `$HOME/.openclaw/workspace/scripts/generate-delegation-context.sh`
 **Output:** `~/.openclaw/workspace/DELEGATION_CONTEXT.md`
 
-The listener calls this existing script to perform the actual regeneration.
+This script exists and works (see [delegation-context.md](delegation-context.md) and [#414](https://github.com/NOVA-Openclaw/nova-mind/issues/414)) and is what the listener *would* call to perform regeneration, if a listener were deployed. Today it must be run manually.
 
 ### Service Management Commands
 
@@ -195,8 +203,8 @@ systemctl --user is-active delegation-listener.service
 # Check database connection
 psql -d nova_memory -c "SELECT 1;"
 
-# Test regeneration script directly  
-~/.openclaw/scripts/generate-delegation-context.sh
+# Test regeneration script directly (source: cognition/scripts/generate-delegation-context.sh)
+$HOME/.openclaw/workspace/scripts/generate-delegation-context.sh
 ```
 
 #### 4. End-to-End Test
@@ -228,13 +236,14 @@ psql -d nova_memory -c "DELETE FROM agents WHERE nickname = 'tester';"
    - Check service logs: `journalctl --user -u delegation-listener.service`
 
 2. **No regeneration after changes:**
+   - **Expected on the current live system — there is no listener deployed (see status warning at the top of this document).** The triggers below firing is normal and does not itself indicate a working auto-regeneration pipeline.
    - Verify triggers exist: `psql -d nova_memory -c "SELECT tgname FROM pg_trigger WHERE tgfoid = (SELECT oid FROM pg_proc WHERE proname = 'notify_delegation_change');"`
-   - Check listener is receiving notifications: `journalctl --user -u delegation-listener.service -f`
-   - Test regeneration script manually: `~/.openclaw/scripts/generate-delegation-context.sh`
+   - Check listener is receiving notifications: `journalctl --user -u delegation-listener.service -f` (will report "Unit could not be found" until a listener is deployed — see #271)
+   - Test regeneration script manually: `$HOME/.openclaw/workspace/scripts/generate-delegation-context.sh`
 
 3. **Script execution failures:**
-   - Check script permissions: `ls -la ~/.openclaw/scripts/generate-delegation-context.sh`
-   - Test script output: `~/.openclaw/scripts/generate-delegation-context.sh && echo "Success"`
+   - Check script permissions: `ls -la $HOME/.openclaw/workspace/scripts/generate-delegation-context.sh`
+   - Test script output: `$HOME/.openclaw/workspace/scripts/generate-delegation-context.sh && echo "Success"` (check exit code — the script can exit non-zero with a still-written, partially-degraded file; see [delegation-context.md](delegation-context.md#output-format))
 
 ## Long-Term Solution (Issue #10)
 
@@ -457,17 +466,19 @@ journalctl --user -u delegation-listener.service --since "24 hours ago" | grep "
 ## Related Documentation
 
 - [Delegation Context Generation](delegation-context.md) - Current manual system
-- [Issue #10: Bootstrap Context Integration](https://github.com/NOVA-Openclaw/nova-cognition/issues/10)
-- [PR #9: Bootstrap Context System](https://github.com/NOVA-Openclaw/nova-cognition/pull/9)
+- [Issue #10: Bootstrap Context Integration](https://github.com/NOVA-Openclaw/nova-cognition/issues/10) — filed against `nova-cognition`, which is now deprecated in favor of this repo (`nova-mind`); not implemented
+- [PR #9: Bootstrap Context System](https://github.com/NOVA-Openclaw/nova-cognition/pull/9) — same caveat
+- [Issue #271: NOTIFY trigger/listener ownership audit](https://github.com/NOVA-Openclaw/nova-mind/issues/271) — tracks the missing `delegation_changed` listener
+- [Issue #414: generate-delegation-context.sh restore and fix](https://github.com/NOVA-Openclaw/nova-mind/issues/414)
 - [Bootstrap Context Management](../focus/bootstrap-context/README.md)
 
 ## Support
 
 For issues with the delegation context auto-regeneration system:
 
-1. **Check service status:** `systemctl --user status delegation-listener.service`
-2. **Review logs:** `journalctl --user -u delegation-listener.service`  
+1. **Check service status:** `systemctl --user status delegation-listener.service` (expect "could not be found" — no listener is deployed; see status warning at top of document)
+2. **Review logs:** `journalctl --user -u delegation-listener.service`
 3. **Test database triggers:** See testing section above
-4. **Verify file generation:** Run `~/.openclaw/scripts/generate-delegation-context.sh` manually
+4. **Verify file generation:** Run `$HOME/.openclaw/workspace/scripts/generate-delegation-context.sh` manually
 
-For long-term solution planning, reference Issue #10 in nova-cognition repository.
+For the listener-deployment gap, see [#271](https://github.com/NOVA-Openclaw/nova-mind/issues/271). For long-term solution planning, reference Issue #10 (superseded/never implemented — nova-cognition is deprecated in favor of this repo, nova-mind).

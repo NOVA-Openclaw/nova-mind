@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+### Fixed (#414 — restore and fix `generate-delegation-context.sh`)
+
+- **`cognition/scripts/generate-delegation-context.sh` restored to version control** ([#414](https://github.com/NOVA-Openclaw/nova-mind/issues/414)) — The script had been deployed and run on the live workspace but was never committed to the repo, so the copy at `~/.openclaw/workspace/scripts/generate-delegation-context.sh` was the only surviving version until it was deleted. Recreated from an introspection transcript and fixed in place; it is now tracked at `cognition/scripts/generate-delegation-context.sh` and wired into `agent-install.sh`.
+- **Two dead SQL queries fixed** (#414) — Agent Roster/Spawn Instructions section and the per-workflow Steps query both referenced schema that no longer exists:
+  - `workflow_steps_detail.agent_name` does not exist on the view (columns are `domain`/`domains`). The steps query now selects `array_to_string(domains, ', ') AS domains` and renders a **Domains** column instead of **Agent**.
+  - `agents.seed_context` does not exist on the `agents` table. The Spawn Instructions section is rebuilt from live `agents` columns instead: `nickname`, `model`, `thinking`, `context_type`, `allowed_subagents`, `decision_criteria`.
+- **All `2>/dev/null` stderr suppression removed** (#414) — 5 occurrences stripped. psql failures now surface (their exit status is captured explicitly instead of being discarded alongside stderr).
+- **Per-section error degradation replaces `set -e` truncation** (#414) — The script no longer uses `set -e`. Each of the three sections (Agent Roster, Active Workflows including per-workflow description/steps sub-queries, Spawn Instructions) checks its own psql exit status; on failure it writes a `> ⚠️ Failed to generate ... (psql exit N)` marker into the output and continues to the next section, rather than dying mid-document and leaving a silently truncated file. The script's own exit code is non-zero (`OVERALL_EXIT=1`) if any section failed, so callers can detect degradation without parsing the markdown.
+- **Apostrophe/quoting hazard fixed** (#414) — Workflow names are escaped for safe SQL string-literal interpolation (`sed "s/'/''/g"`) before being substituted into the per-workflow description and steps queries, fixing breakage on names like `Neva & Edmund's Edification`.
+- **Leading `#` in workflow descriptions escaped** (#414) — Workflow description text is piped through `sed 's/^#/\\#/'` before being written to the output file, preventing embedded description text from being interpreted as a markdown heading and colliding with the document's own heading hierarchy.
+- **`PGPASSWORD` dependency removed** (#414) — The script authenticates via `~/.pgpass` only; it never references the gateway-injected `PGPASSWORD` environment variable.
+- **Installer wiring** (#414) — `agent-install.sh` now copies `cognition/scripts/generate-delegation-context.sh` to `$HOME/.openclaw/workspace/scripts/generate-delegation-context.sh` and `chmod +x`s it, with a warning-and-skip (not a hard failure) if the source file is missing.
+
+#### Tests (#414)
+- `tests/install/test_generate_delegation_context.bats` — 18-case BATS suite covering the happy path, each of the three sections' query-failure degradation (with per-section markers and non-zero exit), the apostrophe/quoting fix, heading-collision escaping, zero-step and empty-workflow-set edge cases, NULL `decision_criteria` omission, multi-domain step rendering, output-path override, UTC timestamp format, absence of `PGPASSWORD`/`2>/dev/null`, idempotent re-run (no duplicate header/footer), and a schema-regression guard asserting the dead `agent_name`/`seed_context` references do not reappear. Uses a dedicated `delegation_context_test` schema with an `assert_fixture_isolation()` pre-flight guard (checks `current_schema()` before any destructive DDL/DML) to keep destructive test statements from touching production `nova_memory` data. `tests/fixtures/delegation_context_seed.sql` provides the schema-agnostic fixture data. See `tests/TEST-CASES-ISSUE-414.md` for the implementation-mapping document.
+
+#### Known follow-up (not part of this fix)
+- The `delegation_changed` NOTIFY channel (fired by triggers on `agents`, `workflows`, `workflow_steps`) has no listener registered — there is no `delegation-listener.py` process or systemd unit deployed. `DELEGATION_CONTEXT.md` regeneration today is manual-only (run the script directly); it does not auto-regenerate on database changes despite `cognition/docs/delegation-context-auto-regeneration.md` describing a listener-based "Short-Term Solution (Currently Active)". That doc has been corrected to flag the gap; re-wiring or removing the dead trigger/listener plan is tracked in [#271](https://github.com/NOVA-Openclaw/nova-mind/issues/271) (NOTIFY/LISTEN ownership audit).
+
+#### Issues Closed
+- #414 — `generate-delegation-context.sh` has 2 dead SQL queries (`workflow_steps_detail.agent_name`, `agents.seed_context`) — silent failure truncates `DELEGATION_CONTEXT.md`
+
+---
+
 ### Fixed (#399 — direct git push for schema-sync, retry/backoff, failure alerting)
 
 - **`sync_schema_to_github()` now pushes schema commits directly to `origin` instead of delegating to the ephemeral subagent `gidget` via `agent_chat`** ([#399](https://github.com/NOVA-Openclaw/nova-mind/issues/399)) — Gidget is a spawn-time-only subagent with no persistent listener, so prior `send_agent_message('schema-sync', ..., ['gidget'])` work orders were never drained (158 dead messages, 25 unpushed commits accumulated between 2026-04-09 and 2026-07-05 before this fix). `sync_schema_to_github()` now runs `git push origin main` itself, inside the same git lock and `try/finally` that already serializes and cleans up the local commit step.

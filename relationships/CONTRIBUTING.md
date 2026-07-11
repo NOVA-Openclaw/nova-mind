@@ -34,16 +34,18 @@ cd ~/.openclaw/workspace/nova-mind
 ```
 
 3. **Environment Configuration**
-```bash
-cp .env.example .env
-# Edit .env with your database credentials
-```
+
+> **Note:** There is no `.env.example` in this repo. Database connection
+> details are loaded from `~/.openclaw/postgres.json` (with standard `PG*`
+> env vars taking priority) via the shared `pg-env.ts` helper — see the
+> Environment Variables section of `ARCHITECTURE-entity-resolver.md`. Set up
+> `postgres.json` rather than a `.env` file.
 
 4. **Install Dependencies**
 ```bash
 cd lib/entity-resolver
 npm install
-npm test  # Verify everything works
+npx tsx test.ts  # Verify everything works (there is no `npm test`/`npm run lint` script in package.json)
 ```
 
 ### Development Workflow
@@ -61,8 +63,7 @@ git checkout -b feature/your-feature-name
 3. **Test Changes**
 ```bash
 cd lib/entity-resolver
-npm test
-npm run lint
+npx tsx test.ts  # there is no `npm test`/`npm run lint` script defined in package.json
 ```
 
 4. **Commit Changes**
@@ -145,6 +146,12 @@ async function resolveEntity(identifiers: EntityIdentifiers): Promise<Entity | n
 ## Testing Guidelines
 
 ### Test Structure
+
+> **Note:** The current repo does not have a `__tests__/` directory or
+> per-component `*.test.ts` files. The actual test setup is a single manual
+> script, `lib/entity-resolver/test.ts`, run directly against a live
+> database (`npx tsx test.ts [phone_or_uuid]`). The structure below
+> describes an aspirational/future test layout, not what exists today.
 
 Tests should be organized by component:
 
@@ -436,9 +443,8 @@ We use semantic versioning (semver):
 
 ### Resources
 
-- **Architecture Docs**: Read `docs/` directory for detailed technical information
-- **Code Examples**: Check `examples/` directory for integration samples
-- **Test Cases**: Look at `__tests__/` for usage patterns
+- **Architecture Docs**: Read `docs/` directory for detailed technical information (`ARCHITECTURE-entity-resolver.md`, `docs/algorithms.md`, `docs/integration-guide.md`, `docs/web-of-trust.md`)
+- **Test Cases**: Look at `lib/entity-resolver/test.ts` for usage patterns (there is no `examples/` or `__tests__/` directory in this repo currently)
 
 ### Communication
 

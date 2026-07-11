@@ -375,7 +375,7 @@ openclaw hooks enable session-init
 Nova-memory uses **declarative schema management** via [`pgschema`](https://github.com/pgplex/pgschema) (pgplex/pgschema). The installer does not run `psql -f schema.sql` directly; instead, it:
 
 1. **Ensures extensions** — attempts `CREATE EXTENSION IF NOT EXISTS` for each extension defined in `schema/schema.sql`
-2. **Runs pre-migrations** — executes all `*.sql` files in **`database/pre-migrations/`** (repo root, not `memory/pre-migrations/` — that directory doesn't exist) in filename order for any data transformations that must happen before the schema diff
+2. **Runs pre-migrations** — executes all `*.sql` files in **`database/pre-migrations/`** (repo root — read via `$SCRIPT_DIR/database/pre-migrations` in `agent-install.sh`) in filename order for any data transformations that must happen before the schema diff. Note: `memory/pre-migrations/` also exists but is empty (just `.gitkeep`) and is not read by the installer — do not confuse it with `database/pre-migrations/`.
 3. **Plans changes** — runs `pgschema plan` to diff `schema/schema.sql` against the live database, using `--plan-db` pointing at the target DB for accurate extension type resolution (e.g., `vector` from pgvector)
 4. **Hazard check** — blocks destructive operations (DROP TABLE, DROP COLUMN) automatically; the plan is rejected if any are found
 5. **Applies changes** — calls `pgschema apply` with the approved plan
@@ -618,20 +618,19 @@ SELECT COUNT(*) FROM memory_embeddings;
 ### Source Repository
 ```
 nova-mind/memory/
-├── agent-install.sh        # Memory subsystem installer (called by root agent-install.sh)
+├── agent-install.sh        # Stale pre-merge copy from the old standalone nova-memory repo — NOT invoked by anything; the live installer is the repo-root `agent-install.sh`
 ├── shell-install.sh        # Memory subsystem interactive installer
 ├── verify-installation.sh  # Verification script
 ├── .pgschemaignore         # Objects excluded from pgschema management (TOML format)
 ├── schema/
 │   └── schema.sql          # Memory-specific schema (reference; root database/schema.sql is authoritative)
 ├── hooks/                  # OpenClaw hooks (source)
-│   ├── memory-extract/     # Extracts memories from messages
+│   ├── memory-extract/     # Extracts memories from messages (calls extract_memories.py directly, not process-input.sh)
 │   └── session-init/       # Initializes session context
 ├── plugins/                # OpenClaw Plugin SDK plugins
 │   └── turn-context/       # Consolidates old semantic-recall + agent-turn-context (#182)
 └── scripts/                # Shell and Python scripts (source)
-    ├── process-input.sh    # Entry point for memory extraction
-    ├── extract_memories.py # Memory extraction logic (replaces the old extract-memories.sh/store-memories.sh shell pipeline, removed in #174)
+    ├── extract_memories.py # Memory extraction logic; entry point called directly by the memory-extract hook (replaces the old extract-memories.sh/store-memories.sh/process-input.sh shell pipeline, removed in #174 — see docs/memory-extraction-pipeline.md for a known unrelated process-input.sh bug in memory-catchup.sh)
     ├── proactive-recall.py # Semantic search
     └── ...                 # Other utility scripts
 ```
@@ -641,7 +640,7 @@ nova-mind/memory/
 ### After Installation (Workspace)
 ```
 ~/.openclaw/hooks/
-├── memory-extract/     # → Uses scripts/process-input.sh
+├── memory-extract/     # → Uses scripts/extract_memories.py
 └── session-init/       # → Uses scripts/generate-session-context.sh
 
 ~/.openclaw/plugins/
@@ -658,7 +657,7 @@ Each hook resolves its script path using `join(os.homedir(), '.openclaw', 'scrip
 
 | Hook | Script | Path Resolution |
 |------|--------|----------------|
-| `memory-extract` | `process-input.sh` | `os.homedir() + /.openclaw/scripts/process-input.sh` |
+| `memory-extract` | `extract_memories.py` | `os.homedir() + /.openclaw/scripts/extract_memories.py` |
 | `session-init` | `generate-session-context.sh` | `os.homedir() + /.openclaw/scripts/generate-session-context.sh` |
 | `turn-context` plugin | (DS API handlers) | Plugin SDK `runtime.ds` with dynamic imports from `~/.openclaw/lib/` |
 

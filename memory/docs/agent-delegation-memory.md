@@ -100,24 +100,18 @@ Populates initial delegation knowledge from the agents table:
 - Basic capabilities from agent descriptions
 - Foundational "delegates_to" relationships
 
-### 2. Memory Extractor Enhancement (`scripts/extract-memories.sh`)
+### 2. Memory Extractor Enhancement (`memory/scripts/extract_memories.py`)
 
-Updated prompt to recognize delegation patterns:
+> As noted in the status correction above, this shipped inside
+> `extract_memories.py`'s existing extraction prompt rather than as a
+> standalone `extract-memories.sh` script. The block below is the actual
+> current prompt text (see the `DELEGATION CONTEXT` section of that file),
+> not the original design sketch:
 
 ```text
 DELEGATION CONTEXT:
-When NOVA says things like:
-- "Let me get Coder to help"
-- "I'll delegate this to Scout"
-- "Coder fixed the bug"
-- "Gidget pushed the changes"
-
-Extract as entity_facts:
-- delegates_to: "AGENT_NAME for TASK_TYPE"
-- agent_capability: "AGENT_NAME: description of what they did well"
-- agent_success/agent_failure: outcome observations
-
-Include the agent name in the value field for searchability.
+NOVA frequently delegates tasks to specialized agents. Extract agent delegation facts with subject="NOVA".
+Known agents: Coder (coding), Gidget (git-ops), Scout (research), IRIS (creative), Hermes (comms), Scribe (docs), Ticker (portfolio), Athena (media), Newhart (meta/agents).
 ```
 
 ### 3. Embedding Sync (`scripts/embed-delegation-facts.sh`)

@@ -3,7 +3,19 @@
 **Date:** 2026-02-12  
 **Migration File:** `migrate-to-agents-table.sql`  
 **Database:** nova_memory  
-**Status:** ✅ **SUCCESS**
+**Status:** ✅ **SUCCESS** (at the time — since superseded, see note below)
+
+> **Superseded (noted during nova-mind#414 documentation audit, 2026-07-11):** This
+> record documents a real migration that ran on 2026-02-12, but the `agents` table
+> has since moved further: neither `agents.seed_context` nor `agents.bootstrap_context`
+> exists on the live `agents` table today. Bootstrap context now lives entirely in the
+> dedicated `agent_bootstrap_context` table (see `../README.md`) — there is no JSONB
+> column on `agents` for it anymore. This doc is retained as a historical test-results
+> record for issue #53, not as a description of the current schema. This is also the
+> root of the confusion behind the `agents.seed_context` dead-query bug found in
+> nova-mind#414 (`generate-delegation-context.sh`) — the column name lived on in
+> stale references (this doc, code comments, and other docs) well after the table
+> itself moved on twice.
 
 ## What Was Changed
 

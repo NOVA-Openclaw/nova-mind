@@ -277,14 +277,20 @@ library — see `ARCHITECTURE-entity-resolver.md` for details.
 ```bash
 cd lib/entity-resolver
 npm install
-npm test  # Verify functionality
+npx tsx test.ts  # Verify functionality (there is no `npm test` script in package.json)
 ```
 
 ### Certificate Authority Setup
+
+> **Note:** There is no `setup-ca.sh` in `nova-ca/`. The CA is initialized by
+> the `relationships/agent-install.sh` installer (not a standalone script in
+> `nova-ca/`), and `nova-ca/certs/` already contains an initialized `ca.crt`
+> in this checkout. The only script under `nova-ca/` is `sign-client-csr.sh`,
+> used to sign an already-generated client CSR against the existing CA.
+
 ```bash
 cd nova-ca
-# CA should already be initialized, but if needed:
-./setup-ca.sh  # Creates CA structure and root cert
+./sign-client-csr.sh client.csr agent-name 365
 ```
 
 ## Usage Examples

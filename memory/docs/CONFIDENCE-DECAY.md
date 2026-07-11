@@ -6,8 +6,8 @@ The confidence decay system is designed to fade learned facts over time, priorit
 
 ### Key Components
 
-- **Script:** `memory/templates/memory-maintenance.py`, deployed to `~/.openclaw/scripts/memory-maintenance.py` by `agent-install.sh` (Phase 5 of its 9-phase pipeline)
-- **Trigger:** Runs from the HEARTBEAT idle cascade (Proactive Mode workflow, Step 4 — "Memory Maintenance (REM Sleep)"), **not cron**. There is no separate `decay-confidence.sh` script.
+- **Script:** `memory/templates/memory-maintenance.py`. In practice this ends up deployed to `~/.openclaw/scripts/memory-maintenance.py`, but `memory/agent-install.sh`'s "Part 4: Scripts Setup" step only copies `memory/scripts/*.sh` and `memory/scripts/*.py` — it does **not** currently copy anything from `memory/templates/`. There is no dedicated installer step that deploys this template; verify the deployed copy is current by hand (e.g. `diff memory/templates/memory-maintenance.py ~/.openclaw/scripts/memory-maintenance.py`) until this gap is fixed in the installer.
+- **Trigger:** Runs from **both** the HEARTBEAT idle cascade (Proactive Mode workflow, Step 4 — "Memory Maintenance (REM Sleep)", which runs `python3 ~/.openclaw/scripts/memory-maintenance.py`) **and** a daily cron job. `memory/agent-install.sh`'s "Part 6: Cron Job Setup" installs `/etc/cron.d/nova-memory-maintenance` running `$SCRIPT_PATH` (`~/.openclaw/scripts/memory-maintenance.py`) at `0 6 * * *` (6:00 AM daily). There is no separate `decay-confidence.sh` script — both triggers invoke the same unified `memory-maintenance.py`, and the script's own `COOLDOWN_HOURS`/`DECAY_COOLDOWN_HOURS` gates prevent redundant runs if both fire close together.
 - **Cooldown:** A 24-hour cooldown (`DECAY_COOLDOWN_HOURS`) gates decay specifically, on top of the overall 4-hour maintenance-run cooldown (`COOLDOWN_HOURS`)
 - **Purpose:** Automatically reduce confidence scores for facts that haven't been recently referenced or reconfirmed
 

@@ -1,8 +1,7 @@
 -- Fixture for generate-delegation-context.sh tests.
--- Assumes the disposable schema delegation_context_test already exists and is
--- writable by the test user. The BATS setup creates the schema as the nova DB
--- user; the fixture is applied as the coder DB user.
-SET search_path TO delegation_context_test;
+-- This fixture is intentionally schema-agnostic: it creates tables in the
+-- current search_path (typically `public` inside a dedicated test database).
+-- Never apply this fixture to nova_memory or any production database.
 
 DROP TABLE IF EXISTS agents CASCADE;
 DROP TABLE IF EXISTS workflows CASCADE;

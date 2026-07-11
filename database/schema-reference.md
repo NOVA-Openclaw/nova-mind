@@ -11,6 +11,17 @@
 > going forward) using whatever tool produced it originally, and see
 > `memory/docs/database-config.md` / `scripts/agent-chat-migration/README.md` for the
 > current `agent_chat` schema and connection story.
+>
+> **Additional drift found during the #414 documentation audit (2026-07-11), not yet
+> regenerated:** `asset_classes`, `price_cache_v2`, and `portfolio_snapshots` are listed
+> below but no longer exist in the live `nova_memory` schema (portfolio-domain tables
+> removed since this file was generated). Conversely, `social_interactions` (16 columns),
+> `user_domains` (6 columns), and `motivation_d100` (20 columns) exist in the live schema
+> but are missing from the listing below. One column count has also drifted from live:
+> `agents` is now 38 columns (listed as 37 below). `comms_checks`, `income_sources`, and
+> `music_analysis` were checked against live and still match the counts listed below (11,
+> 12, and 11 respectively) — no drift found there. Do not hand-patch these counts either —
+> this note exists so the next regeneration pass has a starting checklist.
 
 ## Tables
 

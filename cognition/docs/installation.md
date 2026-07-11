@@ -33,10 +33,18 @@ CREATE TABLE ai_models (
 );
 
 -- Agent registry (minimal starter shape — the live `agents` table in a fully-installed
--- system has ~35+ columns, including context_type, thinking, allowed_subagents,
+-- system has 38 columns, including context_type, thinking, allowed_subagents,
 -- parent_agents, heartbeat_* fields, domain assignments, etc. See
 -- database/schema-reference.md or `\d agents` on a live install for the full
--- current column set before building tooling against this table.)
+-- current column set before building tooling against this table.
+--
+-- Do NOT include `seed_context` if you use this as a starting point: it does not
+-- exist on the live `agents` table (never migrated in, not a rename target) and
+-- was the source of a dead-query bug fixed in nova-mind#414
+-- (generate-delegation-context.sh). There is no replacement single column for
+-- per-agent spawn guidance — the live script rebuilds equivalent guidance from
+-- `nickname`, `model`, `thinking`, `context_type`, `allowed_subagents`, and
+-- `decision_criteria`. See cognition/docs/delegation-context.md.)
 CREATE TABLE agents (
     id SERIAL PRIMARY KEY,
     nickname VARCHAR(50) UNIQUE,
@@ -45,7 +53,6 @@ CREATE TABLE agents (
     model VARCHAR(100),
     instance_type VARCHAR(20) DEFAULT 'subagent',  -- 'primary', 'peer', 'subagent'
     persistent BOOLEAN DEFAULT false,
-    seed_context JSONB,
     instantiation_sop VARCHAR(100),
     notes TEXT,
     created_at TIMESTAMPTZ DEFAULT now(),

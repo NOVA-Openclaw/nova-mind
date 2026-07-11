@@ -1781,6 +1781,22 @@ _install_pg_notify_listener \
     "$HOME/.config/systemd/user" \
     "$HOME/.openclaw/workspace/logs"
 
+# --- generate-delegation-context.sh ---
+echo ""
+echo "generate-delegation-context.sh..."
+
+GENERATE_DELEGATION_SOURCE="$SCRIPT_DIR/cognition/scripts/generate-delegation-context.sh"
+GENERATE_DELEGATION_TARGET="$HOME/.openclaw/workspace/scripts/generate-delegation-context.sh"
+
+if [ ! -f "$GENERATE_DELEGATION_SOURCE" ]; then
+    echo -e "  ${WARNING} generate-delegation-context.sh source not found (skipping)"
+else
+    mkdir -p "$(dirname "$GENERATE_DELEGATION_TARGET")"
+    cp "$GENERATE_DELEGATION_SOURCE" "$GENERATE_DELEGATION_TARGET"
+    chmod +x "$GENERATE_DELEGATION_TARGET"
+    echo -e "  ${CHECK_MARK} Installed generate-delegation-context.sh → $GENERATE_DELEGATION_TARGET"
+fi
+
 # --- agent_chat extension ---
 echo ""
 echo "Agent Chat extension installation..."

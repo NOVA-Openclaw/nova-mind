@@ -1,9 +1,32 @@
 # Objects to exclude from pgschema management
 # See https://www.pgschema.com/cli/ignore
 #
-# Example:
-# [tables]
-# patterns = ["temp_*", "test_*"]
-#
-# [views]
-# patterns = ["debug_*"]
+# These tables exist in production memory databases but are NOT defined in
+# schema.sql. They were created dynamically or as domain extensions.
+# Without this ignore list, pgschema plan will propose DROP TABLE for all
+# of them — destroying live data.
+
+[tables]
+patterns = [
+  # --- Common tables (nova_memory + victoria_memory, not in schema.sql) ---
+  "blockers",
+  "d100_roll_log",
+  "proactive_outreach",
+  "social_interactions",
+  "user_domains",
+
+  # --- nova_memory only ---
+  "agent_model_denylists",
+
+  # --- victoria_memory trading-desk domain tables ---
+  # Victoria's chess-themed trading pipeline book of record.
+  # Dropping these destroys her entire trading operation state.
+  "cash_ledger",
+  "instruments",
+  "portfolio_asset_classes",
+  "portfolios",
+  "positions",
+  "strategies",
+  "strategy_notes",
+  "trades"
+]

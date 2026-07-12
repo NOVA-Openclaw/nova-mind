@@ -281,11 +281,11 @@ The unified installer (`agent‑install.sh`) is idempotent and declarative:
 |------|----------|---------|
 | `pg‑env.sh` | Bash | `load_pg_env()` — sets `PG*` environment variables from `~/.openclaw/postgres.json` |
 | `pg_env.py` | Python | `load_pg_env()` — same for Python scripts |
-| `pg‑env.ts` | TypeScript | `loadPgEnv()` — same for TypeScript hooks/extensions |
+| `pg‑env.ts` | TypeScript | `loadPgEnv()` — returns a connection config object read from `~/.openclaw/postgres.json` (ENV → section → config file → defaults); does **not** write to `process.env`, so callers must pass the returned config directly to the `pg.Client`/`pg.Pool` constructor |
 | `env‑loader.sh` | Bash | Sources `pg‑env.sh` and other environment setup |
 | `env_loader.py` | Python | Python equivalent |
 
-All database‑connected scripts use these loaders, ensuring consistent connection configuration without hardcoded credentials.
+All database‑connected scripts use these loaders, ensuring consistent connection configuration. `pg‑env.sh` and `pg_env.py` set `process.env`/`os.environ` PG* vars directly; `pg‑env.ts` is read‑only and returns a config object instead (see nova-mind#330, nova-mind#408) — TypeScript callers (e.g. `cognition/metacognition/self-awareness/src/shared/pg-pool.ts`) must pass the returned object to the pool/client constructor rather than relying on ambient env vars.
 
 ## Key Design Decisions
 

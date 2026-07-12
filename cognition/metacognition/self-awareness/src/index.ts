@@ -75,7 +75,7 @@ async function processMessageSent(
 
   let pool: import("pg").Pool | undefined;
   try {
-    pool = getPool();
+    pool = await getPool();
   } catch (e) {
     console.warn("[self-awareness] Could not get pg pool:", (e as Error).message);
     return;

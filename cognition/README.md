@@ -123,7 +123,7 @@ The **`agent-config-sync`** extension plugin keeps OpenClaw's agent model config
       {
         "id": "gem",
         "model": "openrouter/google/gemini-3-flash-preview",
-        "thinking": "on"
+        "default": true
       }
     ]
   }
@@ -132,6 +132,11 @@ The **`agent-config-sync`** extension plugin keeps OpenClaw's agent model config
 
 - **`defaults.models`** — Allow-list of all unique models (primaries + fallbacks).
 - **`list`** — Per-agent config. `model` is a plain string when there are no fallbacks, or an object with `primary`/`fallbacks` when fallbacks exist.
+- **`thinking` is never written to `agents.json`.** The `agents` table has a `thinking`
+  column, but `sync.ts` deliberately excludes it from the generated output — thinking
+  level is not a valid per-agent `agents.json` config key in OpenClaw's schema. It is set
+  at spawn time via `sessions_spawn(thinking=...)` instead; the DB column only stores the
+  preferred level for reference by spawning agents.
 - Each peer gateway's `agents.json` is scoped to that gateway: the connecting peer appears as
   `default: true`, and subagents linked to that peer via `parent_agents` appear as non-default
   entries. Both the peer and its own subagents appear in their respective gateway's `agents.json`.

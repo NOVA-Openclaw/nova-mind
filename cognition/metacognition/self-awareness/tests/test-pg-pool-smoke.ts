@@ -56,6 +56,16 @@ function assertEnvUnset(desc: string, envVar: string) {
   }
 }
 
+function assertSecretEq(desc: string, expected: string | undefined, actual: string | undefined) {
+  if (expected === actual) {
+    console.log(`  PASS: ${desc}`);
+    PASS++;
+  } else {
+    console.log(`  FAIL: ${desc} (credential value hidden)`);
+    FAIL++;
+  }
+}
+
 function clearPgVars() {
   for (const v of ["PGHOST", "PGPORT", "PGDATABASE", "PGUSER", "PGPASSWORD"]) {
     delete process.env[v];
@@ -105,7 +115,7 @@ async function run() {
     assertEq("port from config via shared loader (number)", 5433, cfg1.port);
     assertEq("database from config via shared loader", "testdb1", cfg1.database);
     assertEq("user from config via shared loader", "testuser1", cfg1.user);
-    assertEq("password from config via shared loader", "secret1", cfg1.password);
+    assertSecretEq("password from config via shared loader", "secret1", cfg1.password);
     assertEnvUnset("PGHOST not set after loadPgConfig()", "PGHOST");
     assertEnvUnset("PGPORT not set after loadPgConfig()", "PGPORT");
     assertEnvUnset("PGDATABASE not set after loadPgConfig()", "PGDATABASE");
@@ -125,7 +135,7 @@ async function run() {
     assertEq("port from ENV wins (number)", 9999, cfg2.port);
     assertEq("database from ENV wins", "envdb", cfg2.database);
     assertEq("user from ENV wins", "envuser", cfg2.user);
-    assertEq("password from ENV wins", "envpass", cfg2.password);
+    assertSecretEq("password from ENV wins", "envpass", cfg2.password);
     clearPgVars();
 
     // ── Scenario 3: postgres.json absent entirely — falls back to plugin defaults ──
@@ -197,6 +207,47 @@ async function run() {
     assertEnvUnset("PGHOST still unset after getPool()", "PGHOST");
     assertEnvUnset("PGPASSWORD still unset after getPool()", "PGPASSWORD");
     await pool.end().catch(() => {});
+
+    // ── Scenario 9: loader unreachable + PG* env vars set → env vars used ──
+    console.log("Scenario 9: Shared loader unreachable + PG* ENV set — env fallback used");
+    clearPgVars();
+    const home9 = join(scratchRoot, "s9"); // deliberately no lib/pg-env.ts
+    mkdirSync(home9, { recursive: true });
+    process.env.HOME = home9;
+    Object.assign(process.env, {
+      PGHOST: "envfallbackhost",
+      PGPORT: "7777",
+      PGDATABASE: "envfallbackdb",
+      PGUSER: "envfallbackuser",
+      PGPASSWORD: "envfallbacksecret",
+    });
+    const cfg9 = await loadPgConfig1();
+    assertEq("host from ENV fallback when loader missing", "envfallbackhost", cfg9.host);
+    assertEq("port from ENV fallback when loader missing (number)", 7777, cfg9.port);
+    assertEq("database from ENV fallback when loader missing", "envfallbackdb", cfg9.database);
+    assertEq("user from ENV fallback when loader missing", "envfallbackuser", cfg9.user);
+    assertSecretEq("password from ENV fallback when loader missing", "envfallbacksecret", cfg9.password);
+    // These assert the env values were left untouched (read-only fallback path).
+    assertEq("PGHOST unchanged after fallback loadPgConfig()", "envfallbackhost", process.env.PGHOST);
+    assertEq("PGPORT unchanged after fallback loadPgConfig()", "7777", process.env.PGPORT);
+    assertEq("PGDATABASE unchanged after fallback loadPgConfig()", "envfallbackdb", process.env.PGDATABASE);
+    assertEq("PGUSER unchanged after fallback loadPgConfig()", "envfallbackuser", process.env.PGUSER);
+    assertSecretEq("PGPASSWORD unchanged after fallback loadPgConfig()", "envfallbacksecret", process.env.PGPASSWORD);
+    clearPgVars();
+
+    // ── Scenario 10: loader unreachable + no PG* env vars → hardcoded defaults ──
+    console.log("Scenario 10: Shared loader unreachable + no PG* ENV — hardcoded defaults used");
+    clearPgVars();
+    const home10 = join(scratchRoot, "s10"); // deliberately no lib/pg-env.ts
+    mkdirSync(home10, { recursive: true });
+    process.env.HOME = home10;
+    const cfg10 = await loadPgConfig1();
+    assertEq("host hardcoded default when loader+ENV missing", "localhost", cfg10.host);
+    assertEq("port hardcoded default when loader+ENV missing (number)", 5432, cfg10.port);
+    assertEq("database hardcoded default when loader+ENV missing", "nova_memory", cfg10.database);
+    assertEq("user hardcoded default when loader+ENV missing", "nova", cfg10.user);
+    assertSecretEq("password hardcoded default when loader+ENV missing", undefined, cfg10.password);
+    assertEnvUnset("PGHOST not written by default fallback path", "PGHOST");
 
   } finally {
     process.env.HOME = realHome;

@@ -150,7 +150,7 @@ Language-specific helpers live in `lib/` (source) and are installed to `~/.openc
 | `pg_env.py` | Python | `load_pg_env()` | `~/.openclaw/lib/pg_env.py` |
 | `pg-env.ts` | TypeScript | `loadPgEnv()` | `~/.openclaw/lib/pg-env.ts` |
 
-Each loader sets the standard `PG*` environment variables, which PostgreSQL client libraries (`psql`, `psycopg2`, `node-postgres`) honor natively — no custom connection logic needed.
+The Bash and Python loaders set the standard `PG*` environment variables, which PostgreSQL client libraries (`psql`, `psycopg2`) honor natively — no custom connection logic needed for those languages. The TypeScript loader (`pg-env.ts`) is read-only instead: it returns a connection-config object and never writes `process.env`, so `node-postgres` (`pg`) callers must pass the returned object directly to the `Pool`/`Client` constructor (see `memory/docs/database-config.md` for the exact per-language contract, and `cognition/metacognition/self-awareness/src/shared/pg-pool.ts` for a reference caller).
 
 ### Install scripts
 

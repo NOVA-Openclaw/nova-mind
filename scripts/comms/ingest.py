@@ -15,6 +15,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 from datetime import datetime, timezone
@@ -354,6 +355,66 @@ def run_ingest(
     }
 
 
+def log_comms_check(
+    conn: psycopg2.extensions.connection,
+    report: dict[str, Any],
+    platforms: list[str],
+    cron_job_id: str = "hermes-comms-check",
+) -> None:
+    """Persist a comms_checks audit row for this run.
+
+    This is the writer-of-record step that satisfies TC-474-49: even when the
+    comms_state seen-arrays are frozen/retired, comms_checks keeps logging each
+    deterministic run.
+    """
+    new_items = report.get("new_items", [])
+    injection_candidates = report.get("injection_candidates", [])
+    actionable = [i for i in new_items if i.get("disposition") in ("actionable", "escalation")]
+    fyi = [i for i in new_items if i.get("disposition") in ("fyi", "receipt")]
+
+    summary_parts: list[str] = []
+    if actionable:
+        summary_parts.append(f"{len(actionable)} actionable")
+    if fyi:
+        summary_parts.append(f"{len(fyi)} FYI/receipt")
+    if injection_candidates:
+        summary_parts.append(f"{len(injection_candidates)} injection suspect")
+    if report.get("platform_errors"):
+        summary_parts.append(f"{len(report['platform_errors'])} platform error(s)")
+    summary = ", ".join(summary_parts) if summary_parts else "no new items"
+
+    details = {
+        "platforms": platforms,
+        "new_items_count": len(new_items),
+        "existing_items_count": len(report.get("existing_items", [])),
+        "skipped_items_count": len(report.get("skipped_items", [])),
+        "platform_errors": report.get("platform_errors", []),
+    }
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO comms_checks
+                (check_type, platforms, summary, details, new_items_count,
+                 escalations, action_items, cron_job_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                "comms",
+                platforms,
+                summary,
+                json.dumps(details),
+                len(new_items),
+                json.dumps([{"platform": i["platform"], "item_id": i["item_id"], "summary": i.get("summary")}
+                            for i in injection_candidates]),
+                json.dumps([{"platform": i["platform"], "item_id": i["item_id"], "summary": i.get("summary")}
+                            for i in actionable]),
+                cron_job_id,
+            ),
+        )
+        conn.commit()
+
+
 def compose_report(report: dict[str, Any]) -> str:
     """Compose a typed Hermes->NOVA report from persisted rows."""
     lines: list[str] = ["## comms ingest report", ""]
@@ -420,6 +481,12 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Log what would happen without writing to the DB",
     )
+    parser.add_argument(
+        "--log-check",
+        action="store_true",
+        dest="log_check",
+        help="Log this run to comms_checks (used by the hermes-comms-check cron job)",
+    )
     args = parser.parse_args(argv)
 
     platforms = [p.strip() for p in args.platforms.split(",") if p.strip()]
@@ -433,6 +500,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         report = run_ingest(conn, platforms=platforms, limit=args.limit, dry_run=args.dry_run)
         print(compose_report(report))
+        if args.log_check and not args.dry_run:
+            log_comms_check(conn, report, platforms=platforms)
     except IngestError as exc:
         print(f"[comms-ingest] ERROR: {exc.message}", file=sys.stderr)
         return exc.exit_code

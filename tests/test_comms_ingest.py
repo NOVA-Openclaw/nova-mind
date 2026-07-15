@@ -75,7 +75,7 @@ def _grant_test_privileges(db_name: str) -> None:
     with conn.cursor() as cur:
         # Current user needs to exercise DML during tests.
         cur.execute("""
-            GRANT ALL ON TABLE comms_items, comms_responses, entities, entity_facts
+            GRANT ALL ON TABLE comms_items, comms_responses, comms_checks, entities, entity_facts
             TO CURRENT_USER
         """)
         cur.execute("GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO CURRENT_USER")
@@ -529,6 +529,40 @@ def test_TC_474_35_archive_on_resolution_is_deterministic(db_conn, db_config, mo
     row = _fetch_row(db_conn, "email", "msg-archive")
     assert row["status"] == "resolved"
     archive_mock.assert_called_once()
+
+
+def test_TC_474_49_logs_comms_check(db_conn, db_config, monkeypatch):
+    """The consolidated cron job logs each run to comms_checks."""
+    item = _gmail_item("msg-check", "thread-check", "alice@example.com", "Please review", "Body")
+    monkeypatch.setattr(ingest.gmail, "fetch", lambda limit: [item])
+    monkeypatch.setattr(ingest.x, "fetch", lambda limit: [])
+    monkeypatch.setattr(ingest.nostr, "fetch", lambda limit: [])
+
+    # Simulate the --log-check path used by the hermes-comms-check cron job.
+    report = ingest.run_ingest(db_conn, platforms=["email"], limit=10)
+    ingest.log_comms_check(db_conn, report, platforms=["email"])
+
+    with db_conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT check_type, platforms, summary, new_items_count,
+                   escalations, action_items, cron_job_id
+            FROM comms_checks
+            ORDER BY id DESC LIMIT 1
+            """
+        )
+        row = cur.fetchone()
+
+    assert row is not None
+    assert row[0] == "comms"
+    assert row[1] == ["email"]
+    assert "actionable" in row[2]
+    assert row[3] == 1
+    assert row[6] == "hermes-comms-check"
+    # action_items contains the one actionable item.
+    assert len(row[5]) == 1
+    # No injections in this fixture.
+    assert len(row[4]) == 0
 
 
 # =============================================================================

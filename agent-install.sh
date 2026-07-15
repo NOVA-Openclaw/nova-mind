@@ -31,6 +31,8 @@ VERIFICATION_ERRORS=0
 # Cron install status tracking
 # shellcheck disable=SC2034
 ANNOUNCE_D100_CRON_STATUS="not installed"
+# shellcheck disable=SC2034
+HERMES_COMMS_CRON_STATUS="not installed"
 
 # Track if gateway restart is needed
 # shellcheck disable=SC2034
@@ -95,6 +97,11 @@ DAILY_LOG_CRON_INTRADAY='0 6,12,18 * * * '"$DAILY_LOG_CRON_MARKER"' >> '"$OPENCL
 ANNOUNCE_D100_SCRIPT="announce-d100-rolls.sh"
 ANNOUNCE_D100_CRON_MARKER="$HOME/.openclaw/scripts/$ANNOUNCE_D100_SCRIPT"
 ANNOUNCE_D100_CRON_ENTRY='*/15 * * * * '"$ANNOUNCE_D100_CRON_MARKER"' >> '"$OPENCLAW_LOGS_DIR"'/announce-d100-rolls.log 2>&1'
+
+# Hermes comms check cron configuration (issue #474)
+HERMES_COMMS_CHECK_SCRIPT="hermes-comms-check.sh"
+HERMES_COMMS_CHECK_MARKER="$HOME/.openclaw/scripts/comms/$HERMES_COMMS_CHECK_SCRIPT"
+HERMES_COMMS_CRON_ENTRY='0 */4 * * * '"$HERMES_COMMS_CHECK_MARKER"' >> '"$OPENCLAW_LOGS_DIR"'/hermes-comms-check.log 2>&1'
 
 # Superuser connection helper for DDL operations
 PG_SUPERUSER="${PG_SUPERUSER:-$DB_USER}"
@@ -317,6 +324,62 @@ _install_announce_d100_cron() {
     fi
 }
 
+# Install or verify the consolidated Hermes comms-check cron entry.
+# This replaces the previous pair of scheduler jobs (56618ee3 agent=hermes,
+# 9169c40e agent=nova) with exactly one job that runs the deterministic ingest
+# and report composer as the hermes DB user.
+# Uses globals: HERMES_COMMS_CHECK_SCRIPT, HERMES_COMMS_CHECK_MARKER,
+#               HERMES_COMMS_CRON_ENTRY, VERIFY_ONLY, NO_CRON
+# Sets global: HERMES_COMMS_CRON_STATUS
+_install_hermes_comms_check_cron() {
+    if [ "${NO_CRON:-0}" -eq 1 ]; then
+        echo -e "  ${INFO} Hermes comms-check cron installation skipped (--no-cron)"
+        HERMES_COMMS_CRON_STATUS="skipped by --no-cron"
+        return 0
+    fi
+
+    local cron_drift_lines=()
+    local current_crontab
+    current_crontab=$(crontab -l 2>/dev/null || true)
+
+    if echo "$current_crontab" | grep -qF "$HERMES_COMMS_CHECK_MARKER"; then
+        local line
+        while IFS= read -r line; do
+            case "$line" in
+                *"$HERMES_COMMS_CHECK_MARKER"*)
+                    if [ "$line" != "$HERMES_COMMS_CRON_ENTRY" ]; then
+                        cron_drift_lines+=("$line")
+                    fi
+                    ;;
+            esac
+        done <<< "$current_crontab"
+
+        if [ ${#cron_drift_lines[@]} -gt 0 ]; then
+            echo -e "  ${WARNING} Existing cron entry for $HERMES_COMMS_CHECK_SCRIPT differs from expected schedule (drift detected):"
+            local drift_line
+            for drift_line in "${cron_drift_lines[@]}"; do
+                echo "      $drift_line"
+            done
+            VERIFICATION_WARNINGS=$((VERIFICATION_WARNINGS + 1))
+            HERMES_COMMS_CRON_STATUS="drift detected (review required)"
+        elif [ "${VERIFY_ONLY:-0}" -eq 1 ]; then
+            echo -e "  ${CHECK_MARK} Hermes comms-check cron entry installed"
+            HERMES_COMMS_CRON_STATUS="installed"
+        else
+            echo -e "  ${CHECK_MARK} Hermes comms-check cron entry verified"
+            HERMES_COMMS_CRON_STATUS="verified"
+        fi
+    elif [ "${VERIFY_ONLY:-0}" -eq 1 ]; then
+        echo -e "  ${CROSS_MARK} Hermes comms-check cron entry missing"
+        HERMES_COMMS_CRON_STATUS="missing"
+        VERIFICATION_ERRORS=$((VERIFICATION_ERRORS + 1))
+    else
+        (crontab -l 2>/dev/null || true; echo "$HERMES_COMMS_CRON_ENTRY") | crontab -
+        echo -e "  ${CHECK_MARK} Installed Hermes comms-check cron entry (every 4 hours)"
+        HERMES_COMMS_CRON_STATUS="installed"
+    fi
+}
+
 # Install the PostgreSQL NOTIFY listener as a systemd --user service.
 # Parameters: source_script source_service target_dir service_dir logs_dir
 _install_pg_notify_listener() {
@@ -379,6 +442,7 @@ DB_NAME_OVERRIDE=""
 REGENERATE_AGENTS_JSON=0
 DAILY_LOG_CRON_STATUS="not installed"
 ANNOUNCE_D100_CRON_STATUS="not installed"
+HERMES_COMMS_CRON_STATUS="not installed"
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -994,6 +1058,14 @@ if [ $VERIFY_ONLY -eq 1 ]; then
     fi
     echo -e "  ${announce_symbol} D100 announcer cron: $ANNOUNCE_D100_CRON_STATUS"
 
+    comms_symbol="$CHECK_MARK"
+    if [[ "$HERMES_COMMS_CRON_STATUS" == missing* ]]; then
+        comms_symbol="$CROSS_MARK"
+    elif [[ "$HERMES_COMMS_CRON_STATUS" == drift* ]]; then
+        comms_symbol="$WARNING"
+    fi
+    echo -e "  ${comms_symbol} Hermes comms-check cron: $HERMES_COMMS_CRON_STATUS"
+
     if [ $VERIFICATION_ERRORS -gt 0 ]; then
         echo -e "  ${CROSS_MARK} $VERIFICATION_ERRORS errors found"
         exit 1
@@ -1588,6 +1660,34 @@ if [ -d "$SCRIPTS_SOURCE" ]; then
     _install_announce_d100_cron
 else
     echo -e "  ${WARNING} Scripts directory not found at $SCRIPTS_SOURCE (skipping)"
+fi
+
+# --- Comms scripts (issue #474) ---
+echo ""
+echo "Comms scripts setup..."
+
+COMMS_SCRIPTS_SOURCE="$SCRIPT_DIR/scripts/comms"
+COMMS_SCRIPTS_TARGET="$HOME/.openclaw/scripts/comms"
+if [ -d "$COMMS_SCRIPTS_SOURCE" ]; then
+    mkdir -p "$COMMS_SCRIPTS_TARGET"
+    comms_copied=0
+    for source_file in "$COMMS_SCRIPTS_SOURCE"/*.py "$COMMS_SCRIPTS_SOURCE"/*.sh; do
+        [ -f "$source_file" ] || continue
+        filename=$(basename "$source_file")
+        target_file="$COMMS_SCRIPTS_TARGET/$filename"
+        if [ "$FORCE_INSTALL" -eq 1 ] || [ ! -f "$target_file" ] || \
+           [ "$(sha256sum "$source_file" | awk '{print $1}')" != "$(sha256sum "$target_file" | awk '{print $1}')" ]; then
+            cp "$source_file" "$target_file"
+            chmod +x "$target_file"
+            comms_copied=$((comms_copied + 1))
+        fi
+    done
+    echo -e "  ${CHECK_MARK} $comms_copied comms script(s) installed to $COMMS_SCRIPTS_TARGET"
+
+    # --- Consolidated Hermes comms-check cron entry ---
+    _install_hermes_comms_check_cron
+else
+    echo -e "  ${WARNING} Comms scripts directory not found at $COMMS_SCRIPTS_SOURCE (skipping)"
 fi
 
 # --- Memory skills ---
@@ -2699,6 +2799,7 @@ echo "    • Shared PG loader libraries → ~/.openclaw/lib/"
 echo "    • Schema managed via pgschema (database/schema.sql)"
 echo "    • Daily memory log cron → $DAILY_LOG_CRON_STATUS"
 echo "    • D100 announcer cron → $ANNOUNCE_D100_CRON_STATUS"
+echo "    • Hermes comms-check cron → $HERMES_COMMS_CRON_STATUS"
 if [ ${#INSTALLED_HOOKS[@]} -gt 0 ]; then
     for hook in "${INSTALLED_HOOKS[@]}"; do
         echo "    • Hook: $hook"

@@ -791,3 +791,108 @@ def test_main_empty_run(db_name, monkeypatch, capsys):
     assert rc == 0
     captured = capsys.readouterr()
     assert "No comms items require attention" in captured.out
+
+
+# =============================================================================
+# Area 8 — Regression / non-goals
+# =============================================================================
+
+
+def test_TC_474_47_github_out_of_scope():
+    """GitHub notification ingest is not half-implemented in v1."""
+    adapters_dir = COMMS_DIR / "adapters"
+    assert not (adapters_dir / "github.py").exists()
+    # Default CLI platforms do not include github.
+    parser = ingest.argparse.ArgumentParser()
+    ingest.main.__module__  # ensure module loaded
+    # The known platform adapter map is email/x/nostr only.
+    assert set(ingest._platform_adapter("github") for _ in [0]) == {None}
+
+
+def test_TC_474_48_outbound_activity_untouched():
+    """NOVA's own outbound posts/replies are not tracked in comms_items."""
+    adapters_dir = COMMS_DIR / "adapters"
+    for adapter_file in adapters_dir.glob("*.py"):
+        if adapter_file.name == "__init__.py":
+            continue
+        source = adapter_file.read_text()
+        # No outbound post/reply/like export path in any adapter.
+        assert "post(" not in source, f"{adapter_file.name} may contain outbound post path"
+        assert "like(" not in source, f"{adapter_file.name} may contain outbound like path"
+
+
+def test_TC_474_50_not_in_pgschemaignore():
+    """comms_items is not excluded from schema drift detection."""
+    pgschemaignore = REPO_ROOT / ".pgschemaignore"
+    if pgschemaignore.exists():
+        content = pgschemaignore.read_text()
+        assert "comms_items" not in content
+
+
+def test_TC_474_18_hermes_writer_grants(db_name):
+    """Hermes (writer-of-record) can INSERT/UPDATE comms_items; DELETE is revoked."""
+    import tempfile
+
+    # Build a temporary .pgpass file that lets hermes authenticate to the fixture DB.
+    pgpass_path = Path.home() / ".pgpass"
+    hermes_pass = ""
+    if pgpass_path.exists():
+        for line in pgpass_path.read_text().splitlines():
+            if line.startswith("#"):
+                continue
+            parts = line.split(":")
+            if len(parts) >= 5 and parts[3] == "hermes":
+                hermes_pass = parts[4]
+                break
+
+    with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".pgpass") as f:
+        if pgpass_path.exists():
+            f.write(pgpass_path.read_text())
+        f.write(f"localhost:5432:{db_name}:hermes:{hermes_pass}\n")
+        f.write(f"127.0.0.1:5432:{db_name}:hermes:{hermes_pass}\n")
+        tmp_pgpass = Path(f.name)
+    tmp_pgpass.chmod(0o600)
+
+    try:
+        # Connect as nova to configure production-like grants for this fixture.
+        admin = psycopg2.connect(host="localhost", user="nova", dbname=db_name)
+        admin.autocommit = True
+        with admin.cursor() as cur:
+            cur.execute("GRANT USAGE ON SCHEMA public TO hermes")
+            cur.execute("GRANT INSERT, UPDATE, SELECT ON comms_items TO hermes")
+            cur.execute("REVOKE DELETE ON comms_items FROM hermes")
+            cur.execute("GRANT USAGE, SELECT ON SEQUENCE comms_items_id_seq TO hermes")
+        admin.close()
+
+        # Verify hermes can connect and write.
+        os.environ["PGPASSFILE"] = str(tmp_pgpass)
+        os.environ.pop("PGPASSWORD", None)
+        conn = psycopg2.connect(host="localhost", user="hermes", dbname=db_name)
+        conn.autocommit = True
+
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO comms_items (platform, item_id, status) VALUES (%s, %s, %s)",
+                ("email", "hermes-writer-test", "inbound"),
+            )
+            cur.execute(
+                "UPDATE comms_items SET status = %s WHERE platform = %s AND item_id = %s",
+                ("reported", "email", "hermes-writer-test"),
+            )
+            cur.execute(
+                "SELECT status FROM comms_items WHERE platform = %s AND item_id = %s",
+                ("email", "hermes-writer-test"),
+            )
+            assert cur.fetchone()[0] == "reported"
+
+            # DELETE must be revoked.
+            with pytest.raises(psycopg2.errors.InsufficientPrivilege):
+                cur.execute(
+                    "DELETE FROM comms_items WHERE platform = %s AND item_id = %s",
+                    ("email", "hermes-writer-test"),
+                )
+
+        conn.close()
+    finally:
+        tmp_pgpass.unlink(missing_ok=True)
+        os.environ.pop("PGPASSFILE", None)

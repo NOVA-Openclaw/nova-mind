@@ -2500,6 +2500,24 @@ INLINE_MIGRATION_SQL
     fi
 fi
 
+# --- Fold legacy social_interactions into comms_items/comms_responses ---
+echo "  Folding social_interactions into comms_items..."
+
+SOCIAL_FOLD_MIGRATION="$SCRIPT_DIR/cognition/scripts/migrations/164-fold-social-interactions-to-comms-items.sql"
+if [ -f "$SOCIAL_FOLD_MIGRATION" ]; then
+    MIGRATION_ERR="${TMPDIR:-/tmp}/migration-164-$$.err"
+    if psql -U "$DB_USER" -d "$DB_NAME" -q -f "$SOCIAL_FOLD_MIGRATION" 2>"$MIGRATION_ERR"; then
+        echo -e "  ${CHECK_MARK} social_interactions fold migration installed (164-fold-social-interactions-to-comms-items.sql)"
+        rm -f "$MIGRATION_ERR"
+    else
+        echo -e "  ${WARNING} social_interactions fold migration had issues:"
+        cat "$MIGRATION_ERR" >&2
+        rm -f "$MIGRATION_ERR"
+    fi
+else
+    echo -e "  ${WARNING} social_interactions fold migration not found: $SOCIAL_FOLD_MIGRATION"
+fi
+
 # --- agent config notification trigger ---
 echo "  Installing agent config notification trigger..."
 

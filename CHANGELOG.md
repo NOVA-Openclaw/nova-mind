@@ -1,5 +1,105 @@
 # Changelog
 
+### Batch: comms-items-unified-lifecycle-474 (Issue #474)
+
+#### Added
+- **`comms_items` table** (#474) — unified lifecycle for asynchronous inbound
+  communications (Gmail, X mentions/DMs, Nostr DMs; GitHub notifications deferred to a
+  follow-up issue). Dedupe key is `UNIQUE (platform, item_id)` using immutable source
+  identifiers (Gmail message id, tweet id, Nostr event id). Lifecycle:
+  `inbound → reported → tracked → resolved | dismissed`. Columns: `platform`, `item_id`,
+  `thread_id`, `entity_id` (FK → `entities`, nullable), `status` (CHECK-constrained),
+  `disposition` (`fyi|actionable|escalation|receipt|injection_suspect`, CHECK-constrained),
+  `summary` (poller-voice text, never raw relayed prose), `artifact_ref`, `first_seen_at`,
+  `reported_at`, `resolved_at`. Replaces the inbound-lifecycle role of `social_interactions`,
+  which is dropped by the fold migration below. Owner: Communications domain (hermes).
+- **`comms_responses` table** (#474) — approval-gate sub-lifecycle for outbound responses
+  to inbound X/Nostr mentions and DMs, 1:1 linked to `comms_items` via `comms_item_id`
+  (`ON DELETE CASCADE`). Carries `draft_response`, `approved_by`, `approved_at`,
+  `response_id`, `responded_at`, `notes`. Preserves the `social_interactions`
+  drafted/approved/posted workflow that would otherwise have been orphaned by the fold.
+- **`resolve_entity_by_identifier(key text, value text) RETURNS bigint`** (#474) — shared
+  SQL entity-resolution helper mirroring `resolver.ts` logic: looks up `entity_facts` by
+  key/value (case-insensitive), preferring highest confidence then most recently
+  confirmed. Used by both the fold migration and the ingest script so schema-side and
+  script-side resolution stay in sync. Tolerates no match (returns `NULL`); callers are
+  responsible for normalizing identifier formats (e.g., Nostr npub vs. hex) before calling
+  — full normalization convention tracked as a follow-up (#227).
+- **Migration `164-fold-social-interactions-to-comms-items.sql`** (#474) — post-pgschema,
+  idempotent fold of legacy `social_interactions` into `comms_items`/`comms_responses`.
+  No-ops on fresh installs (guards on `social_interactions` existing). Maps
+  `seen→inbound`, `needs_response|drafted|approved→tracked`, `posted→resolved`,
+  `dismissed→dismissed`; preserves `dismissed_reason`/`notes` content by folding it into
+  `summary` rather than discarding it; preserves `created_at` as `first_seen_at`. Excludes
+  NOVA's own outbound X rows (`author_handle = 'NOVA_Openclaw'`) — inbound-only per the
+  #474 scope decision (2026-07-14: general social-interaction/outbound-activity tracking
+  is out of scope for this table). Drops `social_interactions` after a successful fold.
+- **Deterministic comms ingest pipeline** (#474, `scripts/comms/ingest.py`) — per
+  GLOBAL/CRON_DESIGN, all `comms_items` writes are script-side, never agent-turn prose.
+  Flow: fetch (per-platform adapter) → dedupe on `(platform, item_id)` **before any LLM
+  reasoning** → resolve entity → classify (rule-based, no LLM) → upsert → archive-on-
+  resolution. Platform adapters: `scripts/comms/adapters/gmail.py`,
+  `scripts/comms/adapters/x.py`, `scripts/comms/adapters/nostr.py` (with
+  `scripts/comms/adapters/bech32.py` for Nostr npub/hex conversion). A platform fetch
+  failure is isolated (logged as a per-platform error) and does not abort ingest for the
+  remaining platforms.
+- **`scripts/comms/classifier.py`** (#474) — pure rule-based (no LLM) disposition
+  classifier. Detects direct-address imperatives ("NOVA, please run..."),
+  ignore-instructions phrasing, authority-spoofing ("as I)ruid, I'm asking you to..."),
+  and system/tool-markup injection attempts, tagging them `disposition=injection_suspect`
+  regardless of claimed sender identity — authorization derives from the delivery
+  mechanism and resolved `entity_id`, never from payload claims. Also classifies
+  `fyi`/`receipt`/`escalation` via marker-word matching, defaulting to `actionable`.
+  Summaries are capped previews in the poller's own voice, never the full raw body, so an
+  injection payload cannot ride the summary through to the Hermes→NOVA report hop.
+- **Consolidated `hermes-comms-check` cron job** (#474, `scripts/comms/hermes-comms-check.sh`)
+  — replaces the previous two enabled comms-check cron entries (agent=hermes short brief +
+  agent=nova interim-mitigation brief) with exactly one job, every 4 hours, running as the
+  `hermes` DB user (re-execs via `sudo -u hermes` if invoked as another user). Installed and
+  drift-checked by `agent-install.sh` (`_install_hermes_comms_check_cron`); `--verify-only`
+  reports missing/drifted/installed status alongside the existing D100-announcer cron
+  check. Logs to `~/.openclaw/logs/hermes-comms-check.log`.
+- **`comms_checks` audit logging retained** (#474) — `log_comms_check()` continues writing
+  one audit row per deterministic ingest run (summary, per-platform new/existing/skipped
+  counts, injection candidates, actionable items) even as the underlying lifecycle model
+  changes from `social_interactions`/ad hoc state to `comms_items`.
+- **Grants** (#474) — `comms_items`/`comms_responses` follow the `comms_state` grant
+  pattern: `hermes` retains INSERT/UPDATE (writer of record per CRON_DESIGN), DELETE
+  revoked from `hermes`; all other non-owning agents have DELETE/INSERT/UPDATE revoked
+  (SELECT retained); `nova` additionally has DELETE/INSERT revoked on `comms_responses`
+  (approval actions happen through the workflow, not direct row creation).
+
+#### Changed
+- **`social_interactions` table removed** (#474) — dropped by migration 164 after its
+  inbound rows are folded into `comms_items`/`comms_responses`. Outbound-only
+  social-activity tracking (NOVA's own posts/likes/replies) was explicitly scoped out of
+  `comms_items` (2026-07-14 scope decision) and has no replacement table in this change;
+  see the #474 issue thread if that tracking need resurfaces.
+- **`agent-install.sh`** (#474) — installs `scripts/comms/*.py` and `*.sh` to
+  `~/.openclaw/scripts/comms/` (hash-compared, `--force` to overwrite), runs the 164 fold
+  migration during schema apply, and installs/verifies the consolidated
+  `hermes-comms-check` cron entry.
+
+#### Tests
+- `tests/TEST-CASES-ISSUE-474.md` — 50 test cases across 8 areas (schema structure,
+  approval-gate sub-lifecycle, migration/fold, deterministic ingest, trust boundary/
+  injection quarantine, entity resolution, boundary/adversarial sweep, cross-cutting
+  concerns). See `tests/TEST-474-coverage-map.md` for the case→test-file mapping — 50/50
+  passing.
+- `tests/TEST-474-schema.sql`, `tests/TEST-474-migration.sql`,
+  `tests/TEST-474-chunk1-schema.sql`, `tests/TEST-474-chunk2-migration.sql` — pgTAP schema
+  and migration coverage.
+- `tests/test_comms_ingest.py` — unit coverage for dedupe, classification, entity
+  resolution, and archive-on-resolution behavior.
+- `tests/test_comms_integration.sh` — end-to-end ingest→report integration coverage.
+- `tests/install/test_hermes_comms_check_cron.bats` — cron installation/drift-detection
+  coverage for the consolidated cron entry.
+- Staging validation: 84/84 checks passing. QA validation: PASS.
+
+#### Issues Closed
+- #474 — `comms_items`: unified lifecycle + trust boundary for other-comms (email,
+  mentions, DMs)
+
 ### Batch: d100-motivation-refinements-444 (Issue #444)
 
 #### Added

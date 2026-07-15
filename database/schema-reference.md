@@ -15,13 +15,22 @@
 > **Additional drift found during the #414 documentation audit (2026-07-11), not yet
 > regenerated:** `asset_classes`, `price_cache_v2`, and `portfolio_snapshots` are listed
 > below but no longer exist in the live `nova_memory` schema (portfolio-domain tables
-> removed since this file was generated). Conversely, `social_interactions` (16 columns),
-> `user_domains` (6 columns), and `motivation_d100` (20 columns) exist in the live schema
-> but are missing from the listing below. One column count has also drifted from live:
-> `agents` is now 38 columns (listed as 37 below). `comms_checks`, `income_sources`, and
-> `music_analysis` were checked against live and still match the counts listed below (11,
-> 12, and 11 respectively) — no drift found there. Do not hand-patch these counts either —
-> this note exists so the next regeneration pass has a starting checklist.
+> removed since this file was generated). Conversely, `user_domains` (6 columns) and
+> `motivation_d100` (20 columns) exist in the live schema but are missing from the listing
+> below. One column count has also drifted from live: `agents` is now 38 columns (listed
+> as 37 below). `comms_checks`, `income_sources`, and `music_analysis` were checked against
+> live and still match the counts listed below (11, 12, and 11 respectively) — no drift
+> found there. Do not hand-patch these counts either — this note exists so the next
+> regeneration pass has a starting checklist.
+>
+> **#474 update (2026-07-15):** `social_interactions` (previously listed above as
+> live-but-missing drift) has been **removed** by migration
+> `cognition/scripts/migrations/164-fold-social-interactions-to-comms-items.sql` — its
+> inbound rows folded into two new tables, `comms_items` (unified other-comms lifecycle,
+> 12 columns) and `comms_responses` (approval-gate sub-lifecycle, 9 columns), both added
+> to the listing below. This is a genuine schema change, not a documentation-drift
+> correction — do not confuse it with the other #414 drift items above, which still need a
+> real regeneration pass.
 
 ## Tables
 
@@ -50,6 +59,8 @@
 | channel_transcripts | - | 14 |
 | comms_checks | Individual Hermes check run results. Each row = one social/email/digest check. Replaces memory/hermes-*.md files. Owner: Communications domain (hermes). | 11 |
 | comms_digests | Daily/weekly communications digests. Replaces hermes-social-digest-*.md and NOVA_Comms_Digest_*.html. Owner: Communications domain (hermes). | 11 |
+| comms_items | Unified lifecycle for asynchronous inbound communications (email, X mentions/DMs, Nostr DMs). Dedupe key `(platform, item_id)`. Replaces the inbound-lifecycle role of `social_interactions` (folded/removed by issue #474). Owner: Communications domain (hermes). | 12 |
+| comms_responses | Approval-gate sub-lifecycle for outbound responses to inbound X/Nostr mentions and DMs. 1:1 linked to `comms_items` (issue #474). Owner: NOVA Operations (approval), Communications domain (draft creation). | 9 |
 | comms_state | Per-platform communications tracking state (seen IDs, cursors). Replaces hermes-social-state.json. Owner: Communications domain (hermes). | 5 |
 | d100_roll_log | Roll history for motivation_d100 (issue #358), populated by a trigger on motivation_d100. Used by the Proactive Mode gate check to force a D100 roll after 12h regardless of other steps' state. `announced_at` (issue #432) tracks deterministic cron-based announcement to #proactive-mode, decoupled from the heartbeat LLM turn. | 4 |
 | entities | People, AIs, organizations. NOVA has full access. Use entity_facts for attributes. | 22 |

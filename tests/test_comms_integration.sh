@@ -12,6 +12,15 @@
 # file so the hermes user can authenticate to the fixture DB. Never writes to
 # nova_memory or production crontabs.
 #
+# Defense-in-depth note: The 2026-07-15 incident left ~5 orphaned dropdb
+# processes spinning for ~4h. The exact hang mechanism was never confirmed
+# because the evidence was destroyed during incident response. The
+# PGCONNECT_TIMEOUT, timeout(1) wrappers, entry-sweep, and EXIT-trap fd
+# redirection below are therefore defense-in-depth mitigations, not a fix
+# for a single confirmed root cause. If this recurs, capture
+#   ps -eo pid,ppid,pgid,stat,etime,cmd | grep -i dropdb
+# and `strace -p <pid>` on the stuck process BEFORE killing it.
+#
 # Usage:
 #   cd /home/nova/nova-mind
 #   bash tests/test_comms_integration.sh
@@ -19,6 +28,8 @@
 # Output is also tee'd to /home/nova/.openclaw/workspace/se-runs/se435-chunk5-test-output.log
 
 set -euo pipefail
+
+export PGCONNECT_TIMEOUT=10
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SE_RUNS_DIR="${HOME}/.openclaw/workspace/se-runs"
@@ -35,19 +46,38 @@ echo "Log: ${LOG_FILE}"
 
 mkdir -p "${SE_RUNS_DIR}"
 
-# Capture all subsequent stdout/stderr to the log file while still printing to terminal.
-exec > >(tee -a "${LOG_FILE}") 2>&1
-
 # Inherit no gateway PGPASSWORD so .pgpass auth works for the fixture DB.
 unset PGPASSWORD 2>/dev/null || true
 
+# Capture all subsequent stdout/stderr to the log file while still printing to terminal.
+exec > >(tee -a "${LOG_FILE}") 2>&1
+
 _cleanup() {
-    # Best-effort drop of the fixture DB.
-    if command -v dropdb >/dev/null 2>&1; then
-        dropdb -U "${PGUSER}" -h "${PGHOST}" -p "${PGPORT}" --if-exists "${TEST_DB}" 2>/dev/null || true
-    fi
+    # Best-effort drop of the fixture DB. Redirect trap output directly to the
+    # log file path; do NOT rely on the inherited exec > >(tee ...) fds.
+    {
+        echo "--- EXIT trap: dropping fixture DB ${TEST_DB} ---"
+        if command -v dropdb >/dev/null 2>&1; then
+            timeout 30 dropdb -U "${PGUSER}" -h "${PGHOST}" -p "${PGPORT}" --if-exists "${TEST_DB}" || true
+        fi
+    } >>"${LOG_FILE}" 2>&1
 }
 trap _cleanup EXIT
+
+# -----------------------------------------------------------------------------
+# Orphaned fixture database sweep (defense-in-depth for abnormal terminations)
+# -----------------------------------------------------------------------------
+
+echo ""
+echo "--- Sweeping any leftover issue474_test_* databases from prior runs ---"
+mapfile -t leftover_dbs < <(
+    psql -U "${PGUSER}" -h "${PGHOST}" -p "${PGPORT}" -d postgres -tAc \
+        "SELECT datname FROM pg_database WHERE datname LIKE 'issue474\\_test\\_%' ESCAPE '\\'" || true
+)
+for db in "${leftover_dbs[@]}"; do
+    [ -n "${db}" ] || continue
+    timeout 30 dropdb -U "${PGUSER}" -h "${PGHOST}" -p "${PGPORT}" --if-exists "${db}" || true
+done
 
 # -----------------------------------------------------------------------------
 # Disposable fixture database
@@ -55,8 +85,8 @@ trap _cleanup EXIT
 
 echo ""
 echo "--- Creating fixture database ${TEST_DB} ---"
-dropdb -U "${PGUSER}" -h "${PGHOST}" -p "${PGPORT}" --if-exists "${TEST_DB}"
-createdb -U "${PGUSER}" -h "${PGHOST}" -p "${PGPORT}" "${TEST_DB}"
+timeout 30 dropdb -U "${PGUSER}" -h "${PGHOST}" -p "${PGPORT}" --if-exists "${TEST_DB}" || true
+timeout 30 createdb -U "${PGUSER}" -h "${PGHOST}" -p "${PGPORT}" "${TEST_DB}"
 
 echo ""
 echo "--- Applying database/schema.sql ---"

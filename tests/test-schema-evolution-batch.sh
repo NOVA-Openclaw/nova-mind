@@ -7,6 +7,8 @@
 
 set -euo pipefail
 
+export PGCONNECT_TIMEOUT=10
+
 VERBOSE=0
 if [ "${1:-}" = "--verbose" ]; then
     VERBOSE=1
@@ -40,9 +42,19 @@ DB_NAME="nova_memory_test_$$"
 SRC_DB="nova_memory"
 DB_USER="nova"
 
+# Inherit no gateway PGPASSWORD so .pgpass auth works as expected.
+unset PGPASSWORD 2>/dev/null || true
+
+_cleanup() {
+    # Best-effort cleanup; redirect away from inherited stdout/stderr so this
+    # trap is safe even if the session is killed mid-flight.
+    timeout 30 dropdb --if-exists "$DB_NAME" >/dev/null 2>&1 || true
+}
+trap _cleanup EXIT
+
 info "Creating test database: $DB_NAME"
-dropdb --if-exists "$DB_NAME" 2>/dev/null || true
-createdb "$DB_NAME" 2>/dev/null || true
+timeout 30 dropdb --if-exists "$DB_NAME" 2>/dev/null || true
+timeout 30 createdb "$DB_NAME" 2>/dev/null || true
 
 # Clone schema only from source DB (ignore data, avoid permission issues on sequences)
 pg_dump --schema-only --no-owner --no-privileges "$SRC_DB" 2>/dev/null | psql -d "$DB_NAME" >/dev/null 2>&1 || true
@@ -692,7 +704,7 @@ done
 info "=== Cleanup ==="
 unset PGDATABASE
 
-dropdb --if-exists "$DB_NAME" 2>/dev/null || true
+timeout 30 dropdb --if-exists "$DB_NAME" 2>/dev/null || true
 rm -f /tmp/nova_test.dump
 
 # ── Summary ──────────────────────────────────────────────────────────────────

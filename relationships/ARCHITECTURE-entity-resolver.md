@@ -460,22 +460,32 @@ constants in source.
 
 ### Database Setup
 
-**Required Tables:**
+**Required Tables:** These tables are created by the `memory/` installer, not
+by this library — the block below is illustrative of the shape actually
+used by the resolver's queries, not a script to run directly or a full
+schema reference. It intentionally omits columns the resolver doesn't
+touch (confidence, decay, visibility, etc. — see `database/schema.sql` /
+`database/schema-reference.md` for the complete schema). Two corrections
+from earlier drafts of this doc, verified against the live schema:
+`type` has no default value (`NOT NULL`, no `DEFAULT 'person'`), and
+`entity_facts` has its own `id SERIAL PRIMARY KEY` — there is no composite
+primary key on `(entity_id, key)` (an entity can have multiple facts with
+the same key, e.g. re-confirmations).
 ```sql
--- Entities table
+-- Entities table (simplified — see database/schema.sql for full column list)
 CREATE TABLE entities (
   id SERIAL PRIMARY KEY,
   name VARCHAR(255) NOT NULL,
   full_name VARCHAR(255),
-  type VARCHAR(50) DEFAULT 'person'
+  type VARCHAR(50) NOT NULL
 );
 
--- Entity facts table
+-- Entity facts table (simplified — see database/schema.sql for full column list)
 CREATE TABLE entity_facts (
+  id SERIAL PRIMARY KEY,
   entity_id INTEGER REFERENCES entities(id),
   key VARCHAR(255) NOT NULL,
-  value TEXT,
-  PRIMARY KEY (entity_id, key)
+  value TEXT NOT NULL
 );
 
 -- Indexes for performance

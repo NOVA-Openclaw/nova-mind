@@ -79,19 +79,25 @@ Agents can query the trust network:
 ### Current Components
 
 ✅ **NOVA Root CA**
-- Operational certificate authority
-- Client certificate signing
+- Operational certificate authority (manually initialized per
+  `skills/certificate-authority/SKILL.md`; `agent-install.sh` verifies but
+  does not create it — see `README.md`)
+- Client certificate signing (`nova-ca/sign-client-csr.sh`)
 - OpenSSL-based infrastructure
 
-✅ **mTLS Authentication**
-- Nginx configuration for client certificates
-- Certificate validation in applications
-- CN extraction for identity resolution
+📋 **mTLS Authentication** (Not yet implemented in this repo)
+- No Nginx configuration or other server-side mTLS enforcement exists in
+  this repo. `docs/integration-guide.md`'s Express middleware example
+  (`X-SSL-Client-CN` header extraction, `req.socket.getPeerCertificate()`)
+  is illustrative sample code, not a shipped integration.
+- CN extraction for identity resolution is likewise illustrative only
+  (no such code exists in `lib/entity-resolver/`).
 
-🧪 **Trust Protocols** (Experimental)
-- Basic vouch format defined
-- Signature verification prototype
-- Trust path calculation algorithms
+🧪 **Trust Protocols** (Experimental / design-only)
+- Basic vouch format defined below (design sketch, not implemented)
+- Signature verification and trust path calculation are design sketches
+  in this document — no corresponding code exists in `lib/entity-resolver/`
+  or elsewhere in this repo
 
 📋 **Planned Features**
 - Automated trust discovery

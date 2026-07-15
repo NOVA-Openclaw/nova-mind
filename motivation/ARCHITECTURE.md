@@ -264,7 +264,7 @@ with an ad hoc 3-day cooldown. That logic is now split into two distinct concern
 
 Cascade level for a given blocker = count of prior `proactive_outreach` rows for
 `(entity_id, 'blocker', blocker_id)` + 1. Levels map onto that entity's available contact
-channels, in escalation order: `discord_mention → discord_dm → signal → slack → email`,
+channels, in escalation order: `discord_channel → discord_dm → signal → slack → email`,
 skipping any channel missing from `entity_facts`. Entities that are agents (a row exists in
 `agents` with a matching `entity_id`) always use `agent_chat` instead, regardless of level.
 

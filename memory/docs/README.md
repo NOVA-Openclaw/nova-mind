@@ -120,7 +120,7 @@ WHERE to_tsvector(content) @@ plainto_tsquery('brooklyn pizza');"
 
 ### 🧠 Intelligent Memory Extraction
 - Processes natural language conversations automatically
-- Extracts 8 categories: entities, facts, events, relationships, preferences, opinions, places, vocabulary
+- Extracts 4 top-level categories: `facts`, `entities`, `events`, `vocabulary` (preferences, opinions, decisions, moods, and routines are all stored as `facts` rows, disambiguated via the `category` field — see `extract_memories.py`'s current extraction template)
 - 20-message rolling context window for reference resolution
 - Real-time deduplication prevents data corruption
 

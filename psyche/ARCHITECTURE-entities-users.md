@@ -55,13 +55,10 @@ The core table for all tracked entities.
 CHECK (type IN ('person', 'ai', 'organization', 'pet', 'stuffed_animal', 'character', 'other'))
 ```
 
-**Current Distribution:**
-| Type | Count |
-|------|-------|
-| organization | 151 |
-| person | 94 |
-| ai | 68 |
-| stuffed_animal | 1 |
+**Current Distribution:** The `entities` table is under continuous growth (new rows created on essentially every active day), so a fixed snapshot table goes stale quickly. `person` and `organization` are consistently the largest categories, followed by `ai`; `pet`, `stuffed_animal`, and `character` rows are rare or currently absent. For an up-to-date breakdown, run:
+```sql
+SELECT type, COUNT(*) FROM entities GROUP BY type ORDER BY COUNT(*) DESC;
+```
 
 ### entity_facts table
 

@@ -273,7 +273,7 @@ The unified installer (`agent‑install.sh`) is idempotent and declarative:
 - **Gateway Integration:** Automatically restarts the OpenClaw gateway after installation (unless `--no‑restart`)
 - **Plugin Config Preservation:** Plugin entries written to `openclaw.json` use a merge pattern (`existing // {} * installer_defaults`) so any custom settings configured outside the installer are preserved on reinstall.
 - **Idempotent Plugin Directory Installs:** When copying directory entries (e.g., `src/`) into an existing plugin target, the installer removes the target directory first to prevent POSIX `cp -r` nesting (`src/src/`) on subsequent installs.
-- **Nova Data Directory:** `NOVA_DIR="$HOME/.local/share/nova"` is declared in the path constants block and is used for `shell-aliases.sh` and the Python venv (`~/.local/share/nova/venv/`) consumed by motivation scripts.
+- **Nova Data Directory:** `NOVA_DIR="$HOME/.local/share/nova"` is declared in the path constants block and is used for `shell-aliases.sh`. The Python venv consumed by motivation scripts is a separate path, `VENV_DIR="$HOME/.local/share/$USER/venv"` (per-Unix-user, not under `NOVA_DIR`).
 
 ### Shared Libraries (`lib/`)
 

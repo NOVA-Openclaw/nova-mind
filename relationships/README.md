@@ -195,9 +195,8 @@ If all checks pass, it execs `agent-install.sh` with any flags you passed throug
 
 This is the actual installer. It:
 - Verifies database schema (requires tables from the `memory/` module)
-- Installs the entity-resolver TypeScript library
-- Sets up the certificate-authority skill
-- Configures the NOVA CA infrastructure
+- Installs the entity-resolver TypeScript library (`npm install` in `lib/entity-resolver/`)
+- Verifies the certificate-authority skill and NOVA CA are present (checks `$WORKSPACE/skills/certificate-authority/` and `nova-ca/certs/ca.crt` / `nova-ca/private/ca.key`; sets `chmod 700` on `nova-ca/private/` and `chmod +x` on `sign-client-csr.sh` if present) — it does **not** create the skill files or initialize the CA itself. If the CA is not yet initialized, it prints a pointer to `skills/certificate-authority/SKILL.md` for manual setup.
 - Verifies all components are working
 
 **Common flags** (passed through `shell-install.sh` or directly to `agent-install.sh`):
@@ -282,10 +281,14 @@ npx tsx test.ts  # Verify functionality (there is no `npm test` script in packag
 
 ### Certificate Authority Setup
 
-> **Note:** There is no `setup-ca.sh` in `nova-ca/`. The CA is initialized by
-> the `relationships/agent-install.sh` installer (not a standalone script in
-> `nova-ca/`), and `nova-ca/certs/` already contains an initialized `ca.crt`
-> in this checkout. The only script under `nova-ca/` is `sign-client-csr.sh`,
+> **Note:** There is no `setup-ca.sh` in `nova-ca/`. `agent-install.sh` does
+> **not** initialize the CA — it only verifies an existing CA (checks for
+> `nova-ca/certs/ca.crt` and `nova-ca/private/ca.key`, sets `chmod 700` on
+> `nova-ca/private/`) and, if not yet initialized, prints a pointer to
+> `skills/certificate-authority/SKILL.md` for the manual `openssl genrsa` /
+> `openssl req -x509` init steps. `nova-ca/certs/` already contains an
+> initialized `ca.crt` in this checkout (created manually per the skill's
+> instructions). The only script under `nova-ca/` is `sign-client-csr.sh`,
 > used to sign an already-generated client CSR against the existing CA.
 
 ```bash

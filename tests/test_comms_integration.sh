@@ -21,6 +21,10 @@
 #   ps -eo pid,ppid,pgid,stat,etime,cmd | grep -i dropdb
 # and `strace -p <pid>` on the stuck process BEFORE killing it.
 #
+# Note: A mid-setup kill (e.g. SIGKILL during createdb) can leave the fixture
+# database behind until the next run's entry-sweep removes it. This is expected
+# behavior, not a bug.
+#
 # Usage:
 #   cd /home/nova/nova-mind
 #   bash tests/test_comms_integration.sh
@@ -78,6 +82,17 @@ for db in "${leftover_dbs[@]}"; do
     [ -n "${db}" ] || continue
     timeout 30 dropdb -U "${PGUSER}" -h "${PGHOST}" -p "${PGPORT}" --if-exists "${db}" || true
 done
+
+# -----------------------------------------------------------------------------
+# Fast hermes auth probe (stale .pgpass fails fast here, not 40 cases in)
+# -----------------------------------------------------------------------------
+
+echo ""
+echo "--- Probing hermes .pgpass auth against nova_memory ---"
+if ! PGPASSFILE="${HOME}/.pgpass" timeout 30 psql -U hermes -d nova_memory -h "${PGHOST}" -p "${PGPORT}" -c 'SELECT 1' >/dev/null 2>&1; then
+    echo "ERROR: hermes .pgpass auth is stale/broken — fix before running suite" >&2
+    exit 1
+fi
 
 # -----------------------------------------------------------------------------
 # Disposable fixture database

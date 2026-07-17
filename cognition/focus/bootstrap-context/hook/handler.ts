@@ -49,9 +49,11 @@ const { Pool } = pg;
 // graceful fallback instead of an uncaught module-load exception.
 let pool: pg.Pool | null = null;
 
+let PoolConstructor: new (...args: any[]) => pg.Pool = Pool;
+
 function getPool(): pg.Pool {
   if (!pool) {
-    pool = new Pool({
+    pool = new PoolConstructor({
       ...pgConfig,
       max: 5,
       idleTimeoutMillis: 30000,
@@ -195,6 +197,18 @@ Operate in safe mode until context is restored.
 `
   }];
 }
+
+/**
+ * Test-only hooks. Exposed so the synchronous getPool() throw path and the
+ * hardcoded pg-env fallback can be exercised without restructuring the hook.
+ */
+export const __testing = {
+  getPool,
+  loadFromDatabase,
+  getPgConfig: () => pgConfig,
+  resetPool: () => { pool = null; },
+  setPoolConstructor: (ctor: new (...args: any[]) => pg.Pool) => { PoolConstructor = ctor; },
+};
 
 /**
  * Main hook handler

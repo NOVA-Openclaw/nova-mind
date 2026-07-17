@@ -21,11 +21,16 @@ patterns = [
   # --- victoria_memory trading-desk domain tables ---
   # Victoria's chess-themed trading pipeline book of record.
   # Dropping these destroys her entire trading operation state.
+  "asset_classes",
   "cash_ledger",
   "instruments",
+  "open_orders",
+  "order_adjustments",
   "portfolio_asset_classes",
+  "portfolio_snapshots",
   "portfolios",
   "positions",
+  "price_cache_v2",
   "strategies",
   "strategy_notes",
   "trades"

@@ -14,7 +14,7 @@ import { homedir, userInfo } from 'os';
 import {
   detectBootstrapOverride,
   pgEnvUnavailableWarning,
-} from './bootstrap-pg-config.js';
+} from './bootstrap-pg-config.ts';
 
 // Load PG config from postgres.json without polluting process.env.
 // An optional `bootstrap` section overrides the primary DB for bootstrap

@@ -27,7 +27,7 @@ function makeTempHome(): string {
 
 describe("TC-19: loadFromDatabase catches synchronous getPool() throw", { concurrency: false }, () => {
   it("returns { ok: false, files: [] } when the Pool constructor throws", async () => {
-    const { __testing } = await import("./handler.js?tc=19");
+    const { __testing } = await import("./handler.ts?tc=19");
 
     __testing.setPoolConstructor(
       class {
@@ -62,7 +62,7 @@ describe("TC-02: pg-env.ts unavailable with no override uses hardcoded fallback"
   });
 
   it("keeps the literal fallback pgConfig when pg-env.ts cannot be loaded", async () => {
-    const { __testing } = await import("./handler.js?tc=02");
+    const { __testing } = await import("./handler.ts?tc=02");
     assert.deepStrictEqual(__testing.getPgConfig(), FALLBACK_CONFIG);
   });
 });

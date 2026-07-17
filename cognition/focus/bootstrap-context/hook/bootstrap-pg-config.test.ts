@@ -15,7 +15,7 @@ import path from "node:path";
 import {
   detectBootstrapOverride,
   pgEnvUnavailableWarning,
-} from "./bootstrap-pg-config.js";
+} from "./bootstrap-pg-config.ts";
 
 function writeJson(filePath: string, data: unknown) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });

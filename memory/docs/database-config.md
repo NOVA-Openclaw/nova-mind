@@ -24,8 +24,14 @@ All fields are optional. Missing fields fall through to environment variables or
 
 Since nova-mind#330/#320, `postgres.json` can carry additional named, nested
 objects alongside the flat top-level keys — one per additional database a
-component needs to reach. The primary current consumer is **`agent_chat`**
-(#320: `agent_chat` moved out of `nova_memory` into its own dedicated database):
+component needs to reach. Current consumers are **`agent_chat`**
+(#320: `agent_chat` moved out of `nova_memory` into its own dedicated database)
+and **`bootstrap`** (#488: lets the db-bootstrap-context hook query a
+different database than an agent's primary DB, so a split agent like
+`newhart` — whose primary DB is `newhart_memory` — can still load
+`agent_bootstrap_context` rows from `nova_memory`; see
+`cognition/focus/bootstrap-context/hook/HOOK.md` for the hook-side detail,
+including unknown-key handling that `loadPgEnv()` itself does not provide):
 
 ```json
 {

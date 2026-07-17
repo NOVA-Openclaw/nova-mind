@@ -104,8 +104,8 @@ export function loadPgEnv(
   const result: PgConnectionConfig = {};
 
   for (const [jsonKey, envVar] of FIELD_MAP) {
-    // 1. Check ENV (empty string = unset)
-    const envVal = process.env[envVar];
+    // 1. Check ENV (empty string = unset, whitespace-only = unset)
+    const envVal = process.env[envVar]?.trim();
     if (envVal) {
       if (jsonKey === "port") {
         const portNum = Number(envVal);
@@ -116,11 +116,11 @@ export function loadPgEnv(
       continue;
     }
 
-    // 2. Check section config (null/undefined = absent, empty string = absent)
+    // 2. Check section config (null/undefined = absent, empty/whitespace = absent)
     if (sectionConfig) {
       const sectionVal = sectionConfig[jsonKey];
       if (sectionVal != null) {
-        const strVal = String(sectionVal);
+        const strVal = String(sectionVal).trim();
         if (strVal) {
           if (jsonKey === "port") {
             const portNum = Number(strVal);
@@ -133,10 +133,10 @@ export function loadPgEnv(
       }
     }
 
-    // 3. Check top-level config file (null/undefined = absent, empty string = absent)
+    // 3. Check top-level config file (null/undefined = absent, empty/whitespace = absent)
     const cfgVal = config[jsonKey];
     if (cfgVal != null) {
-      const strVal = String(cfgVal);
+      const strVal = String(cfgVal).trim();
       if (strVal) {
         if (jsonKey === "port") {
           const portNum = Number(strVal);

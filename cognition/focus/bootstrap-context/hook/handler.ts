@@ -11,9 +11,17 @@ import { readFile } from 'fs/promises';
 import pg from 'pg';
 import { join } from 'path';
 import { homedir, userInfo } from 'os';
+import {
+  detectBootstrapOverride,
+  pgEnvUnavailableWarning,
+} from './bootstrap-pg-config.js';
 
-// Load PG config from postgres.json without polluting process.env
+// Load PG config from postgres.json without polluting process.env.
+// An optional `bootstrap` section overrides the primary DB for bootstrap
+// context lookups, allowing split agents (e.g. newhart → newhart_memory)
+// to still query agent_bootstrap_context from nova_memory.
 // See: https://github.com/NOVA-Openclaw/nova-mind/issues/330
+// See: https://github.com/NOVA-Openclaw/nova-mind/issues/488
 const pgEnvPath = join(homedir(), '.openclaw', 'lib', 'pg-env.ts');
 let pgConfig: { host?: string; port?: number; database?: string; user?: string; password?: string } = {
   host: 'localhost',
@@ -21,22 +29,37 @@ let pgConfig: { host?: string; port?: number; database?: string; user?: string; 
   database: 'nova_memory',
   user: userInfo().username,
 };
+
+const bootstrapOverride = detectBootstrapOverride(homedir());
+
 try {
   const { loadPgEnv } = await import(pgEnvPath);
-  pgConfig = loadPgEnv();
+  pgConfig = loadPgEnv(undefined, 'bootstrap');
+  for (const key of bootstrapOverride.unknownKeys) {
+    console.warn(`[bootstrap-context] Unknown key "${key}" in postgres.json bootstrap section — ignoring`);
+  }
 } catch (e) {
-  console.warn('[bootstrap-context] Could not load pg-env.ts:', (e as Error).message);
+  console.warn(pgEnvUnavailableWarning(bootstrapOverride.configured, e as Error));
 }
 
 const { Pool } = pg;
 
-// Create connection pool (reused across invocations)
-const pool = new Pool({
-  ...pgConfig,
-  max: 5,
-  idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 5000,
-});
+// Singleton connection pool (reused across invocations). Created lazily so
+// a bad override config that makes the constructor throw is caught as a
+// graceful fallback instead of an uncaught module-load exception.
+let pool: pg.Pool | null = null;
+
+function getPool(): pg.Pool {
+  if (!pool) {
+    pool = new Pool({
+      ...pgConfig,
+      max: 5,
+      idleTimeoutMillis: 30000,
+      connectionTimeoutMillis: 5000,
+    });
+  }
+  return pool;
+}
 
 interface BootstrapFile {
   path: string;
@@ -63,9 +86,17 @@ interface DbResult {
  * is per-call (did the query succeed?), never per-file.
  */
 async function loadFromDatabase(agentName: string): Promise<DbResult> {
+  let poolInstance: pg.Pool;
+  try {
+    poolInstance = getPool();
+  } catch (error) {
+    console.error('[bootstrap-context] Failed to create PostgreSQL pool:', (error as Error).message);
+    return { ok: false, files: [] };
+  }
+
   let client;
   try {
-    client = await pool.connect();
+    client = await poolInstance.connect();
     const result = await client.query(
       'SELECT * FROM get_agent_bootstrap($1)',
       [agentName]

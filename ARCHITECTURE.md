@@ -221,6 +221,7 @@ Return entity + profile for personalization
 | `memory_embeddings` | Memory | Vector embeddings for semantic search | `source_type`, `source_id`, `embedding` (vector(1024)) |
 | `channel_sessions` | Memory | Structured chat session records (replaces deprecated `conversations` table) | `provider`, `external_chat_id`, `chat_type`, `message_count`, `last_message_at` |
 | `channel_transcripts` | Memory | Individual message transcripts with FK source pointers to `entity_facts` | `session_id`, `external_message_id`, `sender_entity_id`, `content` |
+| `extraction_failures` | Memory | Dead-letter store for failed memory extractions ([#485](https://github.com/NOVA-Openclaw/nova-mind/issues/485)), replayable via `extraction-replay.sh` | `channel_transcript_id`, `content`, `stderr_tail`, `failure_reason`, `status`, `retry_count` |
 | `certificates` | Relationships | Client certificates for agent auth | `common_name`, `certificate`, `issued_at`, `expires_at` |
 
 **Note:** The complete schema (`database/schema.sql`) contains ~100 tables; the above highlights the core inter‑subsystem tables.
@@ -233,7 +234,7 @@ nova‑mind integrates with OpenClaw via hooks that run on gateway events:
 
 | Hook / Plugin | Event | Purpose |
 |--------------|-------|---------|
-| `memory‑extract` (hook) | `message:received` | Extract structured memories from natural language using Claude. Real-time upserts `channel_sessions`/`channel_transcripts` rows and passes FK IDs as env vars to the extraction pipeline for source attribution. |
+| `memory‑extract` (hook) | `message:received` | Extract structured memories from natural language using Claude. Real-time upserts `channel_sessions`/`channel_transcripts` rows and passes FK IDs as env vars to the extraction pipeline for source attribution. On extraction failure (nonzero exit, timeout, or spawn error), writes a dead-letter row to `extraction_failures` instead of discarding the message ([#485](https://github.com/NOVA-Openclaw/nova-mind/issues/485)); replayable via `memory/scripts/extraction-replay.sh`. |
 | `session‑init` (hook) | `session:init` | Generate privacy‑filtered context when sessions start |
 | **turn-context** (Plugin SDK) | `before_prompt_build` | Consolidates old `semantic-recall` + `agent-turn-context` hooks. Runs entity resolution, vector search, and turn-reminder injection in parallel. [Source](memory/plugins/turn-context/) |
 

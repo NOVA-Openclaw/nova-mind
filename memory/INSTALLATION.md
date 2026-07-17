@@ -250,6 +250,7 @@ Created `install.sh` - a fully idempotent installer that:
 - Verifies Python dependencies (psycopg2, anthropic, openai)
 - Reports missing dependencies with install command
 - Installs `generate-daily-log.py` plus two cron entries (nightly + intraday) by default — opt out with `--no-cron`. See [Daily Log Generation](docs/daily-log-generation.md).
+- Deploys `memory/scripts/extraction-replay.sh` (nova-mind#485) to `~/.openclaw/scripts/` via the generic scripts-copy step above — no dedicated cron entry is installed for it (unlike `generate-daily-log.py`); add one manually if scheduled replay is desired. See [Memory Extraction Pipeline](docs/memory-extraction-pipeline.md#1a-failure-handling-extraction_failures-dead-letter-table--replay-485).
 
 #### Verification
 - Tests database connection

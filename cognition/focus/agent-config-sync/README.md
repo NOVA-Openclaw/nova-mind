@@ -75,7 +75,7 @@ On startup, the plugin performs an **initial sync** for both `agents.json` and a
 | `default` | `agents.is_default` | `true` only when `is_default = true`; key **omitted** otherwise |
 | `model` | `agents.model` + `agents.fallback_models` | String when no fallbacks; object `{ primary, fallbacks }` when fallbacks present |
 | `subagents.allowAgents` | `agents.allowed_subagents` | Included when non-empty, sorted alphabetically |
-| `heartbeat` | `agents.heartbeat_enabled`, `heartbeat_every`, `heartbeat_target`, `heartbeat_to` | Object `{ every, target, to }` (non-NULL fields only) when `heartbeat_enabled = true`; `false` when disabled. **Every agent gets an explicit key — never omitted.** |
+| `heartbeat` | `agents.heartbeat_enabled`, `heartbeat_every`, `heartbeat_target`, `heartbeat_to` | Object `{ every, target, to }` (non-NULL fields only) when `heartbeat_enabled = true`. **Key is omitted entirely** when `heartbeat_enabled` is `false` or `NULL` (fixed in #273 — OpenClaw's schema requires an object or no key at all, never a boolean `false`). |
 
 **Not included in output:**
 - Models allowlist (`agents.defaults.models`) — stays in `openclaw.json`

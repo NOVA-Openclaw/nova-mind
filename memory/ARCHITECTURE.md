@@ -64,6 +64,7 @@ This is the source of truth for persistent information.
 | `memory_type_priorities` | Priority weights for semantic recall by source_type |
 | `channel_sessions` | Structured chat session records — one row per provider+chat+thread. Replaces legacy JSONL file storage and the deprecated `conversations` table. |
 | `channel_transcripts` | Individual message transcripts linked to `channel_sessions`. FK source for `entity_facts.source_channel_transcript_id`. |
+| `extraction_failures` | Dead-letter store for failed memory extractions (#485) — nonzero exit, timeout, or spawn error. FK to `channel_transcripts` (`ON DELETE SET NULL`) with a raw-body fallback column. Replayed via `memory/scripts/extraction-replay.sh`. See `memory/docs/memory-extraction-pipeline.md#1a-failure-handling-extraction_failures-dead-letter-table--replay-485`. |
 
 #### Entity Facts Access Control Columns
 
@@ -219,12 +220,16 @@ Incoming message → memory-extract hook → extract_memories.py (Claude extract
                                           facts/entities/events/vocabulary in one pass,
                                           LLM judges durability/category/confidence)
                                        → PostgreSQL
+                                          (on failure: extraction_failures dead-letter
+                                           row, replayable via extraction-replay.sh — #485)
 
 Catch-up path (separate cadence, check crontab for current schedule):
 Session JSONL files → memory-catchup.sh
                     → channel_sessions + channel_transcripts (DB ingest)
                     → delete source JSONL files
 ```
+
+**Failure handling (#485):** The `memory-extract` hook captures capped (16KB) stderr/stdout tails from the `extract_memories.py` child process, enforces a 30-second timeout (SIGTERM then SIGKILL after a 5s grace period), and on nonzero exit / timeout / spawn error writes a row to the `extraction_failures` dead-letter table rather than discarding the message. `memory/scripts/extraction-replay.sh` (flock-guarded, rate-limited) replays pending rows, distinguishing `nonzero_exit`/`timeout`/`spawn_error`/`unreplayable` failure reasons and retiring rows to `retry_exhausted` after `EXTRACTION_REPLAY_MAX_RETRIES` (default 5) failed attempts. Full detail: `memory/docs/memory-extraction-pipeline.md`.
 
 > **Note:** `extract-memories.sh` and `store-memories.sh` (the old two-script shell pipeline this diagram used to describe) were removed as part of the #174 grammar-parser removal and consolidated into `memory/scripts/extract_memories.py`. See `memory/docs/memory-extraction-pipeline.md` for the current pipeline, including a known bug where `memory-catchup.sh` still calls a nonexistent `process-input.sh`.
 

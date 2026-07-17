@@ -34,30 +34,25 @@ LISTEN/NOTIFY-driven sync that writes `~/.openclaw/agents.json`.
 
 ## Output Format (`agents.json`)
 
+`agents.json` is a **bare JSON array** (since #244) — there is no wrapping
+`{"agents": {...}}` object. `openclaw.json` uses `"$include": "./agents.json"`
+at the `agents.list` level to splice the array in.
+
 ```json
-{
-  "agents": {
-    "defaults": {
-      "models": {
-        "openrouter/anthropic/claude-opus-4.6": {},
-        "openrouter/google/gemini-3-flash-preview": {}
-      }
-    },
-    "list": [
-      {
-        "id": "coder",
-        "model": {
-          "primary": "openrouter/anthropic/claude-sonnet-4.6",
-          "fallbacks": ["openrouter/openai/gpt-5.2-codex"]
-        }
-      },
-      {
-        "id": "gem",
-        "model": "openrouter/google/gemini-3-flash-preview"
-      }
-    ]
+[
+  {
+    "id": "coder",
+    "model": {
+      "primary": "openrouter/anthropic/claude-sonnet-4.6",
+      "fallbacks": ["openrouter/openai/gpt-5.2-codex"]
+    }
+  },
+  {
+    "id": "gem",
+    "model": "openrouter/google/gemini-3-flash-preview",
+    "default": true
   }
-}
+]
 ```
 
 ### Rules
@@ -67,8 +62,13 @@ LISTEN/NOTIFY-driven sync that writes `~/.openclaw/agents.json`.
 | No fallbacks (NULL or `{}`) | Plain string: `"openrouter/..."` |
 | Has fallbacks | Object: `{ "primary": "...", "fallbacks": ["..."] }` |
 
-- `agents.defaults.models` is an allow-list of **all** unique models
-  (primaries + every fallback).
+- `agents.defaults.models` (the model allow-list) is **not** written by this
+  plugin — it stays in `openclaw.json` and is managed there directly.
+- `default: true` is included only when `is_default = true` for that row; the
+  key is omitted otherwise.
+- `subagents.allowAgents` (from `allowed_subagents`) and `heartbeat` (from the
+  `heartbeat_*` columns) are also included per-entry when applicable — see
+  `README.md` in this directory for the full field reference.
 - Results are scoped per-gateway: `get_agent_export_rows()` returns the connecting
   peer's own row (as `is_default = TRUE`) plus subagents linked to that peer via
   `parent_agents` array overlap. Peers and their own subagents both appear in their

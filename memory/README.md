@@ -770,6 +770,16 @@ Output shape (current extraction template — see the script for the authoritati
 
 This was the combined extract → store entry point in the old pipeline. It no longer exists — `extract_memories.py` is invoked directly by the `memory-extract` hook instead of via a CLI wrapper.
 
+### Failure Recovery: extraction_failures + extraction-replay.sh (#485)
+
+If the `memory-extract` hook's `extract_memories.py` child process exits nonzero, times out (30s), or fails to spawn, the message is no longer silently lost. The hook writes a dead-letter row to the `extraction_failures` table (message body or transcript FK, captured stderr/stdout tails, failure reason) and `memory/scripts/extraction-replay.sh` can replay pending rows later:
+
+```bash
+~/.openclaw/scripts/extraction-replay.sh
+```
+
+Full mechanism, schema, and state machine: `memory/docs/memory-extraction-pipeline.md#1a-failure-handling-extraction_failures-dead-letter-table--replay-485`.
+
 ## Environment Variables
 
 - `ANTHROPIC_API_KEY` - Required for `extract_memories.py`

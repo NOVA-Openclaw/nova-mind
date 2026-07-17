@@ -510,7 +510,7 @@ CREATE TABLE memory_embeddings (
     source_type VARCHAR(50), -- agent_chat, entity_fact, event, lesson, library, etc.
     source_id TEXT, -- ID in source table
     content TEXT NOT NULL, -- Text that was embedded
-    embedding VECTOR(1536), -- OpenAI text-embedding-3-small dimension
+    embedding VECTOR(1024), -- Ollama snowflake-arctic-embed2 dimension (see embedding-config.json)
     confidence REAL DEFAULT 1.0,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()

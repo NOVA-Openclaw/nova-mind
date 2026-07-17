@@ -1,0 +1,84 @@
+# Issue #485 — Integrated Test Results
+# Repository: nova-mind
+# Branch: feature/issue-485-extraction-dead-letter
+# Generated: 2026-07-17T03:11:30Z
+
+## Summary
+
+All 32 test cases from tests/TEST-CASES-ISSUE-485.md executed across the three
+implementation chunks.  Total assertions: 88 PASS / 0 FAIL.
+
+## Chunk Results
+
+| Chunk | Script | Test Cases | Assertions | PASS | FAIL |
+|-------|--------|------------|------------|------|------|
+| 1 — Migration | validate-migration.sh | TC-D2, TC-D3, TC-D4 | 17 | 17 | 0 |
+| 2 — Handler | test-handler.js | TC-A1,A2, B1-B6, C1-C6, D1, D11, E1-E3, F1-F3 | 52 | 52 | 0 |
+| 3 — Replay | test-replay.sh | TC-D5-D10, TC-D12 | 19 | 19 | 0 |
+| **Total** | | **32** | **88** | **88** | **0** |
+
+## Per-Chunk Detail
+
+### Chunk 1 — Migration (validate-migration.sh)
+
+Covers:
+- TC-D3: Migration re-run idempotency
+- TC-D4: Migration schema conformance (id PK, TIMESTAMPTZ, FK ON DELETE SET NULL,
+  CHECK constraints, named indexes, table comment)
+- TC-D2: Session delete cascades to transcripts but dead-letter row survives
+  with channel_transcript_id set to NULL
+
+Result: PASS=17 FAIL=0
+See: tests/issue-485/TEST-RESULTS-chunk1-migration.log
+
+### Chunk 2 — Handler (test-handler.js)
+
+Covers:
+- TC-A1/A2: Happy path (no dead-letter on exit 0, even with stderr warnings)
+- TC-B1/B2/B3: Nonzero exit, spawn error, timeout kill all produce dead-letter rows
+  with distinguishable failure_reason values
+- TC-B4/B5/B6: psql upsert failures are logged (no silent catch), body fallback used
+  when FK resolution fails
+- TC-C1/C2/C3/C4/C5/C6: stderr/stdout cap (16384 bytes), no pipe stall, boundary
+  conditions, empty stderr, interleaved streams
+- TC-D1: Pre-existing transcript + failure -> FK recovered, not body fallback
+- TC-D11: Pre-existing transcript + timeout -> FK recovered, failure_reason=timeout
+- TC-E1/E2/E3: stderr tail in logs, no secrets leaked, senderId truncation preserved
+- TC-F1/F2/F3: No bare silent catches remain, early-return paths untouched,
+  activity tracking unaffected
+
+Result: PASS=52 FAIL=0
+See: tests/issue-485/TEST-RESULTS-chunk2-handler.log
+
+### Chunk 3 — Replay (test-replay.sh)
+
+Covers:
+- TC-D10: Script sources env-loader.sh + pg-env.sh (static check)
+- TC-D6: FK-row body reconstructed from transcript; fallback-row body uses stored content
+- TC-D9: Successful replay marks row resolved with populated resolved_at
+- TC-D8: retry_count increments; exhausted row marked retry_exhausted and skipped
+  on subsequent runs
+- TC-D7: BATCH_LIMIT rate limits processed rows per invocation
+- TC-D12: NULL FK + NULL body rows marked unreplayable (terminal state), retry_count
+  unchanged, siblings processed normally
+- TC-D5: flock overlapping-run protection
+
+Result: PASS=19 FAIL=0
+See: tests/issue-485/TEST-RESULTS-chunk3-replay.log
+
+## Files in this change
+
+- memory/migrations/085_extraction_failures.sql   (chunk 1)
+- memory/hooks/memory-extract/handler.ts          (chunk 2)
+- memory/scripts/extraction-replay.sh             (chunk 3)
+- tests/issue-485/validate-migration.sh
+- tests/issue-485/test-handler.js
+- tests/issue-485/test-replay.sh
+- tests/issue-485/TEST-RESULTS-chunk1-migration.log
+- tests/issue-485/TEST-RESULTS-chunk2-handler.log
+- tests/issue-485/TEST-RESULTS-chunk3-replay.log
+- tests/issue-485/TEST-RESULTS-integrated.log
+
+## Conclusion
+
+Issue #485 implementation is complete and all test cases pass.

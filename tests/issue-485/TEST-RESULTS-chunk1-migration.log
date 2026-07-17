@@ -1,6 +1,6 @@
-[issue-485:chunk1] Migration validation started at 2026-07-17T02:36:12Z
+[issue-485:chunk1] Migration validation started at 2026-07-17T03:10:03Z
 [issue-485:chunk1] Migration file: /home/nova/.openclaw/workspace/nova-mind/memory/migrations/085_extraction_failures.sql
-[issue-485:chunk1] Log file: /home/nova/.openclaw/workspace/nova-mind/tests/issue-485/TEST-RESULTS-chunk1-migration.log
+[issue-485:chunk1] Log file: /tmp/issue485-migration-ymceEx.log
 [issue-485:chunk1] TC-D3: applying migration (first run) as nova...
 NOTICE:  relation "extraction_failures" already exists, skipping
 NOTICE:  relation "idx_extraction_failures_status" already exists, skipping
@@ -51,7 +51,7 @@ idx_extraction_failures_channel_transcript_id
 idx_extraction_failures_created_at
 idx_extraction_failures_replay_order
 idx_extraction_failures_status
-[issue-485:chunk1] TC-D2: testing cascade-delete survival with session_key=issue485-tc-d2-1784255773074840352
+[issue-485:chunk1] TC-D2: testing cascade-delete survival with session_key=issue485-tc-d2-1784257804442779716
 INSERT 0 1
 INSERT 0 1
 INSERT 0 1
@@ -61,4 +61,4 @@ PASS: TC-D2: dead-letter row survives session delete
 PASS: TC-D2: channel_transcript_id is NULL after cascade
 DELETE 1
 [issue-485:chunk1] Summary: PASS=17 FAIL=0
-[issue-485:chunk1] Validation finished at 2026-07-17T02:36:13Z
+[issue-485:chunk1] Validation finished at 2026-07-17T03:10:04Z

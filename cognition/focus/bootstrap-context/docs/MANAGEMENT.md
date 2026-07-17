@@ -146,6 +146,45 @@ WHERE context_type = 'AGENT' AND domain_name = 'agent_name' AND file_key = 'FILE
 
 Bootstrap system configuration is no longer stored in the database. The system is always active when the hook is installed.
 
+### Bootstrap Database Override
+
+By default the hook reads connection settings from the flat keys in
+`~/.openclaw/postgres.json`. Agents that have split to their own primary
+database (for example `newhart_memory`) can add a `bootstrap` section so the
+hook still queries `agent_bootstrap_context` from `nova_memory`:
+
+```json
+{
+  "host": "localhost",
+  "port": 5432,
+  "database": "newhart_memory",
+  "user": "newhart",
+  "password": "",
+  "bootstrap": {
+    "database": "nova_memory"
+  }
+}
+```
+
+Resolution is **per-field** in this order:
+
+1. `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGPASSWORD` environment variables
+2. Matching key inside the `bootstrap` section
+3. Matching flat/top-level key in `postgres.json`
+4. Built-in defaults
+
+Only override the fields that differ. In the example above the agent's normal
+PG operations use `newhart_memory`, but the bootstrap hook queries
+`nova_memory`.
+
+**Important:** environment variables always win. A stray `PGDATABASE` will
+silently override `bootstrap.database` and send bootstrap queries to the wrong
+database. Check `env` and `openclaw.json env.vars` when debugging an override
+that does not appear to take effect.
+
+Unknown keys in the `bootstrap` section are ignored with a warning that names
+the offending key. Whitespace-only values are treated as absent.
+
 > **Note:** `get_bootstrap_config()`, `bootstrap_context_config` table, and the enable/disable toggle were removed in #110. To disable the bootstrap hook, remove the hook directory from `~/.openclaw/hooks/db-bootstrap-context/`.
 
 ## Migrating Existing Files

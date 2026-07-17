@@ -15,8 +15,6 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
 # Load OpenClaw env (API keys) and PostgreSQL env.
 ENV_LOADER="${HOME}/.openclaw/lib/env-loader.sh"
 PG_ENV="${HOME}/.openclaw/lib/pg-env.sh"
@@ -50,6 +48,11 @@ if ! command -v psql >/dev/null 2>&1; then
     exit 1
 fi
 
+if ! command -v jq >/dev/null 2>&1; then
+    echo "[extraction-replay] ERROR: jq is required for JSON row parsing" >&2
+    exit 1
+fi
+
 if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
     echo "[extraction-replay] WARNING: ANTHROPIC_API_KEY not set — extractions will likely fail" >&2
 fi
@@ -61,19 +64,24 @@ psql_run() {
     psql "$DB" -t -A -c "$1"
 }
 
-# Fetch the next batch of pending rows.
+# Fetch the next batch of pending rows as newline-delimited JSON.
+# row_to_json safely escapes pipes and embedded newlines that would otherwise
+# corrupt a pipe-delimited parse (issue #485 QA BUG-1).
 ROWS=$(psql_run "
-    SELECT id,
-           channel_transcript_id,
-           session_key,
-           sender_name,
-           sender_id,
-           content,
-           retry_count
-    FROM extraction_failures
-    WHERE status = 'pending'
-    ORDER BY retry_count ASC, created_at ASC, id ASC
-    LIMIT ${BATCH_LIMIT};
+    SELECT row_to_json(t)
+    FROM (
+        SELECT id,
+               channel_transcript_id,
+               session_key,
+               sender_name,
+               sender_id,
+               content,
+               retry_count
+        FROM extraction_failures
+        WHERE status = 'pending'
+        ORDER BY retry_count ASC, created_at ASC, id ASC
+        LIMIT ${BATCH_LIMIT}
+    ) t;
 ")
 
 if [ -z "$ROWS" ]; then
@@ -86,7 +94,17 @@ SUCCESS=0
 FAILED=0
 UNREPLAYABLE=0
 
-while IFS='|' read -r id channel_transcript_id session_key sender_name sender_id content retry_count; do
+while IFS= read -r line; do
+    [ -z "$line" ] && continue
+
+    id=$(jq -r '.id // ""' <<< "$line")
+    channel_transcript_id=$(jq -r '.channel_transcript_id // ""' <<< "$line")
+    session_key=$(jq -r '.session_key // ""' <<< "$line")
+    sender_name=$(jq -r '.sender_name // ""' <<< "$line")
+    sender_id=$(jq -r '.sender_id // ""' <<< "$line")
+    content=$(jq -r '.content // ""' <<< "$line")
+    retry_count=$(jq -r '.retry_count // "0"' <<< "$line")
+
     [ -z "$id" ] && continue
     PROCESSED=$((PROCESSED + 1))
 
@@ -140,7 +158,6 @@ while IFS='|' read -r id channel_transcript_id session_key sender_name sender_id
         SOURCE_CHANNEL_TRANSCRIPT_ID="${channel_transcript_id:-}" \
         SOURCE_CHANNEL_SESSION_ID="${session_db_id:-}" \
         "$PYTHON_CMD" "$EXTRACT_SCRIPT" >/dev/null 2>&1 || exit_code=$?
-
 
     if [ "$exit_code" -eq 0 ]; then
         echo "[extraction-replay] Row id=$id replay succeeded"

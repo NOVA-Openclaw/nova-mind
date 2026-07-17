@@ -9,6 +9,12 @@ MOCKS_DIR="$(mktemp -d -t issue485-replay-mocks-XXXXXX)"
 LOGFILE="${1:-$(mktemp -t issue485-replay-XXXXXX.log)}"
 LOCK_FILE="${HOME}/.openclaw/run/extraction-replay.lock"
 
+: "${TEST_PGDATABASE:?TEST_PGDATABASE is not set}"
+: "${TEST_PGUSER:?TEST_PGUSER is not set}"
+: "${TEST_PGHOST:?TEST_PGHOST is not set}"
+TEST_PGUSER_DDL="${TEST_PGUSER_DDL:-$TEST_PGUSER}"
+export TEST_PGDATABASE TEST_PGUSER TEST_PGHOST TEST_PGUSER_DDL
+
 PASS=0
 FAIL=0
 
@@ -52,14 +58,18 @@ assertNotContains() {
 }
 
 run_psql() {
-    unset PGPASSWORD; psql -U nova -d nova_memory -h localhost -t -A -c "$1"
+    unset PGPASSWORD; psql -U "$TEST_PGUSER" -d "$TEST_PGDATABASE" -h "$TEST_PGHOST" -t -A -c "$1"
+}
+
+run_psql_ddl() {
+    unset PGPASSWORD; psql -U "$TEST_PGUSER_DDL" -d "$TEST_PGDATABASE" -h "$TEST_PGHOST" -t -A -c "$1"
 }
 
 cleanup_test_rows() {
     local marker="$1"
-    run_psql "DELETE FROM extraction_failures WHERE session_key LIKE '${marker}%';" || true
-    run_psql "DELETE FROM channel_transcripts WHERE external_message_id LIKE '${marker}%';" || true
-    run_psql "DELETE FROM channel_sessions WHERE session_key LIKE '${marker}%';" || true
+    run_psql_ddl "DELETE FROM extraction_failures WHERE session_key LIKE '${marker}%';" || true
+    run_psql_ddl "DELETE FROM channel_transcripts WHERE external_message_id LIKE '${marker}%';" || true
+    run_psql_ddl "DELETE FROM channel_sessions WHERE session_key LIKE '${marker}%';" || true
 }
 
 # Mock extract_memories.py scripts
@@ -84,9 +94,11 @@ PY
 chmod +x "$MOCKS_DIR"/*.py
 
 run_replay() {
-    # Run replay as the nova DB owner so INSERT/UPDATE/DELETE on
-    # extraction_failures succeeds under default privileges.
-    PGUSER=nova \
+    # The replay script uses psql with PGDATABASE/PGUSER/PGHOST from the environment.
+    unset PGPASSWORD
+    PGUSER="$TEST_PGUSER" \
+    PGDATABASE="$TEST_PGDATABASE" \
+    PGHOST="$TEST_PGHOST" \
     EXTRACTION_SCRIPT_PATH_OVERRIDE="${EXTRACTION_SCRIPT_PATH_OVERRIDE:-$MOCKS_DIR/ok.py}" \
     EXTRACTION_REPLAY_BATCH_LIMIT="${EXTRACTION_REPLAY_BATCH_LIMIT:-10}" \
     EXTRACTION_REPLAY_MAX_RETRIES="${EXTRACTION_REPLAY_MAX_RETRIES:-5}" \
@@ -140,6 +152,14 @@ assertContains 'TC-D6: FK-row body reconstructed from transcript' "$(cat "$BODY_
 assertContains 'TC-D6: fallback-row body uses stored content' "$(cat "$BODY_RECORD")" 'fallback body content'
 rm -f "$BODY_RECORD"
 cleanup_test_rows "$MARKER"
+
+# TC-D6b: pipe + embedded newline body reconstruction (regression test for BUG-1)
+D6B_OUT=$(python3 "${REPO_ROOT}/tests/issue-485/test-replay-d6b.py" 2>&1) || true
+echo "$D6B_OUT"
+D6B_PASS=$(echo "$D6B_OUT" | grep -oE 'PASS=[0-9]+' | tail -1 | cut -d= -f2)
+D6B_FAIL=$(echo "$D6B_OUT" | grep -oE 'FAIL=[0-9]+' | tail -1 | cut -d= -f2)
+PASS=$((PASS + ${D6B_PASS:-0}))
+FAIL=$((FAIL + ${D6B_FAIL:-0}))
 
 # TC-D9: successful replay -> resolved
 MARKER="tc-d9-$(date +%s%N)"

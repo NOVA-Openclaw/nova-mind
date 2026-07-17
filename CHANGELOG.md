@@ -1,5 +1,41 @@
 # Changelog
 
+### Batch: extraction-dead-letter-485 (Issue #485)
+
+#### Added
+- **`extraction_failures` dead-letter table + replay path** (nova-mind#485) — The
+  `memory-extract` hook (`memory/hooks/memory-extract/handler.ts`) previously spawned
+  `extract_memories.py` fire-and-forget with no stderr/stdout capture, no retry, and no
+  persistence on failure — a System Diagnostic run (nova-mind#447) found ~10% of
+  extractions failing silently (10/112 messages in a 33-hour window), permanently losing
+  the source message body since it only existed at hook time. The hook now captures
+  16384-byte tail buffers of the child's stderr/stdout (continuous-drain, so an unread
+  pipe never stalls the child), enforces a 30-second timeout (SIGTERM, then SIGKILL after
+  a 5-second grace period), and writes a row to the new `extraction_failures` table on
+  nonzero exit, timeout, or spawn error, tagged with a `failure_reason` taxonomy
+  (`nonzero_exit`, `timeout`, `spawn_error`, `unreplayable`). Migration
+  `085_extraction_failures.sql` adds the table (FK to `channel_transcripts` with
+  `ON DELETE SET NULL`, raw-body fallback column when no FK is available, CHECK
+  constraints on `status`/`failure_reason`/`retry_count`, four named indexes including a
+  composite replay-order index). New script `memory/scripts/extraction-replay.sh`
+  (flock-guarded, batch/retry-limit configurable via env, `row_to_json`+`jq` body
+  reconstruction to avoid a pipe/newline parsing bug caught in QA) replays pending rows
+  via the same stdin-feed contract as the hook, following the `memory-catchup.sh`
+  cron-script pattern and `GLOBAL/CRON_DESIGN` (script is the system of record for DB
+  writes, not an agent-turn prompt). Full detail:
+  `memory/docs/memory-extraction-pipeline.md#1a-failure-handling-extraction_failures-dead-letter-table--replay-485`.
+  **Known debt (not addressed by this change):** both the hook and the replay script
+  default `PGDATABASE` to a hardcoded `nova_memory` rather than deriving it from the OS
+  user, tracked separately under nova-mind#487 (umbrella) / nova-mind#481.
+
+#### Tests
+- `tests/issue-485/validate-migration.sh`, `tests/issue-485/test-handler.js`,
+  `tests/issue-485/test-replay.sh`, `tests/issue-485/test-replay-d6b.py` — 92/92 PASS on
+  nova-staging across migration validation (17), handler behavior (52), and replay-script
+  behavior (23, including the row_to_json/jq regression case). See
+  `tests/issue-485/TEST-RESULTS-integrated.log` for the full run and contamination check
+  (zero residual test rows on staging and production).
+
 ### Batch: comms-items-unified-lifecycle-474 (Issue #474)
 
 #### Added

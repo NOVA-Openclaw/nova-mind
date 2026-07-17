@@ -571,9 +571,12 @@ tail -f ~/.openclaw/logs/memory-catchup.log
 
 # Verify API key is set
 echo "$ANTHROPIC_API_KEY" | head -c1  # non-empty output means it's set
+
+# Check for dead-lettered extraction failures (nonzero exit, timeout, spawn error)
+psql -c "SELECT id, sender_name, failure_reason, created_at FROM extraction_failures WHERE status = 'pending' ORDER BY created_at DESC LIMIT 10;"
 ```
 
-> **Note:** There is no standalone `process-input.sh` or `extract-memories.sh` CLI — extraction runs via the `memory-extract` hook (`memory/scripts/extract_memories.py`) as part of live message handling.
+> **Note:** There is no standalone `process-input.sh` or `extract-memories.sh` CLI — extraction runs via the `memory-extract` hook (`memory/scripts/extract_memories.py`) as part of live message handling. Failed invocations (nonzero exit, timeout, spawn error) are captured as dead-letter rows in `extraction_failures` and can be replayed via `memory/scripts/extraction-replay.sh` — see the "Failure Handling" section in [memory-extraction-pipeline.md](memory-extraction-pipeline.md#1a-failure-handling-extraction_failures-dead-letter-table--replay-485).
 
 ### 3. Performance Issues
 

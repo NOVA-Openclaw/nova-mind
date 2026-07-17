@@ -180,6 +180,7 @@ Research/library ingestion is owned by the Library domain (Athena) via the `libr
 2. **Verify cron job for catchup:** `crontab -l | grep memory-catchup`  
 3. **Review logs:** `tail -50 ~/.openclaw/logs/memory-catchup.log`
 4. **Test database:** `psql -c "SELECT COUNT(*) FROM entities;"`
+5. **Check for silently-failed extractions:** failed hook invocations (nonzero exit, timeout, spawn error) are captured as dead-letter rows in `extraction_failures` and can be replayed — see the "Failure Handling" section in [memory-extraction-pipeline.md](memory-extraction-pipeline.md#1a-failure-handling-extraction_failures-dead-letter-table--replay-485).
 
 ### Performance Problems
 1. **Check indexes:** `ANALYZE; EXPLAIN ANALYZE SELECT ...`

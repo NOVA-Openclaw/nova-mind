@@ -1527,6 +1527,62 @@ CREATE TABLE IF NOT EXISTS events_archive (
 COMMENT ON TABLE events_archive IS 'Archived historical events. Long-term storage for events moved out of active events table.';
 
 --
+-- Name: extraction_failures; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS extraction_failures (
+    id BIGSERIAL,
+    channel_transcript_id bigint,
+    session_key text,
+    sender_name text,
+    sender_id text,
+    content text,
+    stderr_tail text,
+    stdout_tail text,
+    exit_code integer,
+    failure_reason varchar(50),
+    retry_count integer DEFAULT 0 NOT NULL,
+    status varchar(20) DEFAULT 'pending' NOT NULL,
+    created_at timestamptz DEFAULT now() NOT NULL,
+    updated_at timestamptz DEFAULT now() NOT NULL,
+    last_attempt_at timestamptz,
+    resolved_at timestamptz,
+    CONSTRAINT extraction_failures_pkey PRIMARY KEY (id),
+    CONSTRAINT extraction_failures_channel_transcript_id_fkey FOREIGN KEY (channel_transcript_id) REFERENCES channel_transcripts (id) ON DELETE SET NULL,
+    CONSTRAINT extraction_failures_failure_reason_check CHECK (failure_reason IS NULL OR (failure_reason::text IN ('nonzero_exit'::character varying, 'timeout'::character varying, 'spawn_error'::character varying, 'unreplayable'::character varying))),
+    CONSTRAINT extraction_failures_retry_count_nonnegative CHECK (retry_count >= 0),
+    CONSTRAINT extraction_failures_status_check CHECK (status::text IN ('pending'::character varying, 'resolved'::character varying, 'retry_exhausted'::character varying, 'unreplayable'::character varying))
+);
+
+
+COMMENT ON TABLE extraction_failures IS 'Dead-letter store for failed memory extractions from memory-extract hook (#485). Rows are inserted on nonzero exit, timeout, or spawn error and may be retried via extraction-replay.sh.';
+
+--
+-- Name: idx_extraction_failures_channel_transcript_id; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_extraction_failures_channel_transcript_id ON extraction_failures (channel_transcript_id) WHERE (channel_transcript_id IS NOT NULL);
+
+--
+-- Name: idx_extraction_failures_created_at; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_extraction_failures_created_at ON extraction_failures (created_at);
+
+--
+-- Name: idx_extraction_failures_replay_order; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_extraction_failures_replay_order ON extraction_failures (status, retry_count, created_at, id);
+
+--
+-- Name: idx_extraction_failures_status; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_extraction_failures_status ON extraction_failures (status);
+
+
+--
 -- Name: extraction_metrics; Type: TABLE; Schema: -; Owner: -
 --
 

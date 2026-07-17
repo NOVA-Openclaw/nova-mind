@@ -31,6 +31,15 @@
 > to the listing below. This is a genuine schema change, not a documentation-drift
 > correction — do not confuse it with the other #414 drift items above, which still need a
 > real regeneration pass.
+>
+> **#485 update (2026-07-17):** `extraction_failures` (dead-letter store for failed memory
+> extractions, 16 columns) has been added below from migration
+> `memory/migrations/085_extraction_failures.sql` on branch
+> `feature/issue-485-extraction-dead-letter`. **This table does not yet exist in the live
+> production `nova_memory` schema** as of this note — the migration has not been applied
+> to production. Do not treat its presence below as confirmation of a live column count;
+> once the migration lands in `main` and is applied, regenerate this file rather than
+> trusting this manually-inserted row.
 
 ## Tables
 
@@ -74,6 +83,7 @@
 | event_projects | Links events to projects. Many-to-many relationship table for project milestones and activities. | 2 |
 | events | Historical events, milestones, activities. Log significant occurrences. | 10 |
 | events_archive | Archived historical events. Long-term storage for events moved out of active events table. | 11 |
+| extraction_failures | Dead-letter store for failed memory extractions from memory-extract hook (#485). Rows are inserted on nonzero exit, timeout, or spawn error and may be retried via extraction-replay.sh. **Not yet in live production schema — see #485 note above.** | 16 |
 | extraction_metrics | Performance metrics for data extraction processes. Tracks accuracy and efficiency of knowledge extraction. | 6 |
 | fact_change_log | Audit trail for entity fact modifications. Tracks who changed what and when for accountability. | 7 |
 | gambling_entries | Individual gambling session records. Tracks bets, outcomes, and session details for analysis. | 10 |

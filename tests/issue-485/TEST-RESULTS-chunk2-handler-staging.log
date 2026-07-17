@@ -1,0 +1,96 @@
+[issue-485:chunk2] Started at 2026-07-17T03:36:30.658Z
+[issue-485:chunk2] Log file: /tmp/issue485-handler-staging.log
+[issue-485:chunk2] Compiling handler.ts...
+[issue-485:chunk2] tsc emitted errors (expected without @types/node), continuing if JS exists
+[issue-485:chunk2] Compiled handler to /tmp/issue485-handler-GLVmaB/handler.js
+[issue-485:chunk2] 
+=== TC-A1 happy path ===
+[issue-485:chunk2] PASS: TC-A1: no dead-letter row
+[issue-485:chunk2] PASS: TC-A1: extraction complete log
+[issue-485:chunk2] 
+=== TC-A2 warnings exit 0 ===
+[issue-485:chunk2] PASS: TC-A2: no dead-letter row on warning-only exit 0
+[issue-485:chunk2] 
+=== TC-B1 nonzero exit ===
+[issue-485:chunk2] PASS: TC-B1: dead-letter row written
+[issue-485:chunk2] PASS: TC-B1: exit_code = 1
+[issue-485:chunk2] PASS: TC-B1: failure_reason = nonzero_exit
+[issue-485:chunk2] PASS: TC-B1: stderr tail contains error
+[issue-485:chunk2] PASS: TC-B1: failure log contains stderr tail
+[issue-485:chunk2] 
+=== TC-B2 spawn error ===
+[issue-485:chunk2] PASS: TC-B2: handler did not throw
+[issue-485:chunk2] PASS: TC-B2: dead-letter row written
+[issue-485:chunk2] PASS: TC-B2: exit_code is NULL
+[issue-485:chunk2] PASS: TC-B2: failure_reason = spawn_error
+[issue-485:chunk2] 
+=== TC-B3 timeout kill ===
+[issue-485:chunk2] PASS: TC-B3: completed within timeout+grace (under 10s)
+[issue-485:chunk2] PASS: TC-B3: dead-letter row written
+[issue-485:chunk2] PASS: TC-B3: exit_code is NULL
+[issue-485:chunk2] PASS: TC-B3: failure_reason = timeout
+[issue-485:chunk2] PASS: TC-B3: log indicates timeout
+[issue-485:chunk2] 
+=== TC-C4 empty stderr ===
+[issue-485:chunk2] PASS: TC-C4: dead-letter row written
+[issue-485:chunk2] PASS: TC-C4: stderr_tail is empty/NULL
+[issue-485:chunk2] PASS: TC-C4: no undefined in log
+[issue-485:chunk2] 
+=== TC-C1/C2 stderr cap boundary ===
+[issue-485:chunk2] PASS: TC-C1: exact cap retained (16384 bytes)
+[issue-485:chunk2] PASS: TC-C2: cap+1 retained as 16384 bytes
+[issue-485:chunk2] PASS: TC-C2: tail is last N bytes (starts with B)
+[issue-485:chunk2] 
+=== TC-C3 huge stderr no stall ===
+[issue-485:chunk2] PASS: TC-C3: completed without stall (under 5s)
+[issue-485:chunk2] PASS: TC-C3: retained tail length is 16384
+[issue-485:chunk2] 
+=== TC-C5 huge stdout exit 0 ===
+[issue-485:chunk2] PASS: TC-C5: completed without stall (under 5s)
+[issue-485:chunk2] PASS: TC-C5: no dead-letter row on success
+[issue-485:chunk2] 
+=== TC-C6 interleaved stderr/stdout ===
+[issue-485:chunk2] PASS: TC-C6: stderr tail contains final stderr marker
+[issue-485:chunk2] PASS: TC-C6: stderr tail does not contain stdout marker
+[issue-485:chunk2] PASS: TC-C6: stdout tail contains final stdout marker
+[issue-485:chunk2] PASS: TC-C6: stdout tail does not contain stderr marker
+[issue-485:chunk2] 
+=== TC-E2/E3 log safety ===
+[issue-485:chunk2] PASS: TC-E3: full senderId not in failure log
+[issue-485:chunk2] PASS: TC-E3: truncated senderId present
+[issue-485:chunk2] PASS: TC-E2: no connection string with password in log
+[issue-485:chunk2] 
+=== TC-F2 early returns ===
+[issue-485:chunk2] PASS: TC-F2: no spawn for non-message type
+[issue-485:chunk2] PASS: TC-F2: no spawn for non-received action
+[issue-485:chunk2] PASS: TC-F2: no spawn for short body
+[issue-485:chunk2] PASS: TC-F2: no spawn for command body
+[issue-485:chunk2] 
+=== TC-F3 activity tracking ===
+[issue-485:chunk2] PASS: TC-F3: heartbeat counter incremented by 1
+[issue-485:chunk2] PASS: TC-F3: user message counter incremented by 2
+[issue-485:chunk2] 
+=== TC-F1 grep regression ===
+[issue-485:chunk2] PASS: TC-F1: no bare silent catch on stdout
+[issue-485:chunk2] PASS: TC-F1: no bare silent catch with spaces
+[issue-485:chunk2] 
+=== TC-D1 FK recovery on pre-existing transcript ===
+[issue-485:chunk2] PASS: TC-D1: channel_transcript_id matches pre-existing row
+[issue-485:chunk2] PASS: TC-D1: content fallback is NULL/empty
+[issue-485:chunk2] 
+=== TC-D11 FK recovery on timeout ===
+[issue-485:chunk2] PASS: TC-D11: channel_transcript_id matches pre-existing row
+[issue-485:chunk2] PASS: TC-D11: failure_reason = timeout
+[issue-485:chunk2] 
+=== TC-B4/B5/B6 psql failure logging and body fallback ===
+[issue-485:chunk2] PASS: TC-B4/B5: psql session-upsert failure logged
+[issue-485:chunk2] PASS: TC-B4/B5: psql transcript-upsert failure logged
+[issue-485:chunk2] PASS: TC-E2: psql failure log does not include connection string
+[issue-485:chunk2] PASS: TC-B6: dead-letter row written despite psql failures
+[issue-485:chunk2] PASS: TC-B6: channel_transcript_id is NULL
+[issue-485:chunk2] PASS: TC-B6: body fallback contains original message
+[issue-485:chunk2] 
+=== Summary ===
+[issue-485:chunk2] PASS: 52
+[issue-485:chunk2] FAIL: 0
+[issue-485:chunk2] Finished at 2026-07-17T03:36:57.785Z

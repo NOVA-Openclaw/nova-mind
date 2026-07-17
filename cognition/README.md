@@ -92,14 +92,15 @@ The `pg` (PostgreSQL client) module is installed to a shared location (`~/.openc
 
 ## Agent Config Sync (DB → Config)
 
-The **`agent-config-sync`** extension plugin keeps OpenClaw's agent model configuration in sync with the `agents` table in PostgreSQL — no manual config editing required.
+The **`agent-config-sync`** extension plugin keeps OpenClaw's agent model configuration — and each agent's `HEARTBEAT.md` file — in sync with PostgreSQL, no manual config editing required. See `focus/agent-config-sync/README.md` for the full field reference and `focus/agent-config-sync/HOOK.md` for the listener internals.
 
 ### How It Works
 
-1. **DB is the source of truth** — Agent `model`, `fallback_models`, and `thinking` settings are managed in the `agents` table (in the nova-mind database).
-2. **LISTEN/NOTIFY** — The plugin opens a persistent PostgreSQL connection and runs `LISTEN agent_config_changed`. A database trigger fires `pg_notify('agent_config_changed', ...)` whenever relevant columns change.
-3. **Writes `agents.json`** — On each notification (and once at gateway startup), the plugin queries the `agents` table and writes `~/.openclaw/agents.json` atomically (temp file + `rename(2)`).
-4. **Hot-reload via `$include`** — `openclaw.json` includes `"$include": "./agents.json"`. The gateway's file watcher detects the change and hot-reloads the `agents.*` config keys — no gateway restart needed.
+1. **DB is the source of truth** — Agent `model`, `fallback_models`, `is_default`, and `allowed_subagents` settings are managed in the `agents` table (in the nova-mind database); each agent's HEARTBEAT.md content is managed in `agent_bootstrap_context` (`file_key = 'HEARTBEAT'`).
+2. **LISTEN/NOTIFY** — The plugin opens a persistent PostgreSQL connection and runs `LISTEN agent_config_changed` and `LISTEN heartbeat_content_changed`. Triggers fire `pg_notify(...)` on the respective channel whenever relevant rows change.
+3. **Writes `agents.json`** — On each `agent_config_changed` notification (and once at gateway startup), the plugin queries `get_agent_export_rows()` and writes `~/.openclaw/agents.json` atomically (temp file + `rename(2)`) as a bare JSON array.
+4. **Syncs `HEARTBEAT.md` files** — On `heartbeat_content_changed` (and at startup), the plugin writes each agent's HEARTBEAT.md into its workspace directory (`workspace/` for the default agent, `workspace-<agent_name>/` for others), skipping the write when content is unchanged.
+5. **Hot-reload via `$include`** — `openclaw.json` includes `"$include": "./agents.json"`. The gateway's file watcher detects the change and hot-reloads the `agents.*` config keys — no gateway restart needed. HEARTBEAT.md updates don't require a reload signal; the gateway reads the file fresh on each heartbeat cycle.
 
 ### `agents.json` Format
 

@@ -7,14 +7,14 @@
 
 All 32 test cases from tests/TEST-CASES-ISSUE-485.md executed against the
 nova_staging_memory database via SSH user nova-staging@localhost.  Total
-assertions: 96 PASS / 0 FAIL.
+assertions: 92 PASS / 0 FAIL.
 
 | Chunk | Script | Test Cases | Assertions | PASS | FAIL |
 |-------|--------|------------|------------|------|------|
 | 1 — Migration | validate-migration.sh | TC-D2, TC-D3, TC-D4 | 17 | 17 | 0 |
 | 2 — Handler | test-handler.js | TC-A1,A2, B1-B6, C1-C6, D1, D11, E1-E3, F1-F3 | 52 | 52 | 0 |
-| 3 — Replay | test-replay.sh + test-replay-d6b.py | TC-D5-D10, TC-D12, TC-D6b | 27 | 27 | 0 |
-| **Total** | | **32 + 1 regression** | **96** | **96** | **0** |
+| 3 — Replay | test-replay.sh + test-replay-d6b.py | TC-D5-D10, TC-D12, TC-D6b | 23 | 23 | 0 |
+| **Total** | | **32 test cases + 1 regression test** | **92** | **92** | **0** |
 
 ## Environment
 
@@ -71,7 +71,7 @@ Covers:
   unchanged, siblings processed normally
 - TC-D5: flock overlapping-run protection
 
-Result: PASS=27 FAIL=0
+Result: PASS=23 FAIL=0
 See: tests/issue-485/TEST-RESULTS-chunk3-replay-staging.log
 
 ## Contamination Check

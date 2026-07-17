@@ -9,11 +9,17 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 MIGRATION="${REPO_ROOT}/memory/migrations/085_extraction_failures.sql"
 LOGFILE="${1:-$(mktemp -t issue485-migration-XXXXXX.log)}"
 
+: "${TEST_PGDATABASE:?TEST_PGDATABASE is not set}"
+: "${TEST_PGUSER:?TEST_PGUSER is not set}"
+: "${TEST_PGHOST:?TEST_PGHOST is not set}"
+TEST_PGUSER_DDL="${TEST_PGUSER_DDL:-$TEST_PGUSER}"
+
 # Redirect all stdout/stderr to the log file AND still show it on console.
 exec > >(tee -a "$LOGFILE")
 exec 2>&1
 
 echo "[issue-485:chunk1] Migration validation started at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+echo "[issue-485:chunk1] Database: $TEST_PGDATABASE host: $TEST_PGHOST user: $TEST_PGUSER ddl-user: $TEST_PGUSER_DDL"
 echo "[issue-485:chunk1] Migration file: $MIGRATION"
 echo "[issue-485:chunk1] Log file: $LOGFILE"
 
@@ -24,13 +30,13 @@ fi
 
 # Helper: run psql with a single command.
 run_psql() {
-    unset PGPASSWORD; psql -U coder -d nova_memory -h localhost -t -A -c "$1"
+    unset PGPASSWORD; psql -U "$TEST_PGUSER" -d "$TEST_PGDATABASE" -h "$TEST_PGHOST" -t -A -c "$1"
 }
 
 # Helper for DDL: the migration references channel_transcripts, which requires
-# REFERENCES privilege held by the nova owner role. Schema checks use coder.
+# REFERENCES privilege. Use TEST_PGUSER_DDL (often the schema owner).
 run_psql_ddl() {
-    unset PGPASSWORD; psql -U nova -d nova_memory -h localhost -t -A -c "$1"
+    unset PGPASSWORD; psql -U "$TEST_PGUSER_DDL" -d "$TEST_PGDATABASE" -h "$TEST_PGHOST" -t -A -c "$1"
 }
 
 # TC-D3: run migration twice, both must succeed.

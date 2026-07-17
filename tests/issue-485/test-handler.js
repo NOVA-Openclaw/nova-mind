@@ -10,12 +10,32 @@ const cp = require('child_process');
 
 const execFileAsync = promisify(cp.execFile);
 
+function requireEnv(name) {
+  const val = process.env[name];
+  if (!val) {
+    console.error(`ERROR: ${name} is not set`);
+    process.exit(1);
+  }
+  return val;
+}
+
+const TEST_PGDATABASE = requireEnv('TEST_PGDATABASE');
+const TEST_PGUSER = requireEnv('TEST_PGUSER');
+const TEST_PGHOST = requireEnv('TEST_PGHOST');
+const TEST_PGUSER_DDL = process.env.TEST_PGUSER_DDL || TEST_PGUSER;
+
 const REPO_ROOT = path.resolve(__dirname, '../..');
 const HANDLER_TS = path.join(REPO_ROOT, 'memory/hooks/memory-extract/handler.ts');
 const COMPILE_DIR = fs.mkdtempSync('/tmp/issue485-handler-');
 const HANDLER_JS = path.join(COMPILE_DIR, 'handler.js');
 const MOCKS_DIR = fs.mkdtempSync('/tmp/issue485-mocks-');
 const LOG_FILE = process.argv[2] || '/tmp/issue485-handler-test.log';
+
+// The handler under test calls psql without -U/-h, relying on PG env vars.
+process.env.PGDATABASE = TEST_PGDATABASE;
+process.env.PGUSER = TEST_PGUSER_DDL;
+process.env.PGHOST = TEST_PGHOST;
+delete process.env.PGPASSWORD;
 
 const PASS = [];
 const FAIL = [];
@@ -69,23 +89,32 @@ function assertNotContains(name, haystack, needle) {
   return ok;
 }
 
-async function psql(sql) {
+async function psql(sql, user) {
   delete process.env.PGPASSWORD;
-  const { stdout } = await execFileAsync('psql', ['-U', 'coder', '-d', 'nova_memory', '-h', 'localhost', '-t', '-A', '-c', sql]);
+  const u = user || TEST_PGUSER;
+  const { stdout } = await execFileAsync('psql', ['-U', u, '-d', TEST_PGDATABASE, '-h', TEST_PGHOST, '-t', '-A', '-c', sql]);
   return stdout.trim();
 }
 
-async function psqlAsNova(sql) {
-  delete process.env.PGPASSWORD;
-  const { stdout } = await execFileAsync('psql', ['-U', 'nova', '-d', 'nova_memory', '-h', 'localhost', '-t', '-A', '-c', sql]);
-  return stdout.trim();
+async function psqlAsDdl(sql) {
+  return psql(sql, TEST_PGUSER_DDL);
 }
 
 async function cleanupSession(sessionKey) {
   try {
-    await psqlAsNova(`DELETE FROM extraction_failures WHERE session_key = '${sessionKey.replace(/'/g, "''")}';`);
-    await psqlAsNova(`DELETE FROM channel_transcripts WHERE external_message_id LIKE '${sessionKey.replace(/'/g, "''")}%';`);
-    await psqlAsNova(`DELETE FROM channel_sessions WHERE session_key = '${sessionKey.replace(/'/g, "''")}';`);
+    await psqlAsDdl(`DELETE FROM extraction_failures WHERE session_key = '${sessionKey.replace(/'/g, "''")}';`);
+    await psqlAsDdl(`DELETE FROM channel_transcripts WHERE external_message_id LIKE '${sessionKey.replace(/'/g, "''")}%';`);
+    await psqlAsDdl(`DELETE FROM channel_sessions WHERE session_key = '${sessionKey.replace(/'/g, "''")}';`);
+  } catch (e) {
+    // ignore cleanup errors
+  }
+}
+
+async function cleanupSessionPattern(pattern) {
+  try {
+    await psqlAsDdl(`DELETE FROM extraction_failures WHERE session_key LIKE '${pattern.replace(/'/g, "''")}';`);
+    await psqlAsDdl(`DELETE FROM channel_transcripts WHERE external_message_id LIKE '${pattern.replace(/'/g, "''")}';`);
+    await psqlAsDdl(`DELETE FROM channel_sessions WHERE session_key LIKE '${pattern.replace(/'/g, "''")}';`);
   } catch (e) {
     // ignore cleanup errors
   }
@@ -525,6 +554,7 @@ async function main() {
 
   // TC-F3: activity tracking
   await runCase('TC-F3 activity tracking', async () => {
+    await cleanupSessionPattern('tc-f3%');
     process.env.EXTRACTION_SCRIPT_PATH_OVERRIDE = mocks.ok;
     delete process.env.EXTRACTION_TIMEOUT_MS_OVERRIDE;
 
@@ -551,6 +581,7 @@ async function main() {
     const finalUser = userMatch ? parseInt(userMatch[userMatch.length - 1].match(/(\d+)/)[1], 10) : baseUser;
     assert('TC-F3: heartbeat counter incremented by 1', baseHeart + 1, finalHeart);
     assert('TC-F3: user message counter incremented by 2', baseUser + 2, finalUser);
+    await cleanupSessionPattern('tc-f3%');
   });
 
   // TC-F1: grep regression
@@ -569,12 +600,12 @@ async function main() {
     await cleanupSession(sessionKey);
 
     // Pre-insert session and transcript.
-    await psqlAsNova(`
+    await psqlAsDdl(`
       INSERT INTO channel_sessions (session_key, agent_id, provider, external_chat_id, chat_type)
       VALUES ('${sessionKey}', 'main', 'openclaw', '${chatId}', 'direct');
     `);
     const sessId = await psql(`SELECT id FROM channel_sessions WHERE session_key = '${sessionKey}';`);
-    await psqlAsNova(`
+    await psqlAsDdl(`
       INSERT INTO channel_transcripts (session_id, external_message_id, timestamp, role, content)
       VALUES (${sessId}, '${msgId}', NOW(), 'user', 'pre-existing body');
     `);
@@ -605,12 +636,12 @@ async function main() {
     const msgId = 'tc-d11-msg';
     await cleanupSession(sessionKey);
 
-    await psqlAsNova(`
+    await psqlAsDdl(`
       INSERT INTO channel_sessions (session_key, agent_id, provider, external_chat_id, chat_type)
       VALUES ('${sessionKey}', 'main', 'openclaw', '${chatId}', 'direct');
     `);
     const sessId = await psql(`SELECT id FROM channel_sessions WHERE session_key = '${sessionKey}';`);
-    await psqlAsNova(`
+    await psqlAsDdl(`
       INSERT INTO channel_transcripts (session_id, external_message_id, timestamp, role, content)
       VALUES (${sessId}, '${msgId}', NOW(), 'user', 'pre-existing body d11');
     `);

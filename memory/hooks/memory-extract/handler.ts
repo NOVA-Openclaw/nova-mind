@@ -182,7 +182,7 @@ async function insertExtractionFailure(args: {
   `;
 
   try {
-    await execFileAsync('psql', ['nova_memory', '-t', '-A', '-c', sql]);
+    await execFileAsync('psql', [(process.env.PGDATABASE || 'nova_memory'), '-t', '-A', '-c', sql]);
   } catch (err) {
     console.error('[memory-extract] Failed to insert extraction_failure', {
       error: (err as Error).message,
@@ -288,7 +288,7 @@ const handler = async (event: any) => {
         if (externalMessageId || rawBody.length > 0) {
           // Upsert session row
           const sessArgs = [
-            'nova_memory', '-t', '-A', '-c',
+            (process.env.PGDATABASE || 'nova_memory'), '-t', '-A', '-c',
             `INSERT INTO channel_sessions (session_key, agent_id, provider, external_chat_id, chat_type` +
             (groupSubject ? ', group_subject, title' : '') +
             (groupSpace ? ', group_space_id' : '') +
@@ -320,7 +320,7 @@ const handler = async (event: any) => {
             const senderUsernameEsc = senderUsername.replace(/'/g, "''");
 
             const txArgs = [
-              'nova_memory', '-t', '-A', '-c',
+              (process.env.PGDATABASE || 'nova_memory'), '-t', '-A', '-c',
               `INSERT INTO channel_transcripts (session_id, external_message_id, timestamp, role, content` +
               (senderId ? ', sender_id' : '') +
               (senderName && senderName !== 'unknown' ? ', sender_name' : '') +
@@ -349,7 +349,7 @@ const handler = async (event: any) => {
             // falling back to body storage.
             if (!channelTranscriptId && channelSessionId && derivedMessageId) {
               const lookupArgs = [
-                'nova_memory', '-t', '-A', '-c',
+                (process.env.PGDATABASE || 'nova_memory'), '-t', '-A', '-c',
                 `SELECT id FROM channel_transcripts WHERE session_id = ${channelSessionId} AND external_message_id = '${derivedMessageId.replace(/'/g, "''")}' LIMIT 1;`
               ];
               const { stdout: lookupOut } = await execFileAsync('psql', lookupArgs)

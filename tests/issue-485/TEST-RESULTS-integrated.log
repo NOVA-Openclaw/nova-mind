@@ -1,21 +1,27 @@
-# Issue #485 — Integrated Test Results
+# Issue #485 — Integrated Test Results (nova-staging)
 # Repository: nova-mind
 # Branch: feature/issue-485-extraction-dead-letter
-# Generated: 2026-07-17T03:11:30Z
+# Generated: 2026-07-17T03:38:00Z
 
 ## Summary
 
-All 32 test cases from tests/TEST-CASES-ISSUE-485.md executed across the three
-implementation chunks.  Total assertions: 88 PASS / 0 FAIL.
-
-## Chunk Results
+All 32 test cases from tests/TEST-CASES-ISSUE-485.md executed against the
+nova_staging_memory database via SSH user nova-staging@localhost.  Total
+assertions: 96 PASS / 0 FAIL.
 
 | Chunk | Script | Test Cases | Assertions | PASS | FAIL |
 |-------|--------|------------|------------|------|------|
 | 1 — Migration | validate-migration.sh | TC-D2, TC-D3, TC-D4 | 17 | 17 | 0 |
 | 2 — Handler | test-handler.js | TC-A1,A2, B1-B6, C1-C6, D1, D11, E1-E3, F1-F3 | 52 | 52 | 0 |
-| 3 — Replay | test-replay.sh | TC-D5-D10, TC-D12 | 19 | 19 | 0 |
-| **Total** | | **32** | **88** | **88** | **0** |
+| 3 — Replay | test-replay.sh + test-replay-d6b.py | TC-D5-D10, TC-D12, TC-D6b | 27 | 27 | 0 |
+| **Total** | | **32 + 1 regression** | **96** | **96** | **0** |
+
+## Environment
+
+- Host: nova-staging@localhost
+- Database: nova_staging_memory
+- DB user: nova-staging
+- PGHOST: localhost
 
 ## Per-Chunk Detail
 
@@ -29,7 +35,7 @@ Covers:
   with channel_transcript_id set to NULL
 
 Result: PASS=17 FAIL=0
-See: tests/issue-485/TEST-RESULTS-chunk1-migration.log
+See: tests/issue-485/TEST-RESULTS-chunk1-migration-staging.log
 
 ### Chunk 2 — Handler (test-handler.js)
 
@@ -45,16 +51,18 @@ Covers:
 - TC-D11: Pre-existing transcript + timeout -> FK recovered, failure_reason=timeout
 - TC-E1/E2/E3: stderr tail in logs, no secrets leaked, senderId truncation preserved
 - TC-F1/F2/F3: No bare silent catches remain, early-return paths untouched,
-  activity tracking unaffected
+  activity tracking unaffected, cleanup includes baseline session keys
 
 Result: PASS=52 FAIL=0
-See: tests/issue-485/TEST-RESULTS-chunk2-handler.log
+See: tests/issue-485/TEST-RESULTS-chunk2-handler-staging.log
 
-### Chunk 3 — Replay (test-replay.sh)
+### Chunk 3 — Replay (test-replay.sh + test-replay-d6b.py)
 
 Covers:
 - TC-D10: Script sources env-loader.sh + pg-env.sh (static check)
 - TC-D6: FK-row body reconstructed from transcript; fallback-row body uses stored content
+- TC-D6b: Body containing literal `|` and embedded newline replays byte-identically
+  for both FK and fallback paths (BUG-1 regression test)
 - TC-D9: Successful replay marks row resolved with populated resolved_at
 - TC-D8: retry_count increments; exhausted row marked retry_exhausted and skipped
   on subsequent runs
@@ -63,22 +71,43 @@ Covers:
   unchanged, siblings processed normally
 - TC-D5: flock overlapping-run protection
 
-Result: PASS=19 FAIL=0
-See: tests/issue-485/TEST-RESULTS-chunk3-replay.log
+Result: PASS=27 FAIL=0
+See: tests/issue-485/TEST-RESULTS-chunk3-replay-staging.log
+
+## Contamination Check
+
+Residual test rows after staging run:
+
+```
+channel_sessions    | 0
+channel_transcripts | 0
+extraction_failures | 0
+```
+
+Production database residual test rows (verified separately):
+
+```
+channel_sessions    | 0
+channel_transcripts | 0
+extraction_failures | 0
+```
 
 ## Files in this change
 
-- memory/migrations/085_extraction_failures.sql   (chunk 1)
-- memory/hooks/memory-extract/handler.ts          (chunk 2)
-- memory/scripts/extraction-replay.sh             (chunk 3)
+- memory/migrations/085_extraction_failures.sql
+- memory/hooks/memory-extract/handler.ts
+- memory/scripts/extraction-replay.sh
+- database/schema.sql
 - tests/issue-485/validate-migration.sh
 - tests/issue-485/test-handler.js
 - tests/issue-485/test-replay.sh
-- tests/issue-485/TEST-RESULTS-chunk1-migration.log
-- tests/issue-485/TEST-RESULTS-chunk2-handler.log
-- tests/issue-485/TEST-RESULTS-chunk3-replay.log
+- tests/issue-485/test-replay-d6b.py
+- tests/issue-485/TEST-RESULTS-chunk1-migration-staging.log
+- tests/issue-485/TEST-RESULTS-chunk2-handler-staging.log
+- tests/issue-485/TEST-RESULTS-chunk3-replay-staging.log
 - tests/issue-485/TEST-RESULTS-integrated.log
 
 ## Conclusion
 
-Issue #485 implementation is complete and all test cases pass.
+Issue #485 implementation is complete, QA blockers are fixed, and all test cases
+pass on nova-staging with zero residual contamination.

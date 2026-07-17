@@ -1,0 +1,106 @@
+PASS: TC-D10: sources env-loader.sh
+PASS: TC-D10: sources pg-env.sh
+DELETE 0
+DELETE 0
+DELETE 0
+INSERT 0 1
+INSERT 0 1
+INSERT 0 1
+INSERT 0 1
+[extraction-replay] WARNING: ANTHROPIC_API_KEY not set — extractions will likely fail
+[extraction-replay] Processing row id=14 (retry_count=0)
+[extraction-replay] Row id=14 replay succeeded
+UPDATE 1
+[extraction-replay] Processing row id=15 (retry_count=0)
+[extraction-replay] Row id=15 replay succeeded
+UPDATE 1
+[extraction-replay] Run complete: processed=2 success=2 failed=0 unreplayable=0
+PASS: TC-D6: FK-row body reconstructed from transcript
+PASS: TC-D6: fallback-row body uses stored content
+DELETE 2
+DELETE 1
+DELETE 1
+PASS: TC-D6b: FK row resolved on replay
+PASS: TC-D6b: FK body byte-identical (pipe + newline)
+PASS: TC-D6b: fallback row resolved on replay
+PASS: TC-D6b: fallback body byte-identical (pipe + newline)
+TC-D6b summary: PASS=4 FAIL=0
+DELETE 0
+DELETE 0
+DELETE 0
+INSERT 0 1
+[extraction-replay] WARNING: ANTHROPIC_API_KEY not set — extractions will likely fail
+[extraction-replay] Processing row id=18 (retry_count=0)
+[extraction-replay] Row id=18 replay succeeded
+UPDATE 1
+[extraction-replay] Run complete: processed=1 success=1 failed=0 unreplayable=0
+PASS: TC-D9: row marked resolved on success
+PASS: TC-D9: resolved_at populated
+DELETE 1
+DELETE 0
+DELETE 0
+DELETE 0
+DELETE 0
+DELETE 0
+INSERT 0 1
+INSERT 0 1
+[extraction-replay] WARNING: ANTHROPIC_API_KEY not set — extractions will likely fail
+[extraction-replay] Processing row id=19 (retry_count=0)
+[extraction-replay] Row id=19 replay failed (exit_code=1)
+UPDATE 1
+[extraction-replay] Processing row id=20 (retry_count=4)
+[extraction-replay] Row id=20 replay failed (exit_code=1)
+UPDATE 1
+[extraction-replay] Row id=20 reached max retries, marked retry_exhausted
+[extraction-replay] Run complete: processed=2 success=0 failed=2 unreplayable=0
+PASS: TC-D8: fresh row retry_count incremented to 1
+PASS: TC-D8: fresh row still pending
+PASS: TC-D8: exhausted row marked retry_exhausted
+PASS: TC-D8: exhausted row retry_count = 5
+PASS: TC-D8: exhausted row not retried on second run
+DELETE 2
+DELETE 0
+DELETE 0
+DELETE 0
+DELETE 0
+DELETE 0
+INSERT 0 1
+INSERT 0 1
+INSERT 0 1
+INSERT 0 1
+INSERT 0 1
+INSERT 0 1
+INSERT 0 1
+INSERT 0 1
+INSERT 0 1
+INSERT 0 1
+INSERT 0 1
+INSERT 0 1
+PASS: TC-D7: exactly 10 rows processed (resolved)
+PASS: TC-D7: 2 rows left pending
+DELETE 12
+DELETE 0
+DELETE 0
+DELETE 0
+DELETE 0
+DELETE 0
+INSERT 0 1
+INSERT 0 1
+PASS: TC-D12: unreplayable row marked unreplayable
+PASS: TC-D12: unreplayable row retry_count unchanged
+PASS: TC-D12: sibling row resolved normally
+PASS: TC-D12: log mentions unreplayable
+PASS: TC-D12: unreplayable row absent from second run log
+DELETE 2
+DELETE 0
+DELETE 0
+DELETE 0
+DELETE 0
+DELETE 0
+INSERT 0 1
+PASS: TC-D5: second invocation detects lock and exits
+DELETE 1
+DELETE 0
+DELETE 0
+[issue-485:chunk3] Summary: PASS=23 FAIL=0
+[issue-485:chunk3] Validation finished at 2026-07-17T03:37:30Z

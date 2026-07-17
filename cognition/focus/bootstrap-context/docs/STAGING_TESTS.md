@@ -56,3 +56,22 @@ TC-24 is the hard merge gate: capture the hook's output for nova, graybeard,
 and victoria using their current (no-override) `postgres.json`, apply the fix,
 and diff. The output must be byte-identical for any agent without a `bootstrap`
 section.
+
+## Environment Quirks
+
+### TC-17 in a staging environment without a live `nova_memory` DB
+
+TC-17 exercises the pg-env-import-failure path (a configured `bootstrap`
+section while `pg-env.ts` cannot be loaded), which falls back to the
+hardcoded literal `localhost:5432/nova_memory`. If the staging host has no
+live `nova_memory` database reachable at `localhost:5432`, the hook does not
+stop at that hardcoded config — `loadFromDatabase()` still attempts the
+connection, fails (typically `ECONNREFUSED`), and the handler proceeds on to
+the fallback-to-files branch instead of successfully connecting. **This is
+expected behavior in that environment, not a regression.** TC-17's required
+assertions are unaffected either way: the distinct pg-env-unavailable log line
+(naming the ignored `bootstrap` override) fires before the connection attempt,
+and `__testing.getPgConfig()` still reports the hardcoded pgConfig shape
+regardless of whether the subsequent connection attempt succeeds or fails.
+Do not fail TC-17 solely because the run also falls through to fallback files
+— confirm the log line and pgConfig shape assertions instead.

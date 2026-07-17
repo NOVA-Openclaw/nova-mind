@@ -83,6 +83,22 @@ applied. The hook falls back to a hardcoded literal
 section was present, so operators can tell the override was ignored because the
 loader was broken rather than because of a syntax error in the section.
 
+### Multi-file hooks: use explicit `.ts` specifiers for sibling imports
+
+This hook is split across two files (`handler.ts` and `bootstrap-pg-config.ts`).
+OpenClaw's hook loader imports the entry file via Node's native ESM `import()`
+with type-stripping (Node 22+), which does **not** remap a `.js` specifier to a
+sibling `.ts` file the way bundler-based tooling does. A sibling import written
+as `from './bootstrap-pg-config.js'` fails at load time with `Cannot find
+module '.../bootstrap-pg-config.js'`, even though the `.ts` file exists right
+next to it — because single-file hooks (`memory-extract`, `session-init`) never
+exercise this path, the defect only surfaces once a hook is split into multiple
+files. **Any future multi-file hook must import sibling modules with the
+explicit `.ts` extension** (`from './bootstrap-pg-config.ts'`), not `.js` and
+not extension-less. Test files that import the same sibling module should use
+the same `.ts` specifier so the source works identically under `npx tsx --test`
+and `node --test`.
+
 ## Fallback System
 
 Three-tier fallback:

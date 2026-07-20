@@ -40,9 +40,17 @@ CREATE TABLE entity_fact_sources (
     first_seen TIMESTAMPTZ DEFAULT NOW(),
     last_seen TIMESTAMPTZ DEFAULT NOW(),
     source_url TEXT,
+    reporting_distance REAL NOT NULL DEFAULT 1.0,   -- 0-1: how many hops from original witness (1.0 = direct)
+    verification_quality REAL,                       -- 0-1: independent corroboration strength, if computed
+    source_session_id BIGINT REFERENCES channel_sessions(id),
     UNIQUE (fact_id, source_entity_id)
 );
 ```
+
+**Live column count:** 11 (this example previously omitted `reporting_distance`,
+`verification_quality`, and `source_session_id` — corrected during the #506 documentation
+audit, 2026-07-20). Verify against `\d entity_fact_sources` or
+[schema-reference.md](../../database/schema-reference.md) if this drifts again.
 
 ### Source Categories
 

@@ -48,7 +48,7 @@ nova-mind is a unified repository consolidating five previously separate subsyst
 - **`psyche/`** — Agent self-awareness design: core values, agent-chat architecture, entity/user identity models, and identification protocols. (Migrated from archived `nova-psyche` repo.)
 - **`motivation/`** — Drive assignment, goal tracking, reward signals, and proactive mode orchestration. (Migrated from archived `nova-motivation` repo.)
 
-All five subsystems share a single PostgreSQL database (`{username}_memory`) and are installed via a unified installer (`agent-install.sh`) that ensures idempotent, declarative deployments.
+All five subsystems share a single PostgreSQL database (`{username}_memory`) and are installed via a unified installer (`agent-install.sh`) that ensures idempotent, declarative deployments. **Exception (nova-mind#320):** inter-agent messaging (`agent_chat`/`agent_chat_processed`) was moved out of `{username}_memory` into its own dedicated `agent_chat` database — see `README.md` and `memory/docs/database-config.md` for the current connection story. The Key Tables listings below predate that split; treat any `agent_chat`/`agent_chat_processed` row as living in the separate `agent_chat` database, not `{username}_memory`.
 
 ### High-Level Architecture Diagram
 
@@ -118,7 +118,7 @@ graph TB
 - **Delegation Context:** Dynamic context generation for "who can help" decisions
 
 **Key Tables:**
-- `agent_chat`, `agent_chat_processed` — Message queue and delivery tracking
+- `agent_chat`, `agent_chat_processed` — Message queue and delivery tracking (lives in the separate `agent_chat` database as of nova-mind#320, not `{username}_memory` — see the exception note above)
 - `agent_jobs`, `job_messages` — Task coordination with pipeline routing
 - `agents` — Registry of AI agent instances with model, access, and capability metadata
 - `agent_aliases` — Case‑insensitive identifier matching
@@ -208,13 +208,13 @@ Return entity + profile for personalization
 |-------|-----------|---------|-------------|
 | `entities` | Memory/Relationships | People, AIs, organizations, concepts | `id`, `name`, `full_name`, `type` |
 | `entity_facts` | Memory/Relationships | Key‑value facts about entities | `entity_id`, `key`, `value`, `confidence` |
-| `entity_relationships` | Memory/Relationships | Connections between entities | `from_entity_id`, `to_entity_id`, `relationship_type`, `strength` |
+| `entity_relationships` | Memory/Relationships | Connections between entities | `entity_a`, `entity_b`, `relationship`, `since`, `notes` |
 | `events` | Memory | Timeline of what happened | `id`, `event_date`, `description`, `significance` |
 | `lessons` | Memory | Learned experiences (confidence decay) | `lesson`, `context`, `confidence`, `last_referenced` |
 | `projects` | Memory | Active work with Git configuration | `name`, `status`, `goal`, `git_config`, `locked` |
 | `tasks` | Memory | Actionable items linked to projects | `project_id`, `title`, `status`, `assigned_to` |
 | `agents` | Cognition | Registry of AI agent instances | `name`, `model`, `thinking`, `access_method`, `access_details`, `allowed_subagents` |
-| `agent_chat` | Cognition | Inter‑agent message queue | `sender`, `message`, `recipients`, `"timestamp"` |
+| `agent_chat` | Cognition | Inter‑agent message queue (separate `agent_chat` database as of nova-mind#320 — not `{username}_memory`) | `sender`, `message`, `recipients`, `"timestamp"` |
 | `agent_jobs` | Cognition | Task coordination with pipeline routing | `title`, `topic`, `agent_name`, `status`, `notify_agents` |
 | `agent_turn_context` | Memory/Cognition | Per‑turn critical context injection | `context_type`, `domain_name`, `content` (≤500 chars) |
 | `agent_bootstrap_context` | Cognition | Session‑level initialization context | `context_type`, `domain_name`, `file_key`, `content` |
@@ -411,7 +411,7 @@ The `entity_facts` table includes `visibility` (public/trusted/private) and `pri
 
 ## Conclusion
 
-nova‑mind provides a complete, integrated agent mind stack that balances flexibility with consistency. By unifying memory, cognition, and relationships around a single PostgreSQL database and a declarative installer, it enables sophisticated multi‑agent systems that remember, reason, and relate across sessions and platforms.
+nova‑mind provides a complete, integrated agent mind stack that balances flexibility with consistency. By unifying memory, cognition, and relationships around a single PostgreSQL database (with the dedicated `agent_chat` database as the one exception, per nova-mind#320) and a declarative installer, it enables sophisticated multi‑agent systems that remember, reason, and relate across sessions and platforms.
 
 > *Semantic threads weave*
 > *PostgreSQL anchors time—*

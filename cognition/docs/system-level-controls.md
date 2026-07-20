@@ -120,6 +120,8 @@ This is a deliberate, narrow workaround — schema-sync previously delegated pus
 
 If you are auditing pre-push hook behavior or investigating why a push attributed to `gidget` didn't originate from an actual Gidget-spawned process, check whether it came from the schema-sync path first.
 
+**Related, but a separate guard (nova-mind#506):** as of #506, `sync_schema_to_github()` also runs a branch-safety check (`_ensure_on_main()`) before every dump/commit, ensuring the working clone is on `main` and fast-forwarded (or aborting loudly with an `agent_chat` alert) before this push identity spoof is ever reached. See `cognition/CHANGELOG.md` for detail. This is unrelated to the `OPENCLAW_AGENT_ID` workaround above — it runs earlier in the same function and does not change the push-identity behavior described in this section.
+
 ---
 
 ## Design History: Removing the Token Bypass

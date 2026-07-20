@@ -622,7 +622,8 @@ above.
 
 ## Related Files
 
-- `focus/agent_chat/schema.sql` - Contains trigger definitions and replication comments
+- `cognition/focus/agent_chat/schema.sql` - Contains trigger definitions and replication comments
+- `database/agent-chat/schema.sql` - The dedicated `agent_chat` database's schema as of nova-mind#320 (see the superseded-banner note above) — `agent_chat` no longer lives in `nova_memory`, so replication guidance in this document does not apply to it
 - `agent-install.sh` - Automatic replication detection and configuration
 - `memory/database/renames.json` - Declarative rename manifest applied by Step 1.5
 - Database migration scripts in `migrations/`

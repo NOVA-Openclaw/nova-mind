@@ -12,34 +12,61 @@
 > `memory/docs/database-config.md` / `scripts/agent-chat-migration/README.md` for the
 > current `agent_chat` schema and connection story.
 >
-> **Additional drift found during the #414 documentation audit (2026-07-11), not yet
-> regenerated:** `asset_classes`, `price_cache_v2`, and `portfolio_snapshots` are listed
+> **Additional drift found during the #414 documentation audit (2026-07-11):**
+> `asset_classes`, `price_cache_v2`, and `portfolio_snapshots` are listed
 > below but no longer exist in the live `nova_memory` schema (portfolio-domain tables
-> removed since this file was generated). Conversely, `user_domains` (6 columns) and
-> `motivation_d100` (20 columns) exist in the live schema but are missing from the listing
-> below. One column count has also drifted from live: `agents` is now 38 columns (listed
-> as 37 below). `comms_checks`, `income_sources`, and `music_analysis` were checked against
-> live and still match the counts listed below (11, 12, and 11 respectively) — no drift
-> found there. Do not hand-patch these counts either — this note exists so the next
-> regeneration pass has a starting checklist.
+> removed since this file was generated) — **still confirmed absent from both the live
+> schema and `database/schema.sql`** as of the #506 audit (2026-07-20). `user_domains`
+> (6 columns) and `motivation_d100` exist in the live schema but are missing from the
+> listing below — **`motivation_d100`'s column count has been corrected to 18** (this note
+> previously said 20, which was itself wrong; verified against both the live schema and
+> `database/schema.sql`'s declarative `CREATE TABLE`). `comms_checks`, `income_sources`, and
+> `music_analysis` were checked against live and still match the counts listed below (11,
+> 12, and 11 respectively) — no drift found there. Do not hand-patch these counts either —
+> this note exists so the next regeneration pass has a starting checklist.
 >
-> **#474 update (2026-07-15):** `social_interactions` (previously listed above as
-> live-but-missing drift) has been **removed** by migration
-> `cognition/scripts/migrations/164-fold-social-interactions-to-comms-items.sql` — its
-> inbound rows folded into two new tables, `comms_items` (unified other-comms lifecycle,
-> 12 columns) and `comms_responses` (approval-gate sub-lifecycle, 9 columns), both added
-> to the listing below. This is a genuine schema change, not a documentation-drift
-> correction — do not confuse it with the other #414 drift items above, which still need a
-> real regeneration pass.
+> **#474 update (2026-07-15), corrected 2026-07-20:** `comms_items` (unified other-comms
+> lifecycle, 12 columns) and `comms_responses` (approval-gate sub-lifecycle, 9 columns)
+> have been added to the listing below — those two tables are confirmed live. **However,
+> `social_interactions` is NOT actually removed** — migration
+> `cognition/scripts/migrations/164-fold-social-interactions-to-comms-items.sql` (which
+> folds `social_interactions` into `comms_items`/`comms_responses` and then drops the
+> table) has not yet been run against the live production `nova_memory` schema as of the
+> #506 audit (2026-07-20): `social_interactions` (16 columns) is still present in both
+> the live database and `database/schema.sql`'s declarative `CREATE TABLE`. The 2026-07-15
+> note below claiming removal was premature — restored `social_interactions` to the table
+> listing. Re-check after migration 164 actually runs, then remove the row again.
 >
-> **#485 update (2026-07-17):** `extraction_failures` (dead-letter store for failed memory
-> extractions, 16 columns) has been added below from migration
-> `memory/migrations/085_extraction_failures.sql` on branch
-> `feature/issue-485-extraction-dead-letter`. **This table does not yet exist in the live
-> production `nova_memory` schema** as of this note — the migration has not been applied
-> to production. Do not treat its presence below as confirmation of a live column count;
-> once the migration lands in `main` and is applied, regenerate this file rather than
-> trusting this manually-inserted row.
+> **#485 update (2026-07-17), confirmed live 2026-07-20:** `extraction_failures`
+> (dead-letter store for failed memory extractions, 16 columns) from migration
+> `memory/migrations/085_extraction_failures.sql` **is now confirmed present in the live
+> production `nova_memory` schema** (16 columns, matches the listing below exactly) — the
+> migration has landed since the note below was written. The row below no longer needs the
+> "not yet in live production schema" caveat; corrected during the #506 audit.
+>
+> **#506 audit (2026-07-20) — additional drift found, not yet regenerated:**
+> - `entity_credibility` (10 columns: `id`, `entity_id`, `domain`, `score`, `claim_count`,
+>   `corroborated_count`, `contradicted_count`, `last_computed_at`, `computation_version`,
+>   `evidence_snapshot`) exists live but is **missing from this listing entirely** and is
+>   **not declared anywhere in `database/schema.sql` or any migration file in this repo** —
+>   it appears to have been created directly against production outside the declarative
+>   schema process. Per-(entity, domain) source credibility (S axis of S×D×V); computed by
+>   a daily maintenance script, never hand-assigned. Flagged for the Database/schema.sql
+>   owner (Newhart) to add the `CREATE TABLE` to `database/schema.sql` — Technical Writing
+>   does not add tables to the declarative schema itself, only documents what exists
+>   (see `ARCHITECTURE.md`'s schema-sync process description).
+> - Column-count drift (doc vs. live, corrected below): `agents` 37→38, `artwork` 27→28,
+>   `entity_fact_sources` 8→11, `entity_facts` 19→21.
+> - Views (`v_agents`, `v_agent_spawn_stats`, `v_current_stateful_facts`, `v_entity_facts`,
+>   `v_event_timeline`, `v_fact_grades`, `v_gambling_summary`, `v_media_queue_pending`,
+>   `v_media_with_tags`, `v_metamours`, `v_pending_tasks`, `v_pending_test_failures`,
+>   `v_ralph_active`, `v_relationships`, `v_task_tree`, `v_users`, plus the
+>   `workflow_steps_detail` view referenced elsewhere in the docs and `delegation_knowledge`)
+>   are out of scope for this file by original design — this listing only ever covered base
+>   tables — noted here only so a future full regeneration doesn't mistake the absence of a
+>   Views section for an oversight.
+> - Do not hand-patch further — this note exists so the next regeneration pass has a
+>   complete starting checklist across all four audit passes (#414, #474, #485, #506).
 
 ## Tables
 
@@ -56,9 +83,9 @@
 | agent_spawns | Tracks all agent spawns from the general-purpose spawner daemon | 14 |
 | agent_system_config | Agent system configuration. READ-ONLY except Newhart. | 6 |
 | agent_turn_context | - | 8 |
-| agents | Agent registry | 37 |
+| agents | Agent registry | 38 |
 | ai_models | Available AI models. NOVA maintains this; Newhart reads for agent assignments. Credentials and endpoints stored in 1Password (see credential_ref column). | 16 |
-| artwork | Archive of NOVAs Instagram artwork. Reference for future compilation. | 27 |
+| artwork | Archive of NOVAs Instagram artwork. Reference for future compilation. | 28 |
 | asset_classes | Asset class definitions for financial portfolio management. Defines tradeable asset types with pricing sources and trading characteristics. | 6 |
 | blockers | Curated registry of items blocked waiting on another entity's action (issue #356). Populated by Proactive Mode workflow (id=27) Steps 6/7; outreach against this registry is centralized in Step 8. | 11 |
 | bootstrap_context_config | Configuration for bootstrap system behavior | 4 |
@@ -68,14 +95,15 @@
 | channel_transcripts | - | 14 |
 | comms_checks | Individual Hermes check run results. Each row = one social/email/digest check. Replaces memory/hermes-*.md files. Owner: Communications domain (hermes). | 11 |
 | comms_digests | Daily/weekly communications digests. Replaces hermes-social-digest-*.md and NOVA_Comms_Digest_*.html. Owner: Communications domain (hermes). | 11 |
-| comms_items | Unified lifecycle for asynchronous inbound communications (email, X mentions/DMs, Nostr DMs). Dedupe key `(platform, item_id)`. Replaces the inbound-lifecycle role of `social_interactions` (folded/removed by issue #474). Owner: Communications domain (hermes). | 12 |
+| comms_items | Unified lifecycle for asynchronous inbound communications (email, X mentions/DMs, Nostr DMs). Dedupe key `(platform, item_id)`. Will replace the inbound-lifecycle role of `social_interactions` once migration 164 folds/removes it (issue #474) — as of the #506 audit, migration 164 has not yet run against production and `social_interactions` is still live (see row below). Owner: Communications domain (hermes). | 12 |
 | comms_responses | Approval-gate sub-lifecycle for outbound responses to inbound X/Nostr mentions and DMs. 1:1 linked to `comms_items` (issue #474). Owner: NOVA Operations (approval), Communications domain (draft creation). | 9 |
 | comms_state | Per-platform communications tracking state (seen IDs, cursors). Replaces hermes-social-state.json. Owner: Communications domain (hermes). | 5 |
 | d100_roll_log | Roll history for motivation_d100 (issue #358), populated by a trigger on motivation_d100. Used by the Proactive Mode gate check to force a D100 roll after 12h regardless of other steps' state. `announced_at` (issue #432) tracks deterministic cron-based announcement to #proactive-mode, decoupled from the heartbeat LLM turn. | 4 |
 | entities | People, AIs, organizations. NOVA has full access. Use entity_facts for attributes. | 22 |
+| entity_credibility | Computed per-(entity, domain) source credibility (S axis of S×D×V). NEVER hand-assigned — derived from claim track record + verification events; recomputed by a daily maintenance script. Domain taxonomy reuses `entity_facts.category` vocabulary + `agent_domains` topics; `_global` is the fallback. **Not declared in `database/schema.sql` or any migration file — flagged during the #506 audit for the schema/Database domain owner to add.** | 10 |
 | entity_fact_conflicts | Conflicts between entity facts requiring resolution. Part of the truth reconciliation system. | 13 |
-| entity_fact_sources | - | 8 |
-| entity_facts | Key-value facts about entities. Check current_timezone for I)ruid before time-based actions. | 19 |
+| entity_fact_sources | - | 11 |
+| entity_facts | Key-value facts about entities. Check current_timezone for I)ruid before time-based actions. | 21 |
 | entity_facts_archive | Archived entity facts from decay/cleanup processes. Historical record of previously stored knowledge. | 20 |
 | entity_relationships | Relationships between entities (family, work, friendship, etc). | 8 |
 | event_entities | Links events to entities (people, orgs, AIs). Many-to-many relationship table. | 3 |
@@ -83,7 +111,7 @@
 | event_projects | Links events to projects. Many-to-many relationship table for project milestones and activities. | 2 |
 | events | Historical events, milestones, activities. Log significant occurrences. | 10 |
 | events_archive | Archived historical events. Long-term storage for events moved out of active events table. | 11 |
-| extraction_failures | Dead-letter store for failed memory extractions from memory-extract hook (#485). Rows are inserted on nonzero exit, timeout, or spawn error and may be retried via extraction-replay.sh. **Not yet in live production schema — see #485 note above.** | 16 |
+| extraction_failures | Dead-letter store for failed memory extractions from memory-extract hook (#485). Rows are inserted on nonzero exit, timeout, or spawn error and may be retried via extraction-replay.sh. Confirmed live in production as of the #506 audit (2026-07-20). | 16 |
 | extraction_metrics | Performance metrics for data extraction processes. Tracks accuracy and efficiency of knowledge extraction. | 6 |
 | fact_change_log | Audit trail for entity fact modifications. Tracks who changed what and when for accountability. | 7 |
 | gambling_entries | Individual gambling session records. Tracks bets, outcomes, and session details for analysis. | 10 |
@@ -135,6 +163,7 @@
 | shopping_preferences | - | 8 |
 | shopping_wishlist | - | 11 |
 | skills | Skill definitions. Override precedence: WORKSPACE > DOMAIN > MANAGED > BUNDLED. See get_agent_skills(). | 24 |
+| social_interactions | Legacy inbound X/Nostr mention/DM lifecycle. Migration 164 (`cognition/scripts/migrations/164-fold-social-interactions-to-comms-items.sql`) folds this into `comms_items`/`comms_responses` and drops this table — **still live as of the #506 audit (2026-07-20); the migration has not yet been run against production.** Do not remove this row again until the migration is confirmed applied. | 16 |
 | tags | - | 5 |
 | tasks | Task tracking. NOVA can create, update status, assign. Check before starting work. | 23 |
 | tools | Tool usage notes. Override: WORKSPACE > DOMAIN > MANAGED > BUNDLED. See get_agent_tools(). | 13 |

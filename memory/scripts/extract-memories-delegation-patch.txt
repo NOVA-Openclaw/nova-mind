@@ -1,6 +1,20 @@
 # Patch for extract-memories.sh to add delegation awareness
 # This shows the addition to the PROMPT section
 
+# AUDIT NOTE (current as of this pass): This patch describes a historical,
+# more elaborate design. The extraction script is now memory/scripts/extract_memories.py
+# (there is no extract-memories.sh in the current repo). The live DELEGATION CONTEXT
+# section in that script (grep "DELEGATION CONTEXT") is a condensed one-liner —
+# "Extract agent delegation facts with subject=\"NOVA\"." plus the same "Known agents"
+# list below — that reuses the generic entity_facts template (subject/key/value/
+# category/durability/confidence/visibility) rather than the bespoke
+# delegates_to/agent_capability/agent_success/agent_failure key vocabulary and
+# entity_id=1 framing detailed below. None of those specific keys exist in the
+# current prompt. Treat the structure below as historical/superseded design
+# rationale for *why* delegation facts are extracted, not the literal current
+# prompt text — verify against extract_memories.py before relying on exact
+# key names.
+
 # Add this section after the PRIVACY DETECTION section and before the "Return JSON" section:
 
 DELEGATION CONTEXT:

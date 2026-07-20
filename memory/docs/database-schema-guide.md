@@ -74,6 +74,12 @@ CREATE TABLE entity_facts (
     expires TIMESTAMPTZ,
     durability VARCHAR(20) NOT NULL DEFAULT 'long_term',
     category TEXT NOT NULL DEFAULT 'observation'
+    -- Illustrative subset only — the live table has grown to 21 columns
+    -- (adds visibility_reason, source_channel_transcript_id,
+    -- source_channel_session_id, assertion_intent, mutability_class since
+    -- this example was written). Do not treat this block as a complete
+    -- column list; run `\d entity_facts` or see database/schema-reference.md
+    -- for the authoritative current shape.
 );
 ```
 

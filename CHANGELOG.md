@@ -1,5 +1,27 @@
 # Changelog
 
+### Batch: schema-sync-branch-safety-506 (Issue #506)
+
+#### Fixed
+- **`sync_schema_to_github()` now asserts branch safety before every schema dump/commit/push** (nova-mind#506) — Every sync attempt since 2026-07-17 had silently committed and pushed schema dumps onto whatever branch the listener's working clone (`~/.openclaw/workspace/nova-mind`) happened to have checked out, because the function never verified `HEAD`. The clone was left on a stale feature branch after prior work concluded, causing pushes to fail (branch diverged from its remote) while `database/schema.sql` on `main` silently drifted from the live database — masked because failures only wrote a `False` event, with no alert. A new `_ensure_on_main()` check now runs first thing inside the existing git-lock critical section (after lock acquisition, before the `pgschema dump` step) on **every** call — there is no process-lifetime cache, so branch state is re-verified even between long-lived daemon invocations:
+  - **Already on `main`:** fetch `origin` and fast-forward if origin is ahead; proceeds normally.
+  - **Wrong branch or detached `HEAD`:** checkout `main`, fetch `origin`, fast-forward — proceeds normally once remediated. The previously-checked-out branch/commit is left untouched (no commits are ever created on it, before or during the switch).
+  - **`main` has diverged from `origin/main` (ff-only merge fails):** abort loudly — no commit is created, nothing is pushed, local divergent commits are preserved unchanged. Returns `(False, None)` and sends an `agent_chat` alert (`_send_branch_alert()`, sender `schema-sync` → `nova`) naming the expected/found branch and the exact manual reconciliation commands (`git fetch origin && git rebase origin/main && git push origin main`).
+  - **Checkout or fetch fails outright** (e.g., dirty working tree blocking `git checkout main`, or the remote is unreachable): abort loudly the same way — `(False, None)` plus an alert with failure-specific remediation commands. Uncommitted edits are never discarded (git itself refuses the checkout/merge when a dirty file would be clobbered, and the code treats that refusal as an abort signal rather than forcing through with `--force`).
+  - The git lock (`_git_lock_path` flock) is acquired before the branch check runs and released unconditionally in the function's single `finally` block on every exit path, including the new early-return-on-abort paths — lock discipline is unchanged from the #399-era contract.
+  - No behavior change to the existing push retry/backoff/failure-classification logic (`_classify_push_failure()`, `_send_push_alert()`) — those paths are untouched and only run after branch safety is confirmed.
+  - Full detail (invariants, remediation matrix, alert semantics): `cognition/CHANGELOG.md` (`schema-sync-branch-safety-506` batch) and `cognition/scripts/pg-notify-listener.py` (`_ensure_on_main`, `_send_branch_alert`).
+
+#### Tests
+- `cognition/tests/test_pg_notify_listener_issue_506.py` — 11 new tests (14–23, continuing the #399 suite's numbering) covering: happy path (already on main, in sync, no extra alert/commit churn), wrong-branch remediation (feature branch tip byte-identical before/after — the core #506 regression check), detached-`HEAD` remediation, behind-origin fast-forward (commit correctly parented on the fetched tip, no alert on routine catch-up), diverged-main abort (local commits preserved, nothing pushed), dirty-worktree preservation on both `main` and a wrong branch, push-failure-after-remediation return-contract parity (`(False, commit_hash)`), lock release on abort-before-dump and on remediation failure, re-entry re-detection (no one-shot cache), and concurrent same-clone calls (no wrong-branch commit under a forced interleaving race). Existing #399 fixtures were refactored into a shared `cognition/tests/conftest.py`; two #399 assertions (Tests 5/10) were intentionally updated because their "clone behind origin" scenario is now correctly reclassified from a push-time non-fast-forward failure to an auto-remediated fast-forward success — no other #399 assertion changed, and the full 27-test suite (16 #399 + 11 #506) passes. See `cognition/CHANGELOG.md` for QA sign-off detail.
+
+#### Known follow-ups (not part of this fix)
+- **nova-mind#507** — no automated test drives the `_send_push_alert()` non-fast-forward branch post-#506 (only reachable now via a narrow same-call TOCTOU race between the fast-forward and the subsequent push, both inside the held lock); code is untouched and correct by inspection, test coverage only.
+- **nova-mind#508** — `pg-notify-listener.py` `agent_chat` alerts (`_send_push_alert` and the new `_send_branch_alert`) are latently broken in production: both hardcode sender `'schema-sync'`, and `send_agent_message()` now enforces `sender == session_user`, so every listener alert has silently failed to deliver since 2026-07-12. Pre-existing pattern inherited from #399-era code, not introduced by #506; this fix's error handling degrades correctly (alert-send failure is logged, never turns an abort into a false success).
+
+#### Issues Closed
+- #506 — schema-sync listener commits dumps onto whatever branch is checked out — silent total sync failure since Jul 17
+
 ### Batch: extraction-dead-letter-485 (Issue #485)
 
 #### Added

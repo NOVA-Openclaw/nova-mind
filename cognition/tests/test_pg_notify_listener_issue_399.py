@@ -2,248 +2,30 @@
 
 Covers the direct git push fix, retry/backoff, failure classification,
 lock hygiene, alert path, and stale gidget instruction removal.
+
+Fixtures and helpers have been moved to conftest.py so they can be reused
+by the issue #506 test module without duplication.
 """
 
 from __future__ import annotations
 
-import fcntl
-import importlib.util
 import os
-import shutil
 import subprocess
 import sys
 import time
 from pathlib import Path
-from unittest import mock
 
-import psycopg2
 import pytest
 
-SCRIPT_PATH = Path(__file__).parent.parent / "scripts" / "pg-notify-listener.py"
-spec = importlib.util.spec_from_file_location("pg_notify_listener", SCRIPT_PATH)
-pg_notify_listener = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(pg_notify_listener)
-
-
-@pytest.fixture
-def listener_module(monkeypatch, tmp_path):
-    """Return the listener module configured for a disposable repo."""
-    repo = tmp_path / "nova-mind-clone"
-    repo.mkdir()
-    (repo / "database").mkdir()
-    schema_file = repo / "database" / "schema.sql"
-    schema_file.write_text("-- baseline schema\n")
-    lock_path = tmp_path / "git.lock"
-
-    monkeypatch.setattr(pg_notify_listener, "NOVA_MIND_DIR", str(repo))
-    monkeypatch.setattr(pg_notify_listener, "SCHEMA_FILE", str(schema_file))
-    monkeypatch.setattr(pg_notify_listener, "_git_lock_path", str(lock_path))
-    monkeypatch.setattr(
-        pg_notify_listener,
-        "_agent_chat_env",
-        {
-            "PGHOST": "localhost",
-            "PGDATABASE": "agent_chat",
-            "PGUSER": "testuser",
-            "PGPASSWORD": "testpass",
-        },
-    )
-    # Ensure a clean lock fd state for every test.
-    pg_notify_listener._git_lock_fd = None
-
-    yield pg_notify_listener
-
-    # Cleanup: release lock if a test left it held.
-    if pg_notify_listener._git_lock_fd:
-        try:
-            fcntl.flock(pg_notify_listener._git_lock_fd, fcntl.LOCK_UN)
-        except Exception:
-            pass
-        try:
-            pg_notify_listener._git_lock_fd.close()
-        except Exception:
-            pass
-        pg_notify_listener._git_lock_fd = None
-
-
-@pytest.fixture
-def git_repos(tmp_path):
-    """Create a bare origin and a clone with an initial commit pushed."""
-    origin = tmp_path / "origin.git"
-    clone = tmp_path / "clone"
-    origin.mkdir(mode=0o700)
-    subprocess.run(["git", "init", "--bare", str(origin)], check=True, capture_output=True)
-    subprocess.run(["git", "clone", str(origin), str(clone)], check=True, capture_output=True)
-    subprocess.run(["git", "-C", str(clone), "config", "user.email", "test@example.com"], check=True)
-    subprocess.run(["git", "-C", str(clone), "config", "user.name", "Test"], check=True)
-    # Disable global hooks so test pushes to disposable repos are not blocked.
-    subprocess.run(["git", "-C", str(clone), "config", "core.hooksPath", ""], check=True)
-    subprocess.run(["git", "-C", str(origin), "config", "core.hooksPath", ""], check=True)
-    (clone / "database").mkdir(exist_ok=True)
-    (clone / "database" / "schema.sql").write_text("-- initial\n")
-    (clone / "README.md").write_text("# README\n")
-    subprocess.run(["git", "-C", str(clone), "add", "."], check=True)
-    subprocess.run(["git", "-C", str(clone), "commit", "-m", "initial"], check=True, capture_output=True)
-    subprocess.run(["git", "-C", str(clone), "push", "origin", "main"], check=True, capture_output=True)
-    return {"origin": str(origin), "clone": str(clone)}
-
-
-@pytest.fixture
-def mock_pgschema_dump(monkeypatch, listener_module):
-    """Mock pgschema dump to write deterministic schema content."""
-    real_subprocess_run = subprocess.run
-
-    def fake_run(*args, **kwargs):
-        cmd = args[0] if args else kwargs.get("args", [])
-        if len(cmd) > 0 and cmd[0] == "pgschema":
-            stdout = kwargs.get("stdout")
-            new_content = getattr(
-                listener_module, "_test_schema_content", "-- schema from pgschema\n"
-            )
-            if stdout is not None:
-                stdout.write(new_content)
-                stdout.flush()
-            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
-        return real_subprocess_run(*args, **kwargs)
-
-    monkeypatch.setattr(pg_notify_listener.subprocess, "run", fake_run)
-    return fake_run
-
-
-@pytest.fixture
-def mock_agent_chat(monkeypatch, listener_module):
-    """Capture send_agent_message calls made via psycopg2."""
-    calls = []
-
-    class FakeCursor:
-        def execute(self, query, params):
-            calls.append({"query": query, "params": list(params)})
-
-        def close(self):
-            pass
-
-    class FakeConnection:
-        def cursor(self):
-            return FakeCursor()
-
-        def commit(self):
-            pass
-
-        def close(self):
-            pass
-
-    def fake_connect(**kwargs):
-        calls.append({"connect_kwargs": kwargs})
-        return FakeConnection()
-
-    monkeypatch.setattr(pg_notify_listener.psycopg2, "connect", fake_connect)
-    return calls
-
-
-def _create_fake_git_dir(tmp_path, behavior, name="fake-git", **kwargs):
-    """Create a directory containing a fake `git` wrapper for push tests."""
-    # Resolve the real git binary before we shadow it on PATH.
-    real_git = shutil.which("git")
-    if not real_git:
-        real_git = "/usr/bin/git"
-
-    fake_dir = tmp_path / name
-    fake_dir.mkdir(mode=0o700)
-    counter_file = fake_dir / "counter"
-    counter_file.write_text("0")
-
-    if behavior == "transient_then_success":
-        fail_count = kwargs.get("fail_count", 2)
-        body = f"""COUNTER=$(cat {counter_file} 2>/dev/null || echo 0)
-echo $((COUNTER + 1)) > {counter_file}
-if [[ $COUNTER -lt {fail_count} ]]; then
-    echo "fatal: unable to access 'origin': Could not resolve host example.com" >&2
-    exit 128
-fi
-exec "$REAL_GIT" "$@"
-"""
-    elif behavior == "permanent_failure":
-        body = """echo "fatal: unable to access 'origin': Could not resolve host example.com" >&2
-exit 128
-"""
-    elif behavior == "auth_failure":
-        body = """echo "Permission denied (publickey)." >&2
-echo "fatal: Could not read from remote repository." >&2
-exit 128
-"""
-    elif behavior == "timeout":
-        sleep_seconds = kwargs.get("sleep_seconds", 70)
-        body = f"""sleep {sleep_seconds}
-exit 0
-"""
-    else:
-        raise ValueError(f"Unknown fake-git behavior: {behavior}")
-
-    script = f"""#!/usr/bin/env bash
-set -euo pipefail
-REAL_GIT={real_git!r}
-IS_PUSH=0
-for arg in "$@"; do
-    if [[ "$arg" == "push" ]]; then
-        IS_PUSH=1
-        break
-    fi
-done
-if [[ $IS_PUSH -eq 0 ]]; then
-    exec "$REAL_GIT" "$@"
-fi
-{body}
-"""
-    git_path = fake_dir / "git"
-    git_path.write_text(script)
-    git_path.chmod(0o755)
-    return str(fake_dir)
-
-
-def _use_fake_git(monkeypatch, tmp_path, behavior, name="fake-git", **kwargs):
-    """Prepend a fake git directory to PATH."""
-    fake_dir = _create_fake_git_dir(tmp_path, behavior, name=name, **kwargs)
-    monkeypatch.setenv("PATH", f"{fake_dir}{os.pathsep}{os.environ['PATH']}")
-    return fake_dir
-
-
-def _set_schema_content(listener_module, content):
-    """Set the content the mocked pgschema will write."""
-    listener_module._test_schema_content = content
-
-
-def _clone_head(clone_dir):
-    """Return short HEAD hash of clone."""
-    result = subprocess.run(
-        ["git", "-C", str(clone_dir), "rev-parse", "--short", "HEAD"],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    return result.stdout.strip()
-
-
-def _remote_head(origin_dir):
-    """Return short hash of origin/main."""
-    result = subprocess.run(
-        ["git", "--git-dir", str(origin_dir), "rev-parse", "--short", "main"],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    return result.stdout.strip()
-
-
-def _lock_is_held(lock_path):
-    """Return True if an exclusive non-blocking lock cannot be acquired."""
-    try:
-        fd = open(lock_path, "w")
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        fcntl.flock(fd, fcntl.LOCK_UN)
-        fd.close()
-        return False
-    except (IOError, OSError):
-        return True
+from conftest import (
+    pg_notify_listener,
+    _create_fake_git_dir,
+    _use_fake_git,
+    _set_schema_content,
+    _clone_head,
+    _remote_head,
+    _lock_is_held,
+)
 
 
 class TestHappyPath:
@@ -332,10 +114,10 @@ class TestPermanentFailure:
 
 
 class TestNonFastForward:
-    def test_behind_origin_rejection_fail_fast(
+    def test_behind_origin_fast_forwards_and_succeeds(
         self, listener_module, git_repos, mock_pgschema_dump, mock_agent_chat
     ):
-        """Test 5: non-fast-forward rejection fails fast and alerts nova."""
+        """Test 5: behind origin/main is now fast-forwarded before commit (issue #506)."""
         clone = Path(git_repos["clone"])
         origin = Path(git_repos["origin"])
         listener_module.NOVA_MIND_DIR = str(clone)
@@ -352,18 +134,14 @@ class TestNonFastForward:
         subprocess.run(["git", "-C", str(side_dir), "commit", "-m", "side commit"], check=True, capture_output=True)
         subprocess.run(["git", "-C", str(side_dir), "push", "origin", "main"], check=True, capture_output=True)
 
-        # Now make a diverging commit in the clone.
+        # The branch-safety fix fast-forwards the clone before creating the schema commit.
         _set_schema_content(listener_module, "-- local diverged schema\n")
         ok, commit_hash = listener_module.sync_schema_to_github("CREATE", "table", "public.test_table")
 
-        assert ok is False
+        assert ok is True
         assert commit_hash == _clone_head(clone)
-        message_calls = [c for c in mock_agent_chat if "send_agent_message" in c.get("query", "")]
-        assert len(message_calls) == 1
-        sender, message, recipients = message_calls[0]["params"]
-        assert sender == "schema-sync"
-        assert recipients == ["nova"]
-        assert "non-fast-forward" in message.lower()
+        assert _remote_head(git_repos["origin"]) == _clone_head(clone)
+        assert len(mock_agent_chat) == 0
         # Lock released.
         assert not _lock_is_held(listener_module._git_lock_path)
 
@@ -562,7 +340,9 @@ class TestNoGidgetMessages:
         listener_module.sync_schema_to_github("CREATE", "table", "public.t3")
 
         schema_sync_calls = [c for c in mock_agent_chat if "send_agent_message" in c.get("query", "")]
-        assert len(schema_sync_calls) == 3
+        # The non-fast-forward scenario now fast-forwards and succeeds (issue #506),
+        # so only the permanent-failure and auth-failure cases produce alerts.
+        assert len(schema_sync_calls) == 2
         for call in schema_sync_calls:
             recipients = call["params"][2]
             assert recipients == ["nova"]

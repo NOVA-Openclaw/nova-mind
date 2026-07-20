@@ -218,6 +218,140 @@ def _send_push_alert(commit_hash, command, table_name, failure_class, stderr):
         log(f"Failed to send alert to nova: {alert_err}")
 
 
+def _send_branch_alert(found_branch, command, table_name, reason, stderr=None):
+    """Send agent_chat alert to nova when branch-safety check aborts. Never propagates exceptions."""
+    try:
+        message_lines = [
+            f'Schema sync aborted ({reason}):',
+            f'  repo: nova-mind',
+            f'  path: {NOVA_MIND_DIR}',
+            f'  expected branch: main',
+            f'  found branch: {found_branch}',
+            f'  message: schema: {command} {table_name}',
+        ]
+        if reason == 'diverged':
+            message_lines.append(
+                f'  reason: main has diverged from origin/main. '
+                f'Reconcile manually: cd {NOVA_MIND_DIR} && git fetch origin && '
+                f'git rebase origin/main && git push origin main'
+            )
+        elif reason == 'fetch failed':
+            message_lines.append(
+                f'  reason: unable to fetch origin during branch remediation. '
+                f'Investigate remote connectivity, then run: '
+                f'cd {NOVA_MIND_DIR} && git checkout main && git fetch origin && '
+                f'git merge --ff-only origin/main'
+            )
+        elif reason == 'checkout failed':
+            message_lines.append(
+                f'  reason: unable to checkout main (working tree may be dirty or branch missing). '
+                f'Reconcile manually: cd {NOVA_MIND_DIR} && git stash && git checkout main && '
+                f'git fetch origin && git merge --ff-only origin/main'
+            )
+        else:
+            message_lines.append(
+                f'  reason: branch-safety check failed ({reason}). '
+                f'Reconcile manually: cd {NOVA_MIND_DIR} && git checkout main && '
+                f'git fetch origin && git merge --ff-only origin/main'
+            )
+        if stderr:
+            message_lines.append(f'  git stderr: {stderr.strip()[:500]}')
+        message = '\n'.join(message_lines)
+
+        alert_conn = psycopg2.connect(
+            host=_agent_chat_env.get('PGHOST', 'localhost'),
+            database=_agent_chat_env['PGDATABASE'],
+            user=_agent_chat_env['PGUSER'],
+            password=_agent_chat_env.get('PGPASSWORD', '')
+        )
+        alert_cur = alert_conn.cursor()
+        alert_cur.execute(
+            "SELECT send_agent_message(%s, %s, %s)",
+            ('schema-sync', message, ['nova'])
+        )
+        alert_conn.commit()
+        alert_cur.close()
+        alert_conn.close()
+        log(f"Alerted nova via agent_chat about branch-safety abort (found: {found_branch}, reason: {reason})")
+    except Exception as alert_err:
+        log(f"Failed to send branch alert to nova: {alert_err}")
+
+
+def _ensure_on_main(command, table_name):
+    """Ensure the working clone is on main and fast-forwarded with origin.
+
+    Runs inside the git lock critical section. Returns True if the clone is on
+    main and up-to-date, False if remediation is not possible. Never discards
+    pre-existing local commits or uncommitted working-tree changes.
+    """
+    # Discover current branch state.
+    branch_result = subprocess.run(
+        ['git', '-C', NOVA_MIND_DIR, 'branch', '--show-current'],
+        capture_output=True,
+        text=True
+    )
+    if branch_result.returncode != 0:
+        current_branch = None
+        detached = True
+    else:
+        current_branch = branch_result.stdout.strip()
+        detached = current_branch == ''
+
+    if current_branch == 'main' and not detached:
+        # Already on main: fetch and fast-forward if origin is ahead.
+        log("Already on main; fetching origin...")
+        fetch_result = subprocess.run(
+            ['git', '-C', NOVA_MIND_DIR, 'fetch', 'origin'],
+            capture_output=True,
+            text=True
+        )
+        if fetch_result.returncode != 0:
+            _send_branch_alert('main', command, table_name, 'fetch failed', fetch_result.stderr)
+            return False
+        ff_result = subprocess.run(
+            ['git', '-C', NOVA_MIND_DIR, 'merge', '--ff-only', 'origin/main'],
+            capture_output=True,
+            text=True
+        )
+        if ff_result.returncode != 0:
+            _send_branch_alert('main', command, table_name, 'diverged', ff_result.stderr)
+            return False
+        return True
+
+    # Wrong branch or detached HEAD: attempt safe remediation.
+    found_label = current_branch if current_branch else 'DETACHED'
+    log(f"Branch check failed (found: {found_label}); attempting checkout main + fast-forward...")
+    checkout_result = subprocess.run(
+        ['git', '-C', NOVA_MIND_DIR, 'checkout', 'main'],
+        capture_output=True,
+        text=True
+    )
+    if checkout_result.returncode != 0:
+        _send_branch_alert(found_label, command, table_name, 'checkout failed', checkout_result.stderr)
+        return False
+
+    fetch_result = subprocess.run(
+        ['git', '-C', NOVA_MIND_DIR, 'fetch', 'origin'],
+        capture_output=True,
+        text=True
+    )
+    if fetch_result.returncode != 0:
+        _send_branch_alert('main', command, table_name, 'fetch failed', fetch_result.stderr)
+        return False
+
+    ff_result = subprocess.run(
+        ['git', '-C', NOVA_MIND_DIR, 'merge', '--ff-only', 'origin/main'],
+        capture_output=True,
+        text=True
+    )
+    if ff_result.returncode != 0:
+        _send_branch_alert('main', command, table_name, 'diverged', ff_result.stderr)
+        return False
+
+    log("Branch remediation complete; now on main and fast-forwarded")
+    return True
+
+
 def sync_schema_to_github(command, obj_type, obj_name):
     """Dump schema and push to GitHub. Uses file lock to serialize concurrent calls."""
     global _git_lock_fd
@@ -237,6 +371,11 @@ def sync_schema_to_github(command, obj_type, obj_name):
     try:
         # Extract table name for commit message
         table_name = obj_name.split('.')[-1] if '.' in obj_name else obj_name
+
+        # 0. Branch-safety check: must run INSIDE the git lock, before any dump
+        # or commit, and on every call (no process-lifetime cache).
+        if not _ensure_on_main(command, table_name):
+            return False, None
 
         # 1. Dump schema to file (pgschema produces clean SQL without pg_dump artifacts)
         log(f"Dumping schema to {SCHEMA_FILE}...")

@@ -7,6 +7,28 @@
 
 
 --
+-- Name: assertion_intent_enum; Type: TYPE; Schema: -; Owner: -
+--
+
+CREATE TYPE assertion_intent_enum AS ENUM (
+    'asserted',
+    'speculative',
+    'fictional',
+    'disclaimed',
+    'hypothetical'
+);
+
+--
+-- Name: mutability_class_enum; Type: TYPE; Schema: -; Owner: -
+--
+
+CREATE TYPE mutability_class_enum AS ENUM (
+    'immutable',
+    'slow_changing',
+    'stateful'
+);
+
+--
 -- Name: nova:TABLES:argus; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
 --
 
@@ -519,9 +541,6 @@ CREATE TABLE IF NOT EXISTS agents (
 );
 
 
-COMMENT ON TABLE agents IS 'Agent registry';
-
-
 COMMENT ON COLUMN agents.access_details IS 'JSON: session_key, cli_command, endpoint URL, etc.';
 
 
@@ -914,6 +933,9 @@ CREATE TABLE IF NOT EXISTS comms_digests (
 );
 
 
+COMMENT ON TABLE comms_digests IS 'Daily/weekly communications digests. Replaces hermes-social-digest-*.md and NOVA_Comms_Digest_*.html. Owner: Communications domain (hermes).';
+
+
 COMMENT ON COLUMN comms_digests.digest_data IS 'Structured digest for template rendering: {email_received, email_handled, email_escalated, email_notable_items[], social_mentions, social_dms, social_engagement, social_notable_items[], action_items[], patterns_notes}';
 
 --
@@ -1223,6 +1245,127 @@ CREATE INDEX IF NOT EXISTS idx_channel_transcripts_sender_entity ON channel_tran
 CREATE INDEX IF NOT EXISTS idx_channel_transcripts_session_time ON channel_transcripts (session_id, "timestamp");
 
 --
+-- Name: comms_items; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS comms_items (
+    id BIGSERIAL,
+    platform text NOT NULL,
+    item_id text NOT NULL,
+    thread_id text,
+    entity_id bigint,
+    status text DEFAULT 'inbound' NOT NULL,
+    disposition text,
+    summary text,
+    artifact_ref text,
+    first_seen_at timestamptz DEFAULT now() NOT NULL,
+    reported_at timestamptz,
+    resolved_at timestamptz,
+    CONSTRAINT comms_items_pkey PRIMARY KEY (id),
+    CONSTRAINT comms_items_platform_item_id_key UNIQUE (platform, item_id),
+    CONSTRAINT comms_items_entity_id_fkey FOREIGN KEY (entity_id) REFERENCES entities (id),
+    CONSTRAINT comms_items_disposition_check CHECK (disposition IS NULL OR (disposition IN ('fyi'::text, 'actionable'::text, 'escalation'::text, 'receipt'::text, 'injection_suspect'::text))),
+    CONSTRAINT comms_items_status_check CHECK (status IN ('inbound'::text, 'reported'::text, 'tracked'::text, 'resolved'::text, 'dismissed'::text))
+);
+
+
+COMMENT ON TABLE comms_items IS 'Unified lifecycle for asynchronous inbound communications (email, X mentions/DMs, Nostr DMs, etc.). Dedupe key is (platform, item_id). Replaces the inbound-lifecycle role of social_interactions. Owner: Communications domain (hermes).';
+
+
+COMMENT ON COLUMN comms_items.platform IS 'Platform identifier: email, x, nostr, github, ...';
+
+
+COMMENT ON COLUMN comms_items.item_id IS 'Immutable source identifier: Gmail message id, tweet id, Nostr event id, GitHub notification id, etc.';
+
+
+COMMENT ON COLUMN comms_items.thread_id IS 'Platform thread/conversation root: Gmail threadId, X conversation id, Nostr root event id.';
+
+
+COMMENT ON COLUMN comms_items.entity_id IS 'Resolved sender entity, if a matching entity_facts key/value exists. NULL is expected for uncovered identifiers (e.g., X handles until an x_handle fact key exists).';
+
+
+COMMENT ON COLUMN comms_items.status IS 'Lifecycle: inbound (fetched, not yet reported), reported (surfaced in Hermes report), tracked (actionable, artifact_ref set), resolved (handled, source archived), dismissed (no action needed).';
+
+
+COMMENT ON COLUMN comms_items.disposition IS 'Classifier output: fyi, actionable, escalation, receipt, injection_suspect. NULL until classified.';
+
+
+COMMENT ON COLUMN comms_items.summary IS 'Poller-extracted facts in the poller''s own voice; never raw relayed prose.';
+
+
+COMMENT ON COLUMN comms_items.artifact_ref IS 'Task number, issue URL, draft id, or other reference created for tracked items.';
+
+
+COMMENT ON COLUMN comms_items.first_seen_at IS 'When this (platform, item_id) was first observed; preserved across migrations.';
+
+
+COMMENT ON COLUMN comms_items.reported_at IS 'When the item was first included in a Hermes→NOVA report.';
+
+
+COMMENT ON COLUMN comms_items.resolved_at IS 'When the item reached status=resolved; triggers archive-on-resolution for email.';
+
+--
+-- Name: idx_comms_items_entity_id; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_comms_items_entity_id ON comms_items (entity_id) WHERE (entity_id IS NOT NULL);
+
+--
+-- Name: idx_comms_items_first_seen; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_comms_items_first_seen ON comms_items (first_seen_at DESC);
+
+--
+-- Name: idx_comms_items_platform_status; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_comms_items_platform_status ON comms_items (platform, status);
+
+--
+-- Name: comms_responses; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS comms_responses (
+    id BIGSERIAL,
+    comms_item_id bigint NOT NULL,
+    draft_response text,
+    approved_by text,
+    approved_at timestamptz,
+    response_id text,
+    responded_at timestamptz,
+    notes text,
+    created_at timestamptz DEFAULT now() NOT NULL,
+    CONSTRAINT comms_responses_pkey PRIMARY KEY (id),
+    CONSTRAINT comms_responses_comms_item_id_key UNIQUE (comms_item_id),
+    CONSTRAINT comms_responses_comms_item_id_fkey FOREIGN KEY (comms_item_id) REFERENCES comms_items (id) ON DELETE CASCADE
+);
+
+
+COMMENT ON TABLE comms_responses IS 'Approval gate for outbound responses to inbound social communications (X/Nostr mentions and DMs). Linked 1:1 to comms_items. Owner: NOVA Operations (approval), Communications domain (draft creation).';
+
+
+COMMENT ON COLUMN comms_responses.comms_item_id IS 'The inbound comms item this response belongs to.';
+
+
+COMMENT ON COLUMN comms_responses.draft_response IS 'Proposed response text, written by Hermes/NOVA.';
+
+
+COMMENT ON COLUMN comms_responses.approved_by IS 'Entity or agent that approved the response (e.g., I)ruid or NOVA).';
+
+
+COMMENT ON COLUMN comms_responses.approved_at IS 'When the response was approved.';
+
+
+COMMENT ON COLUMN comms_responses.response_id IS 'Platform-specific posted response id (tweet id, Nostr event id).';
+
+
+COMMENT ON COLUMN comms_responses.responded_at IS 'When the response was posted.';
+
+
+COMMENT ON COLUMN comms_responses.notes IS 'Internal notes on the response workflow.';
+
+--
 -- Name: entity_fact_conflicts; Type: TABLE; Schema: -; Owner: -
 --
 
@@ -1271,6 +1414,8 @@ CREATE TABLE IF NOT EXISTS entity_facts (
     expires timestamptz,
     durability varchar(20) DEFAULT 'long_term' NOT NULL,
     category text DEFAULT 'observation' NOT NULL,
+    assertion_intent assertion_intent_enum DEFAULT 'asserted'::assertion_intent_enum NOT NULL,
+    mutability_class mutability_class_enum DEFAULT 'slow_changing'::mutability_class_enum NOT NULL,
     CONSTRAINT entity_facts_pkey PRIMARY KEY (id),
     CONSTRAINT entity_facts_entity_id_fkey FOREIGN KEY (entity_id) REFERENCES entities (id) ON DELETE CASCADE,
     CONSTRAINT entity_facts_source_channel_session_id_fkey FOREIGN KEY (source_channel_session_id) REFERENCES channel_sessions (id),
@@ -1296,6 +1441,18 @@ COMMENT ON COLUMN entity_facts.source_channel_transcript_id IS 'FK to channel_tr
 
 
 COMMENT ON COLUMN entity_facts.source_channel_session_id IS 'FK to channel_sessions row (denormalised for fast session-level queries)';
+
+
+COMMENT ON COLUMN entity_facts.assertion_intent IS 'Epistemological intent of the claim. Grading machinery (S×D×V) only engages for asserted+speculative. fictional/disclaimed/hypothetical are stored with full provenance but never compete as truth claims. Determination happens at ingestion/extraction time.';
+
+
+COMMENT ON COLUMN entity_facts.mutability_class IS 'Controls query-time resolution and contradiction detection. immutable: conflicting values = genuine contradiction → credibility impact. slow_changing: conflict within short window suspicious, across years = natural drift. stateful: latest value is current; full trajectory preserved; no credibility damage from drift. When mixed classes exist for the same (entity_id, key), resolution uses the STRICTEST class (immutable > slow_changing > stateful).';
+
+--
+-- Name: idx_entity_facts_assertion_intent; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_entity_facts_assertion_intent ON entity_facts (assertion_intent);
 
 --
 -- Name: idx_entity_facts_category; Type: INDEX; Schema: -; Owner: -
@@ -1334,10 +1491,22 @@ CREATE INDEX IF NOT EXISTS idx_entity_facts_durability ON entity_facts (durabili
 CREATE INDEX IF NOT EXISTS idx_entity_facts_entity ON entity_facts (entity_id);
 
 --
+-- Name: idx_entity_facts_gradable; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_entity_facts_gradable ON entity_facts (entity_id, key) WHERE assertion_intent IN ('asserted'::public.assertion_intent_enum, 'speculative'::public.assertion_intent_enum);
+
+--
 -- Name: idx_entity_facts_key; Type: INDEX; Schema: -; Owner: -
 --
 
 CREATE INDEX IF NOT EXISTS idx_entity_facts_key ON entity_facts (key);
+
+--
+-- Name: idx_entity_facts_mutability; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_entity_facts_mutability ON entity_facts (mutability_class) WHERE (mutability_class = 'immutable'::public.mutability_class_enum);
 
 --
 -- Name: idx_entity_facts_privacy_scope; Type: INDEX; Schema: -; Owner: -
@@ -1370,11 +1539,26 @@ CREATE TABLE IF NOT EXISTS entity_fact_sources (
     first_seen timestamptz DEFAULT now(),
     last_seen timestamptz DEFAULT now(),
     source_url text,
+    reporting_distance real DEFAULT 1.0 NOT NULL,
+    verification_quality real,
+    source_session_id bigint,
     CONSTRAINT entity_fact_sources_pkey PRIMARY KEY (id),
     CONSTRAINT uq_fact_source UNIQUE (fact_id, source_entity_id),
     CONSTRAINT entity_fact_sources_fact_id_fkey FOREIGN KEY (fact_id) REFERENCES entity_facts (id) ON DELETE CASCADE,
-    CONSTRAINT entity_fact_sources_source_entity_id_fkey FOREIGN KEY (source_entity_id) REFERENCES entities (id)
+    CONSTRAINT entity_fact_sources_source_entity_id_fkey FOREIGN KEY (source_entity_id) REFERENCES entities (id),
+    CONSTRAINT entity_fact_sources_source_session_id_fkey FOREIGN KEY (source_session_id) REFERENCES channel_sessions (id),
+    CONSTRAINT entity_fact_sources_reporting_distance_check CHECK (reporting_distance > 0.0::double precision AND reporting_distance <= 1.0::double precision),
+    CONSTRAINT entity_fact_sources_verification_quality_check CHECK (verification_quality >= 0.0::double precision AND verification_quality <= 1.0::double precision)
 );
+
+
+COMMENT ON COLUMN entity_fact_sources.reporting_distance IS 'Transmission hops from the subject (D axis). Self-report/autobiography = 1.0; direct observation ≈ 0.9; secondhand ≈ 0.8; further decays. Decay rate is tunable per source type (a cited biography does not decay like barroom gossip). Set at extraction time based on source relationship to subject.';
+
+
+COMMENT ON COLUMN entity_fact_sources.verification_quality IS 'Citation density, corroboration, peer review quality (V axis). NULL = not yet assessed (query-time computation treats as neutral 0.5). 0.0 = assessed and FAILED verification. Maps to research_citations.reliability scale (0–1). This distinction matters: NULL sources participate at neutral weight; 0.0 sources actively drag down.';
+
+
+COMMENT ON COLUMN entity_fact_sources.source_session_id IS 'FK to channel_sessions — identifies the originating conversation. Used for corroboration independence: two facts from the same session are one witness, not two. Required for the v1 corroboration ratio in entity_credibility recompute.';
 
 --
 -- Name: idx_efs_fact_id; Type: INDEX; Schema: -; Owner: -
@@ -1387,6 +1571,12 @@ CREATE INDEX IF NOT EXISTS idx_efs_fact_id ON entity_fact_sources (fact_id);
 --
 
 CREATE INDEX IF NOT EXISTS idx_efs_source_entity_id ON entity_fact_sources (source_entity_id);
+
+--
+-- Name: idx_efs_source_session; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS idx_efs_source_session ON entity_fact_sources (source_session_id) WHERE (source_session_id IS NOT NULL);
 
 --
 -- Name: entity_facts_archive; Type: TABLE; Schema: -; Owner: -
@@ -1580,7 +1770,6 @@ CREATE INDEX IF NOT EXISTS idx_extraction_failures_replay_order ON extraction_fa
 --
 
 CREATE INDEX IF NOT EXISTS idx_extraction_failures_status ON extraction_failures (status);
-
 
 --
 -- Name: extraction_metrics; Type: TABLE; Schema: -; Owner: -
@@ -3069,127 +3258,6 @@ CREATE INDEX IF NOT EXISTS idx_social_interactions_created ON social_interaction
 CREATE INDEX IF NOT EXISTS idx_social_interactions_platform_status ON social_interactions (platform, status);
 
 --
--- Name: comms_items; Type: TABLE; Schema: -; Owner: -
---
-
-CREATE TABLE IF NOT EXISTS comms_items (
-    id bigserial,
-    platform text NOT NULL,
-    item_id text NOT NULL,
-    thread_id text,
-    entity_id bigint,
-    status text NOT NULL DEFAULT 'inbound',
-    disposition text,
-    summary text,
-    artifact_ref text,
-    first_seen_at timestamptz NOT NULL DEFAULT now(),
-    reported_at timestamptz,
-    resolved_at timestamptz,
-    CONSTRAINT comms_items_pkey PRIMARY KEY (id),
-    CONSTRAINT comms_items_platform_item_id_key UNIQUE (platform, item_id),
-    CONSTRAINT comms_items_status_check CHECK (status IN ('inbound'::text, 'reported'::text, 'tracked'::text, 'resolved'::text, 'dismissed'::text)),
-    CONSTRAINT comms_items_disposition_check CHECK (disposition IS NULL OR (disposition IN ('fyi'::text, 'actionable'::text, 'escalation'::text, 'receipt'::text, 'injection_suspect'::text))),
-    CONSTRAINT comms_items_entity_id_fkey FOREIGN KEY (entity_id) REFERENCES entities (id)
-);
-
-
-COMMENT ON TABLE comms_items IS 'Unified lifecycle for asynchronous inbound communications (email, X mentions/DMs, Nostr DMs, etc.). Dedupe key is (platform, item_id). Replaces the inbound-lifecycle role of social_interactions. Owner: Communications domain (hermes).';
-
-
-COMMENT ON COLUMN comms_items.platform IS 'Platform identifier: email, x, nostr, github, ...';
-
-
-COMMENT ON COLUMN comms_items.item_id IS 'Immutable source identifier: Gmail message id, tweet id, Nostr event id, GitHub notification id, etc.';
-
-
-COMMENT ON COLUMN comms_items.thread_id IS 'Platform thread/conversation root: Gmail threadId, X conversation id, Nostr root event id.';
-
-
-COMMENT ON COLUMN comms_items.entity_id IS 'Resolved sender entity, if a matching entity_facts key/value exists. NULL is expected for uncovered identifiers (e.g., X handles until an x_handle fact key exists).';
-
-
-COMMENT ON COLUMN comms_items.status IS 'Lifecycle: inbound (fetched, not yet reported), reported (surfaced in Hermes report), tracked (actionable, artifact_ref set), resolved (handled, source archived), dismissed (no action needed).';
-
-
-COMMENT ON COLUMN comms_items.disposition IS 'Classifier output: fyi, actionable, escalation, receipt, injection_suspect. NULL until classified.';
-
-
-COMMENT ON COLUMN comms_items.summary IS 'Poller-extracted facts in the poller''s own voice; never raw relayed prose.';
-
-
-COMMENT ON COLUMN comms_items.artifact_ref IS 'Task number, issue URL, draft id, or other reference created for tracked items.';
-
-
-COMMENT ON COLUMN comms_items.first_seen_at IS 'When this (platform, item_id) was first observed; preserved across migrations.';
-
-
-COMMENT ON COLUMN comms_items.reported_at IS 'When the item was first included in a Hermes→NOVA report.';
-
-
-COMMENT ON COLUMN comms_items.resolved_at IS 'When the item reached status=resolved; triggers archive-on-resolution for email.';
-
---
--- Name: idx_comms_items_first_seen; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_comms_items_first_seen ON comms_items (first_seen_at DESC);
-
---
--- Name: idx_comms_items_platform_status; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE INDEX IF NOT EXISTS idx_comms_items_platform_status ON comms_items (platform, status);
-
---
--- Name: idx_comms_items_entity_id; Type: INDEX; Schema: -; Owner: -
---
-
-CREATE UNIQUE INDEX IF NOT EXISTS idx_comms_items_entity_id ON comms_items (entity_id) WHERE (entity_id IS NOT NULL);
-
---
--- Name: comms_responses; Type: TABLE; Schema: -; Owner: -
---
-
-CREATE TABLE IF NOT EXISTS comms_responses (
-    id bigserial,
-    comms_item_id bigint NOT NULL,
-    draft_response text,
-    approved_by text,
-    approved_at timestamptz,
-    response_id text,
-    responded_at timestamptz,
-    notes text,
-    created_at timestamptz DEFAULT now() NOT NULL,
-    CONSTRAINT comms_responses_pkey PRIMARY KEY (id),
-    CONSTRAINT comms_responses_comms_item_id_key UNIQUE (comms_item_id),
-    CONSTRAINT comms_responses_comms_item_id_fkey FOREIGN KEY (comms_item_id) REFERENCES comms_items (id) ON DELETE CASCADE
-);
-
-
-COMMENT ON TABLE comms_responses IS 'Approval gate for outbound responses to inbound social communications (X/Nostr mentions and DMs). Linked 1:1 to comms_items. Owner: NOVA Operations (approval), Communications domain (draft creation).';
-
-
-COMMENT ON COLUMN comms_responses.comms_item_id IS 'The inbound comms item this response belongs to.';
-
-
-COMMENT ON COLUMN comms_responses.draft_response IS 'Proposed response text, written by Hermes/NOVA.';
-
-
-COMMENT ON COLUMN comms_responses.approved_by IS 'Entity or agent that approved the response (e.g., I)ruid or NOVA).';
-
-
-COMMENT ON COLUMN comms_responses.approved_at IS 'When the response was approved.';
-
-
-COMMENT ON COLUMN comms_responses.response_id IS 'Platform-specific posted response id (tweet id, Nostr event id).';
-
-
-COMMENT ON COLUMN comms_responses.responded_at IS 'When the response was posted.';
-
-
-COMMENT ON COLUMN comms_responses.notes IS 'Internal notes on the response workflow.';
-
---
 -- Name: tags; Type: TABLE; Schema: -; Owner: -
 --
 
@@ -3483,9 +3551,6 @@ CREATE TABLE IF NOT EXISTS workflows (
     CONSTRAINT workflows_name_key UNIQUE (name),
     CONSTRAINT workflows_status_check CHECK (status IN ('active'::text, 'deprecated'::text, 'archived'::text))
 );
-
-
-COMMENT ON TABLE workflows IS 'Defines multi-agent workflows with ordered steps and deliverable handoffs';
 
 --
 -- Name: idx_workflows_name; Type: INDEX; Schema: -; Owner: -
@@ -4555,6 +4620,33 @@ WITH RECURSIVE tag_tree AS (
 )
 SELECT * FROM tag_tree;
 $$;
+
+--
+-- Name: get_strictest_mutability(integer, varchar); Type: FUNCTION; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE FUNCTION get_strictest_mutability(
+    p_entity_id integer,
+    p_key varchar
+)
+RETURNS mutability_class_enum
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT CASE
+        WHEN bool_or(mutability_class = 'immutable') THEN 'immutable'::mutability_class_enum
+        WHEN bool_or(mutability_class = 'slow_changing') THEN 'slow_changing'::mutability_class_enum
+        ELSE 'stateful'::mutability_class_enum
+    END
+    FROM entity_facts
+    WHERE entity_id = p_entity_id AND key = p_key;
+$$;
+
+--
+-- Name: get_strictest_mutability(integer, varchar); Type: FUNCTION; Schema: -; Owner: -
+--
+
+COMMENT ON FUNCTION get_strictest_mutability(integer, varchar) IS 'Returns the strictest mutability class present for a (entity_id, key) group. Ordering: immutable > slow_changing > stateful. Used by contradiction detection: if ANY row for this key is immutable, conflicting values are genuine contradictions regardless of other rows'' classes.';
 
 --
 -- Name: insert_workflow_step(integer, integer, text, text, boolean, text, text); Type: FUNCTION; Schema: -; Owner: -
@@ -6456,28 +6548,6 @@ END;
 $$;
 
 --
--- Name: resolve_entity_by_identifier(text, text); Type: FUNCTION; Schema: -; Owner: -
---
-
-CREATE OR REPLACE FUNCTION resolve_entity_by_identifier(p_key text, p_value text)
-RETURNS bigint
-LANGUAGE sql
-STABLE
-SECURITY INVOKER
-SET search_path = public
-AS $$
-    SELECT entity_id
-    FROM entity_facts
-    WHERE key = p_key
-      AND lower(value) = lower(p_value)
-    ORDER BY confidence DESC, last_confirmed_at DESC NULLS LAST
-    LIMIT 1;
-$$;
-
-
-COMMENT ON FUNCTION resolve_entity_by_identifier(text, text) IS 'Resolves an entity_id from an entity_facts key/value pair. Mirrors resolver.ts logic. Caller is responsible for normalizing identifier formats (e.g., Nostr npub/hex) before calling; see issue #227.';
-
---
 -- Name: journal_entries; Type: TABLE; Schema: -; Owner: -
 --
 
@@ -7386,6 +7456,25 @@ CREATE OR REPLACE VIEW v_agents AS
   ORDER BY persistent DESC, role, name;
 
 --
+-- Name: v_current_stateful_facts; Type: VIEW; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE VIEW v_current_stateful_facts AS
+ SELECT DISTINCT ON (entity_id, key) id,
+    entity_id,
+    key,
+    value,
+    last_confirmed_at,
+    learned_at,
+    confidence
+   FROM entity_facts ef
+  WHERE mutability_class = 'stateful'::mutability_class_enum
+  ORDER BY entity_id, key, last_confirmed_at DESC NULLS LAST;
+
+
+COMMENT ON VIEW v_current_stateful_facts IS 'Resolves stateful (preference/current-state) facts to the latest value per (entity, key). Full trajectory remains in entity_facts — this view gives the current snapshot. Supersession is query-time, not deletion.';
+
+--
 -- Name: v_entity_facts; Type: VIEW; Schema: -; Owner: -
 --
 
@@ -7417,6 +7506,33 @@ CREATE OR REPLACE VIEW v_event_timeline AS
      LEFT JOIN places p ON ep.place_id = p.id
   GROUP BY ev.id, ev.event_date, ev.title, ev.description
   ORDER BY ev.event_date DESC;
+
+--
+-- Name: v_fact_grades; Type: VIEW; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE VIEW v_fact_grades AS
+ SELECT ef.id AS fact_id,
+    ef.entity_id,
+    ef.key,
+    ef.value,
+    ef.assertion_intent,
+    ef.mutability_class,
+    efs.id AS source_id,
+    efs.source_entity_id,
+    efs.reporting_distance AS d_axis,
+    COALESCE(efs.verification_quality, 0.5::real) AS v_axis,
+    COALESCE(ec_domain.score, ec_global.score, 0.5::real) AS s_axis,
+    COALESCE(ec_domain.score, ec_global.score, 0.5::real) * efs.reporting_distance * COALESCE(efs.verification_quality, 0.5::real) AS composite_grade,
+    efs.source_session_id
+   FROM entity_facts ef
+     JOIN entity_fact_sources efs ON efs.fact_id = ef.id
+     LEFT JOIN entity_credibility ec_domain ON ec_domain.entity_id = efs.source_entity_id AND ec_domain.domain::text = ef.category
+     LEFT JOIN entity_credibility ec_global ON ec_global.entity_id = efs.source_entity_id AND ec_global.domain::text = '_global'::text
+  WHERE ef.assertion_intent = ANY (ARRAY['asserted'::assertion_intent_enum, 'speculative'::assertion_intent_enum]);
+
+
+COMMENT ON VIEW v_fact_grades IS 'Query-time S×D×V grade computation. Only includes gradable claims (asserted/speculative). S looked up from entity_credibility (domain-specific with _global fallback). D from entity_fact_sources.reporting_distance. V from entity_fact_sources.verification_quality (NULL → 0.5 neutral). Never materialized — three multiplications per row is trivially fast.';
 
 --
 -- Name: v_gambling_summary; Type: VIEW; Schema: -; Owner: -
@@ -7701,13 +7817,13 @@ CREATE OR REPLACE VIEW workflow_steps_detail AS
 -- Name: agent_actions; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE agent_actions FROM newhart;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_actions FROM newhart;
 
 --
 -- Name: agent_actions; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_actions FROM newhart;
+REVOKE SELECT ON TABLE agent_actions FROM newhart;
 
 --
 -- Name: agent_aliases; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -7815,13 +7931,13 @@ REVOKE DELETE ON TABLE agent_bootstrap_context FROM iris;
 -- Name: agent_bootstrap_context; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_bootstrap_context FROM newhart;
+REVOKE SELECT ON TABLE agent_bootstrap_context FROM newhart;
 
 --
 -- Name: agent_bootstrap_context; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE agent_bootstrap_context FROM newhart;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_bootstrap_context FROM newhart;
 
 --
 -- Name: agent_bootstrap_context; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -7959,13 +8075,13 @@ REVOKE DELETE ON TABLE agent_modifications FROM iris;
 -- Name: agent_modifications; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_modifications FROM newhart;
+REVOKE SELECT ON TABLE agent_modifications FROM newhart;
 
 --
 -- Name: agent_modifications; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE agent_modifications FROM newhart;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_modifications FROM newhart;
 
 --
 -- Name: agent_modifications; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -7989,13 +8105,13 @@ REVOKE DELETE ON TABLE agent_modifications FROM ticker;
 -- Name: agent_spawns; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE agent_spawns FROM newhart;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_spawns FROM newhart;
 
 --
 -- Name: agent_spawns; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_spawns FROM newhart;
+REVOKE SELECT ON TABLE agent_spawns FROM newhart;
 
 --
 -- Name: agent_system_config; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -8037,13 +8153,13 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE agent_system_config FROM iris;
 -- Name: agent_system_config; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE agent_system_config FROM newhart;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_system_config FROM newhart;
 
 --
 -- Name: agent_system_config; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_system_config FROM newhart;
+REVOKE SELECT ON TABLE agent_system_config FROM newhart;
 
 --
 -- Name: agent_system_config; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -8808,6 +8924,18 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE comms_digests FROM scribe;
 REVOKE DELETE, INSERT, UPDATE ON TABLE comms_digests FROM ticker;
 
 --
+-- Name: comms_items; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE comms_items FROM nova;
+
+--
+-- Name: comms_responses; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE comms_responses FROM nova;
+
+--
 -- Name: comms_state; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
@@ -8908,210 +9036,6 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE comms_state FROM scribe;
 --
 
 REVOKE DELETE, INSERT, UPDATE ON TABLE comms_state FROM ticker;
-
---
--- Name: comms_items; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE DELETE, INSERT, UPDATE ON TABLE comms_items FROM argus;
-
---
--- Name: comms_items; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE DELETE, INSERT, UPDATE ON TABLE comms_items FROM athena;
-
---
--- Name: comms_items; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE DELETE, INSERT, UPDATE ON TABLE comms_items FROM coder;
-
---
--- Name: comms_items; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE DELETE, INSERT, UPDATE ON TABLE comms_items FROM conductor;
-
---
--- Name: comms_items; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE DELETE, INSERT, UPDATE ON TABLE comms_items FROM erato;
-
---
--- Name: comms_items; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE DELETE, INSERT, UPDATE ON TABLE comms_items FROM flint;
-
---
--- Name: comms_items; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE DELETE, INSERT, UPDATE ON TABLE comms_items FROM gem;
-
---
--- Name: comms_items; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE DELETE, INSERT, UPDATE ON TABLE comms_items FROM gidget;
-
---
--- Name: comms_items; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE DELETE ON TABLE comms_items FROM hermes;
-
---
--- Name: comms_items; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE DELETE, INSERT, UPDATE ON TABLE comms_items FROM iris;
-
---
--- Name: comms_items; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE DELETE, INSERT, UPDATE ON TABLE comms_items FROM marcie;
-
---
--- Name: comms_items; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE DELETE, INSERT, UPDATE ON TABLE comms_items FROM newhart;
-
---
--- Name: comms_items; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE DELETE, INSERT, UPDATE ON TABLE comms_items FROM nova;
-
---
--- Name: comms_items; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE DELETE, INSERT, UPDATE ON TABLE comms_items FROM quill;
-
---
--- Name: comms_items; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE DELETE, INSERT, UPDATE ON TABLE comms_items FROM scout;
-
---
--- Name: comms_items; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE DELETE, INSERT, UPDATE ON TABLE comms_items FROM scribe;
-
---
--- Name: comms_items; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE DELETE, INSERT, UPDATE ON TABLE comms_items FROM ticker;
-
---
--- Name: comms_responses; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE DELETE, INSERT, UPDATE ON TABLE comms_responses FROM argus;
-
---
--- Name: comms_responses; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE DELETE, INSERT, UPDATE ON TABLE comms_responses FROM athena;
-
---
--- Name: comms_responses; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE DELETE, INSERT, UPDATE ON TABLE comms_responses FROM coder;
-
---
--- Name: comms_responses; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE DELETE, INSERT, UPDATE ON TABLE comms_responses FROM conductor;
-
---
--- Name: comms_responses; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE DELETE, INSERT, UPDATE ON TABLE comms_responses FROM erato;
-
---
--- Name: comms_responses; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE DELETE, INSERT, UPDATE ON TABLE comms_responses FROM flint;
-
---
--- Name: comms_responses; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE DELETE, INSERT, UPDATE ON TABLE comms_responses FROM gem;
-
---
--- Name: comms_responses; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE DELETE, INSERT, UPDATE ON TABLE comms_responses FROM gidget;
-
---
--- Name: comms_responses; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE DELETE ON TABLE comms_responses FROM hermes;
-
---
--- Name: comms_responses; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE DELETE, INSERT, UPDATE ON TABLE comms_responses FROM iris;
-
---
--- Name: comms_responses; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE DELETE, INSERT, UPDATE ON TABLE comms_responses FROM marcie;
-
---
--- Name: comms_responses; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE DELETE, INSERT, UPDATE ON TABLE comms_responses FROM newhart;
-
---
--- Name: comms_responses; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE DELETE, INSERT ON TABLE comms_responses FROM nova;
-
---
--- Name: comms_responses; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE DELETE, INSERT, UPDATE ON TABLE comms_responses FROM quill;
-
---
--- Name: comms_responses; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE DELETE, INSERT, UPDATE ON TABLE comms_responses FROM scout;
-
---
--- Name: comms_responses; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE DELETE, INSERT, UPDATE ON TABLE comms_responses FROM scribe;
-
---
--- Name: comms_responses; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE DELETE, INSERT, UPDATE ON TABLE comms_responses FROM ticker;
 
 --
 -- Name: d100_roll_log; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9282,6 +9206,108 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE events FROM nova;
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE events_archive FROM nova;
 
 --
+-- Name: extraction_failures; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, UPDATE ON TABLE extraction_failures FROM argus;
+
+--
+-- Name: extraction_failures; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, UPDATE ON TABLE extraction_failures FROM athena;
+
+--
+-- Name: extraction_failures; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, UPDATE ON TABLE extraction_failures FROM coder;
+
+--
+-- Name: extraction_failures; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, UPDATE ON TABLE extraction_failures FROM conductor;
+
+--
+-- Name: extraction_failures; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, UPDATE ON TABLE extraction_failures FROM erato;
+
+--
+-- Name: extraction_failures; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, UPDATE ON TABLE extraction_failures FROM flint;
+
+--
+-- Name: extraction_failures; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, UPDATE ON TABLE extraction_failures FROM gem;
+
+--
+-- Name: extraction_failures; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, UPDATE ON TABLE extraction_failures FROM gidget;
+
+--
+-- Name: extraction_failures; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, UPDATE ON TABLE extraction_failures FROM hermes;
+
+--
+-- Name: extraction_failures; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, UPDATE ON TABLE extraction_failures FROM iris;
+
+--
+-- Name: extraction_failures; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, UPDATE ON TABLE extraction_failures FROM marcie;
+
+--
+-- Name: extraction_failures; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, UPDATE ON TABLE extraction_failures FROM newhart;
+
+--
+-- Name: extraction_failures; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE extraction_failures FROM nova;
+
+--
+-- Name: extraction_failures; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, UPDATE ON TABLE extraction_failures FROM quill;
+
+--
+-- Name: extraction_failures; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, UPDATE ON TABLE extraction_failures FROM scout;
+
+--
+-- Name: extraction_failures; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, UPDATE ON TABLE extraction_failures FROM scribe;
+
+--
+-- Name: extraction_failures; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, UPDATE ON TABLE extraction_failures FROM ticker;
+
+--
 -- Name: extraction_metrics; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
@@ -9309,13 +9335,13 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE gambling_logs FROM nova;
 -- Name: git_issue_queue; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE git_issue_queue FROM coder;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE git_issue_queue FROM coder;
 
 --
 -- Name: git_issue_queue; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE git_issue_queue FROM coder;
+REVOKE SELECT ON TABLE git_issue_queue FROM coder;
 
 --
 -- Name: income_sources; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9531,19 +9557,19 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE job_messages FROM nova;
 -- Name: journal_entries; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, UPDATE ON TABLE journal_entries FROM argus;
+REVOKE DELETE ON TABLE journal_entries FROM argus;
 
 --
 -- Name: journal_entries; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, UPDATE ON TABLE journal_entries FROM athena;
+REVOKE DELETE ON TABLE journal_entries FROM athena;
 
 --
 -- Name: journal_entries; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, UPDATE ON TABLE journal_entries FROM coder;
+REVOKE DELETE ON TABLE journal_entries FROM coder;
 
 --
 -- Name: journal_entries; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9561,37 +9587,37 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE journal_entries FROM erato;
 -- Name: journal_entries; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, UPDATE ON TABLE journal_entries FROM flint;
+REVOKE DELETE ON TABLE journal_entries FROM flint;
 
 --
 -- Name: journal_entries; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, UPDATE ON TABLE journal_entries FROM gem;
+REVOKE DELETE ON TABLE journal_entries FROM gem;
 
 --
 -- Name: journal_entries; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, UPDATE ON TABLE journal_entries FROM gidget;
+REVOKE DELETE ON TABLE journal_entries FROM gidget;
 
 --
 -- Name: journal_entries; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, UPDATE ON TABLE journal_entries FROM hermes;
+REVOKE DELETE ON TABLE journal_entries FROM hermes;
 
 --
 -- Name: journal_entries; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, UPDATE ON TABLE journal_entries FROM iris;
+REVOKE DELETE ON TABLE journal_entries FROM iris;
 
 --
 -- Name: journal_entries; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, UPDATE ON TABLE journal_entries FROM marcie;
+REVOKE DELETE ON TABLE journal_entries FROM marcie;
 
 --
 -- Name: journal_entries; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9609,19 +9635,19 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE journal_entries FROM nova;
 -- Name: journal_entries; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, UPDATE ON TABLE journal_entries FROM quill;
+REVOKE DELETE ON TABLE journal_entries FROM quill;
 
 --
 -- Name: journal_entries; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, UPDATE ON TABLE journal_entries FROM scout;
+REVOKE DELETE ON TABLE journal_entries FROM scout;
 
 --
 -- Name: journal_entries; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, UPDATE ON TABLE journal_entries FROM scribe;
+REVOKE DELETE ON TABLE journal_entries FROM scribe;
 
 --
 -- Name: journal_entries; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9645,13 +9671,13 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE lessons_archive FROM nova;
 -- Name: library_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE library_authors FROM athena;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE library_authors FROM athena;
 
 --
 -- Name: library_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE library_authors FROM athena;
+REVOKE SELECT ON TABLE library_authors FROM athena;
 
 --
 -- Name: library_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9777,13 +9803,13 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE library_tags FROM ticker;
 -- Name: library_work_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE library_work_authors FROM athena;
+REVOKE SELECT ON TABLE library_work_authors FROM athena;
 
 --
 -- Name: library_work_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE library_work_authors FROM athena;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE library_work_authors FROM athena;
 
 --
 -- Name: library_work_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10083,13 +10109,13 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE motivation_d100 FROM nova;
 -- Name: music_analysis; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE music_analysis FROM iris;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_analysis FROM iris;
 
 --
 -- Name: music_analysis; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_analysis FROM iris;
+REVOKE SELECT ON TABLE music_analysis FROM iris;
 
 --
 -- Name: music_library; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10131,19 +10157,13 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_works FROM athena;
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE music_works FROM coder;
-
---
--- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_works FROM coder;
 
 --
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE music_works FROM conductor;
+REVOKE SELECT ON TABLE music_works FROM coder;
 
 --
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10155,7 +10175,7 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_works FROM conductor;
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_works FROM erato;
+REVOKE SELECT ON TABLE music_works FROM conductor;
 
 --
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10167,7 +10187,7 @@ REVOKE SELECT ON TABLE music_works FROM erato;
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE music_works FROM flint;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_works FROM erato;
 
 --
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10179,7 +10199,7 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_works FROM flint;
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_works FROM gem;
+REVOKE SELECT ON TABLE music_works FROM flint;
 
 --
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10191,7 +10211,7 @@ REVOKE SELECT ON TABLE music_works FROM gem;
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE music_works FROM gidget;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_works FROM gem;
 
 --
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10203,13 +10223,13 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_works FROM gidget;
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE music_works FROM graybeard;
+REVOKE SELECT ON TABLE music_works FROM gidget;
 
 --
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_works FROM hermes;
+REVOKE SELECT ON TABLE music_works FROM graybeard;
 
 --
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10221,7 +10241,7 @@ REVOKE SELECT ON TABLE music_works FROM hermes;
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_works FROM iris;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_works FROM hermes;
 
 --
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10233,7 +10253,7 @@ REVOKE SELECT ON TABLE music_works FROM iris;
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_works FROM marcie;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_works FROM iris;
 
 --
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10245,13 +10265,19 @@ REVOKE SELECT ON TABLE music_works FROM marcie;
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_works FROM newhart;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_works FROM marcie;
 
 --
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
 REVOKE SELECT ON TABLE music_works FROM newhart;
+
+--
+-- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_works FROM newhart;
 
 --
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10269,25 +10295,25 @@ REVOKE SELECT ON TABLE music_works FROM openproject_user;
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE music_works FROM quill;
-
---
--- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_works FROM quill;
 
 --
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE music_works FROM scout;
+REVOKE SELECT ON TABLE music_works FROM quill;
 
 --
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_works FROM scout;
+
+--
+-- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE music_works FROM scout;
 
 --
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10617,13 +10643,13 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE research_citations FROM nova;
 -- Name: research_citations; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE research_citations FROM scout;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE research_citations FROM scout;
 
 --
 -- Name: research_citations; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE research_citations FROM scout;
+REVOKE SELECT ON TABLE research_citations FROM scout;
 
 --
 -- Name: research_citations; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10683,13 +10709,13 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE research_conclusions FROM nova;
 -- Name: research_conclusions; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE research_conclusions FROM scout;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE research_conclusions FROM scout;
 
 --
 -- Name: research_conclusions; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE research_conclusions FROM scout;
+REVOKE SELECT ON TABLE research_conclusions FROM scout;
 
 --
 -- Name: research_conclusions; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10749,13 +10775,13 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE research_findings FROM nova;
 -- Name: research_findings; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE research_findings FROM scout;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE research_findings FROM scout;
 
 --
 -- Name: research_findings; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE research_findings FROM scout;
+REVOKE SELECT ON TABLE research_findings FROM scout;
 
 --
 -- Name: research_findings; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -11013,13 +11039,13 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE research_tags FROM nova;
 -- Name: research_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE research_tags FROM scout;
+REVOKE SELECT ON TABLE research_tags FROM scout;
 
 --
 -- Name: research_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE research_tags FROM scout;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE research_tags FROM scout;
 
 --
 -- Name: research_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -11079,13 +11105,13 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE research_tasks FROM nova;
 -- Name: research_tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE research_tasks FROM scout;
+REVOKE SELECT ON TABLE research_tasks FROM scout;
 
 --
 -- Name: research_tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE research_tasks FROM scout;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE research_tasks FROM scout;
 
 --
 -- Name: research_tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -11716,6 +11742,78 @@ GRANT EXECUTE ON FUNCTION current_agent_id() TO graybeard;
 --
 
 GRANT EXECUTE ON FUNCTION current_agent_id() TO newhart;
+
+--
+-- Name: get_strictest_mutability(p_entity_id integer, p_key character varying); Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT EXECUTE ON FUNCTION get_strictest_mutability(p_entity_id integer, p_key character varying) TO argus;
+
+--
+-- Name: get_strictest_mutability(p_entity_id integer, p_key character varying); Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT EXECUTE ON FUNCTION get_strictest_mutability(p_entity_id integer, p_key character varying) TO athena;
+
+--
+-- Name: get_strictest_mutability(p_entity_id integer, p_key character varying); Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT EXECUTE ON FUNCTION get_strictest_mutability(p_entity_id integer, p_key character varying) TO coder;
+
+--
+-- Name: get_strictest_mutability(p_entity_id integer, p_key character varying); Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT EXECUTE ON FUNCTION get_strictest_mutability(p_entity_id integer, p_key character varying) TO conductor;
+
+--
+-- Name: get_strictest_mutability(p_entity_id integer, p_key character varying); Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT EXECUTE ON FUNCTION get_strictest_mutability(p_entity_id integer, p_key character varying) TO gem;
+
+--
+-- Name: get_strictest_mutability(p_entity_id integer, p_key character varying); Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT EXECUTE ON FUNCTION get_strictest_mutability(p_entity_id integer, p_key character varying) TO gidget;
+
+--
+-- Name: get_strictest_mutability(p_entity_id integer, p_key character varying); Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT EXECUTE ON FUNCTION get_strictest_mutability(p_entity_id integer, p_key character varying) TO iris;
+
+--
+-- Name: get_strictest_mutability(p_entity_id integer, p_key character varying); Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT EXECUTE ON FUNCTION get_strictest_mutability(p_entity_id integer, p_key character varying) TO marcie;
+
+--
+-- Name: get_strictest_mutability(p_entity_id integer, p_key character varying); Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT EXECUTE ON FUNCTION get_strictest_mutability(p_entity_id integer, p_key character varying) TO quill;
+
+--
+-- Name: get_strictest_mutability(p_entity_id integer, p_key character varying); Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT EXECUTE ON FUNCTION get_strictest_mutability(p_entity_id integer, p_key character varying) TO scout;
+
+--
+-- Name: get_strictest_mutability(p_entity_id integer, p_key character varying); Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT EXECUTE ON FUNCTION get_strictest_mutability(p_entity_id integer, p_key character varying) TO scribe;
+
+--
+-- Name: get_strictest_mutability(p_entity_id integer, p_key character varying); Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT EXECUTE ON FUNCTION get_strictest_mutability(p_entity_id integer, p_key character varying) TO ticker;
 
 --
 -- Name: agent_actions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -12996,6 +13094,198 @@ GRANT USAGE ON SEQUENCE comms_digests_id_seq TO quill;
 GRANT USAGE ON SEQUENCE comms_digests_id_seq TO scribe;
 
 --
+-- Name: comms_items_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE comms_items_id_seq TO argus;
+
+--
+-- Name: comms_items_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE comms_items_id_seq TO athena;
+
+--
+-- Name: comms_items_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE comms_items_id_seq TO coder;
+
+--
+-- Name: comms_items_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE comms_items_id_seq TO conductor;
+
+--
+-- Name: comms_items_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE comms_items_id_seq TO erato;
+
+--
+-- Name: comms_items_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE comms_items_id_seq TO flint;
+
+--
+-- Name: comms_items_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE comms_items_id_seq TO gem;
+
+--
+-- Name: comms_items_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE comms_items_id_seq TO gidget;
+
+--
+-- Name: comms_items_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE comms_items_id_seq TO hermes;
+
+--
+-- Name: comms_items_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE comms_items_id_seq TO iris;
+
+--
+-- Name: comms_items_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE comms_items_id_seq TO marcie;
+
+--
+-- Name: comms_items_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE comms_items_id_seq TO newhart;
+
+--
+-- Name: comms_items_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE comms_items_id_seq TO quill;
+
+--
+-- Name: comms_items_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE comms_items_id_seq TO scout;
+
+--
+-- Name: comms_items_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE comms_items_id_seq TO scribe;
+
+--
+-- Name: comms_items_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE comms_items_id_seq TO ticker;
+
+--
+-- Name: comms_responses_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE comms_responses_id_seq TO argus;
+
+--
+-- Name: comms_responses_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE comms_responses_id_seq TO athena;
+
+--
+-- Name: comms_responses_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE comms_responses_id_seq TO coder;
+
+--
+-- Name: comms_responses_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE comms_responses_id_seq TO conductor;
+
+--
+-- Name: comms_responses_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE comms_responses_id_seq TO erato;
+
+--
+-- Name: comms_responses_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE comms_responses_id_seq TO flint;
+
+--
+-- Name: comms_responses_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE comms_responses_id_seq TO gem;
+
+--
+-- Name: comms_responses_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE comms_responses_id_seq TO gidget;
+
+--
+-- Name: comms_responses_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE comms_responses_id_seq TO hermes;
+
+--
+-- Name: comms_responses_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE comms_responses_id_seq TO iris;
+
+--
+-- Name: comms_responses_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE comms_responses_id_seq TO marcie;
+
+--
+-- Name: comms_responses_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE comms_responses_id_seq TO newhart;
+
+--
+-- Name: comms_responses_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE comms_responses_id_seq TO quill;
+
+--
+-- Name: comms_responses_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE comms_responses_id_seq TO scout;
+
+--
+-- Name: comms_responses_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE comms_responses_id_seq TO scribe;
+
+--
+-- Name: comms_responses_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE comms_responses_id_seq TO ticker;
+
+--
 -- Name: entities_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
@@ -13096,6 +13386,78 @@ GRANT USAGE ON SEQUENCE entities_id_seq TO scribe;
 --
 
 GRANT USAGE ON SEQUENCE entities_id_seq TO ticker;
+
+--
+-- Name: entity_credibility_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE entity_credibility_id_seq TO argus;
+
+--
+-- Name: entity_credibility_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE entity_credibility_id_seq TO athena;
+
+--
+-- Name: entity_credibility_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE entity_credibility_id_seq TO coder;
+
+--
+-- Name: entity_credibility_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE entity_credibility_id_seq TO conductor;
+
+--
+-- Name: entity_credibility_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE entity_credibility_id_seq TO gem;
+
+--
+-- Name: entity_credibility_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE entity_credibility_id_seq TO gidget;
+
+--
+-- Name: entity_credibility_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE entity_credibility_id_seq TO iris;
+
+--
+-- Name: entity_credibility_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE entity_credibility_id_seq TO marcie;
+
+--
+-- Name: entity_credibility_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE entity_credibility_id_seq TO quill;
+
+--
+-- Name: entity_credibility_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE entity_credibility_id_seq TO scout;
+
+--
+-- Name: entity_credibility_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE entity_credibility_id_seq TO scribe;
+
+--
+-- Name: entity_credibility_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE entity_credibility_id_seq TO ticker;
 
 --
 -- Name: entity_fact_conflicts_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -13281,7 +13643,7 @@ GRANT SELECT, USAGE ON SEQUENCE entity_fact_sources_id_seq TO newhart;
 -- Name: entity_fact_sources_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-GRANT SELECT, USAGE ON SEQUENCE entity_fact_sources_id_seq TO "nova-staging";
+GRANT SELECT ON SEQUENCE entity_fact_sources_id_seq TO "nova-staging";
 
 --
 -- Name: entity_fact_sources_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -14331,13 +14693,85 @@ GRANT USAGE ON SEQUENCE job_messages_id_seq TO ticker;
 -- Name: journal_entries_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT SELECT, USAGE ON SEQUENCE journal_entries_id_seq TO argus;
+
+--
+-- Name: journal_entries_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE journal_entries_id_seq TO athena;
+
+--
+-- Name: journal_entries_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE journal_entries_id_seq TO coder;
+
+--
+-- Name: journal_entries_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE journal_entries_id_seq TO flint;
+
+--
+-- Name: journal_entries_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE journal_entries_id_seq TO gem;
+
+--
+-- Name: journal_entries_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE journal_entries_id_seq TO gidget;
+
+--
+-- Name: journal_entries_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT SELECT, USAGE ON SEQUENCE journal_entries_id_seq TO graybeard;
 
 --
 -- Name: journal_entries_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT SELECT, USAGE ON SEQUENCE journal_entries_id_seq TO hermes;
+
+--
+-- Name: journal_entries_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE journal_entries_id_seq TO iris;
+
+--
+-- Name: journal_entries_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE journal_entries_id_seq TO marcie;
+
+--
+-- Name: journal_entries_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT SELECT, USAGE ON SEQUENCE journal_entries_id_seq TO newhart;
+
+--
+-- Name: journal_entries_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE journal_entries_id_seq TO quill;
+
+--
+-- Name: journal_entries_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE journal_entries_id_seq TO scout;
+
+--
+-- Name: journal_entries_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT, USAGE ON SEQUENCE journal_entries_id_seq TO scribe;
 
 --
 -- Name: lessons_archive_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -18414,10 +18848,94 @@ GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE certificates TO graybeard;
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE channel_activity TO graybeard;
 
 --
+-- Name: comms_items; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE comms_items TO hermes;
+
+--
+-- Name: comms_responses; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE comms_responses TO hermes;
+
+--
 -- Name: entities; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE entities TO graybeard;
+
+--
+-- Name: entity_credibility; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE entity_credibility TO argus;
+
+--
+-- Name: entity_credibility; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE entity_credibility TO athena;
+
+--
+-- Name: entity_credibility; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE entity_credibility TO coder;
+
+--
+-- Name: entity_credibility; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE entity_credibility TO conductor;
+
+--
+-- Name: entity_credibility; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE entity_credibility TO gem;
+
+--
+-- Name: entity_credibility; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE entity_credibility TO gidget;
+
+--
+-- Name: entity_credibility; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE entity_credibility TO iris;
+
+--
+-- Name: entity_credibility; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE entity_credibility TO marcie;
+
+--
+-- Name: entity_credibility; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE entity_credibility TO quill;
+
+--
+-- Name: entity_credibility; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE entity_credibility TO scout;
+
+--
+-- Name: entity_credibility; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE entity_credibility TO scribe;
+
+--
+-- Name: entity_credibility; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE entity_credibility TO ticker;
 
 --
 -- Name: entity_fact_conflicts; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -18430,12 +18948,6 @@ GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE entity_fact_conflicts TO graybeard
 --
 
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE entity_fact_sources TO graybeard;
-
---
--- Name: entity_fact_sources; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE entity_fact_sources TO "nova-staging";
 
 --
 -- Name: entity_fact_sources; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -19146,6 +19658,78 @@ GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_agents TO scribe;
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_agents TO ticker;
 
 --
+-- Name: v_current_stateful_facts; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE v_current_stateful_facts TO argus;
+
+--
+-- Name: v_current_stateful_facts; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE v_current_stateful_facts TO athena;
+
+--
+-- Name: v_current_stateful_facts; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE v_current_stateful_facts TO coder;
+
+--
+-- Name: v_current_stateful_facts; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE v_current_stateful_facts TO conductor;
+
+--
+-- Name: v_current_stateful_facts; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE v_current_stateful_facts TO gem;
+
+--
+-- Name: v_current_stateful_facts; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE v_current_stateful_facts TO gidget;
+
+--
+-- Name: v_current_stateful_facts; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE v_current_stateful_facts TO iris;
+
+--
+-- Name: v_current_stateful_facts; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE v_current_stateful_facts TO marcie;
+
+--
+-- Name: v_current_stateful_facts; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE v_current_stateful_facts TO quill;
+
+--
+-- Name: v_current_stateful_facts; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE v_current_stateful_facts TO scout;
+
+--
+-- Name: v_current_stateful_facts; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE v_current_stateful_facts TO scribe;
+
+--
+-- Name: v_current_stateful_facts; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE v_current_stateful_facts TO ticker;
+
+--
 -- Name: v_entity_facts; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
@@ -19372,6 +19956,78 @@ GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_event_timeline TO scribe;
 --
 
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_event_timeline TO ticker;
+
+--
+-- Name: v_fact_grades; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE v_fact_grades TO argus;
+
+--
+-- Name: v_fact_grades; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE v_fact_grades TO athena;
+
+--
+-- Name: v_fact_grades; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE v_fact_grades TO coder;
+
+--
+-- Name: v_fact_grades; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE v_fact_grades TO conductor;
+
+--
+-- Name: v_fact_grades; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE v_fact_grades TO gem;
+
+--
+-- Name: v_fact_grades; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE v_fact_grades TO gidget;
+
+--
+-- Name: v_fact_grades; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE v_fact_grades TO iris;
+
+--
+-- Name: v_fact_grades; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE v_fact_grades TO marcie;
+
+--
+-- Name: v_fact_grades; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE v_fact_grades TO quill;
+
+--
+-- Name: v_fact_grades; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE v_fact_grades TO scout;
+
+--
+-- Name: v_fact_grades; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE v_fact_grades TO scribe;
+
+--
+-- Name: v_fact_grades; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE v_fact_grades TO ticker;
 
 --
 -- Name: v_gambling_summary; Type: PRIVILEGE; Schema: privileges; Owner: -

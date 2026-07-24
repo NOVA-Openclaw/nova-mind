@@ -12,6 +12,10 @@ description: >
 
 Review recent work and harden institutional knowledge by writing it back into the artifacts that guide future work: workflows, skills, TOOLS.md, MEMORY.md, lessons table, and bootstrap context.
 
+## Execution Context — Run In-Session, Never Delegate
+
+**Do NOT delegate introspection to a subagent.** Introspection is self-reflection on recently lived context — the value comes from the session that did the work being the one that reflects on it. A spawned subagent starts with a clean context window and can only reconstruct recent activity from artifacts, losing tool outputs, errors, decisions, and the texture of what actually happened. Run this skill in the session that has the context (or the main session). (I)ruid directive, 2026-07-23; lesson 789.)
+
 ## When to Run
 
 - After completing a significant task (installation, migration, incident, new tooling)
@@ -554,6 +558,10 @@ Update `lastIntrospection` in `~/.openclaw/workspace/memory/heartbeat-state.json
 - `sessionTranscriptBytes` — `find ~/.openclaw/agents/nova/sessions -name '*.jsonl' -printf '%s\n' | awk '{s+=$1} END {print s}'` (do NOT use a `du ...*.jsonl` shell glob — with thousands of session files it silently returns empty → writes 0 and corrupts the transcript-growth trigger; observed 2026-07-08)
 
 Preserve all other JSON fields. Keep any top-level mirror fields (`timestamp`, `dailyLogLines`, `sessionTranscriptBytes`) in sync with `lastIntrospection`.
+
+**Update BOTH state-file mirrors:** `~/.openclaw/workspace/memory/heartbeat-state.json` AND `~/.openclaw/workspace/heartbeat-state.json`. The gate-check script (`proactive-gate-check.py`) reads the memory/ copy first but falls back to the workspace/ copy if the primary is missing or malformed — a stale fallback silently corrupts trigger logic (lesson 454).
+
+**Before updating heartbeat-state, append a brief introspection entry to today's daily log** (`memory/YYYY-MM-DD.md`) — even for light runs that found nothing. heartbeat-state is machine state; the daily log is the human-auditable trail. A run whose only artifact is the state-file update is invisible to later review (observed 2026-07-15: the 15:26Z run updated heartbeat-state but left no journal entry and no daily-log entry — zero trace).
 
 ## Constraints
 

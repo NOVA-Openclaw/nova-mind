@@ -62,6 +62,16 @@ Only `UNIVERSAL` and `GLOBAL` are replicated via FDW. `DOMAIN`, `AGENT`, and `SY
   3. Rename the peer's existing local table to `agent_bootstrap_context_local`.
   4. Create the `agent_bootstrap_context` view and its `INSTEAD OF` triggers as described above.
   5. Delete any old local `UNIVERSAL`/`GLOBAL` rows from the (now-renamed) local table — they are dead weight since the view no longer reads `UNIVERSAL`/`GLOBAL` from it.
+
+  #### Migration Gotchas (from the 2026-07-25 Newhart split)
+
+  1. **Trigger ownership** — verify the bootstrap write-protection trigger passes for the peer's DB user before importing records.
+  2. **Per-section postgres.json credentials** — the `bootstrap` section is separate from the primary DB config; each section holding credentials must be updated independently.
+  3. **Bootstrap manifest** — `get_agent_bootstrap()` has an implicit table dependency set beyond `agent_bootstrap_context` (see the dependency chain in the sync-mechanisms section); all of it must be local and current.
+  4. **Join keys** — domain strings in `workflow_steps.domain` must exactly match `agent_domains.domain_topic`; a mismatched string silently drops the workflow from bootstrap output.
+  5. **Consumer predicate ≠ ownership** — migrate workflows by domain routing (what `get_agent_bootstrap()` selects), not by `created_by` provenance; the two sets overlap but are not identical.
+
+  A sixth, process-level lesson from the same split: when a directive supersedes an already-approved plan, the scope change must be explicitly propagated to everyone holding the old plan before execution — stale approvals otherwise cause conflicting enforcement.
 - **`bootstrap_reader` role:** Read-only. Grants `SELECT` on `agent_bootstrap_context` in `nova_memory` only — no other tables, no write privileges. Credential values are not documented here; retrieve them through the standard peer credential path.
 
 ## Relationship to Per-Peer Sync Mechanisms
@@ -70,7 +80,7 @@ On the same day this architecture was implemented (2026-07-25), a separate memor
 
 **The FDW view supersedes those mechanisms for `UNIVERSAL`/`GLOBAL` records.** Peers no longer hold local copies of `UNIVERSAL`/`GLOBAL` rows at all — they read live through the foreign table. Any script that attempts to write a `UNIVERSAL` or `GLOBAL` row directly into a peer's `agent_bootstrap_context` view will hit the `INSTEAD OF` trigger error described above, by design.
 
-Practical implication: the dual-write and checksum-sync cron for `UNIVERSAL`/`GLOBAL` records should be retired going forward. Those mechanisms remain relevant only for tables **outside** the scope of this FDW replication — specifically `agents`, `agent_domains`, `workflows`, and `workflow_steps`, which form the bootstrap resolution dependency chain but are not part of `agent_bootstrap_context` itself.
+Practical implication: the dual-write and checksum-sync cron for `UNIVERSAL`/`GLOBAL` records should be retired going forward. Those mechanisms remain relevant only for tables **outside** the scope of this FDW replication — specifically `agents`, `agent_domains`, `workflows`, and `workflow_steps` — these form the **bootstrap resolution dependency chain** for `get_agent_bootstrap()`. The function joins `agents` → `agent_domains` to resolve domain-routed `DOMAIN` records and workflow records. If a peer's local copies of these tables drift from `nova_memory`, the function silently drops records from its output (observed during the Newhart split: an empty local `agents` table produced zero WORKFLOW records with no error).
 
 ## Known Drift Resolved During Rollout (2026-07-25)
 

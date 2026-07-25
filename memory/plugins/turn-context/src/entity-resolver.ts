@@ -99,19 +99,39 @@ function readOpenClawConfig(): OpenClawConfigShape | null {
  * Determine the IRC server host for a given accountId from OpenClaw config.
  * Falls back from account-specific config to top-level channel config.
  * Returns undefined if no host can be determined.
+ *
+ * Defensive: config may come from disk and contain unexpected shapes; any
+ * read/parse/type error must degrade to undefined so the shared turn-context
+ * hook path does not throw synchronously for IRC messages. See nova-mind#522.
  */
 export function resolveIrcHostFromConfig(accountId?: string, config?: Record<string, unknown>): string | undefined {
-  const cfg = (config ?? readOpenClawConfig()) as OpenClawConfigShape | null | undefined;
-  const irc = cfg?.channels?.irc;
-  if (!irc) return undefined;
+  try {
+    const cfg = (config ?? readOpenClawConfig()) as OpenClawConfigShape | null | undefined;
+    const irc = cfg?.channels?.irc;
+    if (!irc || typeof irc !== "object" || Array.isArray(irc)) return undefined;
 
-  // If an explicit account id is provided, prefer its host, then fall back to top-level.
-  if (accountId && accountId !== irc.defaultAccount) {
-    const accountHost = irc.accounts?.[accountId]?.host?.trim();
-    if (accountHost) return accountHost;
+    // If an explicit account id is provided, prefer its host, then fall back to top-level.
+    if (accountId && accountId !== irc.defaultAccount) {
+      const accountHost = irc.accounts?.[accountId]?.host;
+      if (typeof accountHost === "string") {
+        const trimmed = accountHost.trim();
+        if (trimmed) return trimmed;
+      }
+    }
+
+    const topHost = irc.host;
+    if (typeof topHost === "string") {
+      const trimmed = topHost.trim();
+      if (trimmed) return trimmed;
+    }
+    return undefined;
+  } catch (err) {
+    console.warn(
+      "[turn-context] IRC host resolution error:",
+      err instanceof Error ? err.message : String(err)
+    );
+    return undefined;
   }
-
-  return irc.host?.trim();
 }
 
 // ── Channel-aware identifier mapping ─────────────────────────────────────────

@@ -168,7 +168,7 @@ async function test() {
  */
 async function runIrcTests() {
   const client = await getDbClient();
-  const testEntityIds = [99001, 99002, 99003, 99004, 99005];
+  const testEntityIds = [99001, 99002, 99003, 99004, 99005, 99006, 99007];
 
   async function seed() {
     // Clean any stale test rows from a previous aborted run
@@ -212,6 +212,16 @@ async function runIrcTests() {
     await client.query(
       `INSERT INTO entity_facts (entity_id, key, value) VALUES ($1, 'irc_username', 'late.sh/dru-idian[bot]')`,
       [testEntityIds[4]]
+    );
+
+    // TC-522-013: combined non-IRC identifier conflict detection regression
+    await client.query(
+      `INSERT INTO entities (id, name, type) VALUES ($1, 'Discord Entity', 'person'), ($2, 'Telegram Entity', 'person')`,
+      [testEntityIds[5], testEntityIds[6]]
+    );
+    await client.query(
+      `INSERT INTO entity_facts (entity_id, key, value) VALUES ($1, 'discord_id', 'combined-discord-013'), ($2, 'telegram_id', 'combined-telegram-013')`,
+      [testEntityIds[5], testEntityIds[6]]
     );
   }
 
@@ -310,6 +320,16 @@ async function runIrcTests() {
     await client.query(
       `DELETE FROM entity_facts WHERE entity_id = $1 AND key = 'discord_id'`,
       [testEntityIds[0]]
+    );
+
+    // TC-522-013: regression — combined non-IRC identifier conflict detection unaffected
+    const r013 = await resolveEntityByIdentifiers({
+      discordId: "combined-discord-013",
+      telegramId: "combined-telegram-013",
+    });
+    check(
+      "TC-522-013: combined non-IRC identifier conflict detection unaffected",
+      r013 != null && r013.ok === false && r013.conflict === true && r013.entities?.length === 2
     );
 
     console.log(`\n${passed} passed, ${failed} failed\n`);

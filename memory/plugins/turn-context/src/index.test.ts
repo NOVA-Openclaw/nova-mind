@@ -244,4 +244,58 @@ describe("extractIdentifiers (IRC support #522)", () => {
       fs.unlinkSync(configPath);
     }
   });
+
+  it("TC-522-028: missing IRC config file → graceful skip, no throw", () => {
+    const configPath = join(os.tmpdir(), `turn-context-test-missing-${Date.now()}.json`);
+    const restore = setIrcConfigPathForTest(configPath);
+    try {
+      assert.deepEqual(extractIdentifiers("irc", "Druidian"), {});
+    } finally {
+      restore();
+    }
+  });
+
+  it("TC-522-028: invalid JSON IRC config → graceful skip, no throw", () => {
+    const configPath = join(os.tmpdir(), `turn-context-test-badjson-${Date.now()}.json`);
+    const restore = setIrcConfigPathForTest(configPath);
+    fs.writeFileSync(configPath, "this is not valid json");
+    try {
+      assert.deepEqual(extractIdentifiers("irc", "Druidian"), {});
+    } finally {
+      restore();
+      try {
+        fs.unlinkSync(configPath);
+      } catch {}
+    }
+  });
+
+  it("TC-522-028: unexpected host type in IRC config → graceful skip, no throw", () => {
+    const configPath = join(os.tmpdir(), `turn-context-test-numhost-${Date.now()}.json`);
+    const restore = setIrcConfigPathForTest(configPath);
+    fs.writeFileSync(configPath, JSON.stringify({ channels: { irc: { host: 12345 } } }));
+    try {
+      assert.deepEqual(extractIdentifiers("irc", "Druidian"), {});
+    } finally {
+      restore();
+      fs.unlinkSync(configPath);
+    }
+  });
+
+  it("TC-522-028: unexpected account host type in IRC config → graceful skip, no throw", () => {
+    const configPath = join(os.tmpdir(), `turn-context-test-numacct-${Date.now()}.json`);
+    const restore = setIrcConfigPathForTest(configPath);
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({ channels: { irc: { accounts: { default: { host: 12345 } } } } })
+    );
+    try {
+      assert.deepEqual(
+        extractIdentifiers("irc", "Druidian", undefined, { accountId: "default" }),
+        {}
+      );
+    } finally {
+      restore();
+      fs.unlinkSync(configPath);
+    }
+  });
 });

@@ -25,12 +25,12 @@ The NOVA Relationships System is a unified platform that merged the original Ent
 ### Key Components
 
 1. **Entity Resolver Library** (`lib/entity-resolver/`)
-   - **Identity Resolution**: `resolveEntity()` looks up an entity across multiple identifiers (phone, email, UUID, certificates, Discord ID, Telegram ID, Slack member ID, Signal UUID/username, `deviceId`) via the `IDENTIFIER_TO_DB_KEY` mapping.
+   - **Identity Resolution**: `resolveEntity()` looks up an entity across multiple identifiers (phone, email, UUID, certificates, Discord ID, Telegram ID, Slack member ID, Signal UUID/username, IRC username, `deviceId`) via the `IDENTIFIER_TO_DB_KEY` mapping (`ircUsername` → `irc_username`, added for #522).
    - Conflict detection via `resolveEntityByIdentifiers()` — flags when identifiers match different entities
-   - (Note: `find_entity_id()`/`is_plausible_entity()` — alternate-spelling matching and ghost-entity heuristics — are implemented in the memory domain's `extract_memories.py`, not this library.)
+   - (Note: `find_entity_id()`/`is_plausible_entity()` — alternate-spelling matching and ghost-entity heuristics — are implemented in the memory domain's `extract_memories.py`, not this library. The IRC `<network>/<nick>` composite value itself is derived in the `turn-context` plugin's `entity-resolver.ts`, not in this library — see `memory/plugins/turn-context/src/entity-resolver.ts`.)
    - Session-aware caching for performance
    - Profile management and fact storage
-   - Cross-platform integration (Discord, Telegram, Slack, Signal, email, web, certificates, devices)
+   - Cross-platform integration (Discord, Telegram, Slack, Signal, IRC, email, web, certificates, devices)
    - `agent-install.sh` runs `npm install` in place under `lib/entity-resolver/` (it does not copy the library elsewhere); hooks import it directly from wherever the repo is checked out, e.g. `<checkout-path>/lib/entity-resolver`
 
 2. **Certificate Authority** (`nova-ca/`)
@@ -70,7 +70,7 @@ The system follows a layered architecture designed for scalability and modularit
 
 ### Perception Layer
 **"What do I notice?"**
-- Multi-channel identity detection (phone, email, UUID, certificate CN, Discord ID, Telegram ID, Slack member ID, Signal UUID/username)
+- Multi-channel identity detection (phone, email, UUID, certificate CN, Discord ID, Telegram ID, Slack member ID, Signal UUID/username, IRC `<network>/<nick>`)
 - Cross-platform user tracking and consolidation
 - Behavioral pattern recognition and trait extraction
 - Context clue identification and correlation

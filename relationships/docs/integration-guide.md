@@ -449,7 +449,7 @@ class AgentNetworkClient {
     // NOTE: `resolveEntity()` in this repo's actual `lib/entity-resolver/`
     // only accepts identifier-based lookup (phone, email, uuid, certCN,
     // discordId, telegramId, slackMemberId, signalUuid, signalUsername,
-    // deviceId) — there is no `id` field on `EntityIdentifiers`, so a
+    // ircUsername, deviceId) — there is no `id` field on `EntityIdentifiers`, so a
     // real integration would need a small `getEntityById()` helper (not
     // yet implemented) instead of the illustrative call below.
     const entity = await getEntityById(entityId); // hypothetical helper — see note above

@@ -71,6 +71,7 @@ const IDENTIFIER_TO_DB_KEY: Record<string, string> = {
   signalUuid: 'signal_uuid',
   signalUsername: 'signal_username',
   deviceId: 'nova_app_device_id',
+  ircUsername: 'irc_username',
 };
 
 /**

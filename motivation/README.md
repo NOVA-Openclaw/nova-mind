@@ -56,6 +56,13 @@ Blocker Outreach cascade/channel/reassignment rules.
 - `flag_d100_low_completion()` — monthly completion-rate audit; flags populated slots with ≥10 post-population rolls and a completion rate below 60% (issue #444)
 - Tracking columns (`times_rolled`, `times_completed`, `last_rolled`, `last_completed`, `populated_at`) are write-protected — only the SECURITY DEFINER functions/triggers can update them. Content columns (including `reserved`) are open for NOVA to maintain directly.
 
+**`work_queue`** — Active-work watch queue for fire-and-forget dispatches (issue nova-mind#527 pattern; designed with I)ruid 2026-07-25).
+- One row per in-flight dispatch: subagent sessions, PRs awaiting review/merge, long-running processes, workflow steps. Columns: `owner_session` (who to wake), `kind` (`subagent_session`/`pr`/`process`/`cron_job`/`workflow_step`/`other`), `ref` (session key / PR ref / process id), `description`, `expected_outcome`, `next_action_hint`, `status` (`pending`/`done`/`failed`/`stale`/`cancelled`), plus check bookkeeping (`last_checked_at`, `check_count`, `completed_at`).
+- **The rule:** whenever an agent dispatches fire-and-forget work (`sessions_spawn` of any mode, `sessions_send` with `timeoutSeconds=0`, background exec), it INSERTs a `work_queue` row **in the same turn as the dispatch**. Fire-and-forget without a queue entry is how work gets orphaned.
+- **`work-queue-sweeper`** OpenClaw cron closes the loop: an every-1-minute schedule gated by a headless trigger script (a single `psql` count of pending rows — zero tokens). Only when pending items exist does an isolated agent turn (cheap model) spin up to check each item's live status, mark completions, and **wake the owner session** (`cron` wake, `mode=now`) with the finding and `next_action_hint`. Items pending >24h go `stale` with a stale notice.
+- Replaces ad-hoc dead-man cron timers as the primary completion-detection mechanism; dead-man timers remain a backup for critical steps only. Rationale: thread-bound subagent sessions deliver output to their own threads and never push completion events to the parent — before `work_queue`, orchestrators either polled manually or forgot dispatched work entirely.
+- Relationship to this subsystem: the motivation system decides **what** autonomous work to start; `work_queue` guarantees started work **gets picked back up** the moment it completes. Proactive-mode steps that spawn subagents (Steps 6, 7, 9, 11) are expected to follow the same INSERT-on-dispatch rule.
+
 ### Supporting Tables (owned by other subsystems)
 
 - `workflows` / `workflow_steps` — Workflow definitions (cognition subsystem)

@@ -27,6 +27,7 @@ export interface EntityIdentifiers {
   signalUuid?: string;
   signalUsername?: string;
   deviceId?: string;  // OpenClaw device pairing ID (Ed25519 pubkey hash)
+  ircUsername?: string;  // composite <network>/<nick>, e.g. late.sh/druidian
 }
 
 /**

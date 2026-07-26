@@ -130,7 +130,7 @@ graph TB
 **Purpose:** Entity perception, profiling, resolution, and trust infrastructure.
 
 **Core Components:**
-- **Entity Resolver Library:** Identity resolution across phone, email, UUID, certificate CN
+- **Entity Resolver Library:** Identity resolution across phone, email, UUID, certificate CN, Discord/Telegram/Slack/Signal IDs, and IRC `<network>/<nick>`
 - **Session‑Aware Caching:** Per‑session entity caching (30‑minute TTL)
 - **Certificate Authority:** Private CA for mTLS authentication and Web of Trust
 - **Profile Management:** Dynamic profiling with behavioral/trait schema

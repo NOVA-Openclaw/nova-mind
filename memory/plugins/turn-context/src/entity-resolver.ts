@@ -8,6 +8,7 @@
  * Issue: nova-mind #182
  */
 
+import * as fs from "fs";
 import * as os from "os";
 import { join } from "path";
 
@@ -41,6 +42,98 @@ async function ensureEntityResolver(): Promise<boolean> {
   }
 }
 
+// ── IRC host resolution from OpenClaw config ─────────────────────────────────
+
+interface IrcConfig {
+  host?: string;
+  defaultAccount?: string;
+  accounts?: Record<string, { host?: string }>;
+}
+
+interface ChannelsConfig {
+  irc?: IrcConfig;
+}
+
+interface OpenClawConfigShape {
+  channels?: ChannelsConfig;
+}
+
+let cachedOpenClawConfig: OpenClawConfigShape | null | undefined;
+let openClawConfigPath: string | undefined;
+
+function resolveOpenClawConfigPath(): string {
+  if (openClawConfigPath) return openClawConfigPath;
+  openClawConfigPath = join(os.homedir(), ".openclaw", "openclaw.json");
+  return openClawConfigPath;
+}
+
+/** Test seam: override the config path and clear the cache. Returns a restore fn. */
+export function setIrcConfigPathForTest(path: string): () => void {
+  const previousPath = openClawConfigPath;
+  const previousCache = cachedOpenClawConfig;
+  openClawConfigPath = path;
+  cachedOpenClawConfig = undefined;
+  return () => {
+    openClawConfigPath = previousPath;
+    cachedOpenClawConfig = previousCache;
+  };
+}
+
+function readOpenClawConfig(): OpenClawConfigShape | null {
+  if (cachedOpenClawConfig !== undefined) return cachedOpenClawConfig;
+  try {
+    const raw = fs.readFileSync(resolveOpenClawConfigPath(), "utf-8");
+    cachedOpenClawConfig = JSON.parse(raw) as OpenClawConfigShape;
+    return cachedOpenClawConfig;
+  } catch (err) {
+    console.warn(
+      "[turn-context] Could not read openclaw.json:",
+      err instanceof Error ? err.message : String(err)
+    );
+    cachedOpenClawConfig = null;
+    return null;
+  }
+}
+
+/**
+ * Determine the IRC server host for a given accountId from OpenClaw config.
+ * Falls back from account-specific config to top-level channel config.
+ * Returns undefined if no host can be determined.
+ *
+ * Defensive: config may come from disk and contain unexpected shapes; any
+ * read/parse/type error must degrade to undefined so the shared turn-context
+ * hook path does not throw synchronously for IRC messages. See nova-mind#522.
+ */
+export function resolveIrcHostFromConfig(accountId?: string, config?: Record<string, unknown>): string | undefined {
+  try {
+    const cfg = (config ?? readOpenClawConfig()) as OpenClawConfigShape | null | undefined;
+    const irc = cfg?.channels?.irc;
+    if (!irc || typeof irc !== "object" || Array.isArray(irc)) return undefined;
+
+    // If an explicit account id is provided, prefer its host, then fall back to top-level.
+    if (accountId && accountId !== irc.defaultAccount) {
+      const accountHost = irc.accounts?.[accountId]?.host;
+      if (typeof accountHost === "string") {
+        const trimmed = accountHost.trim();
+        if (trimmed) return trimmed;
+      }
+    }
+
+    const topHost = irc.host;
+    if (typeof topHost === "string") {
+      const trimmed = topHost.trim();
+      if (trimmed) return trimmed;
+    }
+    return undefined;
+  } catch (err) {
+    console.warn(
+      "[turn-context] IRC host resolution error:",
+      err instanceof Error ? err.message : String(err)
+    );
+    return undefined;
+  }
+}
+
 // ── Channel-aware identifier mapping ─────────────────────────────────────────
 
 interface EntityIdentifiers {
@@ -53,12 +146,49 @@ interface EntityIdentifiers {
   slackMemberId?: string;
   signalUuid?: string;
   signalUsername?: string;
+  ircUsername?: string;
 }
 
-function extractIdentifiers(
+/**
+ * Derive an IRC network identifier from a server host.
+ * - Lowercases the full host first.
+ * - Strips a leading "irc." or "irc-" prefix if present.
+ * - Falls back to the full lowercased host when no prefix is present.
+ * - Returns null when the host is missing or the stripped result is empty.
+ */
+export function deriveIrcNetwork(host: string | undefined): string | null {
+  if (!host || typeof host !== "string") return null;
+  const lower = host.trim().toLowerCase();
+  if (!lower) return null;
+
+  let network = lower;
+  if (network.startsWith("irc.")) {
+    network = network.slice(4);
+  } else if (network.startsWith("irc-")) {
+    network = network.slice(4);
+  }
+
+  if (!network) return null;
+  return network;
+}
+
+/**
+ * Parse the nick portion from an IRC sender identifier.
+ * IRC sender ids may be bare nicks or `nick!user@host` masks.
+ */
+export function parseIrcNick(senderId: string): string | null {
+  const trimmed = senderId.trim();
+  if (!trimmed) return null;
+  const bangIdx = trimmed.indexOf("!");
+  const nick = bangIdx >= 0 ? trimmed.slice(0, bangIdx) : trimmed;
+  return nick || null;
+}
+
+export function extractIdentifiers(
   provider: string | undefined,
   senderId: string | undefined,
-  senderE164?: string | undefined
+  senderE164?: string | undefined,
+  options?: { accountId?: string; host?: string; config?: Record<string, unknown> }
 ): EntityIdentifiers {
   if (!senderId) return {};
 
@@ -73,6 +203,16 @@ function extractIdentifiers(
       const ids: EntityIdentifiers = { signalUuid: senderId };
       if (senderE164) ids.phone = senderE164;
       return ids;
+    }
+    case "irc": {
+      const host = options?.host ?? resolveIrcHostFromConfig(options?.accountId, options?.config);
+      const network = deriveIrcNetwork(host);
+      if (!network) return {};
+
+      const nick = parseIrcNick(senderId);
+      if (!nick) return {};
+
+      return { ircUsername: `${network}/${nick.toLowerCase()}` };
     }
     default:
       // Unknown provider — graceful skip; entity resolution will return nothing
@@ -107,6 +247,9 @@ export interface SenderInfo {
   senderName?: string;
   provider?: string;
   senderE164?: string;
+  accountId?: string;
+  host?: string;
+  config?: Record<string, unknown>;
 }
 
 /**
@@ -188,7 +331,7 @@ async function resolveEntityOnly(
   // Lazy-load entity resolver — graceful degradation if not installed
   if (!(await ensureEntityResolver())) return null;
 
-  const { senderId, senderName, provider, senderE164 } = info;
+  const { senderId, senderName, provider, senderE164, accountId, host, config } = info;
 
   if (!senderId) return null;
 
@@ -204,10 +347,14 @@ async function resolveEntityOnly(
   }
 
   if (!entity) {
-    const identifiers = extractIdentifiers(provider, senderId, senderE164);
+    const identifiers = extractIdentifiers(provider, senderId, senderE164, { accountId, host, config });
     if (Object.keys(identifiers).length === 0) {
-      // Unknown provider — no way to resolve
-      console.log(`[turn-context] Unknown provider '${provider}', skipping entity resolution`);
+      // Network/host unavailable or unknown provider — no way to resolve
+      if (provider === "irc") {
+        console.log(`[turn-context] IRC network derivation failed for sender ${senderName || senderId}, skipping entity resolution`);
+      } else {
+        console.log(`[turn-context] Unknown provider '${provider}', skipping entity resolution`);
+      }
       return null;
     }
 

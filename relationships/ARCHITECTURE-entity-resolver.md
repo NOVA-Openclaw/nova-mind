@@ -6,7 +6,7 @@ The Entity Resolver library is a core component of the NOVA Relationships ecosys
 
 ### Purpose
 
-- **Identity Resolution**: Converts various identifiers (phone, email, UUID, certificate CN, Discord ID, Telegram ID, Slack member ID, Signal UUID/username) into unified entity records
+- **Identity Resolution**: Converts various identifiers (phone, email, UUID, certificate CN, Discord ID, Telegram ID, Slack member ID, Signal UUID/username, IRC username) into unified entity records
 - **Conflict Detection**: Detects when multiple identifiers resolve to different entities, flagging data integrity issues instead of silently picking a winner
 - **Profile Management**: Loads entity facts like timezone, communication style, expertise, and preferences
 - **Session Awareness**: Maintains per-session entity caches to reduce database load and improve response times
@@ -41,6 +41,7 @@ interface EntityIdentifiers {
   slackMemberId?: string;  // Slack member ID
   signalUuid?: string;     // Signal UUID (dedicated field)
   signalUsername?: string;  // Signal username
+  ircUsername?: string;    // Composite <network>/<nick>, e.g. "late.sh/druidian" (#522)
 }
 ```
 
@@ -68,6 +69,9 @@ const entity = await resolveEntity({
 
 // Resolve by platform-specific identifier
 const discordUser = await resolveEntity({ discordId: '123456789012345' });
+
+// Resolve by IRC identity (composite <network>/<nick>, lowercased)
+const ircUser = await resolveEntity({ ircUsername: 'late.sh/druidian' });
 
 if (entity) {
   console.log(`Found: ${entity.name} (ID: ${entity.id})`);
@@ -241,8 +245,20 @@ The resolver maps camelCase identifier fields to snake_case `entity_facts.key` v
 | `signalUuid` | `signal_uuid` |
 | `signalUsername` | `signal_username` |
 | `deviceId` | `nova_app_device_id` |
+| `ircUsername` | `irc_username` (#522) |
 
 Legacy identifiers (`phone`, `uuid`, `certCN`, `email`) are mapped inline to `phone`, `signal_uuid`, `cert_cn`, and `email`.
+
+**Note on `ircUsername` composition:** this library only stores/matches the
+already-composed `<network>/<nick>` string (e.g. `late.sh/druidian`, always
+lowercased) — it does not parse IRC hosts or nicks itself. That derivation
+(network from server host, nick from a `nick!user@host` mask, lowercasing)
+happens upstream in the `turn-context` plugin's
+`memory/plugins/turn-context/src/entity-resolver.ts`
+(`extractIdentifiers()`'s `"irc"` case, `deriveIrcNetwork()`,
+`parseIrcNick()`, `resolveIrcHostFromConfig()`) before the composite value is
+ever passed to `resolveEntity()`/`resolveEntityByIdentifiers()`. See
+nova-mind#522.
 
 **Query Strategy:**
 ```sql

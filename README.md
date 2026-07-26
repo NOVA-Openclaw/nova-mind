@@ -21,7 +21,7 @@ nova-mind is the complete agent mind stack for NOVA. It provides:
 
 - **Memory** — Persistent PostgreSQL memory with semantic recall, extraction hooks, and a structured schema for entities, facts, relationships, events, and lessons
 - **Cognition** — Agent orchestration, inter-agent messaging, bootstrap context seeding, the agent-config-sync system that keeps model configuration in sync with the database, and metacognition plugins (confidence-check, self-awareness)
-- **Relationships** — Entity resolution across platforms, session-aware caching, certificate-based agent identity (Web of Trust), and the social graph
+- **Relationships** — Entity resolution across platforms (Discord, Telegram, Slack, Signal, IRC), session-aware caching, certificate-based agent identity (Web of Trust), and the social graph
 - **Psyche** — Agent self-awareness design: core values, agent-chat architecture, entity/user identity models, and identification protocols
 - **Motivation** — Drive assignment, goal tracking, reward signals, and proactive mode orchestration for agent initiative
 

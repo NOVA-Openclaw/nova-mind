@@ -1,5 +1,33 @@
 # Changelog
 
+### Batch: irc-entity-resolver-522 (Issue #522)
+
+#### Added
+- **IRC entity resolution** (nova-mind#522, PR #525) — `extractIdentifiers()` in `memory/plugins/turn-context/src/entity-resolver.ts` gains an `"irc"` case, producing a composite `ircUsername` identifier of the form `<network>/<nick>` (e.g. `late.sh/druidian`, always lowercased per IRC's `CASEMAPPING=ascii` semantics):
+  - **Network** derivation (`deriveIrcNetwork()`): lowercases the server host, then strips a leading `irc.` or `irc-` prefix if present (falls back to the full lowercased host when no prefix matches, e.g. `chat.freenode.net` stays as-is). Host source priority: `event.metadata.host`/`senderHost` (when the channel adapter supplies it) → resolved from OpenClaw config via the new `resolveIrcHostFromConfig(accountId, config)`, which checks `channels.irc.accounts[accountId].host` first, then falls back to top-level `channels.irc.host`.
+  - **Nick** parsing (`parseIrcNick()`): handles both a bare nick and a `nick!user@host` mask, taking everything before the first `!`.
+  - `memory/plugins/turn-context/src/index.ts`'s `message_received` handler now caches `accountId` and `host` per sender (`SenderCache` interface) alongside existing fields, and passes the plugin's `config` object through the `before_prompt_build` context so `resolveIrcHostFromConfig()` can use the already-loaded config without re-reading `openclaw.json` from disk on every call.
+  - If network derivation fails (no host resolvable from any source, or the stripped result is empty — e.g. a bare `irc.` host), IRC entity resolution gracefully skips (logs `IRC network derivation failed for sender ...` and returns `null`) rather than resolving with a garbage identifier.
+  - Companion resolver-lib change: `relationships/lib/entity-resolver` gains `ircUsername` → `irc_username` in the `IDENTIFIER_TO_DB_KEY` constant (`resolver.ts`) and the `EntityIdentifiers` interface (`types.ts`). The library only stores/matches the already-composed value — it does not parse hosts or nicks itself.
+  - Full identifier-mapping documentation: `relationships/ARCHITECTURE-entity-resolver.md`, `memory/docs/semantic-recall.md` (Entity Resolution section).
+
+#### Fixed
+- **`resolveIrcHostFromConfig()` hardened against malformed IRC config** (nova-mind#522) — Desk review during initial #522 testing found the original implementation called `.trim()` on `irc.accounts?.[accountId]?.host` and `irc.host` without a `typeof === "string"` guard, so a config value of the wrong type (e.g. `host: 12345`, from a hand-edited or corrupted `openclaw.json`) would throw synchronously into the shared `before_prompt_build` hook path for every message, not just IRC messages. The function now validates the IRC config shape (`irc && typeof irc === "object" && !Array.isArray(irc)`), checks `typeof === "string"` before every `.trim()` call, and wraps the entire body in try/catch returning `undefined` with a `console.warn` — matching the graceful-skip contract already used elsewhere in this file (`readOpenClawConfig()`'s own catch handles missing-file/invalid-JSON; this fix covers the additional unexpected-shape cases inside the already-parsed config object).
+
+#### Migrations
+- `database/pre-migrations/006-lowercase-irc-username-values.sql` (nova-mind#522) — One-time idempotent data cleanup: `UPDATE entity_facts SET value = lower(value) WHERE key = 'irc_username' AND value != lower(value)`. Normalizes pre-existing mixed-case `irc_username` fact values (e.g. `entity_facts` id=26989, `late.sh/Druidian`) to lowercase so exact-match resolution against the new lowercased composite values works immediately post-deploy. Must run atomically with (before or alongside) the code deploy above — read via `database/pre-migrations/` per the standard installer pre-migration path (see `memory/INSTALLATION.md`).
+
+#### Tests
+- `memory/plugins/turn-context/src/index.test.ts` (nova-mind#522) — TC-522-014–024, TC-522-032–036: new IRC identifier-extraction tests (bare nick, `nick!user@host` mask, missing host, empty/whitespace nick, IRC-legal special chars in nick, network-derivation case-folding and prefix handling, prefix-only-host empty-network skip) plus regression coverage confirming discord/telegram/slack/signal/unknown-provider/device-provider extraction paths are unchanged by the new `irc` case. TC-522-036 covers config-driven host resolution via `accountId` (default account → top-level host, named account → account-specific host).
+- `memory/plugins/turn-context/src/index.test.ts` (nova-mind#522) — TC-522-028 (4 sub-cases): config-read/parse resilience for the IRC path — missing config file, invalid JSON, non-string `host`, non-string per-account `host`, all asserting graceful-skip (`{}`) with no throw. Only the two non-string-host sub-cases exercise the new `resolveIrcHostFromConfig` hardening fix above; the missing-file and invalid-JSON sub-cases exercise pre-existing `readOpenClawConfig()` resilience (its own try/catch predates #522). See `tests/TEST-CASES-ISSUE-522.md` for the execution-status tracker.
+- `relationships/lib/entity-resolver/test.ts` (nova-mind#522) — TC-522-013: regression test confirming combined non-IRC identifier conflict detection (`resolveEntityByIdentifiers()`) is unaffected by the new `ircUsername` mapping.
+
+#### Known follow-ups (not part of this fix)
+- The `deviceId` identifier field exists in `EntityIdentifiers`/`IDENTIFIER_TO_DB_KEY` but has no corresponding `extractIdentifiers()` case in `memory/plugins/turn-context` today (TC-522-024 documents this gap as a regression guard — #522 must not, and does not, widen the default provider match to cover it). Out of scope for this issue.
+
+#### Issues Closed
+- #522 — IRC entity resolver support (composite `<network>/<nick>` identifier, config-driven host resolution, lowercase-normalization migration)
+
 ### Batch: schema-sync-branch-safety-506 (Issue #506)
 
 #### Fixed

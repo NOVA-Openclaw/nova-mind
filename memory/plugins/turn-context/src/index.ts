@@ -46,6 +46,8 @@ interface SenderCache {
   senderName: string;
   provider: string;
   senderE164?: string;
+  accountId?: string;
+  host?: string;
   content: string;
   timestamp: number;
 }
@@ -201,6 +203,18 @@ export default function register(api: PluginApi): void {
       const senderE164: string | undefined =
         (event.metadata as any)?.senderE164;
 
+      const accountId: string | undefined =
+        ctx.accountId ??
+        (event.metadata as any)?.accountId;
+
+      // IRC (and potentially other channel adapters) may attach the server host
+      // to event.metadata so we can derive a per-network identity. If it is not
+      // present, extractIdentifiers will fall back to resolving the host from
+      // OpenClaw config using accountId.
+      const host: string | undefined =
+        (event.metadata as any)?.host ??
+        (event.metadata as any)?.senderHost;
+
       const content: string | undefined =
         event.content ??
         (event as any).context?.content;
@@ -214,6 +228,8 @@ export default function register(api: PluginApi): void {
         senderName: senderName ?? "",
         provider: provider ?? "",
         senderE164,
+        accountId,
+        host,
         content: content ?? "",
         timestamp: Date.now(),
       });
@@ -284,6 +300,9 @@ export default function register(api: PluginApi): void {
         senderName: cached?.senderName,
         provider: cached?.provider,
         senderE164: cached?.senderE164,
+        accountId: cached?.accountId,
+        host: cached?.host,
+        config: (api as any).config ?? undefined,
       };
 
       // ── Step 1: Classify message type ──────────────────────────────────────
@@ -637,6 +656,8 @@ interface PluginContext {
   sessionKey?: string;
   agentId?: string;
   messageProvider?: string;
+  accountId?: string;
+  config?: Record<string, unknown>;
   [key: string]: unknown;
 }
 

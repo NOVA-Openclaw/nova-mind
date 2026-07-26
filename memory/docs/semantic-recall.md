@@ -96,6 +96,7 @@ Integrates with the entity-resolver library for **channel-aware** sender identif
 - **Telegram** → resolves by `telegramId`
 - **Slack** → resolves by `slackMemberId`
 - **Signal** → resolves by `signalUuid` (+ `phone` if E.164 number available)
+- **IRC** → resolves by `ircUsername`, a composite `<network>/<nick>` value (e.g. `late.sh/druidian`, always lowercased). Network is derived from the IRC server host (message metadata, falling back to OpenClaw config via `accountId`); nick is parsed from a `nick!user@host` mask if present. Added in #522 — see `memory/plugins/turn-context/src/entity-resolver.ts`.
 - **Unknown providers** → falls back to legacy `uuid`/`phone` path
 
 Uses `resolveEntityByIdentifiers()` with **conflict detection** — if identifiers match different entities, entity injection is skipped to avoid incorrect context.

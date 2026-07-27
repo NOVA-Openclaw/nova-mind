@@ -106,8 +106,9 @@ class TestPermanentFailure:
         call = message_calls[0]
         assert call["query"] == "SELECT send_agent_message(%s, %s, %s)"
         sender, message, recipients = call["params"]
-        assert sender == "schema-sync"
-        assert recipients == ["nova"]
+        assert sender == listener_module._agent_chat_env["PGUSER"]
+        assert message.startswith("[schema-sync]")
+        assert recipients == listener_module._alert_recipients(sender)
         assert "schema sync push failed" in message.lower()
         assert commit_hash in message
         assert "Permission denied" not in message
@@ -268,7 +269,9 @@ class TestAuthFailure:
         message_calls = [c for c in mock_agent_chat if "send_agent_message" in c.get("query", "")]
         assert len(message_calls) == 1
         sender, message, recipients = message_calls[0]["params"]
-        assert recipients == ["nova"]
+        assert sender == listener_module._agent_chat_env["PGUSER"]
+        assert message.startswith("[schema-sync]")
+        assert recipients == listener_module._alert_recipients(sender)
         assert "auth" in message.lower()
 
 
@@ -344,8 +347,9 @@ class TestNoGidgetMessages:
         # so only the permanent-failure and auth-failure cases produce alerts.
         assert len(schema_sync_calls) == 2
         for call in schema_sync_calls:
-            recipients = call["params"][2]
-            assert recipients == ["nova"]
+            sender, message, recipients = call["params"]
+            assert message.startswith("[schema-sync]")
+            assert recipients == listener_module._alert_recipients(sender)
             assert "gidget" not in [r.lower() for r in recipients]
 
 
@@ -409,10 +413,11 @@ class TestSendAgentMessageCompliance:
         assert connect_calls[0]["connect_kwargs"]["database"] == "agent_chat"
         assert len(message_calls) == 1
         sender, message, recipients = message_calls[0]["params"]
-        assert sender == "schema-sync"
+        assert sender == listener_module._agent_chat_env["PGUSER"]
+        assert message.startswith("[schema-sync]")
         assert len(sender) <= 50
         assert message
-        assert recipients == ["nova"]
+        assert recipients == listener_module._alert_recipients(sender)
 
 
 class TestStaleGidgetInstruction:

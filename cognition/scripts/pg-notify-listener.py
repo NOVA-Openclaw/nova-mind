@@ -153,6 +153,30 @@ MAX_PUSH_ATTEMPTS = 3
 PUSH_BACKOFF_DELAYS = [2, 4]  # seconds between retries (exponential: 2^1, 2^2)
 PUSH_TIMEOUT = 60  # seconds per attempt
 
+# Alert recipient configuration
+_ALERT_PRIMARY = ["nova"]
+_ALERT_FALLBACK = ["graybeard"]
+
+
+def _alert_recipients(sender: str) -> list[str]:
+    """Resolve agent_chat alert recipients, excluding the sending user.
+
+    send_agent_message enforces two guards that motivate this helper:
+      1. LOWER(p_sender) == session_user: the sender must match the connecting
+         PGUSER (so we bind the real connecting user, not a fake role).
+      2. The sender must NOT appear in the recipient list (self-address guard).
+
+    Primary routing is to nova. When the listener itself is nova, that would
+    violate guard #2, so we fall back to graybeard (Systems Administration /
+    infra owner). The final resort is a broadcast so the alert is not dropped.
+    """
+    sender_l = (sender or "").lower()
+    primary = [r for r in _ALERT_PRIMARY if r.lower() != sender_l]
+    if primary:
+        return primary
+    fallback = [r for r in _ALERT_FALLBACK if r.lower() != sender_l]
+    return fallback or ["*"]
+
 
 def _classify_push_failure(stderr):
     """Classify git push stderr into failure types for retry policy."""
@@ -169,9 +193,15 @@ def _classify_push_failure(stderr):
 
 
 def _send_push_alert(commit_hash, command, table_name, failure_class, stderr):
-    """Send agent_chat alert to nova on push failure. Never propagates exceptions."""
+    """Send agent_chat alert on push failure. Never propagates exceptions."""
     try:
+        sender = _agent_chat_env.get('PGUSER')
+        if not sender:
+            log("PGUSER not configured; cannot send push alert")
+            return
+
         message_lines = [
+            '[schema-sync]',
             f'Schema sync push failed ({failure_class}):',
             f'  repo: nova-mind',
             f'  path: {NOVA_MIND_DIR}',
@@ -202,26 +232,32 @@ def _send_push_alert(commit_hash, command, table_name, failure_class, stderr):
         push_conn = psycopg2.connect(
             host=_agent_chat_env.get('PGHOST', 'localhost'),
             database=_agent_chat_env['PGDATABASE'],
-            user=_agent_chat_env['PGUSER'],
+            user=sender,
             password=_agent_chat_env.get('PGPASSWORD', '')
         )
         push_cur = push_conn.cursor()
         push_cur.execute(
             "SELECT send_agent_message(%s, %s, %s)",
-            ('schema-sync', message, ['nova'])
+            (sender, message, _alert_recipients(sender))
         )
         push_conn.commit()
         push_cur.close()
         push_conn.close()
-        log(f"Alerted nova via agent_chat about push failure (commit: {commit_hash})")
+        log(f"Alerted {_alert_recipients(sender)} via agent_chat about push failure (commit: {commit_hash})")
     except Exception as alert_err:
-        log(f"Failed to send alert to nova: {alert_err}")
+        log(f"Failed to send push alert: {alert_err}")
 
 
 def _send_branch_alert(found_branch, command, table_name, reason, stderr=None):
-    """Send agent_chat alert to nova when branch-safety check aborts. Never propagates exceptions."""
+    """Send agent_chat alert when branch-safety check aborts. Never propagates exceptions."""
     try:
+        sender = _agent_chat_env.get('PGUSER')
+        if not sender:
+            log("PGUSER not configured; cannot send branch alert")
+            return
+
         message_lines = [
+            '[schema-sync]',
             f'Schema sync aborted ({reason}):',
             f'  repo: nova-mind',
             f'  path: {NOVA_MIND_DIR}',
@@ -261,20 +297,20 @@ def _send_branch_alert(found_branch, command, table_name, reason, stderr=None):
         alert_conn = psycopg2.connect(
             host=_agent_chat_env.get('PGHOST', 'localhost'),
             database=_agent_chat_env['PGDATABASE'],
-            user=_agent_chat_env['PGUSER'],
+            user=sender,
             password=_agent_chat_env.get('PGPASSWORD', '')
         )
         alert_cur = alert_conn.cursor()
         alert_cur.execute(
             "SELECT send_agent_message(%s, %s, %s)",
-            ('schema-sync', message, ['nova'])
+            (sender, message, _alert_recipients(sender))
         )
         alert_conn.commit()
         alert_cur.close()
         alert_conn.close()
-        log(f"Alerted nova via agent_chat about branch-safety abort (found: {found_branch}, reason: {reason})")
+        log(f"Alerted {_alert_recipients(sender)} via agent_chat about branch-safety abort (found: {found_branch}, reason: {reason})")
     except Exception as alert_err:
-        log(f"Failed to send branch alert to nova: {alert_err}")
+        log(f"Failed to send branch alert: {alert_err}")
 
 
 def _ensure_on_main(command, table_name):

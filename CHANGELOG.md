@@ -1,5 +1,20 @@
 # Changelog
 
+### Batch: pg-notify-alert-sender-508 (Issue #508)
+
+#### Fixed
+- **`pg-notify-listener.py` alerts use connecting PGUSER as sender and self-safe recipients** (nova-mind#508) — Alert notifications (`_send_push_alert` and `_send_branch_alert`) in the schema-sync listener previously hardcoded the sender as `'schema-sync'`. Because `send_agent_message()` enforces `LOWER(p_sender) == session_user` and no `'schema-sync'` DB user exists, these alerts silently failed to deliver in production since 2026-07-12. The listener now dynamically binds the sender to the connecting `PGUSER` from `_agent_chat_env` (and uses that user to connect to the `agent_chat` database), prefixes the body with `[schema-sync]` for attribution, and applies a smart self-safe recipient resolution strategy (`_alert_recipients()`):
+  - Excludes the sending user from the recipient list to satisfy the self-address guard in `send_agent_message()` (which throws if the sender is in the recipients list).
+  - Routes primarily to `nova`. If the sender is `nova` (e.g. running as the primary nova agent), it falls back to `graybeard`. If both match the sender, it falls back to broadcast (`*`).
+  - Alert helpers remain strictly non-raising; any error along the alert path (missing PGUSER, connection failure, or database error) is logged and swallowed, preventing alert failures from disrupting the schema-sync NOTIFY loop or hiding true sync success/failure outcomes.
+
+#### Tests
+- `cognition/tests/test_pg_notify_listener_issue_508.py` (nova-mind#508) — 23 new tests covering sender binding, message prefixing, recipient self-avoidance (nova → graybeard, graybeard → nova, and fallback broadcast), connection kwarg sourcing, failure swallow/non-raising behavior, raw bound SQL parameter verification, and end-to-end regression paths mirroring #399 and #506 failure states.
+- `cognition/tests/test_pg_notify_listener_issue_399.py` and `cognition/tests/test_pg_notify_listener_issue_506.py` (nova-mind#508) — updated pre-existing assertions to align with the new PGUSER sender, message prefix, and self-safe recipient resolver.
+
+#### Issues Closed
+- #508 — pg-notify-listener.py agent_chat alerts are latently broken (hardcoded 'schema-sync' sender rejects)
+
 ### Batch: irc-entity-resolver-522 (Issue #522)
 
 #### Added

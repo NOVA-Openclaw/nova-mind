@@ -189,8 +189,9 @@ class TestMainDiverged:
         message_calls = [c for c in mock_agent_chat if "send_agent_message" in c.get("query", "")]
         assert len(message_calls) == 1
         sender, message, recipients = message_calls[0]["params"]
-        assert sender == "schema-sync"
-        assert recipients == ["nova"]
+        assert sender == listener_module._agent_chat_env["PGUSER"]
+        assert message.startswith("[schema-sync]")
+        assert recipients == listener_module._alert_recipients(sender)
         assert "main" in message.lower()
         assert "diverged" in message.lower()
         assert "reconcile manually" in message.lower()
@@ -258,8 +259,9 @@ class TestDirtyWorktree:
         message_calls = [c for c in mock_agent_chat if "send_agent_message" in c.get("query", "")]
         assert len(message_calls) >= 1
         sender, message, recipients = message_calls[0]["params"]
-        assert sender == "schema-sync"
-        assert recipients == ["nova"]
+        assert sender == listener_module._agent_chat_env["PGUSER"]
+        assert message.startswith("[schema-sync]")
+        assert recipients == listener_module._alert_recipients(sender)
         assert "branch" in message.lower()
         assert "main" in message.lower()
 
@@ -289,8 +291,9 @@ class TestPushFailureAfterRemediation:
         message_calls = [c for c in mock_agent_chat if "send_agent_message" in c.get("query", "")]
         assert len(message_calls) == 1
         sender, message, recipients = message_calls[0]["params"]
-        assert sender == "schema-sync"
-        assert recipients == ["nova"]
+        assert sender == listener_module._agent_chat_env["PGUSER"]
+        assert message.startswith("[schema-sync]")
+        assert recipients == listener_module._alert_recipients(sender)
         assert "schema sync push failed" in message.lower()
         assert commit_hash in message
 

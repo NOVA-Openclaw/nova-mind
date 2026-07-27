@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### Fixed (#508 — pg-notify-listener alerts use PGUSER sender and self-safe recipients)
+
+- **`pg-notify-listener.py` alerts (`_send_push_alert` and `_send_branch_alert`) now use connecting PGUSER as sender** ([#508](https://github.com/NOVA-Openclaw/nova-mind/issues/508)) — Replaced the hardcoded `'schema-sync'` sender string with dynamic `_agent_chat_env.get('PGUSER')` in both alert paths. Since `send_agent_message()` enforces `LOWER(p_sender) == session_user` and no `'schema-sync'` database role exists, every listener alert had silently failed to deliver in production since 2026-07-12.
+- **Prefix all alert messages with `[schema-sync]`** (#508) — To retain attribution to the schema-sync subsystem when alerts are sent as the connecting user, all push and branch alerts are now prefixed with `[schema-sync]` in the message body.
+- **Smart self-safe recipient resolution helper `_alert_recipients(sender)`** (#508) — Added a helper function to resolve alert recipients that dynamically avoids sending an alert to the user that is sending it. This is required because `send_agent_message()` enforces a strict self-address guard (throws an exception if the sender is in the recipient list). 
+  - Routes primarily to `['nova']`.
+  - If the sender is `nova`, it falls back to `['graybeard']` (Systems Administration / infra owner).
+  - If both match the sender (e.g., in highly restricted environments), it falls back to broadcast (`['*']`) to ensure the alert is not silently dropped.
+- **Strict non-raising failure resilience** (#508) — The alert helpers continue to run within their own safe `try/except` blocks, logging but never propagating any exception (such as a missing `PGUSER` configuration, operational connection error, or database exception). This ensures that an alert failure cannot disrupt the main schema-sync notifier loop.
+
+#### Tests (#508)
+- `cognition/tests/test_pg_notify_listener_issue_508.py` — 23 new tests covering the sender binding, prefixing, recipient avoidance/fallback logic, connection kwargs, failure swallow/non-raising behavior, raw bound SQL params, and end-to-end regression paths under the new contract.
+- Existing suites (`test_pg_notify_listener_issue_399.py` and `test_pg_notify_listener_issue_506.py`) updated to assert the correct PGUSER sender, message body prefix, and `_alert_recipients` list structure.
+
 ### Fixed (#506 — branch-safety check for schema-sync commits/pushes)
 
 - **`sync_schema_to_github()` now asserts branch == `main` before any dump, commit, or push** ([#506](https://github.com/NOVA-Openclaw/nova-mind/issues/506)) — Prior to this fix, the function never verified the checked-out branch of its working clone (`NOVA_MIND_DIR`, normally `~/.openclaw/workspace/nova-mind`). When the clone was left on a stale feature branch after unrelated work concluded (the root cause observed in production from 2026-07-17 16:23 UTC onward), every subsequent sync attempt committed schema dumps onto that branch and then failed to push (branch diverged from its own remote) — a masked failure: sync events logged `False` to the `events` table, but nothing alerted, so `database/schema.sql` on `main` silently drifted from the live database for days. A new `_ensure_on_main(command, table_name)` check now runs as the first statement inside the existing git-lock critical section (`try` block, immediately after `fcntl.flock(..., LOCK_EX | LOCK_NB)` succeeds) and before the `pgschema dump` step — on **every call**, with no process-lifetime cache, since the listener is a long-running daemon and branch state can change between NOTIFY events (e.g. ops intervention, a stray manual commit).

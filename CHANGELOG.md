@@ -1,5 +1,29 @@
 # Changelog
 
+### Batch: entity-resolver-relationship-stats-543 (Issue #543)
+
+#### Added
+- **Pronouns + relationship stats in turn-context entity injection** (nova-mind#543) — the turn-context entity injection (`memory/plugins/turn-context/src/entity-resolver.ts`'s `formatEntityContext()`) previously showed only a 7-key allowlist of facts. It now also renders:
+  - `entities.pronouns` in the `👤 **Talking with:**` header, e.g. `👤 **Talking with:** Tabatha Janell Wilson (she/her)`.
+  - An optional trust suffix from `entities.trust_level` (free-text, e.g. `— trust: friend`) — suppressed when the value is `'unknown'` (the column default) or NULL, since that conveys no information.
+  - A new `📊 Known contact:` stats line with unfiltered fact count, first-seen date (`entities.created_at`), and last message timestamp + `provider:external_chat_id` ref (from `channel_transcripts`/`channel_sessions`) — falling back to `entities.last_seen` when no transcript row exists.
+  - `relationships/lib/entity-resolver/resolver.ts`'s `getEntityProfile()` return type changed from a bare `EntityFacts` map to `EntityProfile` (`{ facts, stats }`) — a breaking signature change for any direct consumer. `resolver.ts` also gains a shared `mapDbEntity()` helper so `pronouns`/`trust_level`/`last_seen`/`created_at` ride on the existing cheap identifier-resolution query (`resolveEntity()`/`resolveEntityByIdentifiers()`) rather than a second round trip — this means pronouns/trust/last-seen survive a `getEntityProfile()` stats-query timeout, since they're already on the resolved `Entity` before the stats race even begins.
+  - The stats query itself (unfiltered fact count + most recent transcript, via a single aggregate query with two `LEFT JOIN LATERAL`s) stays inside the existing 1s `Promise.race` timeout in `resolveEntityContext()`; on timeout or error it degrades to `{ facts: {}, stats: { factCount: 0, lastMessage: null } }`, matching the library's existing fail-closed contract.
+  - Honorific guard path (`resolveEntityForGuard()`) is unchanged — it never triggers the stats query.
+  - `database/schema.sql`'s `entities.trust_level` column comment updated from an enum-style description to reflect that it is free-text, not enforced by a CHECK constraint.
+
+#### Fixed
+- **`entities.last_seen` timezone-shift bug** (nova-mind#543) — `resolveEntity()`/`resolveEntityByIdentifiers()` originally rendered the naive (no-tz) `entities.last_seen` timestamp with `AT TIME ZONE 'UTC'`, which Postgres interprets as "convert from the session's timezone to UTC" — silently shifting the displayed value under any non-UTC session (e.g. `America/Chicago`). Fixed to render directly via `to_char(e.last_seen, 'YYYY-MM-DD HH24:MI "UTC"')` with no timezone conversion, matching how `created_at` is already rendered. See the RS-062 regression test in `relationships/lib/entity-resolver/test.ts` (run under `SET timezone='America/Chicago'`).
+
+#### Tests
+- `memory/plugins/turn-context/src/entity-resolver.test.ts` (nova-mind#543) — RS-001 through RS-062: full formatting matrix for `formatEntityContext()` (pronouns, trust suffix incl. `'unknown'`/NULL suppression, stats-line permutations, zero-fact/new-contact rendering, group-channel cache non-contamination), plus stats-query timeout/error-degradation behavior.
+- `relationships/lib/entity-resolver/test.ts` (nova-mind#543) — integration scaffold plus RS-062 (timezone regression under `SET timezone='America/Chicago'`).
+
+#### Issues Closed
+- #543 — Pronouns + relationship stats in turn-context entity injection
+
+See `relationships/CHANGELOG.md` for the entity-resolver library's own changelog entry.
+
 ### Batch: pg-notify-alert-sender-508 (Issue #508)
 
 #### Fixed

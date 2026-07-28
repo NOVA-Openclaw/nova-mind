@@ -101,8 +101,14 @@ Integrates with the entity-resolver library for **channel-aware** sender identif
 
 Uses `resolveEntityByIdentifiers()` with **conflict detection** — if identifiers match different entities, entity injection is skipped to avoid incorrect context.
 
+As of nova-mind#543, the injected block also renders pronouns, an optional trust suffix, and a
+relationship-stats line when available — see `memory/plugins/turn-context/README.md`'s
+[Entity Context Formatting](../plugins/turn-context/README.md#entity-context-formatting) section
+for the full rendering rules:
+
 ```
-👤 **Talking with:** I)ruid
+👤 **Talking with:** I)ruid (he/him)
+📊 Known contact: 214 facts · first seen 2025-02-08 · last message 2026-07-28 03:10 UTC (webchat:session-abc123)
 • **Timezone:** America/Chicago
 • **Communication Style:** Direct, technical
 ```

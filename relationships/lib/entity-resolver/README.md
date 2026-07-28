@@ -4,9 +4,10 @@ A reusable TypeScript library for resolving and caching entity information from 
 
 ## Features
 
-- **Multi-identifier resolution**: Resolve entities by phone, UUID, certificate CN, email, or platform-specific IDs (Discord, Telegram, Slack, Signal)
+- **Multi-identifier resolution**: Resolve entities by phone, UUID, certificate CN, email, or platform-specific IDs (Discord, Telegram, Slack, Signal, IRC, device pairing)
 - **Conflict detection**: Detect when identifiers resolve to different entities (data integrity issues)
 - **Session-aware caching**: Cache entity lookups per session with configurable TTL
+- **Relationship stats**: `getEntityProfile()` also returns an unfiltered fact count and the most recent channel transcript (timestamp + `provider:external_chat_id` ref), alongside pronouns/trust level carried on the `Entity` itself (nova-mind#543)
 - **Profile loading**: Load entity facts (timezone, preferences, etc.)
 - **Connection pooling**: Efficient database connection management
 - **Dynamic import support**: Installable to `~/.openclaw/lib/` for use by hooks at runtime
@@ -66,6 +67,10 @@ if (entity) {
 - `slackMemberId` - Slack member ID
 - `signalUuid` - Signal UUID (dedicated field, maps to `signal_uuid` in DB)
 - `signalUsername` - Signal username (maps to `signal_username` in DB)
+- `deviceId` - OpenClaw device pairing ID (maps to `nova_app_device_id` in DB)
+- `ircUsername` - Composite `<network>/<nick>`, e.g. `late.sh/druidian` (maps to `irc_username` in DB)
+
+**Returned `Entity` also carries relationship metadata when present on the row** (nova-mind#543): `pronouns`, `trustLevel` (free-text `entities.trust_level`), `lastSeen` (rendered `YYYY-MM-DD HH24:MI UTC`), and `createdAt` (rendered `YYYY-MM-DD`). These are populated by `mapDbEntity()` and are omitted from the object entirely when the underlying column is NULL — consumers should treat them as optional.
 
 #### `resolveEntityByIdentifiers(identifiers: EntityIdentifiers): Promise<ResolveResult | null>`
 
@@ -97,25 +102,37 @@ type ResolveResult =
 
 This function is preferred over `resolveEntity()` when conflict detection matters (e.g., the semantic-recall hook uses it to avoid injecting the wrong entity context).
 
-#### `getEntityProfile(entityId: number, factKeys?: string[]): Promise<EntityFacts>`
+#### `getEntityProfile(entityId: number, factKeys?: string[]): Promise<EntityProfile>`
 
-Load entity profile facts.
+Load entity profile facts **plus cheap relationship stats**, in a single aggregate query designed to stay inside the 1s timeout budget the `turn-context` plugin races it against (nova-mind#543). As of #543 this no longer returns a bare `EntityFacts` map — it returns `{ facts, stats }`.
 
 ```typescript
 const profile = await getEntityProfile(entityId);
-// Returns: { timezone: 'America/New_York', communication_style: 'direct', ... }
+// Returns:
+// {
+//   facts: { timezone: 'America/New_York', communication_style: 'direct', ... },
+//   stats: {
+//     factCount: 48,                     // unfiltered entity_facts row count
+//     lastMessage: {                     // most recent channel_transcripts row, or null
+//       timestamp: '2026-07-27 02:11 UTC',
+//       ref: 'discord:1513392492651872306',  // `${provider}:${external_chat_id}`
+//     },
+//   },
+// }
 
-// Or load specific facts:
-const timezone = await getEntityProfile(entityId, ['timezone', 'current_timezone']);
+// Or load specific facts (still affects only `facts`, not `stats`):
+const { facts } = await getEntityProfile(entityId, ['timezone', 'current_timezone']);
 ```
 
-**Default fact keys:**
+**Default fact keys** (unchanged — still the 7-key allowlist, capped at 20 rows):
 - `timezone`, `current_timezone`
 - `communication_style`
 - `expertise`
 - `preferences`
 - `location`
 - `occupation`
+
+**`stats.factCount`** counts ALL `entity_facts` rows for the entity, regardless of `factKeys` — it is not filtered by the allowlist. **`stats.lastMessage`** comes from a `LEFT JOIN LATERAL` against `channel_transcripts`/`channel_sessions` ordered by `timestamp DESC LIMIT 1`; it is `null` when the entity has no transcript rows. On any query error or timeout, the whole call resolves to `{ facts: {}, stats: { factCount: 0, lastMessage: null } }` rather than throwing — matching the library's existing fail-closed error contract.
 
 #### `getAllEntityFacts(entityId: number): Promise<EntityFacts>`
 
@@ -179,10 +196,26 @@ interface Entity {
   name: string;
   fullName?: string;
   type: string;
+  pronouns?: string;      // added #543
+  trustLevel?: string;    // added #543 — free-text entities.trust_level
+  lastSeen?: string;      // added #543 — pre-rendered 'YYYY-MM-DD HH24:MI UTC'
+  createdAt?: string;     // added #543 — pre-rendered 'YYYY-MM-DD'
 }
 
 interface EntityFacts {
   [key: string]: string;
+}
+
+// Relationship stats returned alongside facts by getEntityProfile() (#543)
+interface EntityRelationshipStats {
+  factCount: number;
+  lastMessage: { timestamp: string; ref: string } | null;
+}
+
+// getEntityProfile()'s actual return type as of #543 (was EntityFacts before)
+interface EntityProfile {
+  facts: EntityFacts;
+  stats: EntityRelationshipStats;
 }
 
 interface EntityIdentifiers {
@@ -195,6 +228,8 @@ interface EntityIdentifiers {
   slackMemberId?: string;
   signalUuid?: string;
   signalUsername?: string;
+  deviceId?: string;      // OpenClaw device pairing ID
+  ircUsername?: string;   // composite <network>/<nick>, e.g. late.sh/druidian
 }
 
 /**
@@ -259,9 +294,10 @@ async function handleMessage(sessionId: string, senderId: string) {
       // Cache for future use
       setCachedEntity(sessionId, entity);
       
-      // Load profile
+      // Load profile (facts + relationship stats, see EntityProfile above)
       const profile = await getEntityProfile(entity.id);
-      console.log(`User ${entity.name} (${profile.timezone || 'unknown timezone'})`);
+      console.log(`User ${entity.name} (${profile.facts.timezone || 'unknown timezone'})`);
+      console.log(`Known for ${profile.stats.factCount} facts`);
     }
   }
   

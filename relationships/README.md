@@ -27,6 +27,7 @@ The NOVA Relationships System is a unified platform that merged the original Ent
 1. **Entity Resolver Library** (`lib/entity-resolver/`)
    - **Identity Resolution**: `resolveEntity()` looks up an entity across multiple identifiers (phone, email, UUID, certificates, Discord ID, Telegram ID, Slack member ID, Signal UUID/username, IRC username, `deviceId`) via the `IDENTIFIER_TO_DB_KEY` mapping (`ircUsername` → `irc_username`, added for #522).
    - Conflict detection via `resolveEntityByIdentifiers()` — flags when identifiers match different entities
+   - **Relationship stats & pronouns** (#543): the resolved `Entity` optionally carries `pronouns`, `trustLevel` (free-text `entities.trust_level`), `lastSeen`, and `createdAt`; `getEntityProfile()` returns `{ facts, stats }`, where `stats` is an unfiltered fact count plus the most recent channel-transcript timestamp/ref — all inside the existing 1s timeout budget consumed by `turn-context`. See `ARCHITECTURE-entity-resolver.md` for the full API.
    - (Note: `find_entity_id()`/`is_plausible_entity()` — alternate-spelling matching and ghost-entity heuristics — are implemented in the memory domain's `extract_memories.py`, not this library. The IRC `<network>/<nick>` composite value itself is derived in the `turn-context` plugin's `entity-resolver.ts`, not in this library — see `memory/plugins/turn-context/src/entity-resolver.ts`.)
    - Session-aware caching for performance
    - Profile management and fact storage
@@ -313,8 +314,8 @@ if (entity) {
   // Load profile for personalization
   const profile = await getEntityProfile(entity.id);
   console.log(`Found: ${entity.name}`);
-  console.log(`Style: ${profile.communication_style}`);
-  console.log(`Timezone: ${profile.timezone}`);
+  console.log(`Style: ${profile.facts.communication_style}`);
+  console.log(`Timezone: ${profile.facts.timezone}`);
 }
 ```
 

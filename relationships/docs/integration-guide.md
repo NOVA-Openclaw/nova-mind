@@ -18,7 +18,7 @@ async function handleUserRequest(userIdentifiers: any) {
   if (entity) {
     const profile = await getEntityProfile(entity.id);
     console.log(`Welcome back, ${entity.name}!`);
-    console.log(`Your timezone: ${profile.timezone || 'UTC'}`);
+    console.log(`Your timezone: ${profile.facts.timezone || 'UTC'}`);
     return { entity, profile };
   } else {
     console.log('New user - consider onboarding');
@@ -72,8 +72,8 @@ class NOVASignalBot {
       }
     }
     
-    // Load user profile for personalization
-    const profile = entity ? await getEntityProfile(entity.id) : {};
+    // Load user profile for personalization (EntityProfile shape as of #543: { facts, stats })
+    const profile = entity ? await getEntityProfile(entity.id) : { facts: {}, stats: { factCount: 0, lastMessage: null } };
     
     // Create response context
     const context = this.createResponseContext(entity, profile, message);
@@ -87,9 +87,9 @@ class NOVASignalBot {
     return {
       entity,
       profile,
-      timezone: profile.timezone || 'UTC',
-      communicationStyle: profile.communication_style || 'balanced',
-      expertise: profile.expertise?.split(',') || [],
+      timezone: profile.facts.timezone || 'UTC',
+      communicationStyle: profile.facts.communication_style || 'balanced',
+      expertise: profile.facts.expertise?.split(',') || [],
       isKnownUser: !!entity,
       platform: 'signal',
       isGroupChat: !!message.groupId
@@ -190,8 +190,8 @@ export async function entityResolverMiddleware(
       req.entityProfile = await getEntityProfile(entity.id);
       
       // Add timezone to request for time-aware responses
-      if (req.entityProfile.timezone) {
-        req.timezone = req.entityProfile.timezone;
+      if (req.entityProfile.facts.timezone) {
+        req.timezone = req.entityProfile.facts.timezone;
       }
     }
   } catch (error) {
@@ -225,14 +225,14 @@ app.get('/api/profile', (req, res) => {
     },
     profile: req.entityProfile,
     personalization: {
-      timezone: req.entityProfile?.timezone || 'UTC',
-      communicationStyle: req.entityProfile?.communication_style || 'balanced'
+      timezone: req.entityProfile?.facts?.timezone || 'UTC',
+      communicationStyle: req.entityProfile?.facts?.communication_style || 'balanced'
     }
   });
 });
 
 app.get('/api/dashboard', (req, res) => {
-  const style = req.entityProfile?.communication_style || 'balanced';
+  const style = req.entityProfile?.facts?.communication_style || 'balanced';
   
   if (style === 'direct') {
     res.json({
@@ -308,9 +308,9 @@ class NOVAEmailProcessor {
         entity: sender,
         profile,
         facts: allFacts,
-        communicationStyle: profile.communication_style || 'formal',
-        timezone: profile.timezone || 'UTC',
-        expertise: profile.expertise?.split(',') || [],
+        communicationStyle: profile.facts.communication_style || 'formal',
+        timezone: profile.facts.timezone || 'UTC',
+        expertise: profile.facts.expertise?.split(',') || [],
         lastInteraction: this.getLastEmailInteraction(sender.id)
       };
       
@@ -603,7 +603,7 @@ class SessionEntityManager {
       }
     }
     
-    return profile || {};
+    return profile || { facts: {}, stats: { factCount: 0, lastMessage: null } };
   }
 }
 ```

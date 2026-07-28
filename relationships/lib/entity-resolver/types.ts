@@ -7,10 +7,34 @@ export interface Entity {
   name: string;
   fullName?: string;
   type: string;
+  pronouns?: string;
+  trustLevel?: string;
+  lastSeen?: string;
+  createdAt?: string;
 }
 
 export interface EntityFacts {
   [key: string]: string;
+}
+
+/**
+ * Relationship stats for an entity.
+ */
+export interface EntityRelationshipStats {
+  factCount: number;
+  lastMessage: {
+    timestamp: string;
+    ref: string;
+  } | null;
+}
+
+/**
+ * Entity profile returned by getEntityProfile().
+ * Combines the existing allowlist facts with cheap relationship stats.
+ */
+export interface EntityProfile {
+  facts: EntityFacts;
+  stats: EntityRelationshipStats;
 }
 
 /**
@@ -47,6 +71,10 @@ export interface DbEntity {
   name: string;
   full_name: string | null;
   type?: string;
+  pronouns?: string | null;
+  trust_level?: string | null;
+  last_seen?: string | null;
+  created_at?: string | null;
 }
 
 /**

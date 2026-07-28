@@ -49,6 +49,8 @@ export {
 export type {
   Entity,
   EntityFacts,
+  EntityProfile,
+  EntityRelationshipStats,
   EntityIdentifiers,
   ResolveResult,
 } from "./types.ts";

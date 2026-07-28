@@ -1032,7 +1032,7 @@ COMMENT ON COLUMN entities.collaborate IS 'If true, collaborate with this entity
 COMMENT ON COLUMN entities.collaboration_scope IS 'full | domain-specific | supervised - determines collaboration breadth';
 
 
-COMMENT ON COLUMN entities.trust_level IS 'Trust level for confidence scoring: owner, admin, user, unknown, untrusted';
+COMMENT ON COLUMN entities.trust_level IS 'Free-text trust/relationship descriptor for the entity (e.g. owner, admin, friend). Values are not enforced by a CHECK constraint; consumers should treat unexpected values as valid arbitrary strings.';
 
 
 COMMENT ON COLUMN entities.introduction_context IS 'How/why we connected with this entity, relationship context';

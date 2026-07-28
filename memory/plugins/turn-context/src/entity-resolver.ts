@@ -16,19 +16,46 @@ import { join } from "path";
 
 // Entity type from dynamic import — use any with runtime property checks
 type Entity = any;
-type EntityFacts = Record<string, unknown>;
+type EntityProfile = { facts: Record<string, unknown>; stats: EntityRelationshipStats };
+type EntityRelationshipStats = { factCount: number; lastMessage: { timestamp: string; ref: string } | null };
 
 let resolveEntityByIdentifiers: any;
 let getEntityProfile: any;
 let getCachedEntity: any;
 let setCachedEntity: any;
 let entityResolverLoaded = false;
+let entityResolverPath = join(os.homedir(), ".openclaw", "lib", "entity-resolver", "index.ts");
+
+/**
+ * Test seam: override the path used to dynamically import the entity-resolver
+ * library. Returns a restore function.
+ *
+ * This is the ONLY supported way for unit tests to inject a mock resolver; it
+ * resets the internal loaded state so the next call re-imports from the new
+ * path. See entity-resolver.test.ts.
+ */
+export function setEntityResolverPathForTest(path: string): () => void {
+  const previousPath = entityResolverPath;
+  entityResolverPath = path;
+  entityResolverLoaded = false;
+  resolveEntityByIdentifiers = undefined;
+  getEntityProfile = undefined;
+  getCachedEntity = undefined;
+  setCachedEntity = undefined;
+  return () => {
+    entityResolverPath = previousPath;
+    entityResolverLoaded = false;
+    resolveEntityByIdentifiers = undefined;
+    getEntityProfile = undefined;
+    getCachedEntity = undefined;
+    setCachedEntity = undefined;
+  };
+}
 
 async function ensureEntityResolver(): Promise<boolean> {
   if (entityResolverLoaded) return !!resolveEntityByIdentifiers;
   entityResolverLoaded = true;
   try {
-    const entityResolverPath = join(os.homedir(), ".openclaw", "lib", "entity-resolver", "index.ts");
     const mod = await import(entityResolverPath);
     resolveEntityByIdentifiers = mod.resolveEntityByIdentifiers;
     getEntityProfile = mod.getEntityProfile;
@@ -222,11 +249,53 @@ export function extractIdentifiers(
 
 // ── Format helpers ────────────────────────────────────────────────────────────
 
-function formatEntityContext(entity: Entity, facts: EntityFacts): string {
+/**
+ * Format an entity and its profile into the turn-context injection block.
+ *
+ * Pure function — safe to unit test with hand-built inputs.
+ */
+export function formatEntityContext(entity: Entity, profile: EntityProfile): string {
   const displayName = entity.fullName || entity.name;
   let context = `👤 **Talking with:** ${displayName}`;
 
-  const factEntries = Object.entries(facts);
+  if (entity.pronouns) {
+    context += ` (${entity.pronouns})`;
+  }
+
+  // Only render trust when it carries real information; 'unknown' is the
+  // column default and is noise for display. See nova-mind#543.
+  if (entity.trustLevel && entity.trustLevel !== "unknown") {
+    context += ` — trust: ${entity.trustLevel}`;
+  }
+
+  // Relationship/stats summary line (nova-mind#543).
+  // Render only when there is something meaningful to show beyond a lone
+  // "0 facts" count (which is expected for brand-new contacts that have no
+  // other metadata yet).
+  const factCount = typeof profile?.stats?.factCount === "number" ? profile.stats.factCount : 0;
+  const lastMessage = profile?.stats?.lastMessage;
+  const hasStatsMetadata =
+    factCount > 0 || entity.createdAt || lastMessage || entity.lastSeen;
+
+  if (hasStatsMetadata) {
+    const statsParts: string[] = [];
+    statsParts.push(`${factCount} fact${factCount === 1 ? "" : "s"}`);
+
+    if (entity.createdAt) {
+      statsParts.push(`first seen ${entity.createdAt}`);
+    }
+
+    if (lastMessage) {
+      statsParts.push(`last message ${lastMessage.timestamp} (${lastMessage.ref})`);
+    } else if (entity.lastSeen) {
+      // Fallback only when no transcript-derived last message is available
+      statsParts.push(`last seen ${entity.lastSeen}`);
+    }
+
+    context += `\n📊 Known contact: ${statsParts.join(" · ")}`;
+  }
+
+  const factEntries = Object.entries(profile?.facts || {});
   if (factEntries.length > 0) {
     context += "\n";
     for (const [key, value] of factEntries) {
@@ -272,13 +341,17 @@ export async function resolveEntityContext(
     return { text: null, entityId: null, displayName: null };
   }
 
-  // Load entity facts with a 1s timeout
-  let facts: EntityFacts = {};
+  // Load entity profile (allowlist facts + relationship stats) with a 1s timeout.
+  // Pronouns/trust/last_seen/created_at are already on the entity from the
+  // identifier-resolution query, so they survive a stats-query timeout.
+  let profile: EntityProfile = { facts: {}, stats: { factCount: 0, lastMessage: null } };
   if (getEntityProfile) {
     try {
-      facts = await Promise.race([
-        getEntityProfile(entity.id),
-        new Promise<EntityFacts>((resolve) => setTimeout(() => resolve({}), 1000)),
+      profile = await Promise.race([
+        getEntityProfile(entity.id) as Promise<EntityProfile>,
+        new Promise<EntityProfile>((resolve) =>
+          setTimeout(() => resolve({ facts: {}, stats: { factCount: 0, lastMessage: null } }), 1000)
+        ),
       ]);
     } catch (err) {
       console.error(
@@ -289,7 +362,7 @@ export async function resolveEntityContext(
   }
 
   const displayName = entity.fullName || entity.name;
-  const result = formatEntityContext(entity, facts);
+  const result = formatEntityContext(entity, profile);
   console.log(
     `[turn-context] Loaded entity context for: ${entity.name} (entityId=${entity.id}) (${info.senderId})`
   );

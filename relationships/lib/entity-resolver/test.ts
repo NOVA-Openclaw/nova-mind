@@ -501,6 +501,26 @@ async function runRelationshipStatsTests() {
         r002b.entity.createdAt === "2026-01-30"
     );
 
+    // RS-062 regression: entities.last_seen is plain timestamp (naive). Applying
+    // AT TIME ZONE 'UTC' under a non-UTC session timezone silently shifts the
+    // displayed value. Verify direct formatting is stable.
+    await client.query("SET timezone = 'America/Chicago'");
+    const r062 = await resolveEntity({ discordId: "rs543-tabatha" });
+    check(
+      "RS-062: last_seen formatting is stable under non-UTC session timezone",
+      r062 != null && r062.lastSeen === "2026-07-27 08:00 UTC",
+      `got lastSeen=${r062?.lastSeen}`
+    );
+    // channel_transcripts.timestamp is timestamptz, so its UTC rendering should
+    // also remain correct under the shifted session timezone.
+    const profileTz = await getEntityProfile(testEntityIds[0]);
+    check(
+      "RS-062: last_message timestamp remains UTC-labeled under non-UTC session timezone",
+      profileTz.stats.lastMessage?.timestamp === "2026-07-27 02:11 UTC",
+      `got lastMessage.timestamp=${profileTz.stats.lastMessage?.timestamp}`
+    );
+    await client.query("RESET timezone");
+
     // RS-014: degenerate entity
     const profileNew = await getEntityProfile(testEntityIds[1]);
     check(

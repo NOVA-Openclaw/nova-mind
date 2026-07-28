@@ -150,7 +150,10 @@ export async function resolveEntity(identifiers: EntityIdentifiers): Promise<Ent
     const query = `
       SELECT DISTINCT e.id, e.name, e.full_name, e.type,
              e.pronouns, e.trust_level,
-             to_char(e.last_seen AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI "UTC"') AS last_seen,
+             -- entities.last_seen is plain timestamp (naive, no tz); do NOT apply
+             -- AT TIME ZONE 'UTC' because that interprets the value in the session
+             -- timezone and converts it. See nova-mind#543 / RS-062.
+             to_char(e.last_seen, 'YYYY-MM-DD HH24:MI "UTC"') AS last_seen,
              to_char(e.created_at, 'YYYY-MM-DD') AS created_at
       FROM entities e 
       JOIN entity_facts ef ON e.id = ef.entity_id 
@@ -225,7 +228,10 @@ export async function resolveEntityByIdentifiers(
     const query = `
       SELECT DISTINCT e.id, e.name, e.full_name, e.type,
              e.pronouns, e.trust_level,
-             to_char(e.last_seen AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI "UTC"') AS last_seen,
+             -- entities.last_seen is plain timestamp (naive, no tz); do NOT apply
+             -- AT TIME ZONE 'UTC' because that interprets the value in the session
+             -- timezone and converts it. See nova-mind#543 / RS-062.
+             to_char(e.last_seen, 'YYYY-MM-DD HH24:MI "UTC"') AS last_seen,
              to_char(e.created_at, 'YYYY-MM-DD') AS created_at,
              ef.key AS fact_key, ef.value AS fact_value
       FROM entities e

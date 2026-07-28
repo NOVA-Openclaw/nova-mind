@@ -151,7 +151,7 @@ async function handleMessage(sessionId: string, senderId: string) {
   // Load profile if needed
   if (entity) {
     const profile = await getEntityProfile(entity.id);
-    console.log(`User: ${entity.name}, Timezone: ${profile.timezone}`);
+    console.log(`User: ${entity.name}, Timezone: ${profile.facts.timezone}`);
   }
   
   return entity;

@@ -40,7 +40,7 @@ The core table for all tracked entities.
 | `photo` | bytea | Avatar/photo (binary) |
 | `user_id` | varchar(255) | External user identifier |
 | `auth_token` | varchar(255) | Authentication token |
-| `trust_level` | varchar(20) | Trust level string, default `'unknown'` (values: `owner`, `admin`, `user`, `unknown`, `untrusted`) |
+| `trust_level` | varchar(20) | Free-text trust/relationship descriptor, default `'unknown'`. Not enforced by a CHECK constraint — `owner`/`admin`/`user`/`unknown`/`untrusted` are the values `confidence_helper.py`'s `get_initial_confidence()` recognizes for confidence scoring (others fall back to its default weight), but arbitrary values (e.g. `friend`) are valid and rendered as-is by the `turn-context` plugin's entity-injection trust suffix (nova-mind#543). See `database/schema.sql`'s column comment. |
 | `collaborate` | boolean | Can this entity collaborate? |
 | `collaboration_scope` | text | 'full', 'domain-specific', or 'supervised' |
 | `introduction_context` | text | How was this entity introduced? |

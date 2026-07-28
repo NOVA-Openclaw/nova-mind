@@ -52,8 +52,21 @@ interface Entity {
   name: string;        // Display name
   fullName?: string;   // Full legal name (optional)
   type: string;        // Entity type (person, organization, etc.)
+  pronouns?: string;   // entities.pronouns, omitted when NULL (#543)
+  trustLevel?: string; // entities.trust_level, free-text, omitted when NULL (#543)
+  lastSeen?: string;   // pre-rendered 'YYYY-MM-DD HH24:MI UTC', omitted when NULL (#543)
+  createdAt?: string;  // pre-rendered 'YYYY-MM-DD', omitted when NULL (#543)
 }
 ```
+
+**Note (#543):** `pronouns`/`trustLevel`/`lastSeen`/`createdAt` are populated by the shared
+`mapDbEntity()` helper in `resolver.ts` from columns fetched in the SAME identifier-resolution
+query as `id`/`name`/`full_name`/`type` — there is no separate round trip for them, and they are
+omitted from the object entirely (not set to `undefined` explicitly, just absent) when the
+underlying column is NULL. Because they ride on the cheap identifier query rather than the
+heavier stats query in `getEntityProfile()`, they survive a `getEntityProfile()` timeout in the
+`turn-context` consumer (see `resolveEntityContext()` in
+`memory/plugins/turn-context/src/entity-resolver.ts`).
 
 **Example:**
 ```typescript
@@ -78,15 +91,19 @@ if (entity) {
 }
 ```
 
-#### `getEntityProfile(entityId: number, factKeys?: string[]): Promise<EntityFacts>`
+#### `getEntityProfile(entityId: number, factKeys?: string[]): Promise<EntityProfile>`
 
-Loads entity profile facts for personalization.
+Loads entity profile facts for personalization, **plus cheap relationship stats** (nova-mind#543).
+As of #543 the return type changed from a bare `EntityFacts` map to `{ facts, stats }` — this is a
+breaking signature change for any direct consumer that previously read fields off the returned
+object as if it were the facts map itself (e.g. old code reading `profile.timezone` must be
+updated to `profile.facts.timezone`).
 
 **Parameters:**
 - `entityId`: Database entity ID from resolveEntity()
-- `factKeys`: Optional array of specific fact keys to load
+- `factKeys`: Optional array of specific fact keys to load (affects `facts` only, not `stats`)
 
-**Default fact keys loaded:**
+**Default fact keys loaded (unchanged, still capped at 20 rows):**
 - `timezone`, `current_timezone` - User's timezone information
 - `communication_style` - Preferred communication approach
 - `expertise` - Areas of knowledge/skill
@@ -96,21 +113,42 @@ Loads entity profile facts for personalization.
 
 **Returns:**
 ```typescript
-interface EntityFacts {
-  [key: string]: string;  // Fact key-value pairs
+interface EntityRelationshipStats {
+  factCount: number;   // UNFILTERED entity_facts row count for this entity (not just the allowlist)
+  lastMessage: {
+    timestamp: string; // 'YYYY-MM-DD HH24:MI UTC', rendered server-side
+    ref: string;        // `${provider}:${external_chat_id}`, e.g. 'discord:1513392492651872306'
+  } | null;              // null when the entity has no channel_transcripts rows
+}
+
+interface EntityProfile {
+  facts: EntityFacts;               // the existing allowlist facts (unchanged shape)
+  stats: EntityRelationshipStats;   // new in #543
 }
 ```
 
 **Example:**
 ```typescript
-// Load default profile facts
+// Load default profile facts + stats
 const profile = await getEntityProfile(entityId);
-console.log(`Timezone: ${profile.timezone}`);
-console.log(`Style: ${profile.communication_style}`);
+console.log(`Timezone: ${profile.facts.timezone}`);
+console.log(`Style: ${profile.facts.communication_style}`);
+console.log(`Known for ${profile.stats.factCount} facts`);
+if (profile.stats.lastMessage) {
+  console.log(`Last heard from them: ${profile.stats.lastMessage.timestamp} (${profile.stats.lastMessage.ref})`);
+}
 
-// Load specific facts only
-const timezoneFacts = await getEntityProfile(entityId, ['timezone', 'current_timezone']);
+// Load specific facts only (stats are always computed regardless of factKeys)
+const { facts } = await getEntityProfile(entityId, ['timezone', 'current_timezone']);
 ```
+
+**Implementation (#543):** a single aggregate SQL query (`fc` subquery for the unfiltered count,
+a `LEFT JOIN LATERAL` against `channel_transcripts`/`channel_sessions` ordered by
+`timestamp DESC LIMIT 1` for the last message, and a `LEFT JOIN LATERAL` for the allowlist facts,
+capped at 20 rows) — designed as one round trip so the whole call stays inside the existing 1s
+`Promise.race` timeout budget consumed by the `turn-context` plugin's `resolveEntityContext()`.
+On any query error or timeout, resolves to `{ facts: {}, stats: { factCount: 0, lastMessage: null } }`
+rather than throwing, matching the library's existing fail-closed error contract.
 
 #### `resolveEntityByIdentifiers(identifiers: EntityIdentifiers): Promise<ResolveResult | null>`
 
@@ -263,7 +301,14 @@ nova-mind#522.
 **Query Strategy:**
 ```sql
 -- resolveEntity() query (simplified) — returns first match
-SELECT DISTINCT e.id, e.name, e.full_name, e.type 
+-- As of #543, also selects pronouns/trust_level/last_seen/created_at so the returned
+-- Entity carries relationship metadata without a second round trip (see mapDbEntity()).
+-- last_seen and created_at are rendered server-side with to_char() rather than left as
+-- raw timestamp values — see the timezone note below.
+SELECT DISTINCT e.id, e.name, e.full_name, e.type,
+       e.pronouns, e.trust_level,
+       to_char(e.last_seen, 'YYYY-MM-DD HH24:MI "UTC"') AS last_seen,
+       to_char(e.created_at, 'YYYY-MM-DD') AS created_at
 FROM entities e 
 JOIN entity_facts ef ON e.id = ef.entity_id 
 WHERE (ef.key = 'phone' AND ef.value = ?)
@@ -273,8 +318,18 @@ WHERE (ef.key = 'phone' AND ef.value = ?)
 LIMIT 1
 
 -- resolveEntityByIdentifiers() query — returns ALL matches for conflict detection
--- Same WHERE clause but NO LIMIT, groups results by entity, and checks for conflicts
+-- Same WHERE clause and same #543 pronouns/trust_level/last_seen/created_at columns,
+-- but NO LIMIT, groups results by entity, and checks for conflicts
 ```
+
+**Timezone note on `last_seen` (#543, fixed post-merge):** `entities.last_seen` is a plain
+`timestamp` column with no timezone attached. An earlier version of this query applied
+`AT TIME ZONE 'UTC'` to it, which Postgres interprets as "this naive value is actually in the
+*session's* timezone — convert it to UTC," silently shifting the displayed time under any
+non-UTC session (e.g. `America/Chicago`). The fix renders the naive value directly via
+`to_char(e.last_seen, 'YYYY-MM-DD HH24:MI "UTC"')` with no `AT TIME ZONE` conversion, matching
+how `created_at` (also a naive `timestamp`) is already rendered. See the RS-062 regression test
+in `test.ts` (run under `SET timezone='America/Chicago'`).
 
 ### Caching Layer
 
@@ -349,12 +404,12 @@ export async function handleSignalMessage(message: SignalMessage, context: HookC
     const profile = await getEntityProfile(entity.id);
     
     // Use timezone for time-aware responses
-    if (profile.timezone) {
-      context.userTimezone = profile.timezone;
+    if (profile.facts.timezone) {
+      context.userTimezone = profile.facts.timezone;
     }
     
     // Adapt communication style
-    if (profile.communication_style === 'direct') {
+    if (profile.facts.communication_style === 'direct') {
       context.responseStyle = 'concise';
     }
   }
@@ -414,7 +469,7 @@ export class EmailProcessor {
       const profile = await getEntityProfile(sender.id);
       
       // Personalize response based on communication style
-      const responseStyle = profile.communication_style || 'balanced';
+      const responseStyle = profile.facts.communication_style || 'balanced';
       
       return {
         sender,
@@ -600,8 +655,8 @@ export class SignalBot {
       entity,
       profile,
       sessionId,
-      timezone: profile.timezone || 'UTC',
-      style: profile.communication_style || 'balanced'
+      timezone: profile.facts.timezone || 'UTC',
+      style: profile.facts.communication_style || 'balanced'
     };
     
     // Process message with context
@@ -661,7 +716,7 @@ app.get('/api/profile', (req, res) => {
   res.json({
     entity: req.entity,
     profile: req.entityProfile,
-    timezone: req.entityProfile.timezone || 'UTC'
+    timezone: req.entityProfile.facts.timezone || 'UTC'
   });
 });
 ```
@@ -693,9 +748,9 @@ export class EmailHandler {
       
       // Adapt response based on communication style
       const responseConfig = {
-        formal: profile.communication_style === 'formal',
-        timezone: profile.timezone || 'UTC',
-        expertise: profile.expertise?.split(',') || []
+        formal: profile.facts.communication_style === 'formal',
+        timezone: profile.facts.timezone || 'UTC',
+        expertise: profile.facts.expertise?.split(',') || []
       };
       
       // Generate personalized response
@@ -783,8 +838,8 @@ describe('Entity Resolution', () => {
     const entity = await resolveEntity({ email: 'john@example.com' });
     const profile = await getEntityProfile(entity!.id);
     
-    expect(profile.timezone).toBeDefined();
-    expect(profile.communication_style).toBeDefined();
+    expect(profile.facts.timezone).toBeDefined();
+    expect(profile.facts.communication_style).toBeDefined();
   });
 });
 ```

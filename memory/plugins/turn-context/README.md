@@ -24,7 +24,7 @@ before_prompt_build:
 |-----------|------|-------------|
 | **Classifier** | `classifier.ts` | Classifies messages into `info_request`, `action`, `conversation`, `continuation`, `command`. Rule-based first pass (~60-70%), Ollama LLM fallback for ambiguous cases. |
 | **Domain Identifier** | `domain-identifier.ts` | Matches messages to subject-matter domains via keyword matching + embedding similarity against `agent_domains` table. Returns top 1-3 domains with assigned agents (via JOIN, not hardcoded). Tolerates a missing `agent_domains.keywords` column on drifted schemas — see [Schema-Drift Tolerance](#schema-drift-tolerance-domain-identifier) below. |
-| **Entity Resolver** | `entity-resolver.ts` | Resolves sender identity via the entity-resolver library. Cache keyed by `sessionKey:senderId` (not just sessionKey) to support group channels. Returns both formatted text and numeric `entityId`. Also exports `resolveEntityForGuard()`, a lightweight resolution (id + display name only, no facts lookup) used by the honorific guard when `entity_resolver` is gated off. |
+| **Entity Resolver** | `entity-resolver.ts` | Resolves sender identity via the entity-resolver library. Cache keyed by `sessionKey:senderId` (not just sessionKey) to support group channels. Returns both formatted text and numeric `entityId`. Formatted text (`formatEntityContext()`) includes pronouns and an optional trust suffix in the `👤 **Talking with:**` header, plus an optional `📊 Known contact:` relationship-stats line — see [Entity Context Formatting](#entity-context-formatting) below (#543). Also exports `resolveEntityForGuard()`, a lightweight resolution (id + display name only, no facts lookup) used by the honorific guard when `entity_resolver` is gated off. |
 | **Semantic Recall** | `semantic-recall.ts` | Spawns `proactive-recall.py` for memory retrieval. Supports tiered recall (domain-scoped first, full fallback) and visibility filtering (group channels → public facts only). |
 | **Turn Reminders** | `turn-reminders.ts` | Queries `agent_turn_context` table for per-turn reminder text. **Always fires regardless of message type** — not gated by prompt_helper_config. |
 | **Honorific Guard** | `honorific-guard.ts` | Deterministic (non-LLM) instruction appended after the base system prompt, enforcing the "Sir" honorific policy based on the resolved sender entity and the responding agent. **Always fires regardless of message type or `entity_resolver` gating** — see [Honorific Guard](#honorific-guard) below. |
@@ -44,6 +44,48 @@ Controlled by the `prompt_helper_config` table. Default configuration:
 Per-agent overrides: insert rows with `agent_name` set to override defaults for a specific agent.
 
 On classifier failure, defaults to `info_request` (full pipeline) — safe fallback.
+
+## Entity Context Formatting
+
+`formatEntityContext()` (in `entity-resolver.ts`) is the pure function that renders the resolved
+entity and its `getEntityProfile()` result into the injected `👤 **Talking with:**` block. As of
+nova-mind#543 it renders up to three lines:
+
+1. **Header (always present):** `👤 **Talking with:** {displayName}`, where `displayName` is
+   `entity.fullName || entity.name`.
+   - If `entity.pronouns` is set, it's appended in parentheses: `(she/her)`.
+   - If `entity.trustLevel` is set **and is not `'unknown'`**, a trust suffix is appended:
+     ` — trust: {trustLevel}`. `'unknown'` is the `entities.trust_level` column default and is
+     suppressed as noise — every never-assessed entity would otherwise show `trust: unknown`.
+     `trustLevel` is free-text (see `database/schema.sql`'s column comment) — any non-empty,
+     non-`'unknown'` string renders as-is; there is no enforced value set.
+2. **Relationship stats line (optional):** `📊 Known contact: {factCount} fact(s) · first seen
+   {createdAt} · last message {timestamp} ({ref})`. Rendered only when there is something
+   meaningful to show — i.e. `factCount > 0`, or `entity.createdAt`, or a resolved last message,
+   or `entity.lastSeen` is present. A lone `factCount: 0` with no other metadata (a genuinely new,
+   never-before-seen contact) suppresses the whole line rather than showing `0 facts` on its own.
+   - The `last message` segment comes from `profile.stats.lastMessage` (most recent
+     `channel_transcripts` row, via `getEntityProfile()`). If absent, falls back to
+     `entity.lastSeen` labeled `last seen {lastSeen}` instead — never both.
+   - Segments are joined with ` · ` and any missing segment (no last message/last seen, no
+     createdAt) is cleanly omitted rather than leaving a stray separator.
+3. **Fact bullet list (unchanged from pre-#543 behavior):** one `• **Label:** value` line per
+   entry in `profile.facts` (the existing 7-key allowlist), rendered below the stats line.
+
+### Data source and timeout interaction (#543)
+
+`pronouns`, `trustLevel`, `lastSeen`, and `createdAt` are fetched as part of the **same,
+already-cheap identifier-resolution query** used to find the entity in the first place
+(`resolveEntityByIdentifiers()` in the entity-resolver library) — not as part of the heavier
+`getEntityProfile()` stats/facts query. This means they are already on the `Entity` object before
+`resolveEntityContext()` even starts the `getEntityProfile()` 1s `Promise.race`, so **pronouns and
+trust survive a stats-query timeout**: on timeout, `profile` degrades to
+`{ facts: {}, stats: { factCount: 0, lastMessage: null } }`, but the header line above it still
+renders normally with pronouns/trust/lastSeen intact. Only the `📊 Known contact:` stats line and
+the fact bullet list are affected by a stats-query timeout.
+
+The honorific guard (`resolveEntityForGuard()`) never triggers the `getEntityProfile()` stats
+query at all — it only needs entity id + display name.
 
 ## Honorific Guard
 

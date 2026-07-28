@@ -194,7 +194,7 @@ import {
 const entity = await resolveEntity({ phone: '+1234567890' });
 if (entity) {
   const profile = await getEntityProfile(entity.id);
-  console.log(profile.timezone, profile.communication_style);
+  console.log(profile.facts.timezone, profile.facts.communication_style);
 }
 ```
 

@@ -23,7 +23,6 @@ import re
 import sys
 from typing import Any, Optional
 
-import json_repair
 import psycopg2
 import psycopg2.extras
 import requests
@@ -826,6 +825,37 @@ If the message contains NO extractable new information (casual chat, acknowledgm
 Return ONLY valid JSON, no markdown fences."""
 
 
+# ── JSON repair (optional dependency) ─────────────────────────────────────────
+
+def _load_json_repair() -> Any:
+    """Lazy-load the optional json_repair module.
+
+    json_repair is installed in the agent venv but may be absent when the
+    script is invoked with a bare system python3. Keeping the import lazy
+    and guarded prevents an unconditional ImportError at module load time.
+    """
+    import json_repair
+    return json_repair
+
+
+def _repair_json(content: str) -> Optional[str]:
+    """Attempt one JSON repair pass. Returns repaired text or None.
+
+    If json_repair is not available, logs a single clear warning and returns
+    None so the caller can fall back to the normal json_parse_failure path.
+    """
+    try:
+        json_repair = _load_json_repair()
+    except ImportError:
+        print(
+            "[extract_memories] WARNING: json_repair is not installed in the active "
+            "Python interpreter; JSON repair pass disabled",
+            file=sys.stderr,
+        )
+        return None
+    return json_repair.repair_json(content)
+
+
 # ── LLM call ──────────────────────────────────────────────────────────────────
 
 def call_llm(prompt: str, api_key: str, model: str) -> dict:
@@ -883,7 +913,9 @@ def call_llm(prompt: str, api_key: str, model: str) -> dict:
         parsed = json.loads(content)
     except json.JSONDecodeError as e:
         # Exactly one repair attempt — no loop, no re-prompt.
-        repaired = json_repair.repair_json(content)
+        # json_repair is optional; if it is unavailable the failure taxonomy
+        # is still json_parse_failure without crashing at import time.
+        repaired = _repair_json(content)
         if not repaired:
             raise JsonParseFailure(
                 f"Failed to parse LLM response as JSON and repair failed: {e}\nRaw: {content[:200]}"

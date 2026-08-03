@@ -2,7 +2,7 @@ import { spawn, execFile } from "child_process";
 import { join } from "path";
 import { promisify } from "util";
 import * as os from "os";
-import { readFileSync } from "fs";
+import { readFileSync, existsSync } from "fs";
 
 const execFileAsync = promisify(execFile);
 
@@ -110,6 +110,57 @@ function loadExtractionTimeoutMs(): number {
     }
   }
   return DEFAULT_EXTRACTION_TIMEOUT_MS;
+}
+
+// Default interpreter fallback when no override or venv is available.
+const DEFAULT_PYTHON_CMD = 'python3';
+
+/**
+ * Resolve the Python interpreter to use for extract_memories.py.
+ *
+ * Resolution order (first match wins):
+ *   1. EXTRACTION_PYTHON_CMD_OVERRIDE environment variable
+ *   2. "python_cmd" key in memory-extraction-config.json (read per event for hot reload)
+ *   3. Agent venv python at ~/.local/share/$USER/venv/bin/python3 if it exists
+ *   4. Bare "python3" from PATH
+ *
+ * The result is logged once per invocation so deploy verification can confirm
+ * the venv is being selected in production.
+ */
+function resolvePythonCmd(): string {
+  // 1. Explicit env override (used by tests and emergency ops).
+  const envOverride = process.env.EXTRACTION_PYTHON_CMD_OVERRIDE;
+  if (envOverride) {
+    return envOverride;
+  }
+
+  // 2. Config file key — read fresh each event so changes are hot-reload friendly.
+  try {
+    const raw = readFileSync(EXTRACTION_CONFIG_PATH, 'utf8');
+    const parsed = JSON.parse(raw);
+    const configCmd = parsed?.python_cmd;
+    if (typeof configCmd === 'string' && configCmd.trim().length > 0) {
+      return configCmd.trim();
+    }
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException)?.code;
+    if (code !== 'ENOENT' && code !== 'EACCES') {
+      console.warn('[memory-extract] Could not read python_cmd from extraction config', {
+        path: EXTRACTION_CONFIG_PATH,
+        error: (err as Error).message
+      });
+    }
+  }
+
+  // 3. Agent venv python installed by agent-install.sh.
+  const userName = process.env.USER || os.userInfo().username || '';
+  const venvPython = join(os.homedir(), '.local', 'share', userName, 'venv', 'bin', 'python3');
+  if (existsSync(venvPython)) {
+    return venvPython;
+  }
+
+  // 4. System fallback.
+  return DEFAULT_PYTHON_CMD;
 }
 
 // ---------------------------------------------------------------------------
@@ -407,9 +458,12 @@ const handler = async (event: any) => {
       }
     }
 
-    // Allow tests to override the python interpreter and timeout without
-    // modifying production defaults or requiring module reload.
-    const pythonCmd = process.env.EXTRACTION_PYTHON_CMD_OVERRIDE || 'python3';
+    // Resolve the Python interpreter and timeout. Both can be overridden by
+    // env vars for tests; in production the venv python is preferred and the
+    // timeout is read fresh from the config file each event.
+    const pythonCmd = resolvePythonCmd();
+    console.info('[memory-extract] Resolved extraction interpreter', { pythonCmd });
+
     const timeoutMs = (() => {
       const raw = process.env.EXTRACTION_TIMEOUT_MS_OVERRIDE;
       if (!raw) return loadExtractionTimeoutMs();

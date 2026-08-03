@@ -2,6 +2,7 @@ import { spawn, execFile } from "child_process";
 import { join } from "path";
 import { promisify } from "util";
 import * as os from "os";
+import { readFileSync, existsSync } from "fs";
 
 const execFileAsync = promisify(execFile);
 
@@ -67,11 +68,100 @@ function logActivity(isUserMessage: boolean) {
 }
 
 // ---------------------------------------------------------------------------
-// Issue #485 constants
+// Issue #485 / #497 constants
 // ---------------------------------------------------------------------------
-const EXTRACTION_TIMEOUT_MS = 30000;
 const KILL_GRACE_MS = 5000;
 const PIPE_TAIL_CAP_BYTES = 16384;
+
+// Default outer hook timeout. Set to 90s (not 60s) because the Python child's
+// inner requests timeout is 60s (extract_memories.py:841). An outer timeout <=
+// 60s risks SIGTERM'ing the child mid-HTTP-call, destroying clean dead-letter
+// context. The 30s buffer lets a normal inner-timeout-induced RuntimeError
+// unwind and exit cleanly before the hook ever needs to kill the process.
+const DEFAULT_EXTRACTION_TIMEOUT_MS = 90000;
+
+const EXTRACTION_CONFIG_PATH =
+  process.env.EXTRACTION_CONFIG_PATH_OVERRIDE ||
+  join(os.homedir(), '.openclaw', 'scripts', 'memory-extraction-config.json');
+
+/**
+ * Read the per-event extraction timeout from the deployed config file.
+ * No caching — every event does a fresh read so the timeout can be hot-reloaded
+ * without a gateway restart. Falls back to DEFAULT_EXTRACTION_TIMEOUT_MS on
+ * missing file, malformed JSON, unreadable file, or non-positive numeric value.
+ */
+function loadExtractionTimeoutMs(): number {
+  try {
+    const raw = readFileSync(EXTRACTION_CONFIG_PATH, 'utf8');
+    const parsed = JSON.parse(raw);
+    const value = parsed?.extraction_timeout_ms;
+    if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+      return value;
+    }
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException)?.code;
+    // ENOENT/EACCES/malformed are all expected operational states; swallow and
+    // fall back to the safe default so the hook never crashes the turn.
+    if (code !== 'ENOENT' && code !== 'EACCES') {
+      console.warn('[memory-extract] Could not read extraction timeout config', {
+        path: EXTRACTION_CONFIG_PATH,
+        error: (err as Error).message
+      });
+    }
+  }
+  return DEFAULT_EXTRACTION_TIMEOUT_MS;
+}
+
+// Default interpreter fallback when no override or venv is available.
+const DEFAULT_PYTHON_CMD = 'python3';
+
+/**
+ * Resolve the Python interpreter to use for extract_memories.py.
+ *
+ * Resolution order (first match wins):
+ *   1. EXTRACTION_PYTHON_CMD_OVERRIDE environment variable
+ *   2. "python_cmd" key in memory-extraction-config.json (read per event for hot reload)
+ *   3. Agent venv python at ~/.local/share/$USER/venv/bin/python3 if it exists
+ *   4. Bare "python3" from PATH
+ *
+ * The result is logged once per invocation so deploy verification can confirm
+ * the venv is being selected in production.
+ */
+function resolvePythonCmd(): string {
+  // 1. Explicit env override (used by tests and emergency ops).
+  const envOverride = process.env.EXTRACTION_PYTHON_CMD_OVERRIDE;
+  if (envOverride) {
+    return envOverride;
+  }
+
+  // 2. Config file key — read fresh each event so changes are hot-reload friendly.
+  try {
+    const raw = readFileSync(EXTRACTION_CONFIG_PATH, 'utf8');
+    const parsed = JSON.parse(raw);
+    const configCmd = parsed?.python_cmd;
+    if (typeof configCmd === 'string' && configCmd.trim().length > 0) {
+      return configCmd.trim();
+    }
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException)?.code;
+    if (code !== 'ENOENT' && code !== 'EACCES') {
+      console.warn('[memory-extract] Could not read python_cmd from extraction config', {
+        path: EXTRACTION_CONFIG_PATH,
+        error: (err as Error).message
+      });
+    }
+  }
+
+  // 3. Agent venv python installed by agent-install.sh.
+  const userName = process.env.USER || os.userInfo().username || '';
+  const venvPython = join(os.homedir(), '.local', 'share', userName, 'venv', 'bin', 'python3');
+  if (existsSync(venvPython)) {
+    return venvPython;
+  }
+
+  // 4. System fallback.
+  return DEFAULT_PYTHON_CMD;
+}
 
 // ---------------------------------------------------------------------------
 // Issue #485 helpers
@@ -368,14 +458,17 @@ const handler = async (event: any) => {
       }
     }
 
-    // Allow tests to override the python interpreter and timeout without
-    // modifying production defaults or requiring module reload.
-    const pythonCmd = process.env.EXTRACTION_PYTHON_CMD_OVERRIDE || 'python3';
+    // Resolve the Python interpreter and timeout. Both can be overridden by
+    // env vars for tests; in production the venv python is preferred and the
+    // timeout is read fresh from the config file each event.
+    const pythonCmd = resolvePythonCmd();
+    console.info('[memory-extract] Resolved extraction interpreter', { pythonCmd });
+
     const timeoutMs = (() => {
       const raw = process.env.EXTRACTION_TIMEOUT_MS_OVERRIDE;
-      if (!raw) return EXTRACTION_TIMEOUT_MS;
+      if (!raw) return loadExtractionTimeoutMs();
       const n = Number(raw);
-      return Number.isFinite(n) && n > 0 ? n : EXTRACTION_TIMEOUT_MS;
+      return Number.isFinite(n) && n > 0 ? n : loadExtractionTimeoutMs();
     })();
 
     const child = spawn(pythonCmd, [scriptPath], {
@@ -453,6 +546,16 @@ const handler = async (event: any) => {
           stderrTail: tailToString(getStderrTail())
         });
         await recordFailure('timeout', null);
+      } else if (code === 2) {
+        console.error('[memory-extract] Extraction failed', {
+          sender: senderName,
+          senderId: truncateSenderId(senderId),
+          exitCode: code,
+          signal,
+          failureReason: 'json_parse_failure',
+          stderrTail: tailToString(getStderrTail())
+        });
+        await recordFailure('json_parse_failure', code);
       } else if (code !== 0) {
         console.error('[memory-extract] Extraction failed', {
           sender: senderName,

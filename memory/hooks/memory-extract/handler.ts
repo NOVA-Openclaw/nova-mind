@@ -2,6 +2,7 @@ import { spawn, execFile } from "child_process";
 import { join } from "path";
 import { promisify } from "util";
 import * as os from "os";
+import { readFileSync } from "fs";
 
 const execFileAsync = promisify(execFile);
 
@@ -67,11 +68,49 @@ function logActivity(isUserMessage: boolean) {
 }
 
 // ---------------------------------------------------------------------------
-// Issue #485 constants
+// Issue #485 / #497 constants
 // ---------------------------------------------------------------------------
-const EXTRACTION_TIMEOUT_MS = 30000;
 const KILL_GRACE_MS = 5000;
 const PIPE_TAIL_CAP_BYTES = 16384;
+
+// Default outer hook timeout. Set to 90s (not 60s) because the Python child's
+// inner requests timeout is 60s (extract_memories.py:841). An outer timeout <=
+// 60s risks SIGTERM'ing the child mid-HTTP-call, destroying clean dead-letter
+// context. The 30s buffer lets a normal inner-timeout-induced RuntimeError
+// unwind and exit cleanly before the hook ever needs to kill the process.
+const DEFAULT_EXTRACTION_TIMEOUT_MS = 90000;
+
+const EXTRACTION_CONFIG_PATH =
+  process.env.EXTRACTION_CONFIG_PATH_OVERRIDE ||
+  join(os.homedir(), '.openclaw', 'scripts', 'memory-extraction-config.json');
+
+/**
+ * Read the per-event extraction timeout from the deployed config file.
+ * No caching — every event does a fresh read so the timeout can be hot-reloaded
+ * without a gateway restart. Falls back to DEFAULT_EXTRACTION_TIMEOUT_MS on
+ * missing file, malformed JSON, unreadable file, or non-positive numeric value.
+ */
+function loadExtractionTimeoutMs(): number {
+  try {
+    const raw = readFileSync(EXTRACTION_CONFIG_PATH, 'utf8');
+    const parsed = JSON.parse(raw);
+    const value = parsed?.extraction_timeout_ms;
+    if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+      return value;
+    }
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException)?.code;
+    // ENOENT/EACCES/malformed are all expected operational states; swallow and
+    // fall back to the safe default so the hook never crashes the turn.
+    if (code !== 'ENOENT' && code !== 'EACCES') {
+      console.warn('[memory-extract] Could not read extraction timeout config', {
+        path: EXTRACTION_CONFIG_PATH,
+        error: (err as Error).message
+      });
+    }
+  }
+  return DEFAULT_EXTRACTION_TIMEOUT_MS;
+}
 
 // ---------------------------------------------------------------------------
 // Issue #485 helpers
@@ -373,9 +412,9 @@ const handler = async (event: any) => {
     const pythonCmd = process.env.EXTRACTION_PYTHON_CMD_OVERRIDE || 'python3';
     const timeoutMs = (() => {
       const raw = process.env.EXTRACTION_TIMEOUT_MS_OVERRIDE;
-      if (!raw) return EXTRACTION_TIMEOUT_MS;
+      if (!raw) return loadExtractionTimeoutMs();
       const n = Number(raw);
-      return Number.isFinite(n) && n > 0 ? n : EXTRACTION_TIMEOUT_MS;
+      return Number.isFinite(n) && n > 0 ? n : loadExtractionTimeoutMs();
     })();
 
     const child = spawn(pythonCmd, [scriptPath], {
@@ -453,6 +492,16 @@ const handler = async (event: any) => {
           stderrTail: tailToString(getStderrTail())
         });
         await recordFailure('timeout', null);
+      } else if (code === 2) {
+        console.error('[memory-extract] Extraction failed', {
+          sender: senderName,
+          senderId: truncateSenderId(senderId),
+          exitCode: code,
+          signal,
+          failureReason: 'json_parse_failure',
+          stderrTail: tailToString(getStderrTail())
+        });
+        await recordFailure('json_parse_failure', code);
       } else if (code !== 0) {
         console.error('[memory-extract] Extraction failed', {
           sender: senderName,

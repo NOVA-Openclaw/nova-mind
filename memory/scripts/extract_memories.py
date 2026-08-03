@@ -23,6 +23,7 @@ import re
 import sys
 from typing import Any, Optional
 
+import json_repair
 import psycopg2
 import psycopg2.extras
 import requests
@@ -873,17 +874,65 @@ def call_llm(prompt: str, api_key: str, model: str) -> dict:
     try:
         parsed = json.loads(content)
     except json.JSONDecodeError as e:
+        # Exactly one repair attempt — no loop, no re-prompt.
+        repaired = json_repair.repair_json(content)
+        if not repaired:
+            raise RuntimeError(
+                f"Failed to parse LLM response as JSON and repair failed: {e}\nRaw: {content[:200]}"
+            ) from e
+        try:
+            parsed = json.loads(repaired)
+        except json.JSONDecodeError as e2:
+            raise RuntimeError(
+                f"Failed to parse LLM response as JSON and repair failed: {e2}\nRaw: {content[:200]}"
+            ) from e2
+
+    if isinstance(parsed, list):
+        if len(parsed) == 0:
+            # Empty array is semantically equivalent to "no extractable info".
+            return {}
+        if all(
+            isinstance(item, dict) and ("key" in item or "value" in item)
+            for item in parsed
+        ):
+            return {"facts": parsed}
         raise RuntimeError(
-            f"Failed to parse LLM response as JSON: {e}\nRaw: {content[:200]}"
-        ) from e
+            f"LLM response parsed to a bare list that does not look like a fact array\nRaw: {content[:200]}"
+        )
 
     if not isinstance(parsed, dict):
-        return {}
+        raise RuntimeError(
+            f"LLM response parsed to an unexpected type ({type(parsed).__name__}), expected dict\nRaw: {content[:200]}"
+        )
 
     return parsed
 
 
 # ── Storage ───────────────────────────────────────────────────────────────────
+
+def coerce_fact_value(raw_value: Any, key: str = "") -> Optional[str]:
+    """
+    Coerce an LLM-emitted fact value to a storable string.
+
+    Returns None when the value is semantically absent (JSON null) so the caller
+    can skip the fact with a logged notice. Booleans are serialized as JSON
+    lowercase literals; ints/floats use str(); dicts/lists use json.dumps().
+    Strings are stripped as before. This MUST run before any falsy guard so
+    boolean false becomes the literal string 'false' and is preserved.
+    """
+    if raw_value is None:
+        print(f"[extract_memories] SKIP: fact {key!r} has null value, not persisted", file=sys.stderr)
+        return None
+    if isinstance(raw_value, bool):
+        return json.dumps(raw_value)  # "true" / "false" (JSON lowercase)
+    if isinstance(raw_value, (int, float)):
+        return str(raw_value)
+    if isinstance(raw_value, (dict, list)):
+        return json.dumps(raw_value)
+    if isinstance(raw_value, str):
+        return raw_value.strip()
+    return str(raw_value).strip()
+
 
 def store_extracted(
     data: dict,
@@ -979,7 +1028,10 @@ def store_extracted(
     for fact in data.get("facts", []) or []:
         subject = (fact.get("subject") or sender_name or "").strip()
         key = (fact.get("key") or fact.get("predicate") or "").strip()
-        value = (fact.get("value") or "").strip()
+        value = coerce_fact_value(fact.get("value"), key)
+        if value is None:
+            continue
+
         visibility = (fact.get("visibility") or "public").strip()
         visibility_reason = (fact.get("visibility_reason") or "").strip() or None
         durability = (fact.get("durability") or "long_term").strip()
@@ -1208,6 +1260,10 @@ def main() -> int:
 
     except RuntimeError as e:
         print(f"[extract_memories] ERROR: {e}", file=sys.stderr)
+        # Exit code 2 is reserved for JSON parse/repair failures so the hook can
+        # dead-letter them with failure_reason='json_parse_failure'.
+        if "Failed to parse LLM response as JSON" in str(e):
+            return 2
         return 1
     except Exception as e:
         print(f"[extract_memories] UNHANDLED ERROR: {e}", file=sys.stderr)

@@ -41,8 +41,12 @@ EXTRACT_SCRIPT="${EXTRACTION_SCRIPT_PATH_OVERRIDE:-${HOME}/.openclaw/scripts/ext
 # Resolution order (first match wins):
 #   1. EXTRACTION_PYTHON_CMD_OVERRIDE environment variable
 #   2. "python_cmd" key in ~/.openclaw/scripts/memory-extraction-config.json
-#   3. Agent venv python at $HOME/.local/share/$USER/venv/bin/python3 if executable
+#   3. Agent venv python at $HOME/.local/share/$(id -un)/venv/bin/python3 if executable
 #   4. Bare "python3" from PATH
+#
+# NOTE: $(id -un) is used instead of $USER because $USER is unset in cron
+# environments. This keeps interpreter resolution cron-safe and matches the
+# syscall-based resolution used by handler.ts (os.userInfo().username).
 resolve_python_cmd() {
     if [ -n "${EXTRACTION_PYTHON_CMD_OVERRIDE:-}" ]; then
         printf '%s' "$EXTRACTION_PYTHON_CMD_OVERRIDE"
@@ -56,7 +60,7 @@ resolve_python_cmd() {
         return
     fi
 
-    local venv_python="${HOME}/.local/share/${USER}/venv/bin/python3"
+    local venv_python="${HOME}/.local/share/$(id -un)/venv/bin/python3"
     if [ -x "$venv_python" ]; then
         printf '%s' "$venv_python"
         return

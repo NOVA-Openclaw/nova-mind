@@ -12,6 +12,8 @@ No DB required — requests.post and DB helpers are mocked.
 import io
 import json
 import os
+import shutil
+import subprocess
 import sys
 import unittest
 from pathlib import Path
@@ -172,6 +174,44 @@ class TestJsonRepairImportError(unittest.TestCase):
         self.assertIn("repair pass disabled", stderr.getvalue())
         self.assertIn("Failed to parse LLM response as JSON", str(ctx.exception))
         self.assertIn("repair failed", str(ctx.exception))
+
+    def test_extract_memories_imports_cleanly_without_json_repair(self):
+        """Top-level module import must succeed under an interpreter without json_repair.
+
+        The rev2b fix made the json_repair import lazy inside _load_json_repair().
+        A subprocess import test is required because mocking _load_json_repair in
+        the already-loaded module cannot catch a reintroduced unconditional
+        top-level import.
+        """
+        bare_python = shutil.which("python3")
+        if not bare_python:
+            self.skipTest("no bare python3 interpreter found")
+
+        # Confirm the chosen interpreter lacks json_repair; otherwise this test
+        # would not exercise the missing-dependency path.
+        try:
+            subprocess.run(
+                [bare_python, "-c", "import json_repair"],
+                check=True,
+                capture_output=True,
+            )
+        except subprocess.CalledProcessError:
+            pass  # Confirmed: interpreter lacks json_repair.
+        else:
+            self.skipTest("bare python3 has json_repair installed; cannot test import without it")
+
+        script_dir = REPO_ROOT / "memory" / "scripts"
+        result = subprocess.run(
+            [bare_python, "-c", "import extract_memories"],
+            cwd=str(script_dir),
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(
+            result.returncode,
+            0,
+            f"import extract_memories failed under {bare_python}: stderr={result.stderr!r}",
+        )
 
 
 class TestCoerceFactValue(unittest.TestCase):

@@ -327,6 +327,37 @@ assertContains 'TC-P3: venv python preferred' "$(cat "$LOGP3")" "Resolved extrac
 rm -rf "$FAKE_HOME" "$LOGP3"
 cleanup_test_rows "$MARKER"
 
+# TC-P3b: venv python resolution is cron-safe (no USER env var).
+# env -i strips USER; the script must still resolve the venv via $(id -un).
+MARKER="tc-p3b-$(date +%s%N)"
+cleanup_test_rows "$MARKER"
+run_psql "
+INSERT INTO extraction_failures (channel_transcript_id, session_key, sender_name, content, status)
+VALUES (NULL, '${MARKER}-session', 'P3bSender', 'p3b body', 'pending');
+"
+FAKE_HOME="$(mktemp -d -t issue485-p3b-home-XXXXXX)"
+FAKE_VENV="$FAKE_HOME/.local/share/$(id -un)/venv/bin/python3"
+mkdir -p "$(dirname "$FAKE_VENV")"
+printf '#!/bin/sh\nexec /usr/bin/python3 "$@"\n' > "$FAKE_VENV"
+chmod +x "$FAKE_VENV"
+mkdir -p "$FAKE_HOME/.openclaw/scripts"
+printf '%s' '{}' > "$FAKE_HOME/.openclaw/scripts/memory-extraction-config.json"
+LOGP3B="$(mktemp)"
+env -i \
+    HOME="$FAKE_HOME" \
+    PATH="$PATH" \
+    PGUSER="$TEST_PGUSER" \
+    PGDATABASE="$TEST_PGDATABASE" \
+    PGHOST="$TEST_PGHOST" \
+    PGPASSFILE="${HOME}/.pgpass" \
+    EXTRACTION_SCRIPT_PATH_OVERRIDE="$MOCKS_DIR/ok.py" \
+    EXTRACTION_REPLAY_BATCH_LIMIT=10 \
+    EXTRACTION_REPLAY_MAX_RETRIES=5 \
+        bash "$REPLAY_SCRIPT" > "$LOGP3B" 2>&1
+assertContains 'TC-P3b: venv python resolved without USER env var' "$(cat "$LOGP3B")" "Resolved extraction interpreter: $FAKE_VENV"
+rm -rf "$FAKE_HOME" "$LOGP3B"
+cleanup_test_rows "$MARKER"
+
 # TC-P4: bare python3 fallback when no override, config, or venv.
 MARKER="tc-p4-$(date +%s%N)"
 cleanup_test_rows "$MARKER"

@@ -30,6 +30,7 @@ const COMPILE_DIR = fs.mkdtempSync('/tmp/issue497-handler-');
 const HANDLER_JS = path.join(COMPILE_DIR, 'handler.js');
 const MOCKS_DIR = fs.mkdtempSync('/tmp/issue497-mocks-');
 const CONFIG_DIR = fs.mkdtempSync('/tmp/issue497-config-');
+const HOMES_DIR = fs.mkdtempSync('/tmp/issue497-homes-');
 const CONFIG_PATH = path.join(CONFIG_DIR, 'memory-extraction-config.json');
 const LOG_FILE = process.argv[2] || '/tmp/issue497-handler-test.log';
 
@@ -123,6 +124,20 @@ function writeConfig(obj) {
 
 function deleteConfig() {
   try { fs.unlinkSync(CONFIG_PATH); } catch (e) {}
+}
+
+function makeFakePython(name) {
+  const p = path.join(MOCKS_DIR, `${name}.sh`);
+  fs.writeFileSync(p, '#!/bin/sh\nexec /usr/bin/python3 "$@"\n', { mode: 0o755 });
+  return p;
+}
+
+function makeFakeVenv(homeDir) {
+  const userName = process.env.USER || 'nobody';
+  const venvPath = path.join(homeDir, '.local', 'share', userName, 'venv', 'bin', 'python3');
+  fs.mkdirSync(path.dirname(venvPath), { recursive: true });
+  fs.writeFileSync(venvPath, '#!/bin/sh\nexec /usr/bin/python3 "$@"\n', { mode: 0o755 });
+  return venvPath;
 }
 
 function captureLogs() {
@@ -522,6 +537,96 @@ async function main() {
     const cnt = await psql(`SELECT COUNT(*) FROM extraction_failures WHERE session_key = '${sessionKey}';`);
     assert('TC-G2: no dead-letter row (default > 2s)', '0', cnt);
     assertTrue('TC-G2: handler returned promptly', elapsed < 5000);
+    await cleanupSession(sessionKey);
+  });
+
+  // TC-P1: EXTRACTION_PYTHON_CMD_OVERRIDE wins.
+  await runCase('TC-P1 env override for python interpreter', async () => {
+    const sessionKey = 'tc-p1-' + Date.now();
+    const fakePython = makeFakePython('override-python');
+    process.env.EXTRACTION_PYTHON_CMD_OVERRIDE = fakePython;
+    process.env.EXTRACTION_SCRIPT_PATH_OVERRIDE = mocks.exit0;
+    delete process.env.EXTRACTION_TIMEOUT_MS_OVERRIDE;
+    writeConfig({ extraction_timeout_ms: 90000 });
+    await cleanupSession(sessionKey);
+    const cap = captureLogs();
+    await callHandler(handler, {
+      type: 'message', action: 'received', sessionKey,
+      context: { rawBody: 'Env override interpreter test message with enough length.', metadata: { senderName: 'TC-P1', senderId: 'tc-p1-user' } }
+    });
+    cap.restore();
+    assertContains('TC-P1: resolved interpreter equals env override', cap.text(), `"pythonCmd":"${fakePython}"`);
+    await cleanupSession(sessionKey);
+  });
+
+  // TC-P2: config python_cmd honored when no env override.
+  await runCase('TC-P2 config python_cmd honored', async () => {
+    const sessionKey = 'tc-p2-' + Date.now();
+    const fakePython = makeFakePython('config-python');
+    delete process.env.EXTRACTION_PYTHON_CMD_OVERRIDE;
+    process.env.EXTRACTION_SCRIPT_PATH_OVERRIDE = mocks.exit0;
+    writeConfig({ extraction_timeout_ms: 90000, python_cmd: fakePython });
+    await cleanupSession(sessionKey);
+    const cap = captureLogs();
+    await callHandler(handler, {
+      type: 'message', action: 'received', sessionKey,
+      context: { rawBody: 'Config interpreter test message with enough length.', metadata: { senderName: 'TC-P2', senderId: 'tc-p2-user' } }
+    });
+    cap.restore();
+    assertContains('TC-P2: resolved interpreter equals config python_cmd', cap.text(), `"pythonCmd":"${fakePython}"`);
+    await cleanupSession(sessionKey);
+  });
+
+  // TC-P3: venv python preferred when present and no override/config.
+  await runCase('TC-P3 venv python preferred', async () => {
+    const sessionKey = 'tc-p3-' + Date.now();
+    const fakeHome = fs.mkdtempSync(path.join(HOMES_DIR, 'home-'));
+    const fakeVenvPython = makeFakeVenv(fakeHome);
+    const osMod = require('os');
+    const realHomedir = osMod.homedir;
+    delete process.env.EXTRACTION_PYTHON_CMD_OVERRIDE;
+    process.env.EXTRACTION_SCRIPT_PATH_OVERRIDE = mocks.exit0;
+    writeConfig({ extraction_timeout_ms: 90000 });
+    await cleanupSession(sessionKey);
+    const cap = captureLogs();
+    // Patch os.homedir() only for the handler invocation so it sees the fake venv
+    // directory. Test-side psql calls keep the real home and .pgpass access.
+    osMod.homedir = () => fakeHome;
+    try {
+      await callHandler(handler, {
+        type: 'message', action: 'received', sessionKey,
+        context: { rawBody: 'Venv interpreter test message with enough length.', metadata: { senderName: 'TC-P3', senderId: 'tc-p3-user' } }
+      });
+    } finally {
+      osMod.homedir = realHomedir;
+    }
+    cap.restore();
+    assertContains('TC-P3: resolved interpreter equals venv python', cap.text(), `"pythonCmd":"${fakeVenvPython}"`);
+    await cleanupSession(sessionKey);
+  });
+
+  // TC-P4: bare python3 fallback when nothing else is available.
+  await runCase('TC-P4 python3 fallback', async () => {
+    const sessionKey = 'tc-p4-' + Date.now();
+    const fakeHome = fs.mkdtempSync(path.join(HOMES_DIR, 'home-'));
+    const osMod = require('os');
+    const realHomedir = osMod.homedir;
+    delete process.env.EXTRACTION_PYTHON_CMD_OVERRIDE;
+    process.env.EXTRACTION_SCRIPT_PATH_OVERRIDE = mocks.exit0;
+    writeConfig({ extraction_timeout_ms: 90000 });
+    await cleanupSession(sessionKey);
+    const cap = captureLogs();
+    osMod.homedir = () => fakeHome;
+    try {
+      await callHandler(handler, {
+        type: 'message', action: 'received', sessionKey,
+        context: { rawBody: 'Fallback interpreter test message with enough length.', metadata: { senderName: 'TC-P4', senderId: 'tc-p4-user' } }
+      });
+    } finally {
+      osMod.homedir = realHomedir;
+    }
+    cap.restore();
+    assertContains('TC-P4: resolved interpreter falls back to python3', cap.text(), '"pythonCmd":"python3"');
     await cleanupSession(sessionKey);
   });
 

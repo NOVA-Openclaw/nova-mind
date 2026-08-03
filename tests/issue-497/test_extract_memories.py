@@ -44,76 +44,111 @@ class FakeResponse:
 class TestCallLlMRepair(unittest.TestCase):
     """Tests for the json_repair pass inside call_llm (spec section C)."""
 
+    @staticmethod
+    def _fake_json_repair(repaired_value):
+        """Return a fake json_repair module whose repair_json returns repaired_value."""
+        fake = mock.MagicMock()
+        fake.repair_json.return_value = repaired_value
+        return fake
+
     def _post_with_content(self, content: str) -> dict:
         with mock.patch("requests.post") as mock_post:
             mock_post.return_value = FakeResponse(content)
             return em.call_llm("prompt", "key", "model")
 
     def test_c1_valid_json_no_repair(self):
-        """C1: valid JSON dict parses immediately; repair is not called."""
-        with mock.patch("json_repair.repair_json") as mock_repair:
+        """C1: valid JSON dict parses immediately; repair loader is not called."""
+        with mock.patch("extract_memories._load_json_repair") as mock_load:
             result = self._post_with_content('{"facts": [{"key": "k", "value": "v"}]}')
-            mock_repair.assert_not_called()
+            mock_load.assert_not_called()
         self.assertEqual(result, {"facts": [{"key": "k", "value": "v"}]})
 
     def test_c2_malformed_json_repair_succeeds(self):
         """C2: truncated JSON is repaired to a valid dict."""
-        result = self._post_with_content('{"facts": [{"key": "favorite_color", "value": "blue"')
+        with mock.patch(
+            "extract_memories._load_json_repair",
+            return_value=self._fake_json_repair('{"facts": [{"key": "favorite_color", "value": "blue"}]}'),
+        ):
+            result = self._post_with_content('{"facts": [{"key": "favorite_color", "value": "blue"')
         self.assertEqual(result, {"facts": [{"key": "favorite_color", "value": "blue"}]})
 
     def test_c3_malformed_json_repair_fails(self):
         """C3: unrepairable garbage raises JsonParseFailure mentioning repair failure."""
-        with self.assertRaises(em.JsonParseFailure) as ctx:
-            self._post_with_content("not json at all")
+        with mock.patch(
+            "extract_memories._load_json_repair",
+            return_value=self._fake_json_repair(""),
+        ):
+            with self.assertRaises(em.JsonParseFailure) as ctx:
+                self._post_with_content("not json at all")
         msg = str(ctx.exception)
         self.assertIn("Failed to parse LLM response as JSON", msg)
         self.assertIn("repair failed", msg)
 
     def test_c4_repair_produces_bare_list_of_facts(self):
         """C4a: repaired bare list of fact dicts wraps to {'facts': [...]}."""
-        result = self._post_with_content('[{"key":"a","value":"b"}]')
+        with mock.patch(
+            "extract_memories._load_json_repair",
+            return_value=self._fake_json_repair('[{"key":"a","value":"b"}]'),
+        ):
+            result = self._post_with_content('[{"key":"a","value":"b"}]')
         self.assertEqual(result, {"facts": [{"key": "a", "value": "b"}]})
 
     def test_c4_repair_produces_key_only_list(self):
         """C4b: list element with only a key still wraps."""
-        result = self._post_with_content('[{"key":"a"}]')
+        with mock.patch(
+            "extract_memories._load_json_repair",
+            return_value=self._fake_json_repair('[{"key":"a"}]'),
+        ):
+            result = self._post_with_content('[{"key":"a"}]')
         self.assertEqual(result, {"facts": [{"key": "a"}]})
 
     def test_c4_repair_produces_bare_scalar_list_fails(self):
         """C4c: bare scalar list raises JsonParseFailure instead of silently becoming {}."""
-        with self.assertRaises(em.JsonParseFailure):
-            self._post_with_content("[1,2,3]")
+        with mock.patch(
+            "extract_memories._load_json_repair",
+            return_value=self._fake_json_repair("[1,2,3]"),
+        ):
+            with self.assertRaises(em.JsonParseFailure):
+                self._post_with_content("[1,2,3]")
 
     def test_c4_repair_produces_empty_list_is_noop(self):
         """C4d: empty array is semantically empty extraction -> {}."""
-        result = self._post_with_content("[]")
+        with mock.patch(
+            "extract_memories._load_json_repair",
+            return_value=self._fake_json_repair("[]"),
+        ):
+            result = self._post_with_content("[]")
         self.assertEqual(result, {})
 
     def test_c5_valid_bare_array_no_repair_needed(self):
         """C5: directly valid JSON bare array is wrapped the same way."""
-        with mock.patch("json_repair.repair_json") as mock_repair:
+        with mock.patch("extract_memories._load_json_repair") as mock_load:
             result = self._post_with_content('[{"key":"x","value":"y"}]')
-            mock_repair.assert_not_called()
+            mock_load.assert_not_called()
         self.assertEqual(result, {"facts": [{"key": "x", "value": "y"}]})
 
     def test_c6_repair_attempted_exactly_once(self):
         """C6: repair is called exactly once even if the result is still bad."""
-        with mock.patch("json_repair.repair_json") as mock_repair:
-            mock_repair.return_value = "{still not valid"
+        fake = self._fake_json_repair("{still not valid")
+        with mock.patch("extract_memories._load_json_repair", return_value=fake):
             with self.assertRaises(RuntimeError):
                 self._post_with_content("{not valid")
-            self.assertEqual(mock_repair.call_count, 1)
+        self.assertEqual(fake.repair_json.call_count, 1)
 
     def test_c7_empty_response_short_circuits(self):
         """C7: empty response returns {} before repair is ever considered."""
-        with mock.patch("json_repair.repair_json") as mock_repair:
+        with mock.patch("extract_memories._load_json_repair") as mock_load:
             result = self._post_with_content("")
-            mock_repair.assert_not_called()
+            mock_load.assert_not_called()
         self.assertEqual(result, {})
 
     def test_c8_fenced_malformed_json_repaired(self):
         """C8: markdown fences are stripped before repair runs."""
-        result = self._post_with_content("```json\n{\"facts\": [{\"key\": \"a\", \"value\": \"b\"\n```")
+        with mock.patch(
+            "extract_memories._load_json_repair",
+            return_value=self._fake_json_repair('{"facts": [{"key": "a", "value": "b"}]}'),
+        ):
+            result = self._post_with_content("```json\n{\"facts\": [{\"key\": \"a\", \"value\": \"b\"\n```")
         self.assertEqual(result, {"facts": [{"key": "a", "value": "b"}]})
 
     def test_c9_unexpected_top_level_type_fails(self):
@@ -121,6 +156,22 @@ class TestCallLlMRepair(unittest.TestCase):
         with self.assertRaises(em.JsonParseFailure) as ctx:
             self._post_with_content('"just a string"')
         self.assertIn("unexpected type", str(ctx.exception))
+
+
+class TestJsonRepairImportError(unittest.TestCase):
+    """Tests for graceful degradation when json_repair is unavailable (issue #554)."""
+
+    def test_json_repair_unavailable_logs_warning_and_raises_json_parse_failure(self):
+        """If json_repair cannot be imported, log one warning and use json_parse_failure taxonomy."""
+        with mock.patch("extract_memories._load_json_repair", side_effect=ImportError("No module named 'json_repair'")):
+            with mock.patch("requests.post") as mock_post:
+                mock_post.return_value = FakeResponse('{"facts": [{"key": "favorite_color", "value": "blue"')
+                with mock.patch("sys.stderr", new_callable=io.StringIO) as stderr:
+                    with self.assertRaises(em.JsonParseFailure) as ctx:
+                        em.call_llm("prompt", "key", "model")
+        self.assertIn("repair pass disabled", stderr.getvalue())
+        self.assertIn("Failed to parse LLM response as JSON", str(ctx.exception))
+        self.assertIn("repair failed", str(ctx.exception))
 
 
 class TestCoerceFactValue(unittest.TestCase):

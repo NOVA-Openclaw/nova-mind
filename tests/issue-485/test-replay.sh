@@ -14,6 +14,8 @@ LOCK_FILE="${HOME}/.openclaw/run/extraction-replay.lock"
 : "${TEST_PGHOST:?TEST_PGHOST is not set}"
 TEST_PGUSER_DDL="${TEST_PGUSER_DDL:-$TEST_PGUSER}"
 export TEST_PGDATABASE TEST_PGUSER TEST_PGHOST TEST_PGUSER_DDL
+# Keep psql password authentication working when tests temporarily override HOME.
+export PGPASSFILE="${HOME}/.pgpass"
 
 PASS=0
 FAIL=0
@@ -274,6 +276,71 @@ EXTRACTION_SCRIPT_PATH_OVERRIDE="$MOCKS_DIR/slow.py" run_replay "$MARKER" > "$LO
 assertContains 'TC-D5: second invocation detects lock and exits' "$(cat "$LOG5")" 'Lock held'
 wait "$HOLDER" 2>/dev/null || true
 rm -f "$LOG5" "$LOCK_HOLD"
+cleanup_test_rows "$MARKER"
+
+# TC-P1: EXTRACTION_PYTHON_CMD_OVERRIDE is honored.
+MARKER="tc-p1-$(date +%s%N)"
+cleanup_test_rows "$MARKER"
+run_psql "
+INSERT INTO extraction_failures (channel_transcript_id, session_key, sender_name, content, status)
+VALUES (NULL, '${MARKER}-session', 'P1Sender', 'p1 body', 'pending');
+"
+LOGP1="$(mktemp)"
+EXTRACTION_PYTHON_CMD_OVERRIDE="/fake/override/python" EXTRACTION_SCRIPT_PATH_OVERRIDE="$MOCKS_DIR/ok.py" run_replay "$MARKER" > "$LOGP1" 2>&1
+assertContains 'TC-P1: env override honored' "$(cat "$LOGP1")" 'Resolved extraction interpreter: /fake/override/python'
+rm -f "$LOGP1"
+cleanup_test_rows "$MARKER"
+
+# TC-P2: config python_cmd is honored when no env override.
+MARKER="tc-p2-$(date +%s%N)"
+cleanup_test_rows "$MARKER"
+run_psql "
+INSERT INTO extraction_failures (channel_transcript_id, session_key, sender_name, content, status)
+VALUES (NULL, '${MARKER}-session', 'P2Sender', 'p2 body', 'pending');
+"
+FAKE_HOME="$(mktemp -d -t issue485-p2-home-XXXXXX)"
+mkdir -p "$FAKE_HOME/.openclaw/scripts"
+printf '%s' '{"python_cmd": "/fake/config/python"}' > "$FAKE_HOME/.openclaw/scripts/memory-extraction-config.json"
+LOGP2="$(mktemp)"
+HOME="$FAKE_HOME" EXTRACTION_SCRIPT_PATH_OVERRIDE="$MOCKS_DIR/ok.py" run_replay "$MARKER" > "$LOGP2" 2>&1
+assertContains 'TC-P2: config python_cmd honored' "$(cat "$LOGP2")" 'Resolved extraction interpreter: /fake/config/python'
+rm -rf "$FAKE_HOME" "$LOGP2"
+cleanup_test_rows "$MARKER"
+
+# TC-P3: venv python is preferred when present and no override/config.
+MARKER="tc-p3-$(date +%s%N)"
+cleanup_test_rows "$MARKER"
+run_psql "
+INSERT INTO extraction_failures (channel_transcript_id, session_key, sender_name, content, status)
+VALUES (NULL, '${MARKER}-session', 'P3Sender', 'p3 body', 'pending');
+"
+FAKE_HOME="$(mktemp -d -t issue485-p3-home-XXXXXX)"
+FAKE_VENV="$FAKE_HOME/.local/share/$USER/venv/bin/python3"
+mkdir -p "$(dirname "$FAKE_VENV")"
+printf '#!/bin/sh\nexec /usr/bin/python3 "$@"\n' > "$FAKE_VENV"
+chmod +x "$FAKE_VENV"
+mkdir -p "$FAKE_HOME/.openclaw/scripts"
+printf '%s' '{}' > "$FAKE_HOME/.openclaw/scripts/memory-extraction-config.json"
+LOGP3="$(mktemp)"
+HOME="$FAKE_HOME" EXTRACTION_SCRIPT_PATH_OVERRIDE="$MOCKS_DIR/ok.py" run_replay "$MARKER" > "$LOGP3" 2>&1
+assertContains 'TC-P3: venv python preferred' "$(cat "$LOGP3")" "Resolved extraction interpreter: $FAKE_VENV"
+rm -rf "$FAKE_HOME" "$LOGP3"
+cleanup_test_rows "$MARKER"
+
+# TC-P4: bare python3 fallback when no override, config, or venv.
+MARKER="tc-p4-$(date +%s%N)"
+cleanup_test_rows "$MARKER"
+run_psql "
+INSERT INTO extraction_failures (channel_transcript_id, session_key, sender_name, content, status)
+VALUES (NULL, '${MARKER}-session', 'P4Sender', 'p4 body', 'pending');
+"
+FAKE_HOME="$(mktemp -d -t issue485-p4-home-XXXXXX)"
+mkdir -p "$FAKE_HOME/.openclaw/scripts"
+printf '%s' '{}' > "$FAKE_HOME/.openclaw/scripts/memory-extraction-config.json"
+LOGP4="$(mktemp)"
+HOME="$FAKE_HOME" EXTRACTION_SCRIPT_PATH_OVERRIDE="$MOCKS_DIR/ok.py" run_replay "$MARKER" > "$LOGP4" 2>&1
+assertContains 'TC-P4: falls back to python3' "$(cat "$LOGP4")" 'Resolved extraction interpreter: python3'
+rm -rf "$FAKE_HOME" "$LOGP4"
 cleanup_test_rows "$MARKER"
 
 echo "[issue-485:chunk3] Summary: PASS=$PASS FAIL=$FAIL"

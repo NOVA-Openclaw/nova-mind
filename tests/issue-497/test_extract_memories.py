@@ -62,8 +62,8 @@ class TestCallLlMRepair(unittest.TestCase):
         self.assertEqual(result, {"facts": [{"key": "favorite_color", "value": "blue"}]})
 
     def test_c3_malformed_json_repair_fails(self):
-        """C3: unrepairable garbage raises RuntimeError mentioning repair failure."""
-        with self.assertRaises(RuntimeError) as ctx:
+        """C3: unrepairable garbage raises JsonParseFailure mentioning repair failure."""
+        with self.assertRaises(em.JsonParseFailure) as ctx:
             self._post_with_content("not json at all")
         msg = str(ctx.exception)
         self.assertIn("Failed to parse LLM response as JSON", msg)
@@ -80,8 +80,8 @@ class TestCallLlMRepair(unittest.TestCase):
         self.assertEqual(result, {"facts": [{"key": "a"}]})
 
     def test_c4_repair_produces_bare_scalar_list_fails(self):
-        """C4c: bare scalar list does not silently become {}."""
-        with self.assertRaises(RuntimeError):
+        """C4c: bare scalar list raises JsonParseFailure instead of silently becoming {}."""
+        with self.assertRaises(em.JsonParseFailure):
             self._post_with_content("[1,2,3]")
 
     def test_c4_repair_produces_empty_list_is_noop(self):
@@ -115,6 +115,12 @@ class TestCallLlMRepair(unittest.TestCase):
         """C8: markdown fences are stripped before repair runs."""
         result = self._post_with_content("```json\n{\"facts\": [{\"key\": \"a\", \"value\": \"b\"\n```")
         self.assertEqual(result, {"facts": [{"key": "a", "value": "b"}]})
+
+    def test_c9_unexpected_top_level_type_fails(self):
+        """C9: valid JSON whose top-level type is neither dict nor supported list raises JsonParseFailure."""
+        with self.assertRaises(em.JsonParseFailure) as ctx:
+            self._post_with_content('"just a string"')
+        self.assertIn("unexpected type", str(ctx.exception))
 
 
 class TestCoerceFactValue(unittest.TestCase):
@@ -156,21 +162,54 @@ class TestCoerceFactValue(unittest.TestCase):
 class TestExitCodeMapping(unittest.TestCase):
     """Tests for the new exit-code-2 path from main() (spec section D)."""
 
-    @mock.patch("extract_memories.call_llm")
-    @mock.patch("extract_memories.get_db_connection")
-    def test_json_parse_failure_returns_exit_2(self, mock_conn, mock_call_llm):
-        """RuntimeError containing 'Failed to parse LLM response as JSON' -> exit 2."""
-        mock_call_llm.side_effect = RuntimeError(
-            "Failed to parse LLM response as JSON and repair failed: ..."
+    def _run_main_with_call_llm_error(self, side_effect):
+        """Helper: run main() with call_llm raising the supplied exception."""
+        with mock.patch("extract_memories.call_llm") as mock_call_llm:
+            with mock.patch("extract_memories.get_db_connection") as mock_conn:
+                mock_call_llm.side_effect = side_effect
+                with mock.patch(
+                    "sys.stdin", io.StringIO("this is a long enough test message")
+                ):
+                    with mock.patch.dict(
+                        os.environ,
+                        {"OPENROUTER_API_KEY": "test-key"},
+                        clear=False,
+                    ):
+                        return em.main()
+
+    def test_json_parse_failure_repair_failed_returns_exit_2(self):
+        """JsonParseFailure from repair-failed path -> exit 2."""
+        code = self._run_main_with_call_llm_error(
+            em.JsonParseFailure(
+                "Failed to parse LLM response as JSON and repair failed: ..."
+            )
         )
-        with mock.patch("sys.stdin", io.StringIO("this is a long enough test message")):
-            with mock.patch.dict(
-                os.environ,
-                {"OPENROUTER_API_KEY": "test-key"},
-                clear=False,
-            ):
-                code = em.main()
         self.assertEqual(code, 2)
+
+    def test_json_parse_failure_bare_scalar_list_returns_exit_2(self):
+        """JsonParseFailure from bare-scalar-list reject -> exit 2."""
+        code = self._run_main_with_call_llm_error(
+            em.JsonParseFailure(
+                "LLM response parsed to a bare list that does not look like a fact array"
+            )
+        )
+        self.assertEqual(code, 2)
+
+    def test_json_parse_failure_unexpected_top_level_type_returns_exit_2(self):
+        """JsonParseFailure from unexpected-top-level-type reject -> exit 2."""
+        code = self._run_main_with_call_llm_error(
+            em.JsonParseFailure(
+                "LLM response parsed to an unexpected type (str), expected dict"
+            )
+        )
+        self.assertEqual(code, 2)
+
+    def test_non_json_runtime_error_returns_exit_1(self):
+        """Non-JsonParseFailure RuntimeError remains exit 1."""
+        code = self._run_main_with_call_llm_error(
+            RuntimeError("LLM API call failed: HTTP 503")
+        )
+        self.assertEqual(code, 1)
 
 
 if __name__ == "__main__":

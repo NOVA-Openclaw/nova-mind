@@ -46,6 +46,14 @@ load_pg_env()
 MIN_MESSAGE_LENGTH = 10  # characters (trimmed)
 
 
+class JsonParseFailure(RuntimeError):
+    """Raised when the LLM response cannot be parsed to a supported JSON shape.
+
+    This dedicated exception makes the exit-code-2 dispatch in main()
+    unambiguous: message text is no longer load-bearing for taxonomy.
+    """
+
+
 def load_config_file(config_path: str) -> dict:
     """Load extraction config from JSON file. Returns empty dict on any error."""
     try:
@@ -877,13 +885,13 @@ def call_llm(prompt: str, api_key: str, model: str) -> dict:
         # Exactly one repair attempt — no loop, no re-prompt.
         repaired = json_repair.repair_json(content)
         if not repaired:
-            raise RuntimeError(
+            raise JsonParseFailure(
                 f"Failed to parse LLM response as JSON and repair failed: {e}\nRaw: {content[:200]}"
             ) from e
         try:
             parsed = json.loads(repaired)
         except json.JSONDecodeError as e2:
-            raise RuntimeError(
+            raise JsonParseFailure(
                 f"Failed to parse LLM response as JSON and repair failed: {e2}\nRaw: {content[:200]}"
             ) from e2
 
@@ -896,12 +904,12 @@ def call_llm(prompt: str, api_key: str, model: str) -> dict:
             for item in parsed
         ):
             return {"facts": parsed}
-        raise RuntimeError(
+        raise JsonParseFailure(
             f"LLM response parsed to a bare list that does not look like a fact array\nRaw: {content[:200]}"
         )
 
     if not isinstance(parsed, dict):
-        raise RuntimeError(
+        raise JsonParseFailure(
             f"LLM response parsed to an unexpected type ({type(parsed).__name__}), expected dict\nRaw: {content[:200]}"
         )
 
@@ -1258,12 +1266,13 @@ def main() -> int:
         print("[extract_memories] Extraction complete", file=sys.stderr)
         return 0
 
-    except RuntimeError as e:
+    except JsonParseFailure as e:
         print(f"[extract_memories] ERROR: {e}", file=sys.stderr)
         # Exit code 2 is reserved for JSON parse/repair failures so the hook can
         # dead-letter them with failure_reason='json_parse_failure'.
-        if "Failed to parse LLM response as JSON" in str(e):
-            return 2
+        return 2
+    except RuntimeError as e:
+        print(f"[extract_memories] ERROR: {e}", file=sys.stderr)
         return 1
     except Exception as e:
         print(f"[extract_memories] UNHANDLED ERROR: {e}", file=sys.stderr)

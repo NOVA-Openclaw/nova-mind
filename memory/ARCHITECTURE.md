@@ -64,7 +64,7 @@ This is the source of truth for persistent information.
 | `memory_type_priorities` | Priority weights for semantic recall by source_type |
 | `channel_sessions` | Structured chat session records — one row per provider+chat+thread. Replaces legacy JSONL file storage and the deprecated `conversations` table. |
 | `channel_transcripts` | Individual message transcripts linked to `channel_sessions`. FK source for `entity_facts.source_channel_transcript_id`. |
-| `extraction_failures` | Dead-letter store for failed memory extractions (#485) — nonzero exit, timeout, or spawn error. FK to `channel_transcripts` (`ON DELETE SET NULL`) with a raw-body fallback column. Replayed via `memory/scripts/extraction-replay.sh`. See `memory/docs/memory-extraction-pipeline.md#1a-failure-handling-extraction_failures-dead-letter-table--replay-485`. |
+| `extraction_failures` | Dead-letter store for failed memory extractions (#485) — nonzero exit, timeout, spawn error, or JSON-parse failure (`json_parse_failure`, #497). FK to `channel_transcripts` (`ON DELETE SET NULL`) with a raw-body fallback column. Replayed via `memory/scripts/extraction-replay.sh`. See `memory/docs/memory-extraction-pipeline.md#1a-failure-handling-extraction_failures-dead-letter-table--replay-485`. |
 
 #### Entity Facts Access Control Columns
 
@@ -229,7 +229,7 @@ Session JSONL files → memory-catchup.sh
                     → delete source JSONL files
 ```
 
-**Failure handling (#485):** The `memory-extract` hook captures capped (16KB) stderr/stdout tails from the `extract_memories.py` child process, enforces a 30-second timeout (SIGTERM then SIGKILL after a 5s grace period), and on nonzero exit / timeout / spawn error writes a row to the `extraction_failures` dead-letter table rather than discarding the message. `memory/scripts/extraction-replay.sh` (flock-guarded, rate-limited) replays pending rows, distinguishing `nonzero_exit`/`timeout`/`spawn_error`/`unreplayable` failure reasons and retiring rows to `retry_exhausted` after `EXTRACTION_REPLAY_MAX_RETRIES` (default 5) failed attempts. Full detail: `memory/docs/memory-extraction-pipeline.md`.
+**Failure handling (#485, #497):** The `memory-extract` hook captures capped (16KB) stderr/stdout tails from the `extract_memories.py` child process, enforces a per-event timeout (config-driven via `memory-extraction-config.json`, default 90s, hot-reloadable — raised from a fixed 30s constant under #497; SIGTERM then SIGKILL after a 5s grace period), and on nonzero exit / timeout / spawn error / JSON-parse failure writes a row to the `extraction_failures` dead-letter table rather than discarding the message. `memory/scripts/extraction-replay.sh` (flock-guarded, rate-limited) replays pending rows, distinguishing `nonzero_exit`/`timeout`/`spawn_error`/`unreplayable`/`json_parse_failure` failure reasons (the last added by migration `086_extraction_failures_json_parse_failure.sql`, #497) and retiring rows to `retry_exhausted` after `EXTRACTION_REPLAY_MAX_RETRIES` (default 5) failed attempts. Full detail: `memory/docs/memory-extraction-pipeline.md`.
 
 > **Note:** `extract-memories.sh` and `store-memories.sh` (the old two-script shell pipeline this diagram used to describe) were removed as part of the #174 grammar-parser removal and consolidated into `memory/scripts/extract_memories.py`. See `memory/docs/memory-extraction-pipeline.md` for the current pipeline, including a known bug where `memory-catchup.sh` still calls a nonexistent `process-input.sh`.
 

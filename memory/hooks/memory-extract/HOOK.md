@@ -13,7 +13,7 @@ Automatically extracts entities, facts, opinions, and relationships from incomin
 1. Receives the incoming message and extracts sender info from the canonical hook context
 2. Sender fields (`senderName`, `senderId`, `isGroup`, `senderUsername`, `senderTag`, `provider`, `channelName`, `guildId`) are resolved from `ctx.metadata` with top-level `ctx.*` fallbacks
 3. Upserts `channel_sessions` and `channel_transcripts` rows in real-time, then passes FK IDs to the extraction subprocess
-4. Runs the extraction pipeline (`process-input.sh`) via stdin for secure, shell-injection-free message processing
+4. Spawns `extract_memories.py` directly (via `python3`, no shell wrapper) and feeds the message body over **stdin** for secure, shell-injection-free processing. There is no `process-input.sh` in this repo's `memory/scripts/` — the hook's `scriptPath` points straight at `extract_memories.py` (overridable via `EXTRACTION_SCRIPT_PATH_OVERRIDE`, used by tests to point at a mock script).
 
 ## Sender Field Resolution
 
@@ -31,6 +31,22 @@ Sender fields are read from the canonical location to support both old and new c
 | `guildId` | `meta.guildId ?? ctx.guildId ?? ""` | 1492385947927445524 |
 
 When metadata is absent (legacy context), the hook falls back to top-level `ctx.*` fields. When both are missing, defaults apply (`"unknown"`, `""`, `false`).
+
+## Timeout and Failure Handling (nova-mind#485, #497)
+
+The hook spawns `extract_memories.py` as a child process and enforces a timeout on it. If the child exceeds the timeout, is killed, exits nonzero, fails to spawn, or exits with code 2, the hook writes a dead-letter row to the `extraction_failures` table instead of silently dropping the message. Full mechanism, schema, and replay path: `memory/docs/memory-extraction-pipeline.md` (sections "1a. Failure Handling" and "1b. JSON Repair and Parse-Failure Handling").
+
+**Timeout:** Read per-event from `extraction_timeout_ms` in `~/.openclaw/scripts/memory-extraction-config.json` (`loadExtractionTimeoutMs()`), with no caching — every event does a fresh file read, so editing the config hot-reloads on the next message with no hook/gateway restart. Precedence: `EXTRACTION_TIMEOUT_MS_OVERRIDE` env var (test-only) > config file value > hardcoded default. Default is **90000ms (90s)**, chosen because the Python child's own inner HTTP request timeout (`requests.post(..., timeout=60)` in `extract_memories.py`) is 60s — the outer hook timeout must exceed it so a slow LLM call fails cleanly inside the child (raising a normal error, exit code 1) rather than being `SIGTERM`'d by the hook mid-request. On timeout, the hook sends `SIGTERM`, then `SIGKILL` after a 5-second grace period if the child hasn't exited.
+
+**Exit-code contract:**
+
+| Exit code | Meaning | `failure_reason` written |
+|-----------|---------|---------------------------|
+| `0` | Success | — (no dead-letter row) |
+| `1` | Generic error | `nonzero_exit` |
+| `2` | JSON parse/repair failure (`JsonParseFailure` in `extract_memories.py`) | `json_parse_failure` |
+
+Timeout detection takes precedence over exit-code inspection in the hook's `child.on('close', ...)` handler: a killed-for-timeout child is always recorded as `failure_reason='timeout'`, regardless of what exit code the killed process happens to report.
 
 ## Channel Transcript Upsert
 

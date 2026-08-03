@@ -772,7 +772,7 @@ This was the combined extract → store entry point in the old pipeline. It no l
 
 ### Failure Recovery: extraction_failures + extraction-replay.sh (#485)
 
-If the `memory-extract` hook's `extract_memories.py` child process exits nonzero, times out (30s), or fails to spawn, the message is no longer silently lost. The hook writes a dead-letter row to the `extraction_failures` table (message body or transcript FK, captured stderr/stdout tails, failure reason) and `memory/scripts/extraction-replay.sh` can replay pending rows later:
+If the `memory-extract` hook's `extract_memories.py` child process exits nonzero, times out (config-driven, default 90s — see `memory/docs/memory-extraction-pipeline.md`'s "Configuration file" section, nova-mind#497), fails to spawn, or returns an unrecoverable JSON parse failure (nova-mind#497), the message is no longer silently lost. The hook writes a dead-letter row to the `extraction_failures` table (message body or transcript FK, captured stderr/stdout tails, failure reason) and `memory/scripts/extraction-replay.sh` can replay pending rows later:
 
 ```bash
 ~/.openclaw/scripts/extraction-replay.sh
@@ -782,7 +782,7 @@ Full mechanism, schema, and state machine: `memory/docs/memory-extraction-pipeli
 
 ## Environment Variables
 
-- `ANTHROPIC_API_KEY` - Required for `extract_memories.py`
+- `ANTHROPIC_API_KEY` - Checked for presence by the wrapper scripts `memory-catchup.sh` and `extraction-replay.sh` (warn-and-continue if unset); `extract_memories.py` itself calls OpenRouter and reads `OPENROUTER_API_KEY` instead (nova-mind#497) — the two are not interchangeable, and an unset `ANTHROPIC_API_KEY` does not actually block extraction since `extract_memories.py` never reads it
 - `PGHOST`, `PGPORT`, `PGUSER`, `PGDATABASE`, `PGPASSWORD` - PostgreSQL connection (see [Database Configuration](#database-configuration) above)
 
 > **Note:** All scripts use the centralized database configuration loaders installed at `~/.openclaw/lib/` (`pg-env.sh` for Bash, `pg_env.py` for Python). No script contains hardcoded connection logic — see #94 for the config system, #95 for the full migration, and #102 for the lib install mechanism.

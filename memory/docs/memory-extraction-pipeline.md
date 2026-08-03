@@ -60,11 +60,40 @@ Facts about identifiers (phone, email, Discord/GitHub handle, Signal UUID) are e
 - `short_term`: Current states/moods. Moderate decay.
 - `ephemeral`: Temporary/fleeting conditions. Aggressive decay.
 
+**Configuration file: `memory-extraction-config.json` (#497)**
+
+Both the hook (`handler.ts`) and `extract_memories.py` read `~/.openclaw/scripts/memory-extraction-config.json` for extraction settings. The file is optional — any missing/unreadable/malformed field falls back to a hardcoded default, so the extraction pipeline never hard-fails on a bad config file.
+
+| Field | Consumed by | Default if absent | Notes |
+|-------|-------------|--------------------|-------|
+| `provider` | Documentation/informational only | — | Not read by `extract_memories.py`; `api_url` is the field that actually drives the HTTP call |
+| `model` | `extract_memories.py` (`DEFAULT_MODEL`) | `deepseek/deepseek-v4-flash` | Overridden per-call by the `MEMORY_EXTRACTION_MODEL` env var if set |
+| `api_url` | `extract_memories.py` (`OPENROUTER_API_URL`) | `https://openrouter.ai/api/v1/chat/completions` | |
+| `max_tokens` | `extract_memories.py` (`CONFIG_MAX_TOKENS`) | `2048` | |
+| `extraction_timeout_ms` | `handler.ts` (`loadExtractionTimeoutMs()`) | `90000` (90s) | See precedence and rationale below |
+
+Example (current deployed shape):
+```json
+{
+  "provider": "openrouter",
+  "model": "deepseek/deepseek-v4-flash",
+  "api_url": "https://openrouter.ai/api/v1/chat/completions",
+  "max_tokens": 2048,
+  "extraction_timeout_ms": 90000
+}
+```
+
+**Timeout precedence (highest to lowest):** `EXTRACTION_TIMEOUT_MS_OVERRIDE` env var (test-only escape hatch) → `extraction_timeout_ms` in the config file → hardcoded `DEFAULT_EXTRACTION_TIMEOUT_MS` (90000ms). A non-numeric or `<= 0` value at any layer is treated as absent and falls through to the next layer.
+
+**Hot-reload:** `handler.ts`'s `loadExtractionTimeoutMs()` does a fresh `readFileSync` + `JSON.parse` on **every** hook invocation — there is no caching. Editing `memory-extraction-config.json` takes effect on the very next incoming message; no gateway or hook restart is required.
+
+**Why 90s, not 30s:** The inner HTTP request in `extract_memories.py`'s `call_llm()` uses a hardcoded `requests.post(..., timeout=60)` (60-second `requests` timeout). The outer hook timeout must exceed this so that a slow LLM call fails cleanly inside the Python process (raising a normal `RuntimeError` that exits 1) rather than being killed mid-request by the hook's `SIGTERM` — which would discard the in-flight HTTP call's own error context. 90s gives a 30s buffer above the 60s inner ceiling. This was raised from an original fixed 30s constant (#485) after nova-mind#497 found deepseek-v4-flash's p95 extraction latency regularly exceeded 30s, producing a ~15% first-attempt timeout rate (all resolved on replay, confirming the constant was too tight rather than indicating a real hang).
+
 **Troubleshooting:**
 
 | Problem | Symptoms | Solution |
 |---------|----------|----------|
-| API timeouts | Extraction hangs or times out | Check `ANTHROPIC_API_KEY` and network connectivity |
+| API timeouts | Extraction hangs or times out | Check `OPENROUTER_API_KEY` and network connectivity; also confirm `extraction_timeout_ms` in `memory-extraction-config.json` (default 90000ms) isn't set too low for the current model's latency |
 | No extraction happening | No new `entity_facts`/`events` rows despite active chat | Verify the `memory-extract` hook is enabled: `openclaw hooks list` |
 | Missing context | Poor reference resolution ("that", "yes", "do it" not extracted) | Check the rolling context window the hook passes in (see hook config) |
 | Rate limiting | HTTP 429 errors | Add/adjust delay handling in the hook or extraction call |
@@ -76,9 +105,9 @@ Facts about identifiers (phone, email, Discord/GitHub handle, Signal UUID) are e
 **What changed:**
 
 - **Stderr/stdout capture.** The hook now attaches a tail-buffer reader (`attachTailBuffer()`) to the child's `stderr`/`stdout` streams, retaining only the **last 16384 bytes** (`PIPE_TAIL_CAP_BYTES`) of each. This also prevents the latent hang risk noted in #447 — an unread pipe stalls a child writing more than the OS pipe buffer (~64KB), and continuously draining the stream (even while discarding old bytes) keeps the child unblocked.
-- **Child-process timeout.** Extraction now has a hard **30-second timeout** (`EXTRACTION_TIMEOUT_MS`). On timeout, the hook sends `SIGTERM`, then `SIGKILL` after a **5-second grace period** (`KILL_GRACE_MS`) if the child hasn't exited.
-- **`extraction_failures` dead-letter table** (migration `085_extraction_failures.sql`). On nonzero exit, timeout, or spawn error, the hook inserts a row capturing the message body (or a `channel_transcript_id` FK when available), sender/session metadata, the captured stderr/stdout tails, exit code, and a `failure_reason`.
-- **Failure-reason taxonomy** (`failure_reason` CHECK constraint): `nonzero_exit`, `timeout`, `spawn_error`, `unreplayable` (the last one is set only by the replay script, never by the hook — see below).
+- **Child-process timeout.** Extraction has a per-event timeout, default **90 seconds** (`DEFAULT_EXTRACTION_TIMEOUT_MS`), config-driven and hot-reloadable as of nova-mind#497 — see the "Configuration file" subsection above for the full precedence rules and rationale. On timeout, the hook sends `SIGTERM`, then `SIGKILL` after a **5-second grace period** (`KILL_GRACE_MS`) if the child hasn't exited. (Originally a fixed 30-second constant under #485; raised and made configurable under #497 after the fixed value produced a ~15% first-attempt timeout rate against slower LLM models.)
+- **`extraction_failures` dead-letter table** (migration `085_extraction_failures.sql`, taxonomy extended by migration `086_extraction_failures_json_parse_failure.sql` — see below). On nonzero exit, timeout, spawn error, or JSON-parse failure, the hook inserts a row capturing the message body (or a `channel_transcript_id` FK when available), sender/session metadata, the captured stderr/stdout tails, exit code, and a `failure_reason`.
+- **Failure-reason taxonomy** (`failure_reason` CHECK constraint): `nonzero_exit`, `timeout`, `spawn_error`, `unreplayable`, `json_parse_failure` (nova-mind#497 — see "JSON Repair and Parse-Failure Handling" below; `unreplayable` is set only by the replay script, never by the hook).
 - **Logged `psql` catches.** The two `channel_sessions`/`channel_transcripts` upsert calls that previously swallowed errors via `.catch(() => ({stdout: ''}))` now log the error message (via `logPsqlError()`) before returning the same empty-stdout fallback — behavior is unchanged, but failures are no longer silent.
 - **Replay script** (`memory/scripts/extraction-replay.sh`, installed to `~/.openclaw/scripts/` by the standard scripts-copy step in `agent-install.sh` — no special-cased install logic was needed since it's just another `.sh` file in `memory/scripts/`). See below for details.
 
@@ -91,8 +120,8 @@ Facts about identifiers (phone, email, Discord/GitHub handle, Signal UUID) are e
 | `session_key`, `sender_name`, `sender_id` | TEXT | Attribution metadata |
 | `content` | TEXT | Raw message body **fallback**, capped at 65535 chars — only populated when no transcript FK is available; when the FK is intact, this column is left NULL to avoid duplicating the body |
 | `stderr_tail`, `stdout_tail` | TEXT | Captured pipe tails (up to 16384 bytes each, last-N-bytes semantics) |
-| `exit_code` | INTEGER | NULL for `timeout`/`spawn_error` (no exit code available) |
-| `failure_reason` | VARCHAR(50) | CHECK: `nonzero_exit`, `timeout`, `spawn_error`, `unreplayable` |
+| `exit_code` | INTEGER | NULL for `timeout`/`spawn_error` (no exit code available); `2` for `json_parse_failure` rows |
+| `failure_reason` | VARCHAR(50) | CHECK: `nonzero_exit`, `timeout`, `spawn_error`, `unreplayable`, `json_parse_failure` (migration `086_extraction_failures_json_parse_failure.sql`, nova-mind#497) |
 | `retry_count` | INTEGER | Default 0, CHECK `>= 0`, incremented by the replay script on each failed retry |
 | `status` | VARCHAR(20) | CHECK: `pending`, `resolved`, `retry_exhausted`, `unreplayable` — see state machine below |
 | `created_at`, `updated_at`, `last_attempt_at`, `resolved_at` | TIMESTAMPTZ | Standard lifecycle timestamps |
@@ -110,6 +139,33 @@ pending  ──(replay succeeds)──────────────► re
 ```
 
 Named indexes: `idx_extraction_failures_status` (eligibility filter), `idx_extraction_failures_channel_transcript_id` (partial, `WHERE channel_transcript_id IS NOT NULL`), `idx_extraction_failures_created_at` (age-based monitoring), `idx_extraction_failures_replay_order` (composite on `status, retry_count ASC, created_at ASC, id ASC` — matches the replay script's batch-selection query exactly).
+
+### 1b. JSON Repair and Parse-Failure Handling (#497)
+
+**Problem this solves:** `call_llm()` in `extract_memories.py` previously raised a bare `RuntimeError` (indistinguishable from an HTTP/network failure) whenever the LLM's response body wasn't valid JSON, and there was no recovery attempt for near-miss malformed output (truncated JSON, trailing commas, etc.) — a small parsing hiccup dead-lettered the whole extraction with a generic `nonzero_exit` reason, giving no signal that the *shape* of the failure was different from a genuine script/API error.
+
+**What changed:**
+
+- **One-shot `json_repair` recovery pass.** After markdown-fence stripping and the empty-content no-op check, if `json.loads(content)` fails, `call_llm()` makes exactly one repair attempt via `json_repair.repair_json()` and re-parses the result. There is no retry loop and no re-prompt to the LLM — if the repaired text still fails to parse, the failure is final.
+- **Bare-array wrap contract.** If the (repaired or original) parsed JSON is a top-level list rather than a dict:
+  - A list of fact-shaped dicts (each having a `key` or `value` field) is wrapped as `{"facts": [...]}`.
+  - An empty list (`[]`) is treated as a semantic no-op, equivalent to `{}`.
+  - Anything else (e.g. a list of scalars, or dicts missing both `key` and `value`) raises `JsonParseFailure`.
+  - A parsed value that is neither a dict nor a list also raises `JsonParseFailure` ("unexpected type").
+- **`JsonParseFailure` exception class.** A dedicated `RuntimeError` subclass in `extract_memories.py` makes the exit-code-2 dispatch in `main()` unambiguous — `main()` catches `JsonParseFailure` specifically (before the generic `RuntimeError` handler) and returns exit code **2**. All other `RuntimeError`s (HTTP failures, non-JSON HTTP responses, etc.) still return exit code **1**.
+- **Type-generic fact-value coercion.** `coerce_fact_value()` normalizes any LLM-emitted value type to a storable string before persistence: `bool` → `"true"`/`"false"` (JSON-lowercase literal, so `False` survives falsy guards), `int`/`float` → `str()`, `dict`/`list` → `json.dumps()`, `None` → skipped with a logged stderr notice (fact silently dropped, not stored as the literal string `"None"`), `str` → stripped as before.
+
+**Exit-code contract (`extract_memories.py` / `handler.ts`):**
+
+| Exit code | Meaning | Hook `failure_reason` |
+|-----------|---------|------------------------|
+| `0` | Success (including empty/no-op extraction) | — (no dead-letter row) |
+| `1` | Generic error (HTTP failure, DB connection failure, missing `OPENROUTER_API_KEY`, unhandled exception) | `nonzero_exit` |
+| `2` | `JsonParseFailure` — LLM response could not be parsed to a supported JSON shape even after one repair attempt | `json_parse_failure` |
+
+In `handler.ts`'s `child.on('close', ...)` handler, timeout detection takes precedence over exit-code inspection: if the child was killed for exceeding the timeout, `failure_reason` is always `'timeout'` regardless of the exit code the killed process happened to report. Exit code `2` only maps to `json_parse_failure` when the child exited on its own (no timeout).
+
+**Dependency:** `json_repair` is a new runtime dependency of `extract_memories.py` (imported as `json_repair`, installed via the `json_repair` PyPI package — no `PACKAGE_MODULE_MAP` entry needed since the import name matches the package name). Added to `REQUIRED_PACKAGES` in the repo-root `agent-install.sh`'s Python venv setup.
 
 **`extraction-replay.sh` — replay path:**
 
@@ -341,7 +397,7 @@ tail -50 ~/.openclaw/logs/memory-catchup.log
 
 **Symptoms (pre-#485):** No new `entity_facts`/`events` rows for a specific message, no error visible anywhere, and the original message body is unrecoverable since it only existed transiently at hook invocation time.
 
-**Fixed by #485:** The hook now captures stderr/stdout tails, enforces a 30s timeout, and writes a dead-letter row to `extraction_failures` on any failure (nonzero exit, timeout, or spawn error) — the message body (or its transcript FK) is preserved and can be replayed via `extraction-replay.sh`. See "Failure Handling" above for the full mechanism.
+**Fixed by #485 (timeout further tuned by #497):** The hook now captures stderr/stdout tails, enforces a config-driven timeout (default 90s, hot-reloadable — see "Configuration file" above), and writes a dead-letter row to `extraction_failures` on any failure (nonzero exit, timeout, spawn error, or JSON-parse failure) — the message body (or its transcript FK) is preserved and can be replayed via `extraction-replay.sh`. See "Failure Handling" above for the full mechanism.
 
 **Diagnosis:**
 ```sql

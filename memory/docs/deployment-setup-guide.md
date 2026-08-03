@@ -574,9 +574,15 @@ echo "$OPENROUTER_API_KEY" | head -c1  # non-empty output means it's set
 
 # Check for dead-lettered extraction failures (nonzero exit, timeout, spawn error, or JSON-parse failure)
 psql -c "SELECT id, sender_name, failure_reason, created_at FROM extraction_failures WHERE status = 'pending' ORDER BY created_at DESC LIMIT 10;"
+
+# If extractions are failing with ModuleNotFoundError, or you suspect the wrong
+# interpreter was picked on a venv-only host, confirm which python was resolved:
+grep 'Resolved extraction interpreter' ~/.openclaw/logs/*.log
 ```
 
 > **Note:** There is no standalone `process-input.sh` or `extract-memories.sh` CLI — extraction runs via the `memory-extract` hook (`memory/scripts/extract_memories.py`) as part of live message handling. Failed invocations (nonzero exit, timeout, spawn error, or JSON-parse failure — nova-mind#497) are captured as dead-letter rows in `extraction_failures` and can be replayed via `memory/scripts/extraction-replay.sh` — see the "Failure Handling" section in [memory-extraction-pipeline.md](memory-extraction-pipeline.md#1a-failure-handling-extraction_failures-dead-letter-table--replay-485).
+>
+> **Interpreter resolution (nova-mind#554, #555):** Both the hook and `extraction-replay.sh` resolve the Python interpreter used to run `extract_memories.py` via `EXTRACTION_PYTHON_CMD_OVERRIDE` env var → `python_cmd` in `memory-extraction-config.json` → agent venv python (`~/.local/share/<user>/venv/bin/python3`) → bare `python3`. If gateway logs show extractions failing with `ModuleNotFoundError`, or the resolved interpreter is bare `python3` on a host where a venv exists, the resolution chain picked the wrong interpreter — grep for `Resolved extraction interpreter` (as above) to see what was actually selected, then check `python_cmd` in `memory-extraction-config.json` and confirm the venv path exists. See the "Interpreter resolution" note in [memory-extraction-pipeline.md](memory-extraction-pipeline.md#1-memory-extract-hook--extract_memoriespy--real-time-extraction) for full detail.
 
 ### 3. Performance Issues
 

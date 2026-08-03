@@ -71,6 +71,7 @@ Both the hook (`handler.ts`) and `extract_memories.py` read `~/.openclaw/scripts
 | `api_url` | `extract_memories.py` (`OPENROUTER_API_URL`) | `https://openrouter.ai/api/v1/chat/completions` | |
 | `max_tokens` | `extract_memories.py` (`CONFIG_MAX_TOKENS`) | `2048` | |
 | `extraction_timeout_ms` | `handler.ts` (`loadExtractionTimeoutMs()`) | `90000` (90s) | See precedence and rationale below |
+| `python_cmd` | `handler.ts` (`resolvePythonCmd()`) / `extraction-replay.sh` (`resolve_python_cmd()`) | none — resolution falls through to venv detection when absent | Optional. See "Interpreter resolution" below |
 
 Example (current deployed shape):
 ```json
@@ -87,6 +88,17 @@ Example (current deployed shape):
 
 **Hot-reload:** `handler.ts`'s `loadExtractionTimeoutMs()` does a fresh `readFileSync` + `JSON.parse` on **every** hook invocation — there is no caching. Editing `memory-extraction-config.json` takes effect on the very next incoming message; no gateway or hook restart is required.
 
+**Interpreter resolution (#554, #555):** Both spawn paths — `handler.ts`'s `resolvePythonCmd()` and `extraction-replay.sh`'s `resolve_python_cmd()` — resolve the Python interpreter used to invoke `extract_memories.py` via the same first-match-wins order:
+
+1. `EXTRACTION_PYTHON_CMD_OVERRIDE` env var (test-only escape hatch)
+2. `python_cmd` key in `memory-extraction-config.json` (read fresh each event, same hot-reload behavior as `extraction_timeout_ms`)
+3. Agent venv python at `~/.local/share/<user>/venv/bin/python3`, if present
+4. Bare `python3` from `PATH`
+
+`handler.ts` logs the resolved interpreter once per invocation as `[memory-extract] Resolved extraction interpreter { pythonCmd: ... }` — grep gateway logs for this string to confirm which interpreter is actually selected in production. `extraction-replay.sh` logs the equivalent `[extraction-replay] Resolved extraction interpreter: ...` line to its own log output.
+
+The replay script derives the venv path with `$(id -un)` rather than `$USER` — `$USER` is unset in cron environments, which previously collapsed the venv path to a malformed `//venv/bin/python3` and silently fell through to bare `python3` under cron (nova-mind#555), reintroducing the system-python failure class the interpreter-resolution work was meant to close. `$(id -un)` is syscall-backed and cron-safe, matching `os.userInfo().username` already used on the `handler.ts` side.
+
 **Why 90s, not 30s:** The inner HTTP request in `extract_memories.py`'s `call_llm()` uses a hardcoded `requests.post(..., timeout=60)` (60-second `requests` timeout). The outer hook timeout must exceed this so that a slow LLM call fails cleanly inside the Python process (raising a normal `RuntimeError` that exits 1) rather than being killed mid-request by the hook's `SIGTERM` — which would discard the in-flight HTTP call's own error context. 90s gives a 30s buffer above the 60s inner ceiling. This was raised from an original fixed 30s constant (#485) after nova-mind#497 found deepseek-v4-flash's p95 extraction latency regularly exceeded 30s, producing a ~15% first-attempt timeout rate (all resolved on replay, confirming the constant was too tight rather than indicating a real hang).
 
 **Troubleshooting:**
@@ -97,6 +109,7 @@ Example (current deployed shape):
 | No extraction happening | No new `entity_facts`/`events` rows despite active chat | Verify the `memory-extract` hook is enabled: `openclaw hooks list` |
 | Missing context | Poor reference resolution ("that", "yes", "do it" not extracted) | Check the rolling context window the hook passes in (see hook config) |
 | Rate limiting | HTTP 429 errors | Add/adjust delay handling in the hook or extraction call |
+| `ModuleNotFoundError` in extraction logs, or resolved interpreter is bare `python3` on a venv-only host | Extractions fail or `json_repair` degradation warning appears even though the venv has the dependency installed | Interpreter resolution picked the wrong python (#554/#555) — grep gateway logs for `Resolved extraction interpreter` (hook) or check `extraction-replay.sh`'s own log for `Resolved extraction interpreter:` (replay path) to see which interpreter was actually selected, then check `python_cmd` in `memory-extraction-config.json` and confirm the venv path exists at `~/.local/share/<user>/venv/bin/python3` |
 
 ### 1a. Failure Handling: `extraction_failures` Dead-Letter Table + Replay (#485)
 
@@ -147,6 +160,7 @@ Named indexes: `idx_extraction_failures_status` (eligibility filter), `idx_extra
 **What changed:**
 
 - **One-shot `json_repair` recovery pass.** After markdown-fence stripping and the empty-content no-op check, if `json.loads(content)` fails, `call_llm()` makes exactly one repair attempt via `json_repair.repair_json()` and re-parses the result. There is no retry loop and no re-prompt to the LLM — if the repaired text still fails to parse, the failure is final.
+- **Graceful degradation when `json_repair` is absent (#554).** The import is lazy and guarded (`_load_json_repair()`), not a top-level unconditional import. If the resolved interpreter's environment doesn't have `json_repair` installed (e.g. a bare system `python3` rather than the agent venv), `_repair_json()` catches the `ImportError`, logs a single stderr warning ("json_repair is not installed in the active Python interpreter; JSON repair pass disabled"), and returns `None` — no repair attempt is made. Extraction still runs end-to-end; malformed JSON just skips straight to `JsonParseFailure` / exit code 2 / `failure_reason='json_parse_failure'` instead of getting a repair pass first.
 - **Bare-array wrap contract.** If the (repaired or original) parsed JSON is a top-level list rather than a dict:
   - A list of fact-shaped dicts (each having a `key` or `value` field) is wrapped as `{"facts": [...]}`.
   - An empty list (`[]`) is treated as a semantic no-op, equivalent to `{}`.

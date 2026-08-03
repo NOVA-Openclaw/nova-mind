@@ -13,7 +13,7 @@ Automatically extracts entities, facts, opinions, and relationships from incomin
 1. Receives the incoming message and extracts sender info from the canonical hook context
 2. Sender fields (`senderName`, `senderId`, `isGroup`, `senderUsername`, `senderTag`, `provider`, `channelName`, `guildId`) are resolved from `ctx.metadata` with top-level `ctx.*` fallbacks
 3. Upserts `channel_sessions` and `channel_transcripts` rows in real-time, then passes FK IDs to the extraction subprocess
-4. Spawns `extract_memories.py` directly (via `python3`, no shell wrapper) and feeds the message body over **stdin** for secure, shell-injection-free processing. There is no `process-input.sh` in this repo's `memory/scripts/` — the hook's `scriptPath` points straight at `extract_memories.py` (overridable via `EXTRACTION_SCRIPT_PATH_OVERRIDE`, used by tests to point at a mock script).
+4. Spawns `extract_memories.py` directly (interpreter resolved by `resolvePythonCmd()` — see below — no shell wrapper) and feeds the message body over **stdin** for secure, shell-injection-free processing. There is no `process-input.sh` in this repo's `memory/scripts/` — the hook's `scriptPath` points straight at `extract_memories.py` (overridable via `EXTRACTION_SCRIPT_PATH_OVERRIDE`, used by tests to point at a mock script).
 
 ## Sender Field Resolution
 
@@ -31,6 +31,21 @@ Sender fields are read from the canonical location to support both old and new c
 | `guildId` | `meta.guildId ?? ctx.guildId ?? ""` | 1492385947927445524 |
 
 When metadata is absent (legacy context), the hook falls back to top-level `ctx.*` fields. When both are missing, defaults apply (`"unknown"`, `""`, `false`).
+
+## Interpreter Resolution (nova-mind#554, #555)
+
+Both spawn paths that invoke `extract_memories.py` — this hook's `handler.ts` and the standalone `extraction-replay.sh` — resolve the Python interpreter with the same first-match-wins order via `resolvePythonCmd()` (handler.ts) / `resolve_python_cmd()` (extraction-replay.sh):
+
+1. `EXTRACTION_PYTHON_CMD_OVERRIDE` env var (test-only)
+2. `python_cmd` key in `~/.openclaw/scripts/memory-extraction-config.json` (read fresh per event — hot-reload friendly, same as `extraction_timeout_ms`)
+3. Agent venv python at `~/.local/share/<user>/venv/bin/python3`, if present
+4. Bare `python3` from `PATH`
+
+The hook logs the result once per invocation: `[memory-extract] Resolved extraction interpreter { pythonCmd: ... }`. Grep gateway logs for this string to confirm which interpreter is actually selected in production — useful when diagnosing `ModuleNotFoundError` failures caused by the wrong python being picked (see Troubleshooting in `memory/docs/memory-extraction-pipeline.md`).
+
+`extraction-replay.sh` derives the venv path using `$(id -un)` rather than `$USER`, because `$USER` is unset under cron and would otherwise silently collapse the venv path and fall through to bare `python3` (nova-mind#555).
+
+**Graceful `json_repair` degradation (nova-mind#554):** `extract_memories.py`'s `json_repair` import is lazy and guarded, not a top-level unconditional import. If the resolved interpreter's environment lacks `json_repair` (e.g. it resolved to bare system `python3` instead of the venv), the extraction still completes end-to-end — one stderr warning is logged, no repair attempt is made, and malformed JSON goes straight to exit code 2 / `failure_reason='json_parse_failure'`.
 
 ## Timeout and Failure Handling (nova-mind#485, #497)
 

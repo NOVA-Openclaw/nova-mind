@@ -1733,7 +1733,7 @@ echo ""
 echo "Python virtual environment setup..."
 
 VENV_DIR="$HOME/.local/share/$USER/venv"
-REQUIRED_PACKAGES=("openai" "tiktoken" "psycopg2-binary" "pillow")
+REQUIRED_PACKAGES=("openai" "tiktoken" "psycopg2-binary" "pillow" "json_repair")
 
 declare -A PACKAGE_MODULE_MAP=(
     ["psycopg2-binary"]="psycopg2"

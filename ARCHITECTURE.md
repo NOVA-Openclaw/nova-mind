@@ -226,6 +226,8 @@ Return entity + profile for personalization
 
 **Note:** The complete schema (`database/schema.sql`) contains ~100 tables; the above highlights the core inter‑subsystem tables.
 
+**Bootstrap context replication:** `UNIVERSAL`/`GLOBAL` rows of `agent_bootstrap_context` are replicated live to peer agent databases (Graybeard, Victoria, Newhart) via `postgres_fdw`, with `nova_memory` as the canonical source — see [`database/BOOTSTRAP-FDW-REPLICATION.md`](database/BOOTSTRAP-FDW-REPLICATION.md) for the full architecture.
+
 ## Hook System
 
 nova‑mind integrates with OpenClaw via hooks that run on gateway events:

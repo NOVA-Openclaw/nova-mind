@@ -1,5 +1,23 @@
 # Changelog
 
+### Batch: append-run-note-557 (Issue #557)
+
+#### Added
+- **`append_run_note(p_run_id integer, p_note text)` — server-side timestamped `workflow_runs.notes` append** (nova-mind#557) — Promotes lesson 757 ("append, don't overwrite, run notes") from convention to database-enforced behavior. Previously, agents updated `workflow_runs.notes` directly via ad-hoc `UPDATE ... SET notes = COALESCE(notes,'') || ...` statements, which meant every caller had to independently reproduce the correct concatenation and timestamp formatting — and nothing prevented a caller from clobbering existing notes with a plain `SET notes = '...'`. `append_run_note()` is now the single supported write path:
+  - **Signature:** `append_run_note(p_run_id integer, p_note text) RETURNS void`.
+  - **Security model:** `SECURITY DEFINER`, `SET search_path = public` pinned (prevents search-path hijacking since it runs with definer privileges). `EXECUTE` is granted to all 17 agent database roles, so any agent can append a note to any run — the function only writes the single `notes` column via its own `UPDATE`, it does not expose broader `workflow_runs` write access.
+  - **Timestamp format:** Each call prepends a UTC stamp of the form `YYYY-MM-DD HH24:MI UTC — ` ahead of the note text, computed server-side via `now() AT TIME ZONE 'UTC'` (not the caller's session timezone), then appends the stamped line to the existing value with a newline separator — the very first note on a run gets no leading newline.
+  - **NULL vs. empty-string handling:** `p_note IS NULL` raises `append_run_note: p_note cannot be NULL`. An empty string (`''`) is accepted and produces a stamped line with nothing after the `— ` separator — this is intentional (e.g. a bookend marker with no free-text content) and documented in the function's `COMMENT ON FUNCTION`.
+  - **Missing run_id:** Raises `append_run_note: run_id % not found` when no row matches `p_run_id` (checked via `FOUND` after the `UPDATE`).
+  - **Usage:** `SELECT append_run_note(<run_id>, 'note text');`
+  - Defined in `database/schema.sql` (~lines 3804-3843), applied via the standard `pgschema` declarative flow — no new migration file needed since `workflow_runs.notes` already existed as a column, only the write-path function is new.
+
+#### Tests
+- `tests/issue-557/test-append-run-note.sh` + `tests/issue-557/README.md` (nova-mind#557) — TC-1 through TC-16 automated (concatenation/newline behavior, NULL vs. empty-string notes, nonexistent run_id, NULL run_id, `SECURITY DEFINER`/`search_path` catalog verification, per-role `EXECUTE` privilege checks across all 17 agent roles, unicode/long-note/special-character payloads, concurrent-append ordering) plus TC-17/TC-18 documented as manual staging steps for `pgschema apply`/re-apply idempotency (full schema apply against a staging database mirroring production roles is required for these two; not automatable in the same script). Staging run: all cases PASS; QA verdict PASS-WITH-CONDITIONS (conditions are follow-up items, not blockers — see nova-mind#559).
+
+#### Issues Closed
+- #557 — Promote lesson 757 (append-only workflow run notes) to a database-enforced `append_run_note()` function
+
 ### Batch: memory-extraction-reliability-497 (Issue #497)
 
 #### Fixed

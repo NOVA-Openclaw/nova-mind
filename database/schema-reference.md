@@ -177,6 +177,18 @@
 | workflows | Defines multi-agent workflows with ordered steps and deliverable handoffs | 10 |
 | works | - | 14 |
 
+## Functions
+
+This file's original scope (per its auto-generated header) is table listings only — it has never
+catalogued functions. The one entry below was added manually during the #557 documentation pass
+because it directly replaces a previously-undocumented ad-hoc write pattern; it is not a claim
+that this is now a complete function reference. For the full function catalog, query
+`pg_proc`/`\df` against the live database or read `database/schema.sql` directly.
+
+| Function | Security | Purpose |
+|----------|----------|---------|
+| `append_run_note(p_run_id integer, p_note text) RETURNS void` | `SECURITY DEFINER`, `search_path=public` pinned. `EXECUTE` granted to all agent roles. | Server-side UTC-timestamped append to `workflow_runs.notes` (nova-mind#557, promotes lesson 757 to enforcement). **This is the write path for run notes** — agents should call `SELECT append_run_note(run_id, 'note text');` rather than `UPDATE workflow_runs SET notes = COALESCE(notes,'')||...` directly. Stamp format: `YYYY-MM-DD HH24:MI UTC — `. Raises on `NULL` note or missing `run_id`; empty-string notes are accepted. |
+
 ## Quick Reference
 
 - **Full schema:** `~/.openclaw/workspace/nova-mind/database/schema.sql` (synced to GitHub)

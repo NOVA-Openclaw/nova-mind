@@ -47,12 +47,17 @@ production roles and object ownership.
      --db nova_staging \
      --user nova \
      --host localhost \
+     --plan-db nova_staging \
+     --plan-user nova \
+     --plan-host localhost \
      --file database/schema.sql \
      --auto-approve
    ```
 
-   If your environment requires an external plan database, add
-   `--plan-db <db> --plan-user nova --plan-host localhost`.
+   The `--plan-*` flags point pgschema at the real target database for its
+   planning/validation phase. This matches the standard invocation used by
+   `agent-install.sh` and avoids failures caused by applying the full
+   `schema.sql` against an embedded or empty plan database.
 
 3. Verify the function exists and has the expected properties:
 
@@ -82,6 +87,9 @@ production roles and object ownership.
      --db nova_staging \
      --user nova \
      --host localhost \
+     --plan-db nova_staging \
+     --plan-user nova \
+     --plan-host localhost \
      --file database/schema.sql \
      --auto-approve
    ```

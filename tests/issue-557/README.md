@@ -35,29 +35,50 @@ production role set) against an embedded or empty plan database can fail with
 role or privilege errors. Run these on a staging database that already mirrors
 production roles and object ownership.
 
+> **Superuser required.** `database/schema.sql` contains `ALTER DEFAULT
+> PRIVILEGES FOR ROLE postgres` statements that only a PostgreSQL superuser can
+> execute. Run the pgschema commands below as the superuser for your environment
+> (the installer uses `$PG_SUPERUSER` via `_superuser_pgschema`; replace
+> `<superuser>` in the examples with that role name).
+>
+> **Two-step plan → apply.** `pgschema 1.7.2` mutates the target database's
+> `source_fingerprint` on the first plan run when `--plan-db` points at the
+> target DB. Single-shot `pgschema apply --file ...` therefore fails with a
+> schema fingerprint mismatch. Use the installer's two-step flow: plan to JSON,
+> then apply the saved plan.
+
 ### TC-17: pgschema apply when `append_run_note` does not yet exist
 
 1. Ensure the staging database is at a schema state from before this change
    (no `append_run_note` function).
-2. From the repo root, plan and apply:
+2. From the repo root, plan to JSON and then apply the saved plan:
 
    ```bash
    cd /home/nova/nova-mind
-   pgschema apply \
+
+   pgschema plan \
      --db nova_staging \
-     --user nova \
+     --user <superuser> \
      --host localhost \
      --plan-db nova_staging \
-     --plan-user nova \
+     --plan-user <superuser> \
      --plan-host localhost \
      --file database/schema.sql \
+     --output-json /tmp/append-run-note-plan.json
+
+   pgschema apply \
+     --db nova_staging \
+     --user <superuser> \
+     --host localhost \
+     --plan /tmp/append-run-note-plan.json \
      --auto-approve
    ```
 
    The `--plan-*` flags point pgschema at the real target database for its
    planning/validation phase. This matches the standard invocation used by
    `agent-install.sh` and avoids failures caused by applying the full
-   `schema.sql` against an embedded or empty plan database.
+   `schema.sql` against an embedded or empty plan database. The two-step
+   plan-to-JSON → apply flow is the same flow the installer uses.
 
 3. Verify the function exists and has the expected properties:
 
@@ -73,24 +94,35 @@ production roles and object ownership.
    ```bash
    pgschema plan \
      --db nova_staging \
-     --user nova \
+     --user <superuser> \
      --host localhost \
+     --plan-db nova_staging \
+     --plan-user <superuser> \
+     --plan-host localhost \
      --file database/schema.sql
    ```
 
 ### TC-18: pgschema re-apply idempotency
 
-1. With `append_run_note` already applied from TC-17, re-run the same apply:
+1. With `append_run_note` already applied from TC-17, re-run the same two-step
+   plan → apply:
 
    ```bash
-   pgschema apply \
+   pgschema plan \
      --db nova_staging \
-     --user nova \
+     --user <superuser> \
      --host localhost \
      --plan-db nova_staging \
-     --plan-user nova \
+     --plan-user <superuser> \
      --plan-host localhost \
      --file database/schema.sql \
+     --output-json /tmp/append-run-note-plan.json
+
+   pgschema apply \
+     --db nova_staging \
+     --user <superuser> \
+     --host localhost \
+     --plan /tmp/append-run-note-plan.json \
      --auto-approve
    ```
 
@@ -101,7 +133,18 @@ production roles and object ownership.
    ./tests/issue-557/test-append-run-note.sh
    ```
 
-4. Re-plan to confirm zero pending changes.
+4. Re-plan to confirm zero pending changes:
+
+   ```bash
+   pgschema plan \
+     --db nova_staging \
+     --user <superuser> \
+     --host localhost \
+     --plan-db nova_staging \
+     --plan-user <superuser> \
+     --plan-host localhost \
+     --file database/schema.sql
+   ```
 
 ## Notes
 

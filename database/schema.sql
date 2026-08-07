@@ -3801,6 +3801,48 @@ END;
 $$;
 
 --
+-- Name: append_run_note(integer, text); Type: FUNCTION; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE FUNCTION append_run_note(
+    p_run_id integer,
+    p_note text
+)
+RETURNS void
+LANGUAGE plpgsql
+VOLATILE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+    v_stamped_line TEXT;
+BEGIN
+    IF p_note IS NULL THEN
+        RAISE EXCEPTION 'append_run_note: p_note cannot be NULL';
+    END IF;
+
+    v_stamped_line := to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI') || ' UTC — ' || p_note;
+
+    UPDATE workflow_runs
+    SET notes = CASE
+        WHEN notes IS NULL OR notes = '' THEN v_stamped_line
+        ELSE notes || E'\n' || v_stamped_line
+    END
+    WHERE id = p_run_id;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'append_run_note: run_id % not found', p_run_id;
+    END IF;
+END;
+$$;
+
+--
+-- Name: append_run_note(integer, text); Type: FUNCTION; Schema: -; Owner: -
+--
+
+COMMENT ON FUNCTION append_run_note(integer, text) IS 'Appends a server-side UTC timestamped note to workflow_runs.notes for the given run_id. The stamp format is ''YYYY-MM-DD HH24:MI UTC — ''. Empty-string notes are accepted and append a line ending in '' UTC — ''; only NULL notes are rejected. Raises an exception if p_note is NULL or if the run_id does not exist.';
+
+--
 -- Name: audit_bootstrap_agents(); Type: FUNCTION; Schema: -; Owner: -
 --
 

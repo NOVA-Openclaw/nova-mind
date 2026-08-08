@@ -33,6 +33,8 @@ VERIFICATION_ERRORS=0
 ANNOUNCE_D100_CRON_STATUS="not installed"
 # shellcheck disable=SC2034
 HERMES_COMMS_CRON_STATUS="not installed"
+# shellcheck disable=SC2034
+COMPLETION_LOG_RECONCILE_CRON_STATUS="not installed"
 
 # Track if gateway restart is needed
 # shellcheck disable=SC2034
@@ -102,6 +104,11 @@ ANNOUNCE_D100_CRON_ENTRY='*/15 * * * * '"$ANNOUNCE_D100_CRON_MARKER"' >> '"$OPEN
 HERMES_COMMS_CHECK_SCRIPT="hermes-comms-check.sh"
 HERMES_COMMS_CHECK_MARKER="$HOME/.openclaw/scripts/comms/$HERMES_COMMS_CHECK_SCRIPT"
 HERMES_COMMS_CRON_ENTRY='0 */4 * * * '"$HERMES_COMMS_CHECK_MARKER"' >> '"$OPENCLAW_LOGS_DIR"'/hermes-comms-check.log 2>&1'
+
+# Completion log reconcile cron configuration (issue #562)
+COMPLETION_LOG_RECONCILE_SCRIPT="completion-log-reconcile.py"
+COMPLETION_LOG_RECONCILE_CRON_MARKER="$HOME/.openclaw/scripts/$COMPLETION_LOG_RECONCILE_SCRIPT"
+COMPLETION_LOG_RECONCILE_CRON_ENTRY='*/5 * * * * '"$COMPLETION_LOG_RECONCILE_CRON_MARKER"' >> '"$OPENCLAW_LOGS_DIR"'/completion-log-reconcile.log 2>&1'
 
 # Superuser connection helper for DDL operations
 PG_SUPERUSER="${PG_SUPERUSER:-$DB_USER}"
@@ -380,6 +387,59 @@ _install_hermes_comms_check_cron() {
     fi
 }
 
+# Install or verify the completion log reconcile cron entry.
+# Uses globals: COMPLETION_LOG_RECONCILE_SCRIPT, COMPLETION_LOG_RECONCILE_CRON_MARKER,
+#               COMPLETION_LOG_RECONCILE_CRON_ENTRY, VERIFY_ONLY, NO_CRON
+# Sets global: COMPLETION_LOG_RECONCILE_CRON_STATUS
+_install_completion_log_reconcile_cron() {
+    if [ "${NO_CRON:-0}" -eq 1 ]; then
+        echo -e "  ${INFO} Completion log reconcile cron installation skipped (--no-cron)"
+        COMPLETION_LOG_RECONCILE_CRON_STATUS="skipped by --no-cron"
+        return 0
+    fi
+
+    local cron_drift_lines=()
+    local current_crontab
+    current_crontab=$(crontab -l 2>/dev/null || true)
+
+    if echo "$current_crontab" | grep -qF "$COMPLETION_LOG_RECONCILE_CRON_MARKER"; then
+        local line
+        while IFS= read -r line; do
+            case "$line" in
+                *"$COMPLETION_LOG_RECONCILE_CRON_MARKER"*)
+                    if [ "$line" != "$COMPLETION_LOG_RECONCILE_CRON_ENTRY" ]; then
+                        cron_drift_lines+=("$line")
+                    fi
+                    ;;
+            esac
+        done <<< "$current_crontab"
+
+        if [ ${#cron_drift_lines[@]} -gt 0 ]; then
+            echo -e "  ${WARNING} Existing cron entry for $COMPLETION_LOG_RECONCILE_SCRIPT differs from expected schedule (drift detected):"
+            local drift_line
+            for drift_line in "${cron_drift_lines[@]}"; do
+                echo "      $drift_line"
+            done
+            VERIFICATION_WARNINGS=$((VERIFICATION_WARNINGS + 1))
+            COMPLETION_LOG_RECONCILE_CRON_STATUS="drift detected (review required)"
+        elif [ "${VERIFY_ONLY:-0}" -eq 1 ]; then
+            echo -e "  ${CHECK_MARK} Completion log reconcile cron entry installed"
+            COMPLETION_LOG_RECONCILE_CRON_STATUS="installed"
+        else
+            echo -e "  ${CHECK_MARK} Completion log reconcile cron entry verified"
+            COMPLETION_LOG_RECONCILE_CRON_STATUS="verified"
+        fi
+    elif [ "${VERIFY_ONLY:-0}" -eq 1 ]; then
+        echo -e "  ${CROSS_MARK} Completion log reconcile cron entry missing"
+        COMPLETION_LOG_RECONCILE_CRON_STATUS="missing"
+        VERIFICATION_ERRORS=$((VERIFICATION_ERRORS + 1))
+    else
+        (crontab -l 2>/dev/null || true; echo "$COMPLETION_LOG_RECONCILE_CRON_ENTRY") | crontab -
+        echo -e "  ${CHECK_MARK} Installed completion log reconcile cron entry (every 5 minutes)"
+        COMPLETION_LOG_RECONCILE_CRON_STATUS="installed"
+    fi
+}
+
 # Install the PostgreSQL NOTIFY listener as a systemd --user service.
 # Parameters: source_script source_service target_dir service_dir logs_dir
 _install_pg_notify_listener() {
@@ -443,6 +503,7 @@ REGENERATE_AGENTS_JSON=0
 DAILY_LOG_CRON_STATUS="not installed"
 ANNOUNCE_D100_CRON_STATUS="not installed"
 HERMES_COMMS_CRON_STATUS="not installed"
+COMPLETION_LOG_RECONCILE_CRON_STATUS="not installed"
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -1036,6 +1097,7 @@ if [ $VERIFY_ONLY -eq 1 ]; then
     echo "Memory scripts verification..."
     _install_daily_log_cron
     _install_announce_d100_cron
+    _install_completion_log_reconcile_cron
 
     echo ""
     echo "═══════════════════════════════════════════"
@@ -1065,6 +1127,14 @@ if [ $VERIFY_ONLY -eq 1 ]; then
         comms_symbol="$WARNING"
     fi
     echo -e "  ${comms_symbol} Hermes comms-check cron: $HERMES_COMMS_CRON_STATUS"
+
+    completion_symbol="$CHECK_MARK"
+    if [[ "$COMPLETION_LOG_RECONCILE_CRON_STATUS" == missing* ]]; then
+        completion_symbol="$CROSS_MARK"
+    elif [[ "$COMPLETION_LOG_RECONCILE_CRON_STATUS" == drift* ]]; then
+        completion_symbol="$WARNING"
+    fi
+    echo -e "  ${completion_symbol} Completion log reconcile cron: $COMPLETION_LOG_RECONCILE_CRON_STATUS"
 
     if [ $VERIFICATION_ERRORS -gt 0 ]; then
         echo -e "  ${CROSS_MARK} $VERIFICATION_ERRORS errors found"
@@ -1658,6 +1728,9 @@ if [ -d "$SCRIPTS_SOURCE" ]; then
 
     # --- D100 roll announcer cron entry ---
     _install_announce_d100_cron
+
+    # --- Completion log reconcile cron entry (issue #562) ---
+    _install_completion_log_reconcile_cron
 else
     echo -e "  ${WARNING} Scripts directory not found at $SCRIPTS_SOURCE (skipping)"
 fi
@@ -2800,6 +2873,7 @@ echo "    • Schema managed via pgschema (database/schema.sql)"
 echo "    • Daily memory log cron → $DAILY_LOG_CRON_STATUS"
 echo "    • D100 announcer cron → $ANNOUNCE_D100_CRON_STATUS"
 echo "    • Hermes comms-check cron → $HERMES_COMMS_CRON_STATUS"
+echo "    • Completion log reconcile cron → $COMPLETION_LOG_RECONCILE_CRON_STATUS"
 if [ ${#INSTALLED_HOOKS[@]} -gt 0 ]; then
     for hook in "${INSTALLED_HOOKS[@]}"; do
         echo "    • Hook: $hook"

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import fcntl
+import getpass
 import json
 import os
 import re
@@ -116,7 +117,7 @@ def connect(dbname: str, pg_config: dict[str, str | int]) -> psycopg2.extensions
     env["PGHOST"] = str(pg_config["host"])
     env["PGPORT"] = str(pg_config["port"])
     env["PGDATABASE"] = dbname
-    env["PGUSER"] = env.get("PGUSER", os.environ.get("USER", str(os.getuid())))
+    env["PGUSER"] = env.get("PGUSER", getpass.getuser())
     env.pop("PGPASSWORD", None)
 
     try:

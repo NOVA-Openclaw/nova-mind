@@ -8,6 +8,7 @@ behaviour, failure modes, and flock mutual exclusion with generate-daily-log.py.
 from __future__ import annotations
 
 import datetime
+import getpass
 import importlib.util
 import os
 import re
@@ -30,6 +31,15 @@ spec = importlib.util.spec_from_file_location("completion_log_reconcile", SCRIPT
 completion_log_reconcile = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(completion_log_reconcile)
 
+GENERATE_SCRIPT_PATH = (
+    Path(__file__).parent.parent / "memory" / "scripts" / "generate-daily-log.py"
+)
+generate_spec = importlib.util.spec_from_file_location(
+    "generate_daily_log", GENERATE_SCRIPT_PATH
+)
+generate_daily_log = importlib.util.module_from_spec(generate_spec)
+generate_spec.loader.exec_module(generate_daily_log)
+
 ReconcileError = completion_log_reconcile.ReconcileError
 
 # Force a fresh real psycopg2 import in case another test mocked it.
@@ -45,9 +55,9 @@ MIGRATION_PATH = REPO_ROOT / "memory" / "migrations" / "087_completion_log_water
 
 
 def _admin_conn():
-    """Connect to the postgres maintenance database as nova."""
+    """Connect to the postgres maintenance database as the current OS user."""
     os.environ.pop("PGPASSWORD", None)
-    return psycopg2.connect(host="localhost", user="nova", dbname="postgres")
+    return psycopg2.connect(host="localhost", user=getpass.getuser(), dbname="postgres")
 
 
 def _create_test_db() -> str:
@@ -127,9 +137,9 @@ def _apply_migration(conn: psycopg2.extensions.connection) -> None:
 
 
 def _test_conn(db_name: str):
-    """Connect to the test database as nova."""
+    """Connect to the test database as the current OS user."""
     os.environ.pop("PGPASSWORD", None)
-    return psycopg2.connect(host="localhost", user="nova", dbname=db_name)
+    return psycopg2.connect(host="localhost", user=getpass.getuser(), dbname=db_name)
 
 
 @pytest.fixture
@@ -155,8 +165,8 @@ def workspace(tmp_path, monkeypatch):
     monkeypatch.setenv("OPENCLAW_WORKSPACE", str(ws))
     # Ensure PGPASSWORD is not inherited from the gateway.
     monkeypatch.delenv("PGPASSWORD", raising=False)
-    # Run the script as nova so it can write to the test DB.
-    monkeypatch.setenv("PGUSER", "nova")
+    # Run the script as the current OS user so it can write to the test DB.
+    monkeypatch.setenv("PGUSER", getpass.getuser())
     return ws
 
 
@@ -424,6 +434,53 @@ class TestCallOrdering:
         assert order == ["marker_present", "append_line", "cursor.execute"]
 
 
+class TestConnectUserResolution:
+    """Regression for the cron-env USER fallback bug (nova-mind#561)."""
+
+    def test_cron_env_without_user_resolves_to_name_not_uid(self, monkeypatch):
+        """Real cron does not set USER; PGUSER must resolve to a name, not a UID."""
+        # Strip the environment variables that getpass.getuser() consults first.
+        for var in ("USER", "LOGNAME", "LNAME", "USERNAME"):
+            monkeypatch.delenv(var, raising=False)
+
+        with mock.patch.object(
+            completion_log_reconcile.psycopg2, "connect"
+        ) as fake_connect:
+            completion_log_reconcile.connect(
+                "test_db", {"host": "localhost", "port": 5432, "database": "test"}
+            )
+
+        assert fake_connect.called
+        _, kwargs = fake_connect.call_args
+        numeric_uid = str(os.getuid())
+        assert kwargs["user"] != numeric_uid, (
+            f"PGUSER resolved to numeric UID {kwargs['user']!r}"
+        )
+        assert re.match(r"^[A-Za-z_][A-Za-z0-9_-]*$", kwargs["user"]), (
+            f"PGUSER {kwargs['user']!r} does not look like a username"
+        )
+
+    def test_generate_daily_log_connect_also_resolves_name_not_uid(self, monkeypatch):
+        """generate-daily-log.py must use the same UID-safe fallback."""
+        for var in ("USER", "LOGNAME", "LNAME", "USERNAME"):
+            monkeypatch.delenv(var, raising=False)
+
+        with mock.patch.object(generate_daily_log.psycopg2, "connect") as fake_connect:
+            generate_daily_log.connect(
+                "test_db", {"host": "localhost", "port": 5432, "database": "test"}
+            )
+
+        assert fake_connect.called
+        _, kwargs = fake_connect.call_args
+        numeric_uid = str(os.getuid())
+        assert kwargs["user"] != numeric_uid, (
+            f"PGUSER resolved to numeric UID {kwargs['user']!r}"
+        )
+        assert re.match(r"^[A-Za-z_][A-Za-z0-9_-]*$", kwargs["user"]), (
+            f"PGUSER {kwargs['user']!r} does not look like a username"
+        )
+
+
 class TestDailyLogLock:
     def test_mutual_exclusion(self, workspace):
         lock_file = workspace / "memory" / ".daily-log.lock"
@@ -548,7 +605,7 @@ class TestReconcile:
     def _run_script(self, workspace: Path, db_name: str, *extra_args: str) -> subprocess.CompletedProcess:
         env = os.environ.copy()
         env["OPENCLAW_WORKSPACE"] = str(workspace)
-        env["PGUSER"] = "nova"
+        env["PGUSER"] = getpass.getuser()
         env.pop("PGPASSWORD", None)
         return subprocess.run(
             [sys.executable, str(SCRIPT_PATH), "--database", db_name, *extra_args],
@@ -760,7 +817,7 @@ class TestReconcile:
                 raise OSError("injected crash after append")
 
             monkeypatch.setenv("OPENCLAW_WORKSPACE", str(workspace))
-            monkeypatch.setenv("PGUSER", "nova")
+            monkeypatch.setenv("PGUSER", getpass.getuser())
             monkeypatch.delenv("PGPASSWORD", raising=False)
 
             # First invocation: append succeeds, DB update never runs.
@@ -1104,7 +1161,7 @@ class TestReconcile:
         ws = tmp_path / "fresh_workspace"
         ws.mkdir()
         monkeypatch.setenv("OPENCLAW_WORKSPACE", str(ws))
-        monkeypatch.setenv("PGUSER", "nova")
+        monkeypatch.setenv("PGUSER", getpass.getuser())
         monkeypatch.delenv("PGPASSWORD", raising=False)
         conn = _test_conn(test_db)
         try:
@@ -1274,7 +1331,7 @@ class TestFlockMutualExclusion:
     def _run_script(self, workspace: Path, db_name: str) -> subprocess.CompletedProcess:
         env = os.environ.copy()
         env["OPENCLAW_WORKSPACE"] = str(workspace)
-        env["PGUSER"] = "nova"
+        env["PGUSER"] = getpass.getuser()
         env.pop("PGPASSWORD", None)
         return subprocess.run(
             [sys.executable, str(SCRIPT_PATH), "--database", db_name],
@@ -1384,7 +1441,7 @@ os.close(fd)
         try:
             env = os.environ.copy()
             env["OPENCLAW_WORKSPACE"] = str(workspace)
-            env["PGUSER"] = "nova"
+            env["PGUSER"] = getpass.getuser()
             env.pop("PGPASSWORD", None)
             start = time.time()
             result = subprocess.run(

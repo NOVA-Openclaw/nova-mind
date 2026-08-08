@@ -18,6 +18,7 @@ import tempfile
 import threading
 import time
 import uuid
+from contextlib import contextmanager
 from pathlib import Path
 from unittest import mock
 
@@ -366,6 +367,61 @@ class TestMarkerPresent:
             completion_log_reconcile.WORKFLOW_RUNS_MARKER, 1
         )
         assert completion_log_reconcile.marker_present(pattern, [file1]) is False
+
+
+class TestCallOrdering:
+    """TC-561-07: marker grep → file append → DB UPDATE ordering."""
+
+    def test_marker_check_before_append_before_update(self, monkeypatch, tmp_path):
+        order: list[str] = []
+        ws = tmp_path / "workspace"
+        (ws / "memory").mkdir(parents=True)
+
+        monkeypatch.setattr(
+            completion_log_reconcile,
+            "marker_present",
+            lambda pattern, paths: order.append("marker_present") or False,
+        )
+        monkeypatch.setattr(
+            completion_log_reconcile,
+            "append_line",
+            lambda path, line: order.append("append_line"),
+        )
+
+        @contextmanager
+        def fake_lock(workspace_param):
+            yield
+
+        monkeypatch.setattr(completion_log_reconcile, "daily_log_lock", fake_lock)
+
+        fake_conn = mock.MagicMock()
+        fake_cur = fake_conn.cursor.return_value.__enter__.return_value
+        fake_cur.execute.side_effect = lambda query, params=None: order.append(
+            "cursor.execute"
+        )
+        monkeypatch.setattr(
+            completion_log_reconcile, "connect", lambda dbname, pg_config: fake_conn
+        )
+
+        ts = datetime.datetime(2026, 8, 8, 10, 0, 0, tzinfo=datetime.timezone.utc)
+        row = {
+            "id": 1,
+            "kind": "subagent_session",
+            "description": "ordering test",
+            "status": "done",
+            "completed_at": ts,
+            "last_checked_at": None,
+            "created_at": ts,
+        }
+        monkeypatch.setattr(
+            completion_log_reconcile, "fetch_eligible_rows", lambda conn: ([row], [])
+        )
+
+        pg_config = {"host": "localhost", "port": 5432, "database": "test"}
+        appended = completion_log_reconcile.reconcile(pg_config, "test", ws, False)
+
+        assert appended == 1
+        assert order == ["marker_present", "append_line", "cursor.execute"]
 
 
 class TestDailyLogLock:

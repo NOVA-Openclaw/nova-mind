@@ -277,7 +277,7 @@ library — see `ARCHITECTURE-entity-resolver.md` for details.
 ```bash
 cd lib/entity-resolver
 npm install
-npx tsx test.ts  # Verify functionality (there is no `npm test` script in package.json)
+npm test  # Runs `tsx test.ts --irc-tests` (see package.json `scripts.test`)
 ```
 
 ### Certificate Authority Setup

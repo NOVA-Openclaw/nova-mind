@@ -79,8 +79,8 @@ When values conflict, which takes precedence?
 - Distinct from *detecting* user mood (that's Entity Relations) — this is NOVA's *own* mood
 
 ### 2. NOVA Multiuser System (Project #28)
-**Status:** Active  
-**Focus:** User-specific features and management.
+**Status:** Abandoned  
+**Focus:** User-specific features and management. Superseded by the NOVA Relationships System (Project #29), which merged this project's scope with the original Entity Relations System — see `relationships/README.md`.
 
 **Scope:** Everything specific to *users* (entities with `is_user = true`):
 - User onboarding and lifecycle
@@ -93,7 +93,7 @@ When values conflict, which takes precedence?
 **Note:** Users are a *class* of entity. Generic entity profiling lives in the Entity Relations System.
 
 ### 3. NOVA Entity Relations System (Project #29)
-**Status:** Active  
+**Status:** Active (project since renamed **NOVA Relationships** in the `agents`/`projects` table — it absorbed the abandoned NOVA Multiuser System's scope; see `relationships/README.md`)  
 **Focus:** How NOVA perceives, organizes, recalls, and weighs entity data across ALL entity types.
 
 **Note:** Applies to all entities (people, organizations, AIs, etc.), not just users.

@@ -29,17 +29,19 @@ All five subsystems share a single PostgreSQL database (`{username}_memory`) and
 
 ### Memory Maintenance
 
-Memory maintenance is handled by a **unified** script `memory/templates/memory-maintenance.py` (deployed to `~/.openclaw/scripts/memory-maintenance.py` by `agent-install.sh`) that replaces the separate embedding scripts (`embed-full-database.py`, `embed-memories.py`, `embed-research.py`, `embed-library.py`) and the previous memory maintenance logic. It runs as a 9-phase pipeline:
+Memory maintenance is handled by a **unified** script `memory/templates/memory-maintenance.py` (deployed to `~/.openclaw/scripts/memory-maintenance.py` by `agent-install.sh`) that replaces the separate embedding scripts (`embed-full-database.py`, `embed-memories.py`, `embed-research.py`, `embed-library.py`) and the previous memory maintenance logic. It runs as a pipeline of these steps, in order:
 
 1. **Cooldown check** — 4-hour gate prevents redundant runs (`--force` to bypass, `--state-file` override)
-2. **Embed** — Generates semantic embeddings across all table types (entities, facts, lessons, events, research, library, tasks, blog posts, etc.); memory files are split with a paragraph/section-boundary-aware chunker before embedding (see `memory/README.md#text-chunking`)
-3. **Cross-key consolidation** — pgvector cosine similarity ≥0.92
-4. **Same-key dedup** — pg_trgm similarity, 3-tier (high/medium/low)
-5. **Confidence decay** — Exponential, durability-based rates
-6. **Ghost entity cleanup** — Pattern-based, zero-fact orphans, low-fact review
-7. **Entity-level dedup** — ≥80% auto-merge via `merge_entities()`, <80% review queue
-8. **Clean orphaned embeddings**
-9. **Archive & purge** low-confidence facts
+2. **Lessons deduplication** — Runs before embedding to avoid wasted embed calls on rows about to be merged: exact duplicates keep the oldest row, near-duplicates (similarity ≥0.80) go to a review report (`--skip-lesson-dedup` to skip)
+3. **Embed** — Generates semantic embeddings across all table types (entities, facts, lessons, events, research, library, tasks, blog posts, etc.); memory files are split with a paragraph/section-boundary-aware chunker before embedding (see `memory/README.md#text-chunking`)
+4. **Cross-key consolidation** — pgvector cosine similarity ≥0.92
+5. **Same-key dedup** — pg_trgm similarity, 3-tier (high/medium/low)
+6. **Confidence decay** — Exponential, durability-based rates
+7. **Ghost entity cleanup** — Pattern-based, zero-fact orphans, low-fact review
+8. **Entity-level dedup** — ≥80% auto-merge via `merge_entities()`, <80% review queue
+9. **Re-embed modified facts** — Facts touched by consolidation/dedup above get stale embeddings deleted and regenerated
+10. **Clean orphaned embeddings**
+11. **Archive & purge** low-confidence facts (archive facts below the confidence floor, then hard-delete archived rows older than 1 year)
 
 **Flags:** `--dry-run`, `--verbose`, `--force`, `--state-file`, `--skip-embed`, `--skip-consolidation`, `--skip-dedup`, `--skip-decay`, `--skip-ghost-cleanup`, `--skip-entity-dedup`, `--skip-lesson-dedup`, `--reindex-files` (force a full re-chunk/re-embed of memory files — see `memory/README.md#text-chunking`)
 
@@ -96,6 +98,8 @@ The installer is **idempotent** — safe to run multiple times. It installs all 
 | `--verify-only` | Check installation without modifying anything |
 | `--force` | Force overwrite existing files |
 | `--no-restart` | Skip automatic gateway restart |
+| `--no-cron` | Skip installation of all cron-installed scripts (daily-log generation, D100 roll announcer, Hermes comms-check, completion-log-reconcile) |
+| `--regenerate-agents-json` | Backup and regenerate `~/.openclaw/agents.json` from the database |
 | `--database NAME` / `-d NAME` | Override database name (default: `${USER}_memory`) |
 
 See subsystem READMEs for detailed documentation:

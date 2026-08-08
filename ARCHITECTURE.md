@@ -354,11 +354,11 @@ The installer enforces this order automatically.
 
 - **Session‑Aware Caching:** Entity resolver caches per session (30‑minute TTL) to reduce database load.
 - **Embedding Batch Processing:** Embedding scripts run incrementally via cron to avoid overwhelming Ollama.
-- **Connection Pooling:** All PostgreSQL clients use connection pools (default size 5).
+- **Connection Pooling:** PostgreSQL clients use connection pools sized per-service (`turn-context` plugin and the `entity-resolver` library use `max: 5`; the `self-awareness` metacognition plugin uses a smaller `max: 3`) rather than one shared default.
 - **Vector Indexes:** `memory_embeddings` uses PostgreSQL `pgvector` indexes for fast similarity search.
 - **Turn-Context Plugin Context Budget:** The `turn-context` plugin budgets ~1000 tokens for context injection. High-confidence results (>0.7 threshold) get full content injected; lower-confidence results get a summary only. Configurable via `SEMANTIC_RECALL_TOKEN_BUDGET` and `SEMANTIC_RECALL_HIGH_CONFIDENCE` environment variables.
 - **Semantic Recall Priority Weighting:** Results are scored as `vector_similarity × priority_weight` from the `memory_type_priorities` table. Workflows (1.50) and lessons (1.30) surface before entity_facts (1.00) and daily_logs (0.90).
-- **Ghost Embeddings (⚠️ Known Failure Mode):** Orphaned vectors in `memory_embeddings` from deleted source records surface stale information with high confidence. Detection requires manual LEFT JOIN queries. No automatic cleanup exists yet — this is the most dangerous class of memory corruption.
+- **Ghost Embeddings (⚠️ Partial Coverage):** Orphaned vectors in `memory_embeddings` from deleted source records surface stale information with high confidence. `memory-maintenance.py`'s "Clean orphaned embeddings" phase (`clean_orphaned_embeddings()`) automatically deletes orphans for `source_type IN ('entity_fact', 'entity')` on every run — the original ghost-embedding gap for those two types (#216-adjacent) is closed. However, `memory_embeddings` rows for other source types (`lesson`, `library`, and any other `source_type` used by the chunked-file/research embedding paths) have **no automatic orphan cleanup** and still require manual LEFT JOIN queries to detect. This narrower gap remains the most likely residual class of memory corruption.
 
 ## Security Model
 

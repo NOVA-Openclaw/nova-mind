@@ -1,5 +1,18 @@
 # Shell Environment Setup
 
+> ⚠️ **Status: broken on current OpenClaw for `exec`-tool contexts (tracked in [nova-mind#398](https://github.com/NOVA-Openclaw/nova-mind/issues/398)).**
+> OpenClaw's host-env-security hardening now strips `BASH_ENV`, `ENV`, and `CDPATH`
+> from the environment before spawning `exec` commands, and runs the shell as
+> `bash --noprofile --norc -c "command"` — so the `BASH_ENV` mechanism described below
+> no longer causes shell functions/aliases to load in the `exec` tool's non-interactive
+> shells (verified live: `type gh` and `BASH_ENV=~/.bash_env bash -c 'type gh'` both
+> resolve to the `/usr/bin/gh` binary, not a shell function, on a fully-installed host).
+> The mechanism may still work for genuinely interactive shells or other non-OpenClaw
+> invocation paths where `BASH_ENV` isn't stripped. Do not rely on this setup to make
+> shell functions available inside OpenClaw `exec` calls until #398 lands a fix
+> (e.g., a `BASH_ENV`-independent drop-in). The rest of this document describes the
+> original (currently non-functional, for `exec`) design.
+
 The NOVA Cognition System includes a shell environment setup feature that enables shell functions and aliases to work correctly in both interactive and non-interactive contexts. This is essential for proper operation of SE workflow commands and git operations within OpenClaw's execution environment.
 
 ## What Gets Installed and Why

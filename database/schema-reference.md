@@ -67,6 +67,12 @@
 >   Views section for an oversight.
 > - Do not hand-patch further — this note exists so the next regeneration pass has a
 >   complete starting checklist across all four audit passes (#414, #474, #485, #506).
+>
+> **SE Run #608 Step 9 documentation audit (2026-08-08) — additional drift found, corrected below:**
+> - `social_interactions` column count corrected 16→17 — a `kind` column (`text DEFAULT 'mention' NOT NULL`, `CHECK (kind IN ('mention', 'engagement_candidate'))`) exists live in `database/schema.sql`'s declarative `CREATE TABLE` but was not reflected in the count below. The table itself is still confirmed live (see the #506 note above); only the column count was stale.
+> - `motivation_d100` (18 columns, per the #506 note above) and `user_domains` (6 columns) are declared in `database/schema.sql` but are still missing as rows from the listing below — confirmed again during this pass, not yet added. Flagged for the next full regeneration.
+> - `asset_classes`, `price_cache_v2`, and `portfolio_snapshots` (listed below, portfolio-domain tables) and `agent_chat`/`agent_chat_processed` (moved out per #320, see the top-of-file note) remain absent from `database/schema.sql` — consistent with prior audits, no new drift.
+> - `entity_credibility` remains undeclared in `database/schema.sql` or any migration file (per the #506 note above) — still flagged for the Database/schema.sql owner, not re-flagged as a new item here.
 
 ## Tables
 
@@ -163,7 +169,7 @@
 | shopping_preferences | - | 8 |
 | shopping_wishlist | - | 11 |
 | skills | Skill definitions. Override precedence: WORKSPACE > DOMAIN > MANAGED > BUNDLED. See get_agent_skills(). | 24 |
-| social_interactions | Legacy inbound X/Nostr mention/DM lifecycle. Migration 164 (`cognition/scripts/migrations/164-fold-social-interactions-to-comms-items.sql`) folds this into `comms_items`/`comms_responses` and drops this table — **still live as of the #506 audit (2026-07-20); the migration has not yet been run against production.** Do not remove this row again until the migration is confirmed applied. | 16 |
+| social_interactions | Legacy inbound X/Nostr mention/DM lifecycle. Migration 164 (`cognition/scripts/migrations/164-fold-social-interactions-to-comms-items.sql`) folds this into `comms_items`/`comms_responses` and drops this table — **still live as of the #506 audit (2026-07-20); the migration has not yet been run against production.** Do not remove this row again until the migration is confirmed applied. | 17 |
 | tags | - | 5 |
 | tasks | Task tracking. NOVA can create, update status, assign. Check before starting work. | 23 |
 | tools | Tool usage notes. Override: WORKSPACE > DOMAIN > MANAGED > BUNDLED. See get_agent_tools(). | 13 |
@@ -171,8 +177,9 @@
 | user_insights | Human-contributed insights — observations, realizations, and wisdom shared by users. Primarily for users to save important insights. Managed by any agent on behalf of the contributing user. | 8 |
 | vehicles | Vehicle tracking and management. Cars, bikes, boats, planes owned or used. | 13 |
 | vocabulary | Custom vocabulary for speech recognition. Add names, terms, jargon as encountered. | 8 |
+| work_queue | Active-work watch queue: entries for in-flight subagent sessions, PRs, long-running processes. A 5m cron sweeps pending entries, checks live status, and wakes the owner session when items complete. Add an entry whenever dispatching fire-and-forget work; the sweeper closes the loop. Designed 2026-07-25 per I)ruid to replace ad-hoc dead-man timers. | 15 |
 | work_tags | - | 3 |
-| workflow_runs | Tracks individual executions of workflows. Each row is one run from opening bookend to closing bookend. Updated as the orchestrator advances through steps. | 10 |
+| workflow_runs | Tracks individual executions of workflows. Each row is one run from opening bookend to closing bookend. Updated as the orchestrator advances through steps. | 11 |
 | workflow_steps | Ordered steps in a workflow with agent assignments and deliverable specifications | 14 |
 | workflows | Defines multi-agent workflows with ordered steps and deliverable handoffs | 10 |
 | works | - | 14 |

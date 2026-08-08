@@ -79,6 +79,8 @@ Flexible key-value storage for any fact about an entity.
 | `decay_rate` | real | Confidence decay rate |
 | `durability` | varchar(20) | `permanent`, `long_term`, `short_term`, or `ephemeral` — replaces the old `data_type` column |
 | `category` | text | Free-form category, default `'observation'` |
+| `assertion_intent` | assertion_intent_enum | `asserted` (default), `speculative`, `fictional`, `disclaimed`, or `hypothetical` — how confidently/literally the fact was stated |
+| `mutability_class` | mutability_class_enum | `immutable`, `slow_changing` (default), or `stateful` — how often the fact is expected to change |
 | `expires` | timestamptz | Optional expiration for ephemeral facts |
 | `source_channel_transcript_id` | bigint | FK to `channel_transcripts` — source attribution (replaces the old `source`/`source_entity_id` columns) |
 | `source_channel_session_id` | bigint | FK to `channel_sessions` — source attribution |

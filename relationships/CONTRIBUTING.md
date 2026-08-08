@@ -45,7 +45,7 @@ cd ~/.openclaw/workspace/nova-mind
 ```bash
 cd lib/entity-resolver
 npm install
-npx tsx test.ts  # Verify everything works (there is no `npm test`/`npm run lint` script in package.json)
+npm test  # Runs `tsx test.ts --irc-tests` (there is no `npm run lint` script in package.json)
 ```
 
 ### Development Workflow
@@ -63,7 +63,7 @@ git checkout -b feature/your-feature-name
 3. **Test Changes**
 ```bash
 cd lib/entity-resolver
-npx tsx test.ts  # there is no `npm test`/`npm run lint` script defined in package.json
+npm test  # runs `tsx test.ts --irc-tests` (there is no `npm run lint` script defined in package.json)
 ```
 
 4. **Commit Changes**

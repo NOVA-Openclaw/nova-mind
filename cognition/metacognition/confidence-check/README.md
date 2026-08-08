@@ -169,7 +169,7 @@ Claude-style assistant messages with content arrays (`[{ type: "text", text: "..
 ```
 confidence-check/
 ├── src/
-│   └── index.ts             # Plugin source (single file, ~550 lines)
+│   └── index.ts             # Plugin source (single file, ~930 lines)
 ├── dist/
 │   └── index.js             # Compiled output (loaded by gateway)
 ├── package.json             # npm metadata and build scripts

@@ -1159,7 +1159,7 @@ State is stored in `~/.openclaw/memory-catchup-state.json`.
 
 ## Daily Log Generation (#397)
 
-As of nova-mind#397, daily memory logs (`memory/YYYY-MM-DD.md`) are no longer purely hand-written. `memory/scripts/generate-daily-log.py` runs from cron (installed by `agent-install.sh`, default-on) and writes a system-activity summary (agent_chat counts, workflow_runs, lessons, events, tasks) into a delimited generated block at the top of each day's file, leaving any agent-written narrative elsewhere in the file untouched. See [Daily Log Generation](docs/daily-log-generation.md) for the full marker contract, flags, cron schedule/opt-out, and backfill runbook for gap days.
+As of nova-mind#397, daily memory logs (`memory/YYYY-MM-DD.md`) are no longer purely hand-written. `memory/scripts/generate-daily-log.py` runs from cron (installed by `agent-install.sh`, default-on) and writes a system-activity summary (agent_chat counts, workflow_runs, lessons, events, tasks) into a delimited generated block at the top of each day's file, leaving any agent-written narrative elsewhere in the file untouched. As of nova-mind#561, a second cron script, `memory/scripts/completion-log-reconcile.py`, runs every 5 minutes to append completion-side lines for closed `work_queue` rows and completed `workflow_runs` rows; both scripts share an advisory `flock` to avoid clobbering each other's writes. See [Daily Log Generation](docs/daily-log-generation.md) for the full marker contract, flags, cron schedule/opt-out, and backfill runbook for gap days.
 
 ## Context Window (2026-02-07)
 

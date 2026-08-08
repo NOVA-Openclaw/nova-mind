@@ -59,6 +59,19 @@ The installer is **idempotent** — safe to run multiple times. Use `./agent-ins
 
 ## Recent Changes
 
+### 2026-08-08: Completion Log Reconcile + Cron-Env PGUSER Fix (#561, #562, #564)
+
+Added `memory/scripts/completion-log-reconcile.py`, a deterministic, LLM-free companion to `generate-daily-log.py` that appends completion-side daily-log lines for closed `work_queue` rows and completed `workflow_runs` rows, run from cron every 5 minutes. Full docs: `memory/docs/daily-log-generation.md#completion-log-reconcile-nova-mind561`.
+
+**What Changed:**
+- `memory/scripts/completion-log-reconcile.py` — new script (`--database`, `--dry-run` flags); two-phase idempotent append with crash recovery; shares an advisory `flock` with `generate-daily-log.py`
+- `memory/scripts/generate-daily-log.py` — surgical companion change to take the same shared `flock` around its read/write/rename critical section
+- `memory/migrations/087_completion_log_watermark.sql` — adds `completion_logged_at timestamptz` to `work_queue` and `workflow_runs`, seeded for already-closed rows at deploy time
+- `agent-install.sh` — installs the script plus a default-on `*/5 * * * *` cron entry; `--no-cron` and `--verify-only` now cover this script as well as `generate-daily-log.py`
+- `database/schema.sql`, `database/schema-reference.md` — updated with the new `completion_logged_at` column on both tables
+- `tests/test_completion_log_reconcile.py` (64 tests) — new test coverage, including `TestConnectUserResolution` and `TestFlockMutualExclusion`
+- **Fix (#564):** both scripts' `connect()` now resolves PGUSER via `getpass.getuser()` instead of `os.environ.get("USER", str(os.getuid()))` — the old fallback resolved to a literal numeric UID string under Debian cron (which does not set `USER`), causing every cron invocation of `completion-log-reconcile.py` to fail with `fe_sendauth: no password supplied`
+
 ### 2026-07-05: Script-Generated Daily Memory Log (#397)
 
 Added `memory/scripts/generate-daily-log.py`, which generates/updates the current day's `memory/YYYY-MM-DD.md` from live database state (agent_chat activity, workflow_runs, lessons, events, tasks) inside a delimited generated block, preserving agent-written narrative outside the markers byte-for-byte. Full docs: `memory/docs/daily-log-generation.md`.
@@ -250,7 +263,8 @@ Created `install.sh` - a fully idempotent installer that:
 - Verifies Python dependencies (psycopg2, anthropic, openai)
 - Reports missing dependencies with install command
 - Installs `generate-daily-log.py` plus two cron entries (nightly + intraday) by default — opt out with `--no-cron`. See [Daily Log Generation](docs/daily-log-generation.md).
-- Deploys `memory/scripts/extraction-replay.sh` (nova-mind#485) to `~/.openclaw/scripts/` via the generic scripts-copy step above — no dedicated cron entry is installed for it (unlike `generate-daily-log.py`); add one manually if scheduled replay is desired. See [Memory Extraction Pipeline](docs/memory-extraction-pipeline.md#1a-failure-handling-extraction_failures-dead-letter-table--replay-485).
+- Installs `completion-log-reconcile.py` (nova-mind#561/#562) plus a default-on `*/5 * * * *` cron entry — also covered by `--no-cron` and `--verify-only`. See [Completion Log Reconcile](docs/daily-log-generation.md#completion-log-reconcile-nova-mind561).
+- Deploys `memory/scripts/extraction-replay.sh` (nova-mind#485) to `~/.openclaw/scripts/` via the generic scripts-copy step above — no dedicated cron entry is installed for it (unlike `generate-daily-log.py`/`completion-log-reconcile.py`); add one manually if scheduled replay is desired. See [Memory Extraction Pipeline](docs/memory-extraction-pipeline.md#1a-failure-handling-extraction_failures-dead-letter-table--replay-485).
 
 #### Verification
 - Tests database connection

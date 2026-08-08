@@ -48,7 +48,7 @@ Nova-memory is a PostgreSQL-based long-term memory system for AI assistants that
 - [Database Aliasing Guide](DATABASE-ALIASING.md) - pgbouncer setup for multi-agent database sharing
 - [Memory Extraction Pipeline](memory-extraction-pipeline.md) - Automated conversation processing
 - [Semantic Search Guide](semantic-search-guide.md) - Vector embeddings and intelligent queries
-- [Daily Log Generation](daily-log-generation.md) - Script-generated daily memory log summaries (#397)
+- [Daily Log Generation](daily-log-generation.md) - Script-generated daily memory log summaries (#397), plus a deterministic completion-log reconcile pass for `work_queue`/`workflow_runs` (see [Completion Log Reconcile](daily-log-generation.md#completion-log-reconcile-nova-mind561), #561)
 
 ### 🔧 Advanced Topics
 > **Note:** The docs below (Librarian Agent Deployment, Access Control Implementation, Performance Tuning) are referenced here as planned topics but have not been written yet — no corresponding files exist in `memory/docs/`. Treat these as a roadmap note, not working links.

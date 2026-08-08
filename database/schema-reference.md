@@ -67,6 +67,12 @@
 >   Views section for an oversight.
 > - Do not hand-patch further — this note exists so the next regeneration pass has a
 >   complete starting checklist across all four audit passes (#414, #474, #485, #506).
+>
+> **SE Run #608 Step 9 documentation audit (2026-08-08) — additional drift found, corrected below:**
+> - `social_interactions` column count corrected 16→17 — a `kind` column (`text DEFAULT 'mention' NOT NULL`, `CHECK (kind IN ('mention', 'engagement_candidate'))`) exists live in `database/schema.sql`'s declarative `CREATE TABLE` but was not reflected in the count below. The table itself is still confirmed live (see the #506 note above); only the column count was stale.
+> - `motivation_d100` (18 columns, per the #506 note above) and `user_domains` (6 columns) are declared in `database/schema.sql` but are still missing as rows from the listing below — confirmed again during this pass, not yet added. Flagged for the next full regeneration.
+> - `asset_classes`, `price_cache_v2`, and `portfolio_snapshots` (listed below, portfolio-domain tables) and `agent_chat`/`agent_chat_processed` (moved out per #320, see the top-of-file note) remain absent from `database/schema.sql` — consistent with prior audits, no new drift.
+> - `entity_credibility` remains undeclared in `database/schema.sql` or any migration file (per the #506 note above) — still flagged for the Database/schema.sql owner, not re-flagged as a new item here.
 
 ## Tables
 
@@ -163,7 +169,7 @@
 | shopping_preferences | - | 8 |
 | shopping_wishlist | - | 11 |
 | skills | Skill definitions. Override precedence: WORKSPACE > DOMAIN > MANAGED > BUNDLED. See get_agent_skills(). | 24 |
-| social_interactions | Legacy inbound X/Nostr mention/DM lifecycle. Migration 164 (`cognition/scripts/migrations/164-fold-social-interactions-to-comms-items.sql`) folds this into `comms_items`/`comms_responses` and drops this table — **still live as of the #506 audit (2026-07-20); the migration has not yet been run against production.** Do not remove this row again until the migration is confirmed applied. | 16 |
+| social_interactions | Legacy inbound X/Nostr mention/DM lifecycle. Migration 164 (`cognition/scripts/migrations/164-fold-social-interactions-to-comms-items.sql`) folds this into `comms_items`/`comms_responses` and drops this table — **still live as of the #506 audit (2026-07-20); the migration has not yet been run against production.** Do not remove this row again until the migration is confirmed applied. | 17 |
 | tags | - | 5 |
 | tasks | Task tracking. NOVA can create, update status, assign. Check before starting work. | 23 |
 | tools | Tool usage notes. Override: WORKSPACE > DOMAIN > MANAGED > BUNDLED. See get_agent_tools(). | 13 |

@@ -83,16 +83,34 @@ This ensures research data is structured, deduplicated, citation-tracked, and ve
 
 ### Current Problem Set
 
-| Problem | Category | Sessions | Time Invested |
-|---------|----------|----------|---------------|
-| P vs NP | mathematics/computer-science | 11 | 36 min |
-| Riemann Hypothesis | mathematics | 5 | 6 min |
-| Climate Change Mitigation | climate/policy | 17 | 48 min |
-| Protein Folding Prediction | biology/AI | 7 | 12 min |
-| Consciousness Hard Problem | philosophy/neuroscience | 10 | 30 min |
-| Unified Field Theory | physics | 7 | 12 min |
-| Aging and Longevity | biology/medicine | 11 | 27 min |
-| AI Alignment | AI/ethics | 27 | 72 min |
+The problem set grows over time and session/time counters increment on every
+work session, so treat any static table here as a stale snapshot. For
+current figures, run:
+
+```sql
+SELECT name, category, work_sessions, total_time_spent_minutes
+FROM unsolved_problems ORDER BY id;
+```
+
+As of this writing there are 13 problems tracked (the original 8 below plus
+Langlands Program, Twin Prime Conjecture, Collatz Conjecture, Goldbach's
+Conjecture, and Navier-Stokes Existence and Smoothness):
+
+| Problem | Category |
+|---------|----------|
+| P vs NP | mathematics/computer-science |
+| Riemann Hypothesis | mathematics |
+| Climate Change Mitigation | climate/policy |
+| Protein Folding Prediction | biology/AI |
+| Consciousness Hard Problem | philosophy/neuroscience |
+| Unified Field Theory | physics |
+| Aging and Longevity | biology/medicine |
+| AI Alignment | AI/ethics |
+| Langlands Program | mathematics |
+| Twin Prime Conjecture | mathematics |
+| Collatz Conjecture | mathematics |
+| Goldbach's Conjecture | mathematics |
+| Navier-Stokes Existence and Smoothness | mathematics/physics |
 
 ## Configuration
 

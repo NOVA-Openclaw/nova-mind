@@ -18,12 +18,14 @@
 #### Changed
 - **`generate-daily-log.py` companion flock** (nova-mind#561) — Small, surgical change to wrap the existing read/modify/atomic-rename critical section with the same shared advisory lock used by `completion-log-reconcile.py`, closing the deterministic race at 00:05/06:00/12:00/18:00 UTC cron boundaries.
 - **`database/schema.sql` + `database/schema-reference.md`** (nova-mind#561) — Declarative schema and table listing updated to include the new `completion_logged_at` column on both tables, matching the migration.
+- **`agent-install.sh` crontab wiring for `completion-log-reconcile.py`** (nova-mind#562) — Installs/verifies an idempotent `*/5 * * * *` cron entry that runs the LLM-free script every few minutes, appending output to `~/.openclaw/logs/completion-log-reconcile.log`. Mirrors the existing `generate-daily-log.py` idempotent marker-grep pattern and includes `--no-cron` / `--verify-only` support.
 
 #### Tests
 - `tests/test_completion_log_reconcile.py` (nova-mind#561) — 60+ automated cases covering line formatting, sanitization, watermark fallback, idempotency, crash recovery, midnight-boundary dating, status decision tables, migration idempotency (including the amended TC-561-26 semantics), failure modes (permission errors, unreachable DB, DB permission-denied), flock mutual exclusion, and the TC-561-35 numeric-prefix collision regression for both tables.
 
 #### Issues Closed
 - #561 — completion-log-reconcile: deterministic daily-log completion lines for work_queue + workflow_runs
+- #562 — completion-log-reconcile.py: no crontab/sweeper invocation wiring — feature is inert in production
 
 ### Batch: append-run-note-557 (Issue #557)
 

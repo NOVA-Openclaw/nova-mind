@@ -171,7 +171,7 @@
 | user_insights | Human-contributed insights — observations, realizations, and wisdom shared by users. Primarily for users to save important insights. Managed by any agent on behalf of the contributing user. | 8 |
 | vehicles | Vehicle tracking and management. Cars, bikes, boats, planes owned or used. | 13 |
 | vocabulary | Custom vocabulary for speech recognition. Add names, terms, jargon as encountered. | 8 |
-| work_queue | Active-work watch queue: entries for in-flight subagent sessions, PRs, long-running processes. A 5m cron sweeps pending entries, checks live status, and wakes the owner session when items complete. Add an entry whenever dispatching fire-and-forget work; the sweeper closes the loop. Designed 2026-07-25 per I)ruid to replace ad-hoc dead-man timers. | 14 |
+| work_queue | Active-work watch queue: entries for in-flight subagent sessions, PRs, long-running processes. A 5m cron sweeps pending entries, checks live status, and wakes the owner session when items complete. Add an entry whenever dispatching fire-and-forget work; the sweeper closes the loop. Designed 2026-07-25 per I)ruid to replace ad-hoc dead-man timers. | 15 |
 | work_tags | - | 3 |
 | workflow_runs | Tracks individual executions of workflows. Each row is one run from opening bookend to closing bookend. Updated as the orchestrator advances through steps. | 11 |
 | workflow_steps | Ordered steps in a workflow with agent assignments and deliverable specifications | 14 |

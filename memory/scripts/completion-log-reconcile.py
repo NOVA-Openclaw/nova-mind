@@ -31,9 +31,20 @@ WORKFLOW_RUNS_TERMINAL_STATUSES = ("completed", "failed", "cancelled")
 DESCRIPTION_MAX_LEN = 120
 TRIGGER_CONTEXT_MAX_LEN = 80
 
-# Marker substrings used for the two-phase grep pre-check.
+# Marker templates used for the two-phase grep pre-check.  A word boundary is
+# required after the numeric id so that "#1" cannot match inside "#10".
 WORK_QUEUE_MARKER = "wq#{id} closed"
 WORKFLOW_RUNS_MARKER = "workflow run #{id}"
+
+
+def _marker_pattern(marker_template: str, row_id: int) -> str:
+    """Return a regex pattern that matches the marker for a specific id.
+
+    A \\b word boundary is inserted immediately after the formatted digits so
+    that a shorter id cannot match as a prefix of a longer id (e.g. #1 inside
+    #10).
+    """
+    return marker_template.format(id=f"{row_id}\\b")
 
 
 class ReconcileError(Exception):
@@ -207,15 +218,16 @@ def adjacent_log_paths(workspace: Path, ts: datetime) -> list[Path]:
     ]
 
 
-def marker_present(marker: str, paths: list[Path]) -> bool:
-    """Grep the candidate files for a marker substring."""
+def marker_present(marker_pattern: str, paths: list[Path]) -> bool:
+    """Grep the candidate files for a marker regex pattern."""
+    compiled = re.compile(marker_pattern)
     for path in paths:
         if not path.is_file():
             continue
         try:
             with path.open("r", encoding="utf-8") as f:
                 for line in f:
-                    if marker in line:
+                    if compiled.search(line):
                         return True
         except OSError:
             continue
@@ -352,15 +364,16 @@ def reconcile(
             appended = 0
             for ts, table, row in items:
                 if table == "work_queue":
-                    marker = WORK_QUEUE_MARKER.format(id=row["id"])
+                    marker_template = WORK_QUEUE_MARKER
                     format_line = format_work_queue_line
                     update_sql = "UPDATE work_queue SET completion_logged_at = now() WHERE id = %s"
                 else:
-                    marker = WORKFLOW_RUNS_MARKER.format(id=row["id"])
+                    marker_template = WORKFLOW_RUNS_MARKER
                     format_line = format_workflow_runs_line
                     update_sql = "UPDATE workflow_runs SET completion_logged_at = now() WHERE id = %s"
 
                 candidate_paths = adjacent_log_paths(workspace, ts)
+                marker = _marker_pattern(marker_template, row["id"])
 
                 if marker_present(marker, candidate_paths):
                     # Line already exists; just watermark.

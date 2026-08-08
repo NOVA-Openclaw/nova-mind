@@ -506,10 +506,10 @@ that closed between the two migration applies with a stale re-seed value).
 **Pass Criteria:** Column exists on both tables after first apply with `is_nullable='YES'`
 and `column_default IS NULL`; every pre-existing terminal-status row has
 `completion_logged_at` non-null immediately after first apply; second apply exits 0 with
-no schema change and does not alter `completion_logged_at` on rows already seeded; a row
-that transitions to terminal status BETWEEN the two migration applies still has
-`completion_logged_at IS NULL` after the second apply (proving the guard works, not just
-the happy path).
+no schema change; already-seeded rows keep their original watermark (the `IS NULL` guard
+prevents re-stamping them); rows that transitioned to terminal status BETWEEN the two
+migration applies get seeded by the second apply (their `completion_logged_at` becomes
+non-null, because the guard only protects already-seeded rows, not newly-terminal rows).
 
 ### TC-561-27: Backfill guard — migration-seeded watermark means zero new lines on first reconcile run
 **Objective:** Per design-gate ruling 7: "Migration-seeded watermark — the migration sets
@@ -659,6 +659,25 @@ append-first ordering if the append already landed; this is exactly the TC-561-0
 surface, and this test doubles as a real-world trigger for it).
 **Pass Criteria:** Non-zero exit, clear error naming the permission issue; no duplicate or
 orphaned state after a subsequent successful run with correct grants.
+
+### TC-561-35: Numeric-prefix id collision does not swallow the shorter id
+**Objective:** Regression guard for the S2/P1 marker substring collision: the grep pre-
+check for a shorter id must not false-match inside an already-written line for a longer
+id that shares the same numeric prefix (e.g. `workflow run #1` matching inside
+`workflow run #10`).
+**Preconditions:** Seed both `work_queue` and `workflow_runs` with two rows whose ids form
+a prefix relationship (e.g. ids 1 and 10). The longer id (10) is terminal; the shorter id
+(1) is non-terminal. Target daily-log file does not yet contain either line.
+**Steps:**
+1. Run reconcile once. Only id=10 rows are eligible, so lines for id=10 are appended and
+   watermarked.
+2. Transition the id=1 rows to a terminal status (with a completion timestamp).
+3. Run reconcile again.
+**Expected:** The second run's grep pre-check for id=1 does NOT match inside the existing
+id=10 lines. Both id=1 rows are appended normally, and their watermarks are set.
+**Pass Criteria:** After both runs, the target daily-log file contains exactly one line
+for id=1 and exactly one line for id=10 in each affected table; `completion_logged_at` is
+non-null for all four rows (both tables, both ids); exit code 0 for both runs.
 
 ---
 

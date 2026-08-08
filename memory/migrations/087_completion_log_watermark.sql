@@ -4,7 +4,10 @@
 -- Adds completion_logged_at timestamptz to both tables and seeds the watermark
 -- for all already-closed rows at deploy time. The seed UPDATE is guarded by
 -- `completion_logged_at IS NULL` so re-applying the migration does not re-stamp
--- rows that reached a terminal status between applies.
+-- already-seeded rows; however, re-applying against a live system will also
+-- seed any row that became terminal between the two applies, permanently
+-- excluding it from reconcile.py's scan. Run completion-log-reconcile.py before
+-- re-applying this migration against a live system.
 
 -- work_queue: terminal statuses are done/failed/stale/cancelled.
 ALTER TABLE work_queue

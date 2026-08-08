@@ -3500,6 +3500,7 @@ CREATE TABLE IF NOT EXISTS work_queue (
     last_checked_at timestamptz,
     check_count integer DEFAULT 0 NOT NULL,
     completed_at timestamptz,
+    completion_logged_at timestamptz,
     notes text,
     CONSTRAINT work_queue_pkey PRIMARY KEY (id),
     CONSTRAINT work_queue_kind_check CHECK (kind IN ('subagent_session'::text, 'pr'::text, 'process'::text, 'cron_job'::text, 'workflow_step'::text, 'other'::text)),
@@ -3508,6 +3509,11 @@ CREATE TABLE IF NOT EXISTS work_queue (
 
 
 COMMENT ON TABLE work_queue IS 'Active-work watch queue: entries for in-flight subagent sessions, PRs, long-running processes. A 5m cron sweeps pending entries, checks live status, and wakes the owner session when items complete. Add an entry whenever dispatching fire-and-forget work; the sweeper closes the loop. Designed 2026-07-25 per I)ruid to replace ad-hoc dead-man timers.';
+
+
+COMMENT ON COLUMN work_queue.completion_logged_at IS
+    'Watermark set when the row''s completion line was appended to the daily log. '
+    'Seeded by migration 087 for pre-existing closed rows; updated by completion-log-reconcile.py.';
 
 --
 -- Name: idx_work_queue_pending; Type: INDEX; Schema: -; Owner: -
@@ -3528,6 +3534,7 @@ CREATE TABLE IF NOT EXISTS workflow_runs (
     status varchar(20) DEFAULT 'running' NOT NULL,
     started_at timestamptz DEFAULT now() NOT NULL,
     completed_at timestamptz,
+    completion_logged_at timestamptz,
     notes text,
     channel text NOT NULL,
     CONSTRAINT workflow_runs_pkey PRIMARY KEY (id),
@@ -3548,6 +3555,11 @@ COMMENT ON COLUMN workflow_runs.notes IS 'Running log of progress: step transiti
 
 
 COMMENT ON COLUMN workflow_runs.channel IS 'Channel where this run was triggered and is being tracked. NOT NULL. Format: "<provider>:<channel_id>" e.g. "discord:1494763249609211905". Sentinel "unknown:pre-tracking" used for historical rows before column was added. Added 2026-05-24.';
+
+
+COMMENT ON COLUMN workflow_runs.completion_logged_at IS
+    'Watermark set when the row''s completion line was appended to the daily log. '
+    'Seeded by migration 087 for pre-existing closed rows; updated by completion-log-reconcile.py.';
 
 --
 -- Name: idx_workflow_runs_channel; Type: INDEX; Schema: -; Owner: -

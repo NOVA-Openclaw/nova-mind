@@ -1,5 +1,30 @@
 # Changelog
 
+### Batch: completion-log-reconcile-561 (Issue #561)
+
+#### Added
+- **`completion-log-reconcile.py` — deterministic completion-side daily-log reconcile** (nova-mind#561) — Closes the gap where closed `work_queue` rows and completed `workflow_runs` rows could fail to produce a corresponding daily-log completion line. The script runs LLM-free from cron every few minutes, scans both tables for terminal-status rows whose `completion_logged_at` watermark is NULL, and appends exactly one line per row to the correct `~/.openclaw/workspace/memory/YYYY-MM-DD.md` file (dated by the row's own completion timestamp, not script-run time):
+  - `work_queue`: `- HH:MM wq#<id> closed (<kind>): <description> — <status>` for rows reaching `done`/`failed`/`stale`/`cancelled`.
+  - `workflow_runs`: `- HH:MM workflow run #<id> <status> (workflow <workflow_id>): <trigger_context>` for rows reaching `completed`/`failed`/`cancelled`.
+  - **Two-phase idempotency:** a file-grep pre-check (current day + adjacent days) fires before append, and `completion_logged_at` is set only after the append succeeds, so a crash between append and commit is recovered by the next run with zero duplicate lines.
+  - **Marker anchoring:** the grep pattern uses a word boundary immediately after the numeric id so a shorter id cannot false-match inside a longer prefix id (e.g. `#1` inside `#10`) — fixes the S2/P1 collision found during QA desk review.
+  - **Sanitization:** description/trigger_context whitespace is collapsed to single spaces; long text is truncated to 120 chars (work_queue description) or ~80 chars (trigger_context) with a trailing `…`; Markdown structural characters are preserved verbatim.
+  - **Shared flock:** both `completion-log-reconcile.py` and `generate-daily-log.py` acquire an exclusive advisory `flock` on `~/.openclaw/workspace/memory/.daily-log.lock` during their read/write/rename critical sections, preventing inter-script races.
+  - **Watermark fallback:** `work_queue` uses `COALESCE(completed_at, last_checked_at, created_at)`; `workflow_runs` uses `COALESCE(completed_at, started_at)`. Rows with unusable timestamps are skipped with a stderr warning rather than crashing.
+
+#### Migrations
+- `memory/migrations/087_completion_log_watermark.sql` (nova-mind#561) — Adds `completion_logged_at timestamptz` to both `work_queue` and `workflow_runs`, with `COMMENT ON COLUMN` documenting the watermark semantics, and seeds the column for all already-closed rows at deploy time via `COALESCE(completed_at, now())` guarded by `WHERE completion_logged_at IS NULL`. The migration header documents the operational risk that re-applying against a live system will seed any row that became terminal between applies, permanently excluding it from the reconcile scan; drain pending closures with `completion-log-reconcile.py` before re-applying.
+
+#### Changed
+- **`generate-daily-log.py` companion flock** (nova-mind#561) — Small, surgical change to wrap the existing read/modify/atomic-rename critical section with the same shared advisory lock used by `completion-log-reconcile.py`, closing the deterministic race at 00:05/06:00/12:00/18:00 UTC cron boundaries.
+- **`database/schema.sql` + `database/schema-reference.md`** (nova-mind#561) — Declarative schema and table listing updated to include the new `completion_logged_at` column on both tables, matching the migration.
+
+#### Tests
+- `tests/test_completion_log_reconcile.py` (nova-mind#561) — 60+ automated cases covering line formatting, sanitization, watermark fallback, idempotency, crash recovery, midnight-boundary dating, status decision tables, migration idempotency (including the amended TC-561-26 semantics), failure modes (permission errors, unreachable DB, DB permission-denied), flock mutual exclusion, and the TC-561-35 numeric-prefix collision regression for both tables.
+
+#### Issues Closed
+- #561 — completion-log-reconcile: deterministic daily-log completion lines for work_queue + workflow_runs
+
 ### Batch: append-run-note-557 (Issue #557)
 
 #### Added

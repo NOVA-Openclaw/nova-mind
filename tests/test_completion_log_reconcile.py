@@ -324,18 +324,48 @@ class TestMarkerPresent:
     def test_finds_marker(self, tmp_path):
         file1 = tmp_path / "2026-08-08.md"
         file1.write_text("# Day\n\n- 14:32 wq#42 closed (x): desc — done\n", encoding="utf-8")
-        assert completion_log_reconcile.marker_present("wq#42 closed", [file1]) is True
+        pattern = completion_log_reconcile._marker_pattern(
+            completion_log_reconcile.WORK_QUEUE_MARKER, 42
+        )
+        assert completion_log_reconcile.marker_present(pattern, [file1]) is True
 
     def test_checks_adjacent_file(self, tmp_path):
         file1 = tmp_path / "2026-08-08.md"
         file2 = tmp_path / "2026-08-09.md"
         file2.write_text("# Day\n\n- 00:01 wq#42 closed (x): desc — done\n", encoding="utf-8")
-        assert completion_log_reconcile.marker_present("wq#42 closed", [file1, file2]) is True
+        pattern = completion_log_reconcile._marker_pattern(
+            completion_log_reconcile.WORK_QUEUE_MARKER, 42
+        )
+        assert completion_log_reconcile.marker_present(pattern, [file1, file2]) is True
 
     def test_missing_marker(self, tmp_path):
         file1 = tmp_path / "2026-08-08.md"
         file1.write_text("# Day\n\n- 14:32 wq#99 closed (x): desc — done\n", encoding="utf-8")
-        assert completion_log_reconcile.marker_present("wq#42 closed", [file1]) is False
+        pattern = completion_log_reconcile._marker_pattern(
+            completion_log_reconcile.WORK_QUEUE_MARKER, 42
+        )
+        assert completion_log_reconcile.marker_present(pattern, [file1]) is False
+
+    def test_work_queue_marker_does_not_match_prefix_id(self, tmp_path):
+        """TC-561-35 prefix-coverage for work_queue: #4 must not match #42."""
+        file1 = tmp_path / "2026-08-08.md"
+        file1.write_text("# Day\n\n- 14:32 wq#42 closed (x): desc — done\n", encoding="utf-8")
+        pattern = completion_log_reconcile._marker_pattern(
+            completion_log_reconcile.WORK_QUEUE_MARKER, 4
+        )
+        assert completion_log_reconcile.marker_present(pattern, [file1]) is False
+
+    def test_workflow_runs_marker_does_not_match_prefix_id(self, tmp_path):
+        """TC-561-35 prefix-coverage for workflow_runs: #1 must not match #10."""
+        file1 = tmp_path / "2026-08-08.md"
+        file1.write_text(
+            "# Day\n\n- 10:00 workflow run #10 completed (workflow 4): run ten context\n",
+            encoding="utf-8",
+        )
+        pattern = completion_log_reconcile._marker_pattern(
+            completion_log_reconcile.WORKFLOW_RUNS_MARKER, 1
+        )
+        assert completion_log_reconcile.marker_present(pattern, [file1]) is False
 
 
 class TestDailyLogLock:
@@ -1116,6 +1146,67 @@ class TestReconcile:
             with mock.patch.object(completion_log_reconcile, "connect", wrapped_connect):
                 rc = completion_log_reconcile.main(["--database", test_db])
             assert rc != 0
+        finally:
+            conn.close()
+
+    def test_35_numeric_prefix_collision_both_tables(self, test_db, workspace):
+        """TC-561-35: id=1 must not be swallowed by a prior line for id=10."""
+        conn = _test_conn(test_db)
+        try:
+            with conn.cursor() as cur:
+                # Seed id=10 terminal first, id=1 non-terminal (will close later).
+                cur.execute(
+                    """
+                    INSERT INTO work_queue (id, owner_session, kind, ref, description, status, completed_at)
+                    VALUES
+                        (10, 's10', 'subagent_session', 'r10', 'wq ten', 'done', '2026-08-08T11:00:00Z'),
+                        (1,  's1',  'subagent_session', 'r1',  'wq one', 'pending', NULL)
+                    """
+                )
+                cur.execute("SELECT setval('work_queue_id_seq', 10)")
+                cur.execute(
+                    """
+                    INSERT INTO workflow_runs (id, workflow_id, trigger_context, status, completed_at, started_at, channel)
+                    VALUES
+                        (10, 4, 'run ten', 'completed', '2026-08-08T11:00:00Z', '2026-08-08T10:00:00Z', 'test:1'),
+                        (1,  4, 'run one', 'running',   NULL,                    '2026-08-08T10:00:00Z', 'test:1')
+                    """
+                )
+                cur.execute("SELECT setval('workflow_runs_id_seq', 10)")
+            conn.commit()
+
+            # First reconcile: only id=10 rows are eligible.
+            r1 = self._run_script(workspace, test_db)
+            assert r1.returncode == 0, r1.stderr
+            log_08 = (workspace / "memory" / "2026-08-08.md").read_text(encoding="utf-8")
+            assert "wq#10 closed" in log_08
+            assert "workflow run #10 completed" in log_08
+            assert "wq#1 closed" not in log_08
+            assert "workflow run #1 completed" not in log_08
+
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE work_queue SET status='done', completed_at='2026-08-08T10:00:00Z' WHERE id=1"
+                )
+                cur.execute(
+                    "UPDATE workflow_runs SET status='completed', completed_at='2026-08-08T10:00:00Z' WHERE id=1"
+                )
+            conn.commit()
+
+            # Second reconcile: id=1 rows must be appended, not falsely skipped.
+            r2 = self._run_script(workspace, test_db)
+            assert r2.returncode == 0, r2.stderr
+            log_08 = (workspace / "memory" / "2026-08-08.md").read_text(encoding="utf-8")
+            assert log_08.count("wq#1 closed") == 1
+            assert log_08.count("wq#10 closed") == 1
+            assert log_08.count("workflow run #1 completed") == 1
+            assert log_08.count("workflow run #10 completed") == 1
+
+            with conn.cursor() as cur:
+                cur.execute("SELECT completion_logged_at IS NOT NULL FROM work_queue WHERE id IN (1, 10)")
+                assert [row[0] for row in cur.fetchall()] == [True, True]
+                cur.execute("SELECT completion_logged_at IS NOT NULL FROM workflow_runs WHERE id IN (1, 10)")
+                assert [row[0] for row in cur.fetchall()] == [True, True]
         finally:
             conn.close()
 

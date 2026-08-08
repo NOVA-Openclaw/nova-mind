@@ -12,11 +12,13 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
 import os
 import re
 import sys
 import tempfile
+from contextlib import contextmanager
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Iterable
@@ -504,6 +506,15 @@ def update_file(file_path: Path, new_block: str) -> bool:
     """Atomically update the daily log file. Returns True if a write occurred."""
     file_path.parent.mkdir(parents=True, exist_ok=True)
 
+    # Serialize with completion-log-reconcile.py around the read/modify/rename
+    # critical section (nova-mind#561).
+    workspace = file_path.parent.parent
+    with _daily_log_lock(workspace):
+        return _update_file_locked(file_path, new_block)
+
+
+def _update_file_locked(file_path: Path, new_block: str) -> bool:
+    """Actual file update logic; caller must hold the daily-log flock."""
     if not file_path.exists():
         content = f"# {file_path.stem}\n\n"
         content += new_block
@@ -548,6 +559,20 @@ def update_file(file_path: Path, new_block: str) -> bool:
 
     _atomic_write(file_path, new_content)
     return True
+
+
+@contextmanager
+def _daily_log_lock(workspace: Path):
+    """Acquire an exclusive advisory flock on the shared daily-log lock file."""
+    lock_file = workspace / "memory" / ".daily-log.lock"
+    lock_file.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(str(lock_file), os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
 
 
 def _atomic_write(file_path: Path, content: str) -> None:

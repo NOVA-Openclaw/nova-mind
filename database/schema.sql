@@ -541,9 +541,6 @@ CREATE TABLE IF NOT EXISTS agents (
 );
 
 
-COMMENT ON TABLE agents IS 'Agent registry';
-
-
 COMMENT ON COLUMN agents.access_details IS 'JSON: session_key, cli_command, endpoint URL, etc.';
 
 
@@ -1032,7 +1029,7 @@ COMMENT ON COLUMN entities.collaborate IS 'If true, collaborate with this entity
 COMMENT ON COLUMN entities.collaboration_scope IS 'full | domain-specific | supervised - determines collaboration breadth';
 
 
-COMMENT ON COLUMN entities.trust_level IS 'Free-text trust/relationship descriptor for the entity (e.g. owner, admin, friend). Values are not enforced by a CHECK constraint; consumers should treat unexpected values as valid arbitrary strings.';
+COMMENT ON COLUMN entities.trust_level IS 'Trust level for confidence scoring: owner, admin, user, unknown, untrusted';
 
 
 COMMENT ON COLUMN entities.introduction_context IS 'How/why we connected with this entity, relationship context';
@@ -1742,7 +1739,7 @@ CREATE TABLE IF NOT EXISTS extraction_failures (
     resolved_at timestamptz,
     CONSTRAINT extraction_failures_pkey PRIMARY KEY (id),
     CONSTRAINT extraction_failures_channel_transcript_id_fkey FOREIGN KEY (channel_transcript_id) REFERENCES channel_transcripts (id) ON DELETE SET NULL,
-    CONSTRAINT extraction_failures_failure_reason_check CHECK (failure_reason IS NULL OR (failure_reason::text IN ('nonzero_exit'::character varying, 'timeout'::character varying, 'spawn_error'::character varying, 'unreplayable'::character varying))),
+    CONSTRAINT extraction_failures_failure_reason_check CHECK (failure_reason IS NULL OR (failure_reason::text IN ('nonzero_exit'::character varying, 'timeout'::character varying, 'spawn_error'::character varying, 'unreplayable'::character varying, 'json_parse_failure'::character varying))),
     CONSTRAINT extraction_failures_retry_count_nonnegative CHECK (retry_count >= 0),
     CONSTRAINT extraction_failures_status_check CHECK (status::text IN ('pending'::character varying, 'resolved'::character varying, 'retry_exhausted'::character varying, 'unreplayable'::character varying))
 );
@@ -3500,8 +3497,8 @@ CREATE TABLE IF NOT EXISTS work_queue (
     last_checked_at timestamptz,
     check_count integer DEFAULT 0 NOT NULL,
     completed_at timestamptz,
-    completion_logged_at timestamptz,
     notes text,
+    completion_logged_at timestamptz,
     CONSTRAINT work_queue_pkey PRIMARY KEY (id),
     CONSTRAINT work_queue_kind_check CHECK (kind IN ('subagent_session'::text, 'pr'::text, 'process'::text, 'cron_job'::text, 'workflow_step'::text, 'other'::text)),
     CONSTRAINT work_queue_status_check CHECK (status IN ('pending'::text, 'done'::text, 'failed'::text, 'stale'::text, 'cancelled'::text))
@@ -3511,9 +3508,7 @@ CREATE TABLE IF NOT EXISTS work_queue (
 COMMENT ON TABLE work_queue IS 'Active-work watch queue: entries for in-flight subagent sessions, PRs, long-running processes. A 5m cron sweeps pending entries, checks live status, and wakes the owner session when items complete. Add an entry whenever dispatching fire-and-forget work; the sweeper closes the loop. Designed 2026-07-25 per I)ruid to replace ad-hoc dead-man timers.';
 
 
-COMMENT ON COLUMN work_queue.completion_logged_at IS
-    'Watermark set when the row''s completion line was appended to the daily log. '
-    'Seeded by migration 087 for pre-existing closed rows; updated by completion-log-reconcile.py.';
+COMMENT ON COLUMN work_queue.completion_logged_at IS 'Watermark set when the row''s completion line was appended to the daily log. Seeded by migration 087 for pre-existing closed rows; updated by completion-log-reconcile.py.';
 
 --
 -- Name: idx_work_queue_pending; Type: INDEX; Schema: -; Owner: -
@@ -3534,9 +3529,9 @@ CREATE TABLE IF NOT EXISTS workflow_runs (
     status varchar(20) DEFAULT 'running' NOT NULL,
     started_at timestamptz DEFAULT now() NOT NULL,
     completed_at timestamptz,
-    completion_logged_at timestamptz,
     notes text,
     channel text NOT NULL,
+    completion_logged_at timestamptz,
     CONSTRAINT workflow_runs_pkey PRIMARY KEY (id),
     CONSTRAINT workflow_runs_status_check CHECK (status::text IN ('running'::character varying, 'completed'::character varying, 'failed'::character varying, 'paused'::character varying, 'cancelled'::character varying))
 );
@@ -3557,9 +3552,7 @@ COMMENT ON COLUMN workflow_runs.notes IS 'Running log of progress: step transiti
 COMMENT ON COLUMN workflow_runs.channel IS 'Channel where this run was triggered and is being tracked. NOT NULL. Format: "<provider>:<channel_id>" e.g. "discord:1494763249609211905". Sentinel "unknown:pre-tracking" used for historical rows before column was added. Added 2026-05-24.';
 
 
-COMMENT ON COLUMN workflow_runs.completion_logged_at IS
-    'Watermark set when the row''s completion line was appended to the daily log. '
-    'Seeded by migration 087 for pre-existing closed rows; updated by completion-log-reconcile.py.';
+COMMENT ON COLUMN workflow_runs.completion_logged_at IS 'Watermark set when the row''s completion line was appended to the daily log. Seeded by migration 087 for pre-existing closed rows; updated by completion-log-reconcile.py.';
 
 --
 -- Name: idx_workflow_runs_channel; Type: INDEX; Schema: -; Owner: -
@@ -3604,6 +3597,9 @@ CREATE TABLE IF NOT EXISTS workflows (
     CONSTRAINT workflows_name_key UNIQUE (name),
     CONSTRAINT workflows_status_check CHECK (status IN ('active'::text, 'deprecated'::text, 'archived'::text))
 );
+
+
+COMMENT ON TABLE workflows IS 'Defines multi-agent workflows with ordered steps and deliverable handoffs';
 
 --
 -- Name: idx_workflows_name; Type: INDEX; Schema: -; Owner: -
@@ -3811,48 +3807,6 @@ BEGIN
     RETURN NEW;
 END;
 $$;
-
---
--- Name: append_run_note(integer, text); Type: FUNCTION; Schema: -; Owner: -
---
-
-CREATE OR REPLACE FUNCTION append_run_note(
-    p_run_id integer,
-    p_note text
-)
-RETURNS void
-LANGUAGE plpgsql
-VOLATILE
-SECURITY DEFINER
-SET search_path = public
-AS $$
-DECLARE
-    v_stamped_line TEXT;
-BEGIN
-    IF p_note IS NULL THEN
-        RAISE EXCEPTION 'append_run_note: p_note cannot be NULL';
-    END IF;
-
-    v_stamped_line := to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI') || ' UTC — ' || p_note;
-
-    UPDATE workflow_runs
-    SET notes = CASE
-        WHEN notes IS NULL OR notes = '' THEN v_stamped_line
-        ELSE notes || E'\n' || v_stamped_line
-    END
-    WHERE id = p_run_id;
-
-    IF NOT FOUND THEN
-        RAISE EXCEPTION 'append_run_note: run_id % not found', p_run_id;
-    END IF;
-END;
-$$;
-
---
--- Name: append_run_note(integer, text); Type: FUNCTION; Schema: -; Owner: -
---
-
-COMMENT ON FUNCTION append_run_note(integer, text) IS 'Appends a server-side UTC timestamped note to workflow_runs.notes for the given run_id. The stamp format is ''YYYY-MM-DD HH24:MI UTC — ''. Empty-string notes are accepted and append a line ending in '' UTC — ''; only NULL notes are rejected. Raises an exception if p_note is NULL or if the run_id does not exist.';
 
 --
 -- Name: audit_bootstrap_agents(); Type: FUNCTION; Schema: -; Owner: -
@@ -7918,13 +7872,13 @@ CREATE OR REPLACE VIEW workflow_steps_detail AS
 -- Name: agent_actions; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_actions FROM newhart;
+REVOKE SELECT ON TABLE agent_actions FROM newhart;
 
 --
 -- Name: agent_actions; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE agent_actions FROM newhart;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_actions FROM newhart;
 
 --
 -- Name: agent_aliases; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -7966,13 +7920,13 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE agent_aliases FROM iris;
 -- Name: agent_aliases; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_aliases FROM newhart;
+REVOKE SELECT ON TABLE agent_aliases FROM newhart;
 
 --
 -- Name: agent_aliases; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE agent_aliases FROM newhart;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_aliases FROM newhart;
 
 --
 -- Name: agent_aliases; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -8098,13 +8052,13 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE agent_domains FROM iris;
 -- Name: agent_domains; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_domains FROM newhart;
+REVOKE SELECT ON TABLE agent_domains FROM newhart;
 
 --
 -- Name: agent_domains; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE agent_domains FROM newhart;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_domains FROM newhart;
 
 --
 -- Name: agent_domains; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -8206,13 +8160,13 @@ REVOKE DELETE ON TABLE agent_modifications FROM ticker;
 -- Name: agent_spawns; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE agent_spawns FROM newhart;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_spawns FROM newhart;
 
 --
 -- Name: agent_spawns; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_spawns FROM newhart;
+REVOKE SELECT ON TABLE agent_spawns FROM newhart;
 
 --
 -- Name: agent_system_config; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -8254,13 +8208,13 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE agent_system_config FROM iris;
 -- Name: agent_system_config; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE agent_system_config FROM newhart;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_system_config FROM newhart;
 
 --
 -- Name: agent_system_config; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_system_config FROM newhart;
+REVOKE SELECT ON TABLE agent_system_config FROM newhart;
 
 --
 -- Name: agent_system_config; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -8398,13 +8352,13 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE ai_models FROM iris;
 -- Name: ai_models; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE ai_models FROM newhart;
+REVOKE SELECT ON TABLE ai_models FROM newhart;
 
 --
 -- Name: ai_models; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE ai_models FROM newhart;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE ai_models FROM newhart;
 
 --
 -- Name: ai_models; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -8428,13 +8382,13 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE ai_models FROM ticker;
 -- Name: artwork; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE artwork FROM iris;
+REVOKE SELECT ON TABLE artwork FROM iris;
 
 --
 -- Name: artwork; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE artwork FROM iris;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE artwork FROM iris;
 
 --
 -- Name: blockers; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9838,13 +9792,13 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE library_authors FROM ticker;
 -- Name: library_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE library_tags FROM athena;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE library_tags FROM athena;
 
 --
 -- Name: library_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE library_tags FROM athena;
+REVOKE SELECT ON TABLE library_tags FROM athena;
 
 --
 -- Name: library_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10222,13 +10176,13 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_analysis FROM iris;
 -- Name: music_library; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_library FROM iris;
+REVOKE SELECT ON TABLE music_library FROM iris;
 
 --
 -- Name: music_library; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE music_library FROM iris;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_library FROM iris;
 
 --
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10246,25 +10200,25 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_works FROM argus;
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE music_works FROM athena;
-
---
--- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_works FROM athena;
 
 --
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE music_works FROM coder;
+REVOKE SELECT ON TABLE music_works FROM athena;
 
 --
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_works FROM coder;
+
+--
+-- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE music_works FROM coder;
 
 --
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10282,13 +10236,13 @@ REVOKE SELECT ON TABLE music_works FROM conductor;
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE music_works FROM erato;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_works FROM erato;
 
 --
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_works FROM erato;
+REVOKE SELECT ON TABLE music_works FROM erato;
 
 --
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10306,13 +10260,13 @@ REVOKE SELECT ON TABLE music_works FROM flint;
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_works FROM gem;
+REVOKE SELECT ON TABLE music_works FROM gem;
 
 --
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE music_works FROM gem;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_works FROM gem;
 
 --
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10336,13 +10290,13 @@ REVOKE SELECT ON TABLE music_works FROM graybeard;
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE music_works FROM hermes;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_works FROM hermes;
 
 --
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_works FROM hermes;
+REVOKE SELECT ON TABLE music_works FROM hermes;
 
 --
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10360,13 +10314,13 @@ REVOKE SELECT ON TABLE music_works FROM iris;
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE music_works FROM marcie;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_works FROM marcie;
 
 --
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_works FROM marcie;
+REVOKE SELECT ON TABLE music_works FROM marcie;
 
 --
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10420,13 +10374,13 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_works FROM scout;
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE music_works FROM scribe;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_works FROM scribe;
 
 --
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_works FROM scribe;
+REVOKE SELECT ON TABLE music_works FROM scribe;
 
 --
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10876,13 +10830,13 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE research_findings FROM nova;
 -- Name: research_findings; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE research_findings FROM scout;
+REVOKE SELECT ON TABLE research_findings FROM scout;
 
 --
 -- Name: research_findings; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE research_findings FROM scout;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE research_findings FROM scout;
 
 --
 -- Name: research_findings; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -11008,13 +10962,13 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE research_provenance FROM nova;
 -- Name: research_provenance; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE research_provenance FROM scout;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE research_provenance FROM scout;
 
 --
 -- Name: research_provenance; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE research_provenance FROM scout;
+REVOKE SELECT ON TABLE research_provenance FROM scout;
 
 --
 -- Name: research_provenance; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -11074,13 +11028,13 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE research_taggings FROM nova;
 -- Name: research_taggings; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE research_taggings FROM scout;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE research_taggings FROM scout;
 
 --
 -- Name: research_taggings; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE research_taggings FROM scout;
+REVOKE SELECT ON TABLE research_taggings FROM scout;
 
 --
 -- Name: research_taggings; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -11140,13 +11094,13 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE research_tags FROM nova;
 -- Name: research_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE research_tags FROM scout;
+REVOKE SELECT ON TABLE research_tags FROM scout;
 
 --
 -- Name: research_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE research_tags FROM scout;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE research_tags FROM scout;
 
 --
 -- Name: research_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -11206,13 +11160,13 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE research_tasks FROM nova;
 -- Name: research_tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE research_tasks FROM scout;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE research_tasks FROM scout;
 
 --
 -- Name: research_tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE research_tasks FROM scout;
+REVOKE SELECT ON TABLE research_tasks FROM scout;
 
 --
 -- Name: research_tasks; Type: PRIVILEGE; Schema: privileges; Owner: -

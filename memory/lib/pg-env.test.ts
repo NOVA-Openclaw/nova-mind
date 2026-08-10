@@ -305,7 +305,7 @@ describe("TC-06/07: empty string and null treated as absent", { concurrency: fal
   });
 });
 
-describe("ENV override still wins over bootstrap section", { concurrency: false }, () => {
+describe("TC-30: bootstrap section field wins over ENV when explicitly defined", { concurrency: false }, () => {
   let tmpDir: string;
   let configPath: string;
   let savedEnv: Record<string, string | undefined>;
@@ -326,9 +326,9 @@ describe("ENV override still wins over bootstrap section", { concurrency: false 
     restorePgEnv(savedEnv);
   });
 
-  it("uses ENV value when present", () => {
+  it("uses bootstrap section value when both section and ENV define database", () => {
     const cfg = loadPgEnv(configPath, "bootstrap");
-    assert.strictEqual(cfg.database, "debug_scratch_db");
+    assert.strictEqual(cfg.database, "nova_memory");
   });
 });
 

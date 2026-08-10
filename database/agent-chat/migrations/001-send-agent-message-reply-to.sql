@@ -73,6 +73,18 @@ BEGIN
 END;
 $$;
 
+-- Explicit ownership: the function must be owned by postgres so the SECURITY
+-- DEFINER context sets current_user = 'postgres' and the DML lockdown trigger
+-- authorizes INSERTs. Without this, a non-postgres superuser applying the
+-- migration becomes the owner and agents get permission-denied on every send
+-- (nova-mind#569). Wrapped so a non-superuser devtest apply still succeeds.
+DO $$
+BEGIN
+    ALTER FUNCTION public.send_agent_message(text, text, text[], interval, integer) OWNER TO postgres;
+EXCEPTION WHEN insufficient_privilege THEN
+    RAISE NOTICE 'Skipping send_agent_message owner assignment: current user is not a superuser';
+END $$;
+
 -- Preserve the explicit EXECUTE grants that the checked-in schema file defines
 -- for cross-ecosystem callers (victoria, nova-staging).
 GRANT EXECUTE ON FUNCTION public.send_agent_message(text, text, text[], interval, integer) TO victoria, "nova-staging";

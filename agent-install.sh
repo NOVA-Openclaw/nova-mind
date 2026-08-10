@@ -513,6 +513,24 @@ _apply_agent_chat_migrations() {
         echo -e "  ${CHECK_MARK} Created database '$db_name'"
     fi
 
+    # Apply the canonical base schema before migrations. The schema file is
+    # idempotent (CREATE IF NOT EXISTS / CREATE OR REPLACE), so applying it on
+    # every install run is safe and guarantees a fresh install gets the tables,
+    # triggers, and functions that migrations assume already exist.
+    local schema_file="$SCRIPT_DIR/database/agent-chat/schema.sql"
+    if [ ! -f "$schema_file" ]; then
+        echo -e "  ${CROSS_MARK} agent_chat schema file not found: $schema_file"
+        exit 1
+    fi
+
+    echo "  Applying agent_chat base schema..."
+    if _superuser_psql "$db_name" -v ON_ERROR_STOP=1 -f "$schema_file" >/dev/null 2>&1; then
+        echo -e "  ${CHECK_MARK} Base schema applied"
+    else
+        echo -e "  ${CROSS_MARK} Base schema apply failed"
+        exit 1
+    fi
+
     echo "  Applying agent_chat migrations..."
     for sql_file in "${mig_files[@]}"; do
         local mig_name

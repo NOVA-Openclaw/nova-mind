@@ -72,3 +72,7 @@ BEGIN
     RETURN v_id;
 END;
 $$;
+
+-- Preserve the explicit EXECUTE grants that the checked-in schema file defines
+-- for cross-ecosystem callers (victoria, nova-staging).
+GRANT EXECUTE ON FUNCTION public.send_agent_message(text, text, text[], interval, integer) TO victoria, "nova-staging";

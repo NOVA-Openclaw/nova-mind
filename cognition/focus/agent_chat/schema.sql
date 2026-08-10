@@ -99,6 +99,16 @@ EXECUTE FUNCTION enforce_agent_chat_function_use();
 -- send_agent_message: validated, normalized insert API (SECURITY DEFINER)
 -- Validates sender and all recipients exist in agents table (or '*' for broadcast).
 -- Rejects empty message and empty/NULL recipients.
+
+-- Defensive drop of all known historical signatures before CREATE OR REPLACE.
+-- Without this, applying this 5-arg schema against a database that still has
+-- the live 4-arg (or stale 3-arg) signature would CREATE a second overload,
+-- producing a transient ambiguous-function window for 3-arg callers between
+-- schema-apply and migration 001. Matches migration 001's idempotent pattern.
+DROP FUNCTION IF EXISTS public.send_agent_message(text, text, text[]);
+DROP FUNCTION IF EXISTS public.send_agent_message(text, text, text[], interval);
+DROP FUNCTION IF EXISTS public.send_agent_message(text, text, text[], interval, integer);
+
 CREATE OR REPLACE FUNCTION send_agent_message(
     p_sender     TEXT,
     p_message    TEXT,

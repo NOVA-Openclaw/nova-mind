@@ -112,6 +112,16 @@ END;
 $$;
 
 -- Name: send_agent_message(text, text, text[], interval, integer); Type: FUNCTION; Schema: public; Owner: -
+
+-- Defensive drop of all known historical signatures before CREATE OR REPLACE.
+-- Without this, applying this 5-arg schema against a database that still has
+-- the live 4-arg (or stale 3-arg) signature would CREATE a second overload,
+-- producing a transient ambiguous-function window for 3-arg callers between
+-- schema-apply and migration 001. Matches migration 001's idempotent pattern.
+DROP FUNCTION IF EXISTS public.send_agent_message(text, text, text[]);
+DROP FUNCTION IF EXISTS public.send_agent_message(text, text, text[], interval);
+DROP FUNCTION IF EXISTS public.send_agent_message(text, text, text[], interval, integer);
+
 CREATE OR REPLACE FUNCTION public.send_agent_message(
     p_sender text,
     p_message text,

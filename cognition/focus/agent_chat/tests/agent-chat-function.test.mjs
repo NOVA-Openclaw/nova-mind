@@ -23,6 +23,13 @@ import os from "node:os";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "../../../..");
 const SCHEMA_SQL = path.join(REPO_ROOT, "database", "agent-chat", "schema.sql");
+const DEPRECATED_SCHEMA_SQL = path.join(
+  REPO_ROOT,
+  "cognition",
+  "focus",
+  "agent_chat",
+  "schema.sql",
+);
 const MIGRATION_SQL = path.join(
   REPO_ROOT,
   "database",
@@ -276,6 +283,42 @@ describe("Migration mechanics (TC-006–TC-008)", { concurrency: false }, () => 
     assert.strictEqual(res.rows.length, 1, "expected exactly one post-migration overload");
     // Derived from migration 001: p_reply_to is the 5th positional arg.
     assert.match(res.rows[0].args, /p_sender.*p_message.*p_recipients.*p_ttl.*p_reply_to/);
+  });
+
+  it("TC-007b: schema, deprecated schema, and migration explicitly assign ownership to postgres (#569)", async () => {
+    // Derivation: nova-mind#569 root cause. The production outage occurred
+    // because a staging install recreated send_agent_message() owned by
+    // nova-staging; the DML lockdown trigger then rejected every agent's INSERT
+    // because current_user was no longer 'postgres' inside SECURITY DEFINER.
+    const alter =
+      "ALTER FUNCTION public.send_agent_message(text, text, text[], interval, integer) OWNER TO postgres;";
+    assert.ok(
+      fs.readFileSync(SCHEMA_SQL, "utf-8").includes(alter),
+      "canonical schema.sql must contain explicit OWNER TO postgres for send_agent_message",
+    );
+    assert.ok(
+      fs.readFileSync(DEPRECATED_SCHEMA_SQL, "utf-8").includes(alter),
+      "deprecated schema.sql must contain explicit OWNER TO postgres for send_agent_message",
+    );
+    assert.ok(
+      fs.readFileSync(MIGRATION_SQL, "utf-8").includes(alter),
+      "migration 001 must contain explicit OWNER TO postgres for send_agent_message",
+    );
+
+    // The temp harness applies DDL as the test owner (nova), which has CREATEDB
+    // but is not a PostgreSQL superuser, so the wrapped ALTER is skipped and
+    // the owner remains the applying role. Production/staging runs
+    // _superuser_psql as postgres (or another superuser), so the ALTER succeeds
+    // and assigns ownership to postgres.
+    const res = await superClient.query(
+      "SELECT pg_get_userbyid(proowner) AS owner FROM pg_proc WHERE proname = 'send_agent_message'",
+    );
+    assert.strictEqual(res.rows.length, 1);
+    assert.strictEqual(
+      res.rows[0].owner,
+      PG_SUPERUSER,
+      `send_agent_message owner in temp harness should be the applying role (${PG_SUPERUSER}); the explicit ALTER ensures postgres ownership when applied by a superuser`,
+    );
   });
 
   it("TC-008: 3-arg call does not raise function-is-not-unique (42725)", async () => {

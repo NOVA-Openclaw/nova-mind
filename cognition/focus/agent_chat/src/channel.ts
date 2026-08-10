@@ -138,20 +138,14 @@ async function insertOutboundMessage(
   },
 ) {
   // All inserts must go through send_agent_message() — direct INSERT is blocked.
-  // reply_to is set separately after insert since send_agent_message doesn't accept it.
+  // reply_to is carried in the same SECURITY DEFINER call so the insert is
+  // atomic (no separate UPDATE that can fail after the body commits).
   const result = await client.query(
-    `SELECT send_agent_message($1::text, $2::text, $3::text[]) AS id`,
-    [sender, message, recipients],
+    `SELECT send_agent_message($1::text, $2::text, $3::text[], p_ttl => $4::interval, p_reply_to => $5::integer) AS id`,
+    [sender, message, recipients, null, replyTo],
   );
 
   const newId: number = result.rows[0].id;
-
-  if (replyTo !== null) {
-    await client.query(
-      `UPDATE agent_chat SET reply_to = $1 WHERE id = $2`,
-      [replyTo, newId],
-    );
-  }
 
   return { id: newId };
 }
@@ -256,7 +250,17 @@ async function processAgentChatMessage({
             await markMessageResponded(client, message.id, agentName);
             log?.info?.(`Sent reply for message ${message.id}`);
           } catch (err) {
-            log?.error?.(`Failed to send reply for message ${message.id}: ${err}`);
+            const pgErr = err as { code?: string; message?: string };
+            if (pgErr.code === "23503") {
+              // Foreign-key violation on reply_to (e.g. parent row deleted/race).
+              // Log distinctly from the old permission-denied class so operators
+              // can tell the DML lockdown is no longer the failure path.
+              log?.error?.(
+                `Reply for message ${message.id} rejected: invalid reply_to (foreign key violation)`,
+              );
+            } else {
+              log?.error?.(`Failed to send reply for message ${message.id}: ${err}`);
+            }
             throw err;
           }
         },

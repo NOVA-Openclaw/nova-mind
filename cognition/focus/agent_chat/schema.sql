@@ -1,7 +1,10 @@
--- Agent Chat Database Schema
+-- Agent Chat Database Schema (DEPRECATED)
 --
--- This file sets up the tables and triggers needed for the agent_chat channel plugin.
--- Run this in your PostgreSQL database (e.g., nova_memory).
+-- ⚠️ DEPRECATED post-nova-mind#320: the canonical agent_chat schema now lives in
+-- database/agent-chat/schema.sql. This file is retained for historical reference
+-- and any legacy installs that still point at it, but it should NOT be used for
+-- new agent_chat database provisioning. Keeping it in sync with the canonical
+-- schema prevents silent drift (see nova-mind#548).
 --
 -- COLUMN HISTORY (see #106):
 --   mentions   → recipients  (renamed)
@@ -25,7 +28,8 @@ CREATE TABLE IF NOT EXISTS agent_chat (
     message     TEXT NOT NULL,
     recipients  TEXT[] NOT NULL CHECK (array_length(recipients, 1) > 0),
     reply_to    INTEGER REFERENCES agent_chat(id),
-    "timestamp" TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    "timestamp" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    expires_at  TIMESTAMPTZ
 );
 
 -- Track message state through processing pipeline: received → routed → responded
@@ -44,6 +48,7 @@ CREATE TABLE IF NOT EXISTS agent_chat_processed (
 CREATE INDEX IF NOT EXISTS idx_agent_chat_recipients  ON agent_chat USING GIN (recipients);
 CREATE INDEX IF NOT EXISTS idx_agent_chat_timestamp   ON agent_chat ("timestamp");
 CREATE INDEX IF NOT EXISTS idx_agent_chat_sender      ON agent_chat (sender, "timestamp" DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_chat_expires     ON agent_chat (expires_at) WHERE expires_at IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_agent_chat_processed_agent  ON agent_chat_processed (agent);
 CREATE INDEX IF NOT EXISTS idx_agent_chat_processed_status ON agent_chat_processed (status);
 
@@ -54,14 +59,34 @@ CREATE INDEX IF NOT EXISTS idx_agent_chat_processed_status ON agent_chat_process
 -- All inserts must go through send_agent_message() (SECURITY DEFINER).
 -- Direct INSERT on agent_chat is blocked by enforce_agent_chat_function_use().
 
--- Gate trigger function: blocks direct inserts that bypass send_agent_message()
+-- Gate trigger function: blocks direct DML that bypass send_agent_message()
 CREATE OR REPLACE FUNCTION enforce_agent_chat_function_use()
 RETURNS TRIGGER AS $$
 BEGIN
-    IF current_setting('agent_chat.bypass_gate', true) IS DISTINCT FROM 'on' THEN
-        RAISE EXCEPTION 'Direct INSERT on agent_chat is not allowed. Use send_agent_message() instead.';
+    -- Allow logical replication apply workers.
+    IF EXISTS (
+        SELECT 1 FROM pg_stat_activity
+        WHERE pid = pg_backend_pid()
+          AND backend_type = 'logical replication worker'
+    ) THEN
+        IF TG_OP = 'DELETE' THEN RETURN OLD; ELSE RETURN NEW; END IF;
     END IF;
-    RETURN NEW;
+
+    -- Allow postgres role (SECURITY DEFINER functions + admin sessions).
+    IF current_user = 'postgres' THEN
+        IF TG_OP = 'DELETE' THEN RETURN OLD; ELSE RETURN NEW; END IF;
+    END IF;
+
+    -- All other roles: deny direct DML
+    IF TG_OP = 'INSERT' THEN
+        RAISE EXCEPTION 'Direct INSERT on agent_chat is not allowed. Use send_agent_message() instead.';
+    ELSIF TG_OP = 'UPDATE' THEN
+        RAISE EXCEPTION 'Direct UPDATE on agent_chat is not allowed. Messages are immutable.';
+    ELSIF TG_OP = 'DELETE' THEN
+        RAISE EXCEPTION 'Direct DELETE on agent_chat is not allowed.';
+    END IF;
+
+    RETURN NULL;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -77,17 +102,27 @@ EXECUTE FUNCTION enforce_agent_chat_function_use();
 CREATE OR REPLACE FUNCTION send_agent_message(
     p_sender     TEXT,
     p_message    TEXT,
-    p_recipients TEXT[]
+    p_recipients TEXT[],
+    p_ttl        INTERVAL DEFAULT NULL,
+    p_reply_to   INTEGER DEFAULT NULL
 )
 RETURNS integer
 LANGUAGE plpgsql
 SECURITY DEFINER
 AS $$
 DECLARE
-    v_id        INTEGER;
-    v_sender    TEXT;
+    v_id         INTEGER;
+    v_sender     TEXT;
     v_recipients TEXT[];
+    v_expires_at TIMESTAMPTZ;
 BEGIN
+    -- Validate sender matches the actual connected database user.
+    -- Must use session_user (not current_user) because SECURITY DEFINER
+    -- sets current_user to the function owner (postgres).
+    IF LOWER(p_sender) != session_user THEN
+        RAISE EXCEPTION 'send_agent_message: sender must match session_user (got % but connected as %)', p_sender, session_user;
+    END IF;
+
     -- Validate inputs
     IF p_message IS NULL OR trim(p_message) = '' THEN
         RAISE EXCEPTION 'send_agent_message: message cannot be empty';
@@ -101,11 +136,20 @@ BEGIN
     v_sender := LOWER(p_sender);
     v_recipients := ARRAY(SELECT LOWER(unnest(p_recipients)));
 
+    -- GUARD: reject self-addressed messages (no legitimate use case; always a typo)
+    IF v_sender = ANY(v_recipients) THEN
+        RAISE EXCEPTION 'send_agent_message: sender "%" is in the recipient list — agents cannot message themselves (did you mean to address someone else?)', v_sender;
+    END IF;
 
-    -- Bypass gate and insert
-    SET LOCAL agent_chat.bypass_gate = 'on';
-    INSERT INTO agent_chat (sender, message, recipients)
-    VALUES (v_sender, p_message, v_recipients)
+    -- Compute expiry if TTL provided
+    IF p_ttl IS NOT NULL THEN
+        v_expires_at := NOW() + p_ttl;
+    END IF;
+
+    -- Atomic insert including reply_to; the enforce trigger allows this because
+    -- current_user = 'postgres' inside the SECURITY DEFINER context.
+    INSERT INTO agent_chat (sender, message, recipients, reply_to, expires_at)
+    VALUES (v_sender, p_message, v_recipients, p_reply_to, v_expires_at)
     RETURNING id INTO v_id;
 
     RETURN v_id;

@@ -54,6 +54,7 @@ CREATE TABLE IF NOT EXISTS public.agent_chat (
     recipients text[] NOT NULL,
     reply_to integer,
     "timestamp" timestamptz DEFAULT now() NOT NULL,
+    expires_at timestamptz,
     CONSTRAINT agent_chat_pkey PRIMARY KEY (id),
     CONSTRAINT agent_chat_reply_to_fkey FOREIGN KEY (reply_to) REFERENCES public.agent_chat (id),
     CONSTRAINT agent_chat_recipients_check CHECK (array_length(recipients, 1) > 0)
@@ -84,6 +85,7 @@ COMMENT ON TABLE public.agent_chat_processed IS 'Message processing state. Agent
 CREATE INDEX IF NOT EXISTS idx_agent_chat_recipients ON public.agent_chat USING gin (recipients);
 CREATE INDEX IF NOT EXISTS idx_agent_chat_sender ON public.agent_chat (sender, "timestamp" DESC);
 CREATE INDEX IF NOT EXISTS idx_agent_chat_timestamp ON public.agent_chat ("timestamp");
+CREATE INDEX IF NOT EXISTS idx_agent_chat_expires ON public.agent_chat (expires_at) WHERE expires_at IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS idx_agent_chat_processed_agent ON public.agent_chat_processed (agent);
 CREATE INDEX IF NOT EXISTS idx_agent_chat_processed_status ON public.agent_chat_processed (status);
@@ -109,11 +111,13 @@ BEGIN
 END;
 $$;
 
--- Name: send_agent_message(text, text, text[]); Type: FUNCTION; Schema: public; Owner: -
+-- Name: send_agent_message(text, text, text[], interval, integer); Type: FUNCTION; Schema: public; Owner: -
 CREATE OR REPLACE FUNCTION public.send_agent_message(
     p_sender text,
     p_message text,
-    p_recipients text[]
+    p_recipients text[],
+    p_ttl interval DEFAULT NULL::interval,
+    p_reply_to integer DEFAULT NULL
 )
 RETURNS integer
 LANGUAGE plpgsql
@@ -121,10 +125,18 @@ VOLATILE
 SECURITY DEFINER
 AS $$
 DECLARE
-    v_id        INTEGER;
-    v_sender    TEXT;
+    v_id         INTEGER;
+    v_sender     TEXT;
     v_recipients TEXT[];
+    v_expires_at TIMESTAMPTZ;
 BEGIN
+    -- Validate sender matches the actual connected database user.
+    -- Must use session_user (not current_user) because SECURITY DEFINER
+    -- sets current_user to the function owner (postgres).
+    IF LOWER(p_sender) != session_user THEN
+        RAISE EXCEPTION 'send_agent_message: sender must match session_user (got % but connected as %)', p_sender, session_user;
+    END IF;
+
     -- Validate inputs
     IF p_message IS NULL OR trim(p_message) = '' THEN
         RAISE EXCEPTION 'send_agent_message: message cannot be empty';
@@ -138,10 +150,20 @@ BEGIN
     v_sender := LOWER(p_sender);
     v_recipients := ARRAY(SELECT LOWER(unnest(p_recipients)));
 
-    -- Bypass gate and insert
-    SET LOCAL agent_chat.bypass_gate = 'on';
-    INSERT INTO public.agent_chat (sender, message, recipients)
-    VALUES (v_sender, p_message, v_recipients)
+    -- GUARD: reject self-addressed messages (no legitimate use case; always a typo)
+    IF v_sender = ANY(v_recipients) THEN
+        RAISE EXCEPTION 'send_agent_message: sender "%" is in the recipient list — agents cannot message themselves (did you mean to address someone else?)', v_sender;
+    END IF;
+
+    -- Compute expiry if TTL provided
+    IF p_ttl IS NOT NULL THEN
+        v_expires_at := NOW() + p_ttl;
+    END IF;
+
+    -- Atomic insert including reply_to; the enforce trigger allows this because
+    -- current_user = 'postgres' inside the SECURITY DEFINER context.
+    INSERT INTO public.agent_chat (sender, message, recipients, reply_to, expires_at)
+    VALUES (v_sender, p_message, v_recipients, p_reply_to, v_expires_at)
     RETURNING id INTO v_id;
 
     RETURN v_id;
@@ -155,15 +177,33 @@ LANGUAGE plpgsql
 VOLATILE
 AS $$
 BEGIN
-    -- Skip enforcement for logical replication (apply worker)
-    IF current_setting('agent_chat.bypass_gate', true) IS NOT DISTINCT FROM 'on' THEN
-        RETURN NEW;
+    -- Allow logical replication apply workers.
+    IF EXISTS (
+        SELECT 1 FROM pg_stat_activity
+        WHERE pid = pg_backend_pid()
+          AND backend_type = 'logical replication worker'
+    ) THEN
+        IF TG_OP = 'DELETE' THEN RETURN OLD; ELSE RETURN NEW; END IF;
     END IF;
-    -- Check if this is a replication apply worker
-    IF EXISTS (SELECT 1 FROM pg_stat_activity WHERE pid = pg_backend_pid() AND backend_type = 'logical replication worker') THEN
-        RETURN NEW;
+
+    -- Allow postgres role (SECURITY DEFINER functions + admin sessions).
+    -- send_agent_message() is SECURITY DEFINER owned by postgres, so
+    -- current_user = 'postgres' inside it. Agent sessions have current_user
+    -- set to their own role — this check cannot be spoofed.
+    IF current_user = 'postgres' THEN
+        IF TG_OP = 'DELETE' THEN RETURN OLD; ELSE RETURN NEW; END IF;
     END IF;
-    RAISE EXCEPTION 'Direct INSERT on agent_chat is not allowed. Use send_agent_message() instead.';
+
+    -- All other roles: deny direct DML
+    IF TG_OP = 'INSERT' THEN
+        RAISE EXCEPTION 'Direct INSERT on agent_chat is not allowed. Use send_agent_message() instead.';
+    ELSIF TG_OP = 'UPDATE' THEN
+        RAISE EXCEPTION 'Direct UPDATE on agent_chat is not allowed. Messages are immutable.';
+    ELSIF TG_OP = 'DELETE' THEN
+        RAISE EXCEPTION 'Direct DELETE on agent_chat is not allowed.';
+    END IF;
+
+    RETURN NULL;
 END;
 $$;
 
@@ -300,4 +340,4 @@ GRANT SELECT ON TABLE public.v_agent_chat_stats TO victoria;
 -- Function grants: existing nova_memory functions default to PUBLIC EXECUTE.
 -- We explicitly document the required EXECUTE capability for victoria and
 -- nova-staging without revoking PUBLIC access.
-GRANT EXECUTE ON FUNCTION public.send_agent_message(text, text, text[]) TO victoria, "nova-staging";
+GRANT EXECUTE ON FUNCTION public.send_agent_message(text, text, text[], interval, integer) TO victoria, "nova-staging";

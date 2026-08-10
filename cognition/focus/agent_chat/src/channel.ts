@@ -123,7 +123,7 @@ async function markMessageFailed(
 /**
  * Insert outbound message into agent_chat via send_agent_message()
  */
-async function insertOutboundMessage(
+export async function insertOutboundMessage(
   client: pg.Client,
   {
     sender,
@@ -160,7 +160,7 @@ function buildSessionLabel({ agentName }: { agentName: string }) {
 /**
  * Process a single message from agent_chat
  */
-async function processAgentChatMessage({
+export async function processAgentChatMessage({
   message,
   client,
   agentName,

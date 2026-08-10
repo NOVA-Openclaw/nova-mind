@@ -66,7 +66,21 @@ function makeRuntime(deliverImpl) {
         formatInboundEnvelope: () => "envelope body",
         finalizeInboundContext: (ctx) => ctx,
         createReplyDispatcherWithTyping: ({ deliver, onError }) => ({
-          dispatcher: { deliver },
+          // Reproduce the real OpenClaw runtime promise-chain semantics:
+          // deliver() is wrapped in .then().catch(onError), so a throw inside
+          // deliver is swallowed and routed to onError — it does NOT propagate
+          // to the caller of dispatchReplyFromConfig. This is the control-flow
+          // gap that caused channel.ts's outer catch (markMessageFailed) to be
+          // bypassed in production despite passing the old direct-await mock.
+          dispatcher: {
+            deliver: async (payload, info) => {
+              try {
+                await deliver(payload, info);
+              } catch (err) {
+                onError?.(err, info);
+              }
+            },
+          },
           replyOptions: {},
           markDispatchIdle: () => {},
         }),

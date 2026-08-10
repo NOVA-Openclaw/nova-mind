@@ -251,16 +251,23 @@ export async function processAgentChatMessage({
             log?.info?.(`Sent reply for message ${message.id}`);
           } catch (err) {
             const pgErr = err as { code?: string; message?: string };
-            if (pgErr.code === "23503") {
-              // Foreign-key violation on reply_to (e.g. parent row deleted/race).
-              // Log distinctly from the old permission-denied class so operators
-              // can tell the DML lockdown is no longer the failure path.
-              log?.error?.(
-                `Reply for message ${message.id} rejected: invalid reply_to (foreign key violation)`,
-              );
-            } else {
-              log?.error?.(`Failed to send reply for message ${message.id}: ${err}`);
-            }
+            const errorMsg =
+              pgErr.code === "23503"
+                ? `Reply for message ${message.id} rejected: invalid reply_to (foreign key violation)`
+                : `Failed to send reply for message ${message.id}: ${err}`;
+
+            // Foreign-key violation on reply_to (e.g. parent row deleted/race).
+            // Log distinctly from the old permission-denied class so operators
+            // can tell the DML lockdown is no longer the failure path.
+            log?.error?.(errorMsg);
+
+            // The OpenClaw runtime's reply dispatcher wraps deliver() in a
+            // .then().catch(onError) chain, so this throw is swallowed and never
+            // reaches processAgentChatMessage's outer catch. Update the
+            // operational state table directly here; the throw below still feeds
+            // onError's log line but is not the sole failure mechanism.
+            await markMessageFailed(client, message.id, agentName, errorMsg);
+
             throw err;
           }
         },

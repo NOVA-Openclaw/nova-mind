@@ -506,6 +506,13 @@ _apply_agent_chat_migrations() {
         return 0
     fi
 
+    # Ensure the dedicated agent_chat database exists before applying migrations.
+    if ! psql -U "$DB_USER" -lqt | cut -d \| -f 1 | grep -qw "$db_name"; then
+        echo "  Creating agent_chat database '$db_name'..."
+        _superuser_createdb "$db_name"
+        echo -e "  ${CHECK_MARK} Created database '$db_name'"
+    fi
+
     echo "  Applying agent_chat migrations..."
     for sql_file in "${mig_files[@]}"; do
         local mig_name

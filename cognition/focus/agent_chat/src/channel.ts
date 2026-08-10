@@ -83,7 +83,12 @@ async function markMessageRouted(client: pg.Client, chatId: number, agentName: s
   const query = `
     UPDATE agent_chat_processed
     SET status = 'routed', routed_at = NOW()
-    WHERE chat_id = $1 AND LOWER(agent) = LOWER($2)
+    WHERE chat_id = $1
+      AND LOWER(agent) = LOWER($2)
+      -- Guard against a downstream "success" transition clobbering a terminal
+      -- status already written earlier in the same reply cycle (e.g. the
+      -- deliver callback's markMessageFailed call on FK-violation failures).
+      AND status NOT IN ('failed', 'responded')
   `;
 
   await client.query(query, [chatId, agentName]);

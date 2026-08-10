@@ -25,20 +25,44 @@ import { setAgentChatRuntime } from "../dist/src/runtime.js";
 function makeFakeClient() {
   return {
     queries: [],
+    statuses: {}, // keyed by chatId|agent, simulated DB status for guard checks
     replyId: 99,
     sendError: null,
     async query(text, params) {
-      this.queries.push({ text, params });
       if (text.includes("send_agent_message")) {
+        this.queries.push({ text, params });
         if (this.sendError) {
           throw this.sendError;
         }
         return { rows: [{ id: this.replyId }] };
       }
       if (text.includes("INSERT INTO agent_chat_processed")) {
+        this.queries.push({ text, params });
+        const key = `${params[0]}|${String(params[1]).toLowerCase()}`;
+        this.statuses[key] = "received";
         return { rows: [] };
       }
       if (text.includes("UPDATE agent_chat_processed")) {
+        const key = `${params[0]}|${String(params[1]).toLowerCase()}`;
+        let newStatus = null;
+        if (text.includes("SET status = 'failed'")) newStatus = "failed";
+        else if (text.includes("SET status = 'routed'")) newStatus = "routed";
+        else if (text.includes("SET status = 'responded'")) newStatus = "responded";
+
+        // Simulate the SQL guard in markMessageRouted: terminal statuses are
+        // never overwritten by a later 'routed' transition. Only apply this
+        // skip when the actual UPDATE text contains the guard, so the test
+        // correctly fails against pre-fix code that lacks the guard.
+        const hasGuard = text.includes("status NOT IN");
+        const current = this.statuses[key];
+        const terminal = new Set(["failed", "responded"]);
+        if (hasGuard && newStatus === "routed" && current && terminal.has(current)) {
+          // Guard skipped the UPDATE; don't record it as an executed status write.
+          return { rows: [] };
+        }
+
+        this.queries.push({ text, params });
+        if (newStatus) this.statuses[key] = newStatus;
         return { rows: [] };
       }
       return { rows: [] };
@@ -226,8 +250,29 @@ describe("processAgentChatMessage reply path", { concurrency: false }, () => {
 
     // The message should NOT be marked responded.
     const respondedQuery = client.queries.find(
-      (q) => q.text.includes("UPDATE agent_chat_processed") && q.text.includes("responded"),
+      (q) =>
+        q.text.includes("UPDATE agent_chat_processed") &&
+        q.text.includes("SET status = 'responded'"),
     );
     assert.strictEqual(respondedQuery, undefined);
+
+    // NEW (Finding A re-review): the LAST status write to agent_chat_processed
+    // must be 'failed', not 'routed'. The unconditional markMessageRouted call
+    // after dispatch "succeeds" used to overwrite 'failed' back to 'routed',
+    // so a final-status assertion is required to detect the overwrite.
+    const statusUpdates = client.queries
+      .filter((q) => q.text.includes("UPDATE agent_chat_processed"))
+      .map((q) => {
+        if (q.text.includes("SET status = 'failed'")) return "failed";
+        if (q.text.includes("SET status = 'routed'")) return "routed";
+        if (q.text.includes("SET status = 'responded'")) return "responded";
+        return "other";
+      });
+    assert.ok(statusUpdates.length > 0, "expected at least one status update");
+    assert.strictEqual(
+      statusUpdates[statusUpdates.length - 1],
+      "failed",
+      "final status write must be 'failed', not overwritten back to 'routed'",
+    );
   });
 });

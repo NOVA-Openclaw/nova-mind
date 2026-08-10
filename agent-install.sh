@@ -72,10 +72,25 @@ else
     exit 1
 fi
 
+# Resolve agent_chat database target.
+# Prefer the top-level key agentChatDatabase in ~/.openclaw/postgres.json,
+# then the AGENT_CHAT_DB_NAME environment override, then the production
+# default 'agent_chat'. Staging installs set agentChatDatabase to an isolated
+# name (e.g. 'agent_chat_staging') so they do not mutate the shared production
+# agent_chat bus (nova-mind#569).
+_resolve_agent_chat_db_name() {
+    local pg_config="${HOME}/.openclaw/postgres.json"
+    local configured=""
+    if [ -f "$pg_config" ] && command -v jq &>/dev/null; then
+        configured=$(jq -r '.agentChatDatabase // ""' "$pg_config" 2>/dev/null || true)
+    fi
+    printf '%s' "${configured:-${AGENT_CHAT_DB_NAME:-agent_chat}}"
+}
+
 # Derived variables
 DB_USER="${PGUSER:-$(whoami)}"
 DB_NAME="${PGDATABASE:-${DB_USER//-/_}_memory}"
-AGENT_CHAT_DB_NAME="agent_chat"
+AGENT_CHAT_DB_NAME="$(_resolve_agent_chat_db_name)"
 
 # PostgreSQL password file path
 PGPASS_FILE="${HOME}/.pgpass"
@@ -201,15 +216,16 @@ _ensure_agent_chat_postgres_json() {
 
     local new_json
     new_json=$(jq --arg db "$database" --arg user "$user" --arg pass "$password" \
-        'if (.agent_chat // null) | type == "object" then
-            .agent_chat |= . + {
-                database: (.database // $db),
-                user: (.user // $user),
-                password: (.password // $pass)
-            }
-         else
-            .agent_chat = {"database": $db, "user": $user, "password": $pass}
-         end' "$pg_config" 2>/dev/null) || return 1
+        'if (.agentChatDatabase // null) | type == "string" then . else .agentChatDatabase = $db end
+         | if (.agent_chat // null) | type == "object" then
+             .agent_chat |= . + {
+                 database: (.database // $db),
+                 user: (.user // $user),
+                 password: (.password // $pass)
+             }
+           else
+             .agent_chat = {"database": $db, "user": $user, "password": $pass}
+           end' "$pg_config" 2>/dev/null) || return 1
 
     # Only write if something changed.
     if [ "$(printf '%s\n' "$new_json" | jq -Sc .)" = "$(jq -Sc . < "$pg_config")" ]; then
@@ -492,6 +508,17 @@ _install_pg_notify_listener() {
 _apply_agent_chat_migrations() {
     local db_name="${1:-$AGENT_CHAT_DB_NAME}"
     local migrations_dir="$SCRIPT_DIR/database/agent-chat/migrations"
+
+    # Belt-and-braces guard: the literal production database name must only be
+    # touched by the production unix account. This prevents a staging install
+    # from mutating the shared production agent_chat bus (nova-mind#569).
+    if [ "$db_name" = "agent_chat" ] && [ "$(whoami)" != "nova" ]; then
+        echo -e "  ${CROSS_MARK} Refusing to target production agent_chat database as user '$(whoami)'"
+        echo "      This install is running against the shared production Postgres cluster."
+        echo "      Set AGENT_CHAT_DB_NAME or configure agentChatDatabase in ~/.openclaw/postgres.json"
+        echo "      to point at an isolated staging database (e.g. 'agent_chat_staging')."
+        exit 1
+    fi
 
     if [ ! -d "$migrations_dir" ]; then
         return 0
@@ -1081,7 +1108,7 @@ verify_cognition() {
 
     # agent_chat tables live in the dedicated agent_chat DB, not the memory DB.
     local agent_chat_db
-    agent_chat_db=$(jq -r '.agent_chat.database // "agent_chat"' "$PG_CONFIG" 2>/dev/null || echo "agent_chat")
+    agent_chat_db=$(jq -r '.agentChatDatabase // "agent_chat"' "$PG_CONFIG" 2>/dev/null || echo "agent_chat")
     if psql -U "$DB_USER" -d "$agent_chat_db" -c '\q' >/dev/null 2>&1; then
         local required_tables=("agent_chat" "agent_chat_processed")
         for table in "${required_tables[@]}"; do
@@ -1993,6 +2020,10 @@ else
     echo -e "  ${WARNING} PGPASSWORD not set — skipping ~/.pgpass provisioning"
 fi
 
+# Preserve an explicit agent_chat database name (agentChatDatabase) in
+# postgres.json so the runtime and future installer runs resolve the same
+# target. Production default is 'agent_chat'; staging should set this to an
+# isolated name (e.g. 'agent_chat_staging') before running the installer.
 if _ensure_agent_chat_postgres_json "$PG_CONFIG" "$AGENT_CHAT_DB_NAME" "$DB_USER" "${PGPASSWORD:-}"; then
     echo -e "  ${CHECK_MARK} Wrote nested agent_chat section to $PG_CONFIG"
 else

@@ -486,6 +486,39 @@ _install_pg_notify_listener() {
     fi
 }
 
+# Apply sorted .sql migrations from database/agent-chat/migrations/ against the
+# dedicated agent_chat database. Hard failure on any migration error so the DB
+# cannot be left in a half-migrated state.
+_apply_agent_chat_migrations() {
+    local db_name="${1:-$AGENT_CHAT_DB_NAME}"
+    local migrations_dir="$SCRIPT_DIR/database/agent-chat/migrations"
+
+    if [ ! -d "$migrations_dir" ]; then
+        return 0
+    fi
+
+    local mig_files=()
+    while IFS= read -r -d '' f; do
+        mig_files+=("$f")
+    done < <(find "$migrations_dir" -maxdepth 1 -name "*.sql" -print0 | sort -z)
+
+    if [ ${#mig_files[@]} -eq 0 ]; then
+        return 0
+    fi
+
+    echo "  Applying agent_chat migrations..."
+    for sql_file in "${mig_files[@]}"; do
+        local mig_name
+        mig_name=$(basename "$sql_file")
+        if _superuser_psql "$db_name" -v ON_ERROR_STOP=1 -f "$sql_file" >/dev/null 2>&1; then
+            echo -e "    ${CHECK_MARK} Migration: $mig_name"
+        else
+            echo -e "    ${CROSS_MARK} Migration failed: $mig_name"
+            exit 1
+        fi
+    done
+}
+
 echo "  Agent DB user: $DB_USER"
 if [ "$PG_SUPERUSER" != "$DB_USER" ]; then
     echo "  Superuser:     $PG_SUPERUSER (for DDL operations)"
@@ -1908,7 +1941,8 @@ fi
 # --- agent_chat runtime configuration ---
 # The agent_chat messaging bus now lives in a dedicated `agent_chat` database.
 # Schema/objects for that database are managed by database/agent-chat/schema.sql
-# and applied by scripts/agent-chat-migration/migrate.sh, not by this installer.
+# and migrations under database/agent-chat/migrations/, which this installer
+# applies automatically after the extension is built.
 # Logical replication for agent_chat (#64/#67) was superseded by the shared-DB
 # design and is no longer configured here.
 echo ""
@@ -2053,6 +2087,9 @@ if [ -d "$EXTENSION_SOURCE" ]; then
 else
     echo -e "  ${WARNING} cognition/focus/agent_chat not found (skipping extension)"
 fi
+
+# Apply agent_chat database migrations after the extension source is in place.
+_apply_agent_chat_migrations "$AGENT_CHAT_DB_NAME"
 
 # --- Cognition focus skills (managed tier — all sessions) ---
 echo ""

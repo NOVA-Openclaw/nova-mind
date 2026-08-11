@@ -208,7 +208,7 @@ EOF
     [[ "$output" != *"agent_chat bus is configured but unreachable"* ]]
 }
 
-@test "TC-579-PD-06: schema version mismatch emits compatibility warning" {
+@test "TC-579-PD-06: older bus schema emits compatibility warning" {
     MOCK_JQ_HAS_AGENT_CHAT=1
     MOCK_PSQL_REACHABLE=1
     MOCK_PSQL_SCHEMA_VERSION="2"
@@ -219,7 +219,35 @@ EOF
     source_peer_lib
     run _agent_chat_integrate_peer
     [ "$status" -eq 0 ]
-    [[ "$output" == *"agent_chat bus schema version 2 may be incompatible"* ]]
+    [[ "$output" == *"agent_chat bus schema version 2 is older than expected"* ]]
+}
+
+@test "TC-579-PD-06b: equal bus schema emits no warning" {
+    MOCK_JQ_HAS_AGENT_CHAT=1
+    MOCK_PSQL_REACHABLE=1
+    MOCK_PSQL_SCHEMA_VERSION="3"
+    make_checkout
+    AGENT_CHAT_REPO="$FAKE_REPO"
+    export AGENT_CHAT_REPO MOCK_JQ_HAS_AGENT_CHAT MOCK_PSQL_REACHABLE MOCK_PSQL_SCHEMA_VERSION
+
+    source_peer_lib
+    run _agent_chat_integrate_peer
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"agent_chat bus schema version"* ]]
+}
+
+@test "TC-579-PD-06c: newer bus schema emits distinct forward-compatibility warning" {
+    MOCK_JQ_HAS_AGENT_CHAT=1
+    MOCK_PSQL_REACHABLE=1
+    MOCK_PSQL_SCHEMA_VERSION="4"
+    make_checkout
+    AGENT_CHAT_REPO="$FAKE_REPO"
+    export AGENT_CHAT_REPO MOCK_JQ_HAS_AGENT_CHAT MOCK_PSQL_REACHABLE MOCK_PSQL_SCHEMA_VERSION
+
+    source_peer_lib
+    run _agent_chat_integrate_peer
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"agent_chat bus schema version 4 is newer than this installer knows; consider updating nova-mind"* ]]
 }
 
 @test "TC-579-PD-07: agent-install.sh passes bash -n" {

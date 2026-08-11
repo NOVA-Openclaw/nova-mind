@@ -9,7 +9,7 @@
 
 # Schema-version handshake constant. Bump when nova-mind requires a newer
 # agent_chat schema than the one currently installed.
-KNOWN_COMPATIBLE_AGENT_CHAT_SCHEMA_VERSION=1
+KNOWN_COMPATIBLE_AGENT_CHAT_SCHEMA_VERSION=3
 
 # Resolve the agent-chat repo checkout path.
 _agent_chat_repo_path() {
@@ -83,8 +83,10 @@ _agent_chat_register_peer() {
             # schema_version table missing or non-numeric — no handshake possible.
             ;;
         *)
-            if [ "$installed_version" -ne "$KNOWN_COMPATIBLE_AGENT_CHAT_SCHEMA_VERSION" ]; then
-                echo -e "  ${WARNING} agent_chat bus schema version ${installed_version} may be incompatible (expected ${KNOWN_COMPATIBLE_AGENT_CHAT_SCHEMA_VERSION})" >&2
+            if [ "$installed_version" -lt "$KNOWN_COMPATIBLE_AGENT_CHAT_SCHEMA_VERSION" ]; then
+                echo -e "  ${WARNING} agent_chat bus schema version ${installed_version} is older than expected (${KNOWN_COMPATIBLE_AGENT_CHAT_SCHEMA_VERSION}); bus may be incompatible" >&2
+            elif [ "$installed_version" -gt "$KNOWN_COMPATIBLE_AGENT_CHAT_SCHEMA_VERSION" ]; then
+                echo -e "  ${WARNING} agent_chat bus schema version ${installed_version} is newer than this installer knows; consider updating nova-mind" >&2
             fi
             ;;
     esac

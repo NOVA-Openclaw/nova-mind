@@ -1,13 +1,17 @@
 # Issue #147: Document agent_chat Plugin Database Authentication Requirements
 
-> **Superseded by #320.** As of the `agent_chat` dedicated-database migration, the
-> plugin no longer reads `database`/`host`/`port`/`user`/`password` from
-> `channels.<plugin_name>` at all — connection details resolve from the nested
+> **Superseded by #320, then by #579.** As of the `agent_chat` dedicated-database
+> migration, the plugin no longer reads `database`/`host`/`port`/`user`/`password`
+> from `channels.<plugin_name>` at all — connection details resolve from the nested
 > `agent_chat` section of `~/.openclaw/postgres.json` (see
-> `cognition/focus/agent_chat/SETUP.md` and `memory/docs/database-config.md` for
-> the current story). The requirements below (password-required, sequence grants)
-> are still true in spirit but the specific config-block example is obsolete.
-> Left as-is otherwise for historical record of the original ask.
+> `memory/docs/database-config.md` for the current story). As of nova-mind#579, the
+> plugin itself (and any setup docs describing it) moved to the
+> `NOVA-Openclaw/agent-chat` repository — the `cognition/focus/agent_chat/SETUP.md`
+> path referenced below no longer exists in this repo; see that repo's `README.md`
+> and `docs/security-model.md` for the current connection/auth story. The
+> requirements below (password-required, sequence grants) are still true in spirit
+> but the specific config-block example and file path are obsolete. Left as-is
+> otherwise for historical record of the original ask.
 
 ## Context
 The `agent_chat` extension plugin connects to PostgreSQL via TCP using `pg.Client` (not Unix socket peer auth). This has specific requirements that are not currently documented clearly, and the existing SETUP.md contains environment-specific references (agent names, credential storage locations) that should not be in a public repository.

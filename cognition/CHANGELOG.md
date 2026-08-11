@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Removed (#579 — agent_chat extracted to NOVA-Openclaw/agent-chat)
+
+- **`cognition/focus/agent_chat/` deleted in full** — the OpenClaw channel plugin (`index.ts`, `src/channel.ts`, `src/config.ts`, `src/runtime.ts`, `lib/pg-env.ts`, `lib/pg-env.test.ts`), its `schema.sql` (the deprecated-but-kept-in-sync copy), and its Node test suites (`tests/agent-chat-function.test.mjs`, `tests/channel-insert.test.mjs`) all moved to the dedicated repo's `plugin/` and `tests/` directories. This repo no longer has a second, separately-maintained copy of the plugin source to keep in sync with the canonical schema.
+- **`agent-install.sh`'s bus provisioning removed** — `_resolve_agent_chat_db_name`, `_ensure_agent_chat_postgres_json`, `_apply_agent_chat_migrations`, and the #569 production-mutation refusal guard are gone. Extension build/sync steps for `cognition/focus/agent_chat` (npm install, TypeScript compilation) and the `agent_chat` table-existence verification step are also removed. See root `CHANGELOG.md` (batch `agent-chat-extraction-579`) for the replacement peer-detection mechanism (`lib/agent-chat-peer-detection.sh`, sourced by `agent-install.sh`).
+- **`database/agent-chat/`** (schema.sql + migrations) and **`scripts/agent-chat-migration/`** (the original #320 one-shot cutover runbook: `migrate.sh`, `decommission.sh`, `delta_check_and_migrate.py`, `audit_rollout.py`, `pre_drop_gate_check.sh`) deleted — both fully superseded by the dedicated repo's `schema.sql`/`migrations/` and installer.
+
 ### Fixed (#548/#569/#403 — agent_chat reply_to param, atomic insert, installer provisioning, pg-env TS parity)
 
 See root `CHANGELOG.md` (batch `agent-chat-reply-to-548`) for full detail. Summary of the `cognition/` pieces:

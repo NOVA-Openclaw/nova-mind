@@ -1,5 +1,33 @@
 # Changelog
 
+### Batch: agent-chat-extraction-579 (Issue #579)
+
+#### Removed
+- **`agent_chat` message bus fully extracted to `NOVA-Openclaw/agent-chat`** (nova-mind#579) — Schema (`database/agent-chat/schema.sql`), migrations (`database/agent-chat/migrations/`), the OpenClaw channel plugin (`cognition/focus/agent_chat/`), and the one-shot migration runbook (`scripts/agent-chat-migration/`) are removed from this repo. `agent-install.sh` no longer resolves `agentChatDatabase`, applies bus schema/migrations, enforces the #569 production-mutation refusal guard, builds/syncs the plugin, or injects `channels.agent_chat`/`plugins.entries.agent_chat` config — all of that now lives in the dedicated repo.
+- **`tests/install/test_agent_chat_installer.bats`** (496 lines) — removed; its assertions (`.pgpass` provisioning/idempotency, `postgres.json` section writes, config strip/injection, listener install) are re-homed in `NOVA-Openclaw/agent-chat/tests/test_agent_chat_installer.bats` (27 tests). The old #569 refusal-guard tests are not ported — the guard itself no longer exists by design; nova-mind's installer has no DDL code path against `agent_chat` to guard.
+
+#### Added
+- **`lib/agent-chat-peer-detection.sh`** (nova-mind#579) — Optional peer-detection library sourced by `agent-install.sh`. Detects whether an `agent_chat` bus is present (via `postgres.json`'s nested `agent_chat` section plus a reachability probe), and if so, delegates to the peer repo checkout (`${AGENT_CHAT_REPO:-$HOME/agent-chat}`): invokes `register-agent.sh <agent>` then `install-plugin.sh --agent-name <agent>`. If the bus is absent, skips silently with one informational line and writes no `agent_chat` artifacts. If configured-but-unreachable or configured-but-checkout-missing, warns and continues — the bus is optional by design, and installation never fails because a peer bus isn't present or isn't checked out.
+- **Schema-version compatibility handshake** (nova-mind#579, QA F-1) — After registration, compares the bus's live `schema_version` against `KNOWN_COMPATIBLE_AGENT_CHAT_SCHEMA_VERSION` (currently `3`, matching the agent-chat repo's fully-migrated baseline) and warns (does not fail) on a directional mismatch — older-than-expected or newer-than-expected are distinguished in the warning text.
+- **`tests/install/test_agent_chat_peer_detection.bats`** (nova-mind#579) — 10 test cases covering all four detection/registration paths (present+registered, absent, unreachable, configured-but-checkout-missing) plus the schema-version handshake.
+
+#### Fixed
+- **Schema-version handshake constant bumped from stale `1` to `3`** (nova-mind#579, QA F-1) — `KNOWN_COMPATIBLE_AGENT_CHAT_SCHEMA_VERSION` initially shipped as `1`, which would have fired a compatibility warning against every fully-migrated bus (schema_version 3 after schema.sql + all three migrations) immediately on merge. Fixed before step-7 platform testing began.
+
+#### Documentation
+- `README.md`, `ARCHITECTURE.md`, `memory/README.md`, `memory/INSTALLATION.md`, `memory/docs/database-config.md`, `cognition/README.md`, `cognition/docs/installation.md`, `cognition/docs/cross-database-replication.md`, `cognition/docs/multi-agent-addressing.md`, `database/schema-reference.md`, `psyche/ARCHITECTURE-agent-chat.md`, `cognition/focus/protocols/agent-chat.md`, `cognition/focus/skills/agent-ecosystem/SKILL.md`, `memory/docs/database-schema-guide.md`, `memory/docs/deployment-setup-guide.md`, `memory/docs/semantic-search-guide.md` — updated to describe `agent_chat` as an optional external peer system owned by `NOVA-Openclaw/agent-chat`, replacing in-repo ownership language and stale `database/agent-chat/`, `cognition/focus/agent_chat/`, and `scripts/agent-chat-migration/` path references.
+
+#### Known follow-ups (filed, not fixed in this batch)
+- **[nova-mind#582](https://github.com/NOVA-Openclaw/nova-mind/issues/582)** — `agent-spawner.py` and `github-issue-watcher.py` bypass `postgres.json` entirely, connecting via bare `psycopg2.connect(dbname="agent_chat")`. Deferred from #579 by design (step-2 validation report, §1A).
+- **[nova-mind#584](https://github.com/NOVA-Openclaw/nova-mind/issues/584)** — `_agent_chat_schema_version()` in the new peer-detection lib hardcodes the literal database name `agent_chat` instead of resolving `.agentChatDatabase`, so the version handshake silently no-ops on isolated/staging-style deployments (QA F-5).
+- **[nova-mind#585](https://github.com/NOVA-Openclaw/nova-mind/issues/585)** — `_agent_chat_detect_bus()`'s presence probe has the same hardcoded-name defect class, creating a false-positive-"present" risk on a shared cluster with an unrelated same-named database and no `.agentChatDatabase` override (QA F-6).
+- **[agent-chat#1](https://github.com/NOVA-Openclaw/agent-chat/issues/1)** — the new repo's `pg-notify-listener-chat.py` still imports nova-mind's deployed `pg_env.py` from `~/.openclaw/lib` rather than vendoring its own copy (QA F-2).
+- **[agent-chat#2](https://github.com/NOVA-Openclaw/agent-chat/issues/2)** — `register-agent.sh` should canonicalize `PGHOST` via `realpath` before `.pgpass` writes/reads, as defensive hardening against a host-environment symlink quirk found during staging (F-4).
+- **Process note (not a code issue):** a data-bearing TC-04 adoption rehearsal (real production `agent_chat` snapshot restored to an isolated instance, installer run against it) is a required precondition before any production deploy/cutover of this extraction — not before merge. See `NOVA-Openclaw/agent-chat`'s `docs/adoption-guide.md` and `reports/SE643-step8-qa-validation.md` §3.
+
+#### Issues Closed
+- #579 — Extract agent_chat message bus into a dedicated repository
+
 ### Batch: agent-chat-reply-to-548 (Issues #548, #569, #403)
 
 #### Added

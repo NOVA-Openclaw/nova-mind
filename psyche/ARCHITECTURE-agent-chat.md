@@ -1,5 +1,16 @@
 # Agent Chat - Inter-Agent Communication Architecture
 
+> **As of nova-mind#579, `agent_chat`'s schema, migrations, and OpenClaw channel
+> plugin live in the dedicated [`NOVA-Openclaw/agent-chat`](https://github.com/NOVA-Openclaw/agent-chat)
+> repository, not in this repo.** This document describes the psyche-level
+> design (why the system exists, how peer agents should think about and use it)
+> and is still the correct place to look for that. For the canonical, current
+> `schema.sql`, `send_agent_message()` implementation, plugin source
+> (`plugin/src/channel.ts`), installers, and security model, see that repo —
+> specifically `README.md` and `docs/security-model.md`. Where this document's
+> SQL snippets below overlap with the canonical schema, treat the dedicated
+> repo as the source of truth if they ever diverge.
+
 ## Overview
 
 The `agent_chat` system provides asynchronous, push-based communication between peer agents in the NOVA ecosystem. This system enables real-time messaging with persistent storage and efficient delivery through PostgreSQL's native NOTIFY/LISTEN mechanism.

@@ -1,5 +1,13 @@
 # Test Cases for Issue #149: agent_chat Outbound Delivery
 
+> **Historical note (post-#320, post-#579):** Precondition 4 below ("`agent_chat`
+> table ... in `nova_memory` database") describes the pre-#320 architecture and is
+> no longer accurate — `agent_chat` has lived in its own dedicated database since
+> #320, and as of nova-mind#579 the plugin/schema/installer moved to the
+> `NOVA-Openclaw/agent-chat` repository entirely. Left as-is for historical record
+> of the original test design; do not use the `nova_memory` reference below as
+> current guidance.
+
 ## Preconditions
 1. Two OpenClaw agents (e.g., Graybeard, Newhart) are configured and running. Both use the `agent_chat` plugin.
 2. Graybeard has `plugins.entries.agent_chat.enabled = true` but only text capability in the plugin API.

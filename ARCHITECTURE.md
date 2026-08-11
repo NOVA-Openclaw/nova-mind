@@ -43,12 +43,12 @@ Other subsystems (`entity_facts`, `agent_bootstrap_context`, `agent_chat`) requi
 nova-mind is a unified repository consolidating five previously separate subsystems:
 
 - **`memory/`** — Persistent PostgreSQL memory with semantic recall, extraction hooks, and structured schema for entities, facts, relationships, events, and lessons.
-- **`cognition/`** — Agent orchestration, inter-agent messaging (`agent_chat`), bootstrap context seeding, and the `agent-config-sync` system that keeps model configuration in sync with the database.
+- **`cognition/`** — Agent orchestration, optional inter-agent messaging peer detection (`agent_chat`, schema/plugin owned by `NOVA-Openclaw/agent-chat` as of #579), bootstrap context seeding, and the `agent-config-sync` system that keeps model configuration in sync with the database.
 - **`relationships/`** — Entity resolution across platforms, session-aware caching, certificate-based agent identity (Web of Trust), and the social graph.
 - **`psyche/`** — Agent self-awareness design: core values, agent-chat architecture, entity/user identity models, and identification protocols. (Migrated from archived `nova-psyche` repo.)
 - **`motivation/`** — Drive assignment, goal tracking, reward signals, and proactive mode orchestration. (Migrated from archived `nova-motivation` repo.)
 
-All five subsystems share a single PostgreSQL database (`{username}_memory`) and are installed via a unified installer (`agent-install.sh`) that ensures idempotent, declarative deployments. **Exception (nova-mind#320):** inter-agent messaging (`agent_chat`/`agent_chat_processed`) was moved out of `{username}_memory` into its own dedicated `agent_chat` database — see `README.md` and `memory/docs/database-config.md` for the current connection story. The Key Tables listings below predate that split; treat any `agent_chat`/`agent_chat_processed` row as living in the separate `agent_chat` database, not `{username}_memory`.
+All five subsystems share a single PostgreSQL database (`{username}_memory`) and are installed via a unified installer (`agent-install.sh`) that ensures idempotent, declarative deployments. **Exception (nova-mind#320/#579):** inter-agent messaging (`agent_chat`/`agent_chat_processed`) was moved out of `{username}_memory` into its own dedicated `agent_chat` database (#320), and as of #579 the bus's schema, migrations, and OpenClaw plugin moved out of this repo entirely into `NOVA-Openclaw/agent-chat` — see `README.md` and `memory/docs/database-config.md` for the current connection story. The Key Tables listings below predate that split; treat any `agent_chat`/`agent_chat_processed` row as living in the separate `agent_chat` database (owned by the dedicated repo), not `{username}_memory`.
 
 ### High-Level Architecture Diagram
 
@@ -118,7 +118,7 @@ graph TB
 - **Delegation Context:** Dynamic context generation for "who can help" decisions
 
 **Key Tables:**
-- `agent_chat`, `agent_chat_processed` — Message queue and delivery tracking (lives in the separate `agent_chat` database as of nova-mind#320, not `{username}_memory` — see the exception note above)
+- `agent_chat`, `agent_chat_processed` — Message queue and delivery tracking (lives in the separate `agent_chat` database as of nova-mind#320, schema/plugin owned by `NOVA-Openclaw/agent-chat` as of #579 — not `{username}_memory` — see the exception note above)
 - `agent_jobs`, `job_messages` — Task coordination with pipeline routing
 - `agents` — Registry of AI agent instances with model, access, and capability metadata
 - `agent_aliases` — Case‑insensitive identifier matching
@@ -214,7 +214,7 @@ Return entity + profile for personalization
 | `projects` | Memory | Active work with Git configuration | `name`, `status`, `goal`, `git_config`, `locked` |
 | `tasks` | Memory | Actionable items linked to projects | `project_id`, `title`, `status`, `assigned_to` |
 | `agents` | Cognition | Registry of AI agent instances | `name`, `model`, `thinking`, `access_method`, `access_details`, `allowed_subagents` |
-| `agent_chat` | Cognition | Inter‑agent message queue (separate `agent_chat` database as of nova-mind#320 — not `{username}_memory`) | `sender`, `message`, `recipients`, `"timestamp"` |
+| `agent_chat` | Cognition | Inter‑agent message queue (separate `agent_chat` database as of nova-mind#320, schema/plugin owned by `NOVA-Openclaw/agent-chat` as of #579 — not `{username}_memory`) | `sender`, `message`, `recipients`, `"timestamp"` |
 | `agent_jobs` | Cognition | Task coordination with pipeline routing | `title`, `topic`, `agent_name`, `status`, `notify_agents` |
 | `agent_turn_context` | Memory/Cognition | Per‑turn critical context injection | `context_type`, `domain_name`, `content` (≤500 chars) |
 | `agent_bootstrap_context` | Cognition | Session‑level initialization context | `context_type`, `domain_name`, `file_key`, `content` |
@@ -263,7 +263,7 @@ The unified installer (`agent‑install.sh`) is idempotent and declarative:
 
 1. **Relationships** — entity‑resolver library, certificate authority skill
 2. **Memory** — schema (via `pgschema`), hooks, scripts, skills, embeddings
-3. **Cognition** — hooks, workflows, bootstrap context, `agent_chat` plugin
+3. **Cognition** — hooks, workflows, bootstrap context, optional `agent_chat` peer-detection/registration (plugin itself owned by `NOVA-Openclaw/agent-chat` as of #579)
 
 ### Key Features
 
@@ -411,7 +411,7 @@ The `entity_facts` table includes `visibility` (public/trusted/private) and `pri
 
 ## Conclusion
 
-nova‑mind provides a complete, integrated agent mind stack that balances flexibility with consistency. By unifying memory, cognition, and relationships around a single PostgreSQL database (with the dedicated `agent_chat` database as the one exception, per nova-mind#320) and a declarative installer, it enables sophisticated multi‑agent systems that remember, reason, and relate across sessions and platforms.
+nova‑mind provides a complete, integrated agent mind stack that balances flexibility with consistency. By unifying memory, cognition, and relationships around a single PostgreSQL database (with the dedicated `agent_chat` bus — owned by `NOVA-Openclaw/agent-chat` as of nova-mind#579 — as the one exception, per nova-mind#320) and a declarative installer, it enables sophisticated multi‑agent systems that remember, reason, and relate across sessions and platforms.
 
 > *Semantic threads weave*
 > *PostgreSQL anchors time—*

@@ -24,14 +24,16 @@ All fields are optional. Missing fields fall through to environment variables or
 
 Since nova-mind#330/#320, `postgres.json` can carry additional named, nested
 objects alongside the flat top-level keys — one per additional database a
-component needs to reach. Current consumers are **`agent_chat`**
-(#320: `agent_chat` moved out of `nova_memory` into its own dedicated database)
-and **`bootstrap`** (#488: lets the db-bootstrap-context hook query a
-different database than an agent's primary DB, so a split agent like
-`newhart` — whose primary DB is `newhart_memory` — can still load
-`agent_bootstrap_context` rows from `nova_memory`; see
-`cognition/focus/bootstrap-context/hook/HOOK.md` for the hook-side detail,
-including unknown-key handling that `loadPgEnv()` itself does not provide):
+component needs to reach. Inside nova-mind the primary consumer is
+**`bootstrap`** (#488: lets the db-bootstrap-context hook query a different
+database than an agent's primary DB, so a split agent like `newhart` — whose
+primary DB is `newhart_memory` — can still load `agent_bootstrap_context` rows
+from `nova_memory`; see `cognition/focus/bootstrap-context/hook/HOOK.md` for
+the hook-side detail, including unknown-key handling that `loadPgEnv()` itself
+does not provide). The **`agent_chat`** section is still used by the optional
+agent_chat bus plugin, but that plugin now lives in the
+`NOVA-Openclaw/agent-chat` repo and is only installed when a bus is detected
+(see "Optional agent_chat Bus Peer Integration" below):
 
 ```json
 {
@@ -40,8 +42,8 @@ including unknown-key handling that `loadPgEnv()` itself does not provide):
   "database": "nova_memory",
   "user": "nova",
   "password": "secret",
-  "agent_chat": {
-    "database": "agent_chat",
+  "bootstrap": {
+    "database": "nova_memory",
     "user": "nova",
     "password": "secret"
   }
@@ -57,65 +59,42 @@ TypeScript agree on per-field section-over-ENV precedence** — see "Resolution
 Order" below. Bash still has no section support at all. See "Loader Functions"
 below for the exact call signature per language.
 
-`postgres.json` also supports a flat, top-level `agentChatDatabase` string key
-(nova-mind#569) that names which database `agent-install.sh` provisions and
-targets as the `agent_chat` bus — distinct from the nested `agent_chat`
-section above, which carries connection *credentials* (`database`/`user`/`password`)
-for runtime loaders. Production installs default to `agentChatDatabase: "agent_chat"`;
-staging/dev installs should set it to an isolated name (e.g. `"agent_chat_staging"`)
-so a staging `agent-install.sh` run cannot mutate the shared production bus. See
-"Installer-Provisioned agent_chat Database Target" below.
+## Optional agent_chat Bus Peer Integration (nova-mind#579)
 
-`agent-install.sh` provisions the `agent_chat` section automatically and is
-idempotent — re-running it reports the section is already correct rather than
-clobbering existing values. See `scripts/agent-chat-migration/README.md` for
-the full rollout runbook.
+`agent-install.sh` no longer owns the `agent_chat` schema, migrations, plugin,
+or OpenClaw config injection. Those moved to the `NOVA-Openclaw/agent-chat`
+repository.
 
-## Installer-Provisioned agent_chat Database Target (nova-mind#569)
+If a bus is present, `agent-install.sh` detects it and delegates to the peer
+repo checkout:
 
-`agent-install.sh` resolves which database name to target as the `agent_chat`
-bus (for both schema/migration application and the runtime `agent_chat`
-section above) via this order:
+1. **Detection** — the bus is "present" when `postgres.json` contains an
+   `agent_chat` nested section **and** the configured database is reachable using
+   the same connection params as the memory DB.
+2. **Sibling-checkout resolution** — the peer repo is expected at
+   `${AGENT_CHAT_REPO:-$HOME/agent-chat}`. Set `AGENT_CHAT_REPO` to point
+   elsewhere if the checkout lives in a non-default location.
+3. **Registration** — `register-agent.sh <agent>` creates the DB role, grants,
+   and `.pgpass` entry for the current agent.
+4. **Plugin install** — `install-plugin.sh` builds the TypeScript plugin, syncs
+   it to `~/.openclaw/extensions/agent_chat`, writes the nested `agent_chat`
+   section of `postgres.json`, and injects the stripped-down
+   `channels.agent_chat` / `plugins.entries.agent_chat` config keys into
+   `openclaw.json`.
 
-1. **`agentChatDatabase`** top-level string key in `~/.openclaw/postgres.json`, if present
-2. **`AGENT_CHAT_DB_NAME`** environment variable
-3. **Default:** `agent_chat`
+If the bus is absent, the installer skips these steps silently (one
+informational line), writes no `agent_chat` artifacts, and exits successfully.
+If the bus is configured but unreachable, or if the peer checkout is missing,
+the installer prints a clear warning and continues — the bus is optional.
 
-The installer writes the resolved value back to `postgres.json` as
-`agentChatDatabase` (creating the key on first run, never overwriting an
-existing string value on re-run), so subsequent installer runs and any script
-that needs the target name — for example `verify_cognition()`'s
-`jq -r '.agentChatDatabase // "agent_chat"'` lookup — agree on the same value.
-
-**Production-mutation guard:** if the resolved name is the literal string
-`agent_chat` (the production default) and the installer is *not* running as
-the `nova` unix account, it refuses to proceed and exits non-zero. This
-prevents a staging or per-developer install from accidentally applying schema
-or migrations against the shared production `agent_chat` bus. Staging/dev
-installs must set `agentChatDatabase` (or `AGENT_CHAT_DB_NAME`) to an isolated
-name such as `agent_chat_staging` before running `agent-install.sh`. The guard
-checks `whoami` (the actual connected unix user), not `$PGUSER`, so it cannot
-be bypassed by exporting a different `PGUSER` value.
-
-Once the target database is resolved, `agent-install.sh`:
-1. Creates the database if it does not already exist.
-2. Applies `database/agent-chat/schema.sql` unconditionally (idempotent —
-   `CREATE IF NOT EXISTS` / `CREATE OR REPLACE` throughout) — this guarantees a
-   fresh install has the tables/triggers/functions that migrations assume
-   already exist, even before any migration file runs.
-3. Applies every `*.sql` file under `database/agent-chat/migrations/`, in
-   filename-sorted order, with `ON_ERROR_STOP=1` — any migration failure is a
-   hard installer failure, never a silent partial-migration state.
-
-See `scripts/agent-chat-migration/README.md` for the original one-shot
-cutover runbook (superseded for day-to-day schema evolution by the migrations
-directory above, which the installer now applies automatically on every run).
+For a from-scratch bus install, run the `NOVA-Openclaw/agent-chat` installer
+instead of `agent-install.sh`.
 
 ## Resolution Order
 
-**As of nova-mind#403, Python and TypeScript share the same per-field resolution order.** (Python got there first via #405; #403 ported the identical contract to all three TypeScript `loadPgEnv()` copies — `lib/pg-env.ts`, `memory/lib/pg-env.ts`, and `cognition/focus/agent_chat/lib/pg-env.ts`.) Bash remains the odd one out — see below.
+**As of nova-mind#403, Python and TypeScript share the same per-field resolution order.** (Python got there first via #405; #403 ported the identical contract to the TypeScript `loadPgEnv()` copies in `lib/pg-env.ts` and `memory/lib/pg-env.ts`. The agent_chat plugin's copy now lives in the `NOVA-Openclaw/agent-chat` repo at `plugin/lib/pg-env.ts`.) Bash remains the odd one out — see below.
 
-### Python (`lib/pg_env.py` / `memory/lib/pg_env.py`) and TypeScript (`lib/pg-env.ts` / `memory/lib/pg-env.ts` / `cognition/focus/agent_chat/lib/pg-env.ts`) — per-field precedence
+### Python (`lib/pg_env.py` / `memory/lib/pg_env.py`) and TypeScript (`lib/pg-env.ts` / `memory/lib/pg-env.ts` / `NOVA-Openclaw/agent-chat/plugin/lib/pg-env.ts`) — per-field precedence
 
 Resolution happens **per field**, not once for the whole config:
 
@@ -126,7 +105,7 @@ Resolution happens **per field**, not once for the whole config:
 
 A field the section **omits** is unaffected by the section at all — it falls through to the normal ENV → flat-config → default chain, exactly as if no section had been requested. This is why it's a *per-field* rule rather than a single global switch: a section that only sets `database` still lets ENV win for `host`/`port`/`user`/`password`.
 
-This closes the gap that used to let a pre-exported ambient var (e.g. a gateway shell already exporting `PGDATABASE=nova_memory`) override a TypeScript-side `section` value — `cognition/focus/agent_chat/src/channel.ts`'s `loadPgEnv(undefined, "agent_chat")` call is a confirmed beneficiary; it now reliably resolves the `agent_chat` database section even when `PGDATABASE` is set in the environment.
+This closes the gap that used to let a pre-exported ambient var (e.g. a gateway shell already exporting `PGDATABASE=nova_memory`) override a TypeScript-side `section` value — the agent_chat plugin's `src/channel.ts` (now in `NOVA-Openclaw/agent-chat`) calls `loadPgEnv(undefined, "agent_chat")` and is a confirmed beneficiary; it now reliably resolves the `agent_chat` database section even when `PGDATABASE` is set in the environment.
 
 ### Bash (`pg-env.sh`) — no section support
 
@@ -153,8 +132,8 @@ psql -c "SELECT 1"
 
 > **No section support in Bash.** `pg-env.sh` does not currently support the
 > nested-section feature described above — it only reads top-level flat keys.
-> Scripts that need the `agent_chat` DB from Bash should read the nested JSON
-> directly with `jq` (e.g. `jq -r '.agent_chat.database' ~/.openclaw/postgres.json`)
+> Scripts that need the optional `agent_chat` DB from Bash should read the nested
+> JSON directly with `jq` (e.g. `jq -r '.agent_chat.database' ~/.openclaw/postgres.json`)
 > rather than relying on `load_pg_env`.
 
 ### Python
@@ -208,7 +187,7 @@ const agentChatConfig = loadPgEnv(undefined, "agent_chat");
 const client = new Client(agentChatConfig);
 ```
 
-This is exactly the pattern `cognition/focus/agent_chat/src/channel.ts` uses to
+This is exactly the pattern the agent_chat plugin (`NOVA-Openclaw/agent-chat/plugin/src/channel.ts`) uses to
 resolve its dedicated database connection (`loadPgEnv(undefined, "agent_chat")`).
 
 ### Custom config path
@@ -233,11 +212,9 @@ shell-install.sh
 
 agent-install.sh
   └─ Installs lib/ → ~/.openclaw/lib/
-  └─ source ~/.openclaw/lib/pg-env.sh → load_pg_env() → reads postgres.json → creates DB & runs migrations
-  └─ Resolves agentChatDatabase (postgres.json → AGENT_CHAT_DB_NAME env → "agent_chat" default)
-  └─ Refuses to proceed if target is literal "agent_chat" and not running as the nova unix user
-  └─ Creates the agent_chat-target DB if missing, applies database/agent-chat/schema.sql, then
-     applies database/agent-chat/migrations/*.sql in sorted order
+  └─ source ~/.openclaw/lib/pg-env.sh → load_pg_env() → reads postgres.json → creates memory DB & runs migrations
+  └─ Detects optional agent_chat bus (postgres.json section/DB probe)
+  └─ If present, invokes ${AGENT_CHAT_REPO:-$HOME/agent-chat}/register-agent.sh then install-plugin.sh
 
 hooks & scripts
   └─ source ~/.openclaw/lib/pg-env.sh (or import equivalent) → PG* vars set → use psql/psycopg2/pg natively
@@ -254,4 +231,4 @@ hooks & scripts
 
 - The config file may contain a plaintext password (in both the flat top-level keys and any nested section such as `agent_chat`). Ensure `~/.openclaw/` has `700` permissions and `postgres.json` itself is mode `600`.
 - Prefer peer authentication or env vars in production over storing passwords in the file.
-- `agent-install.sh` provisions `~/.pgpass` entries and the `postgres.json` `agent_chat` section together, so most installs never need to hand-edit passwords into this file.
+- When the optional bus is present, the peer repo's `install-plugin.sh` provisions the `~/.pgpass` entry and the `postgres.json` `agent_chat` section, so most installs never need to hand-edit passwords into this file.

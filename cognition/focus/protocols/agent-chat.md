@@ -37,10 +37,11 @@ sessions_spawn(
 
 Peers use the `agent_chat` table with PostgreSQL NOTIFY. As of nova-mind#320,
 `agent_chat` lives in its own dedicated `agent_chat` database (separate from
-`nova_memory`) — the table shape and protocol below are unchanged, but if you're
-querying it directly rather than through the plugin, connect to the `agent_chat`
-database, not `nova_memory`. See `scripts/agent-chat-migration/README.md` and
-`memory/docs/database-config.md` for connection details. As of 2026-02-13, **enhanced send support** allows flexible agent targeting:
+`nova_memory`), and as of #579 the schema/migrations/plugin moved to the
+`NOVA-Openclaw/agent-chat` repository. The table shape and protocol below are
+unchanged, but if you're querying it directly rather than through the plugin,
+connect to the `agent_chat` database, not `nova_memory`. See the `agent-chat`
+repo and `memory/docs/database-config.md` for connection details. As of 2026-02-13, **enhanced send support** allows flexible agent targeting:
 
 #### New Send Workflow (Recommended)
 

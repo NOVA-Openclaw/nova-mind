@@ -61,46 +61,15 @@ CREATE TABLE agents (
 
 ```
 
-> **`agent_chat` lives in its own database (#320), not here.** As of the #320
-> migration, `agent_chat` and `agent_chat_processed` are NOT part of the main
-> memory database above — they live in a separate, dedicated `agent_chat`
-> database on the same PostgreSQL instance. `agent-install.sh` provisions and
-> migrates this database automatically (resolving the target name via the
-> `agentChatDatabase` key in `~/.openclaw/postgres.json`, nova-mind#569 — see
-> `memory/docs/database-config.md#installer-provisioned-agent_chat-database-target-nova-mind569`);
-> for a manual/from-scratch setup, create and schema it yourself:
->
-> ```bash
-> createdb agent_chat
-> psql -d agent_chat -f database/agent-chat/schema.sql
-> # Then apply any migrations in filename order:
-> for f in database/agent-chat/migrations/*.sql; do psql -d agent_chat -v ON_ERROR_STOP=1 -f "$f"; done
-> ```
->
-> See `scripts/agent-chat-migration/README.md` for the original one-shot migration
-> runbook (grants, sequence alignment, rollout) and `memory/docs/database-config.md`
-> for how agents resolve which database to connect to. The table shape (columns,
-> `send_agent_message()` as the only insert path, column history from #106) has
-> evolved since the #320 move — most recently in nova-mind#548, which added the
-> `expires_at` column and a 5th `send_agent_message()` parameter (`p_reply_to`):
->
-> ```sql
-> -- Column history (#106): mentions → recipients, created_at → "timestamp", channel dropped
-> -- expires_at added in #548 (computed from send_agent_message's optional p_ttl arg)
-> -- All inserts via send_agent_message(sender, message, recipients, p_ttl, p_reply_to)
-> CREATE TABLE agent_chat (
->     id          SERIAL PRIMARY KEY,
->     sender      TEXT NOT NULL,
->     message     TEXT NOT NULL,
->     recipients  TEXT[] NOT NULL CHECK (array_length(recipients, 1) > 0),
->     reply_to    INTEGER REFERENCES agent_chat(id),
->     "timestamp" TIMESTAMPTZ NOT NULL DEFAULT now(),
->     expires_at  TIMESTAMPTZ
-> );
-> ```
->
-> See `psyche/ARCHITECTURE-agent-chat.md` for the full `send_agent_message()`
-> signature, `reply_to` atomicity semantics, and `agent_chat_processed` status-flow detail.
+> **`agent_chat` is an optional peer subsystem (#579), not part of this database.**
+> As of nova-mind#579, the `agent_chat` schema, migrations, plugin, and bus
+> installer live in the dedicated `NOVA-Openclaw/agent-chat` repository. When a
+> bus is present on the host, `agent-install.sh` detects it and delegates to that
+> repo's `register-agent.sh` and `install-plugin.sh`. No `agent_chat` tables or
+> functions belong in the main memory database above. See
+> `memory/docs/database-config.md#optional-agent_chat-bus-peer-integration-nova-mind579`
+> for detection details and the `agent-chat` repo for the canonical schema,
+> `send_agent_message()` signature, and `reply_to` semantics.
 
 ## Step 2: OpenClaw Configuration
 
@@ -153,7 +122,7 @@ In `~/.openclaw/openclaw.json`, add agents to the `agents.list` array:
 1. **Primary agent** must have `subagents.allowAgents` listing spawnable agents
 2. **Each subagent** needs an entry in `agents.list` with at least `id` and `model`
 3. **Fallbacks** are optional but recommended for reliability
-4. **Agent chat connection details do NOT live in `openclaw.json` (as of #320)** — `channels.agent_chat` and `plugins.entries.agent_chat.config` should be config-free of `database`/`host`/`port`/`user`/`password`; `agent-install.sh` actively strips those keys if present. The plugin resolves its connection from the nested `agent_chat` section of `~/.openclaw/postgres.json` instead (see `memory/docs/database-config.md`). Manual setups must provision that `postgres.json` section rather than the `openclaw.json` config keys
+4. **Agent chat connection details do NOT live in `openclaw.json` (as of #320/#579)** — when the optional bus is present, the peer repo's `install-plugin.sh` ensures `channels.agent_chat` and `plugins.entries.agent_chat.config` are config-free of `database`/`host`/`port`/`user`/`password`. The plugin resolves its connection from the nested `agent_chat` section of `~/.openclaw/postgres.json` instead (see `memory/docs/database-config.md`). Manual setups must provision that `postgres.json` section rather than the `openclaw.json` config keys
 
 ## Step 3: Workspace Setup
 
@@ -230,16 +199,14 @@ sessions_spawn(agentId="scout", task="Test: confirm you can spawn and respond")
 
 ## Advanced Configuration
 
-### Cross-Database Replication (superseded by #320 for `agent_chat`)
+### Cross-Database Replication (superseded by #320/#579 for `agent_chat`)
 
 > **This section describes a pre-#320 architecture.** Logical replication of
 > `agent_chat` between per-agent memory databases (e.g. `nova_memory` ↔
 > `graybeard_memory`) has been **superseded** by the #320 shared dedicated
-> `agent_chat` database design — all agents now connect to the same `agent_chat`
-> database directly, so there is nothing to replicate for that table anymore.
-> `agent-install.sh` no longer configures `agent_chat` replication (see the
-> "agent_chat runtime configuration" section of `agent-install.sh` itself, which
-> notes the shared-DB design supersedes it). The [Cross-Database Replication
+> `agent_chat` database design, and as of #579 the bus code/schema/plugin moved
+> to the `NOVA-Openclaw/agent-chat` repository. `agent-install.sh` no longer
+> configures `agent_chat` replication. The [Cross-Database Replication
 > Guide](cross-database-replication.md) is kept for historical reference and in
 > case other tables still need cross-database replication in some deployments,
 > but do **not** follow it for `agent_chat` on a #320-or-later install. It

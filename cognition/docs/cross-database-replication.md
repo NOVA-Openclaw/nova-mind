@@ -1,17 +1,16 @@
 # Cross-Database Replication Setup
 
-> **⚠️ Superseded for `agent_chat` by nova-mind#320.** This entire guide describes a
+> **⚠️ Superseded for `agent_chat` by nova-mind#320/#579.** This entire guide describes a
 > pre-#320 architecture in which `agent_chat` was replicated bidirectionally between
 > each agent's own memory database (e.g. `nova_memory` ↔ `graybeard_memory`). As of
 > #320, `agent_chat` lives in a single dedicated `agent_chat` database that all agents
-> connect to directly — there is no more per-agent `agent_chat` table to replicate, and
-> `agent-install.sh` no longer sets up or detects `agent_chat` logical replication (see
-> the "agent_chat runtime configuration" section of `agent-install.sh`, and
-> `scripts/agent-chat-migration/README.md` for the current architecture). This guide is
-> kept as a historical/reference document for the replication mechanics themselves
-> (origin='none', trigger REPLICA-mode pitfalls, etc.), which may still be relevant if
-> some other table is replicated this way in the future — but do not use it to set up
-> or troubleshoot `agent_chat` on a #320-or-later install.
+> connect to directly, and as of #579 the bus code/schema/plugin moved to the
+> `NOVA-Openclaw/agent-chat` repository. `agent-install.sh` no longer sets up or
+> detects `agent_chat` logical replication. This guide is kept as a historical/reference
+> document for the replication mechanics themselves (origin='none', trigger REPLICA-mode
+> pitfalls, etc.), which may still be relevant if some other table is replicated this
+> way in the future — but do not use it to set up or troubleshoot `agent_chat` on a
+> #320-or-later install.
 
 This guide covers setting up **bidirectional** logical replication for `agent_chat` when agents use
 separate databases. The production configuration (nova_memory ↔ graybeard_memory) is bidirectional
@@ -622,8 +621,8 @@ above.
 
 ## Related Files
 
-- `cognition/focus/agent_chat/schema.sql` - Contains trigger definitions and replication comments
-- `database/agent-chat/schema.sql` - The dedicated `agent_chat` database's schema as of nova-mind#320 (see the superseded-banner note above) — `agent_chat` no longer lives in `nova_memory`, so replication guidance in this document does not apply to it
+- `NOVA-Openclaw/agent-chat/schema.sql` - The dedicated `agent_chat` database's canonical schema (moved out of this repo in #579)
+- `NOVA-Openclaw/agent-chat/plugin/` - The OpenClaw channel plugin source (moved out of this repo in #579)
 - `agent-install.sh` - As of #320 no longer auto-detects or configures `agent_chat` logical replication (see the "agent_chat runtime configuration" section, which explicitly notes replication for #64/#67 was superseded by the shared-DB design); the replication mechanics on this page are reference-only for other tables that might use this pattern in the future
 - `memory/database/renames.json` - Declarative rename manifest applied by Step 1.5
 - Database migration scripts in `migrations/`

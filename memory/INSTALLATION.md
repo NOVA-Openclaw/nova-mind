@@ -59,15 +59,29 @@ The installer is **idempotent** — safe to run multiple times. Use `./agent-ins
 
 ## Recent Changes
 
-### 2026-08-11: agent_chat reply_to Param, Atomic Insert, Installer Provisioning Guard (#548, #569, #403)
+### 2026-08-11: agent_chat Extraction to Dedicated Repo (#579)
 
-`agent-install.sh`'s agent_chat provisioning changed in three ways (full detail: root `CHANGELOG.md` batch `agent-chat-reply-to-548`, `cognition/CHANGELOG.md`, `memory/docs/database-config.md#installer-provisioned-agent_chat-database-target-nova-mind569`):
+`agent-install.sh` no longer owns the `agent_chat` schema, migrations, plugin,
+OpenClaw config injection, or `.pgpass` provisioning for the bus. Those moved to
+the dedicated `NOVA-Openclaw/agent-chat` repository. `agent-install.sh` now
+performs **optional peer detection**:
 
-- **Target database resolution (#569):** the installer now resolves the `agent_chat` bus database name via `agentChatDatabase` (top-level string key in `~/.openclaw/postgres.json`) → `AGENT_CHAT_DB_NAME` env var → default `agent_chat`, persisting the resolved value back to `postgres.json`.
-- **Production-mutation refusal guard (#569):** if the resolved name is the literal production database name `agent_chat` and the installer is not running as the `nova` unix account (checked via `whoami`, not `$PGUSER`), it hard-refuses and exits non-zero — prevents a staging/dev install from mutating the shared production bus.
-- **Base schema applied before migrations, every run (#548):** `_apply_agent_chat_migrations` now applies `database/agent-chat/schema.sql` unconditionally (idempotent) before running `database/agent-chat/migrations/*.sql` in sorted order, so a fresh install always has the tables/triggers/functions the migrations assume exist.
+- **Present bus:** if `postgres.json` contains an `agent_chat` section and the
+  configured database is reachable, the installer invokes
+  `${AGENT_CHAT_REPO:-$HOME/agent-chat}/register-agent.sh` followed by
+  `install-plugin.sh`.
+- **Missing checkout:** if the bus is configured/reachable but the peer repo
+  checkout cannot be found, the installer warns and continues.
+- **Unreachable bus:** if the bus is configured but the DB is unreachable, the
+  installer warns and continues.
+- **Absent bus:** if no bus is detected, the installer skips with one
+  informational line and writes no `agent_chat` artifacts.
 
-Separately, `send_agent_message()` gained a 5th parameter (`p_reply_to`, #548) and all three TypeScript `loadPgEnv()` copies gained per-field section-over-ENV precedence matching Python (#403) — neither of these touches the memory-subsystem installer path directly, but both are documented fully in the references above since `agent-install.sh` is the shared installer for all `nova-mind` subsystems.
+The earlier production-mutation guard (#569) and base-schema application step
+(#548) no longer exist in nova-mind because the bus DDL now lives entirely in
+`NOVA-Openclaw/agent-chat`. See `memory/docs/database-config.md#optional-agent_chat-bus-peer-integration-nova-mind579`
+for detection details and the `agent-chat` repo for the canonical schema,
+migrations, and plugin.
 
 ### 2026-08-08: Completion Log Reconcile + Cron-Env PGUSER Fix (#561, #562, #564)
 

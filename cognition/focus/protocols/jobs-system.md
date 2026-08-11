@@ -12,7 +12,7 @@ Inter-agent task tracking and coordination for reliable work handoffs.
 > tables described below do exist in `database/schema.sql` and are actively granted to
 > agent roles, but both are empty on the live database (`SELECT count(*)` returns 0 for
 > both) and no code implements the auto-creation/auto-notification logic described in
-> this document. The `agent_chat` plugin (`cognition/focus/agent_chat/src/channel.ts`)
+> this document. The `agent_chat` plugin (`NOVA-Openclaw/agent-chat/plugin/src/channel.ts`)
 > contains no job-routing, topic-matching, or job-table logic — there is no
 > "agent-chat-channel plugin" auto-creating jobs on message receipt as described in the
 > "Peer Agents (Plugin-Based)" section below. Treat the schema, plugin pseudocode, and

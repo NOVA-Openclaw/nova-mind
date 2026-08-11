@@ -74,7 +74,7 @@ SELECT send_agent_message(
 - **Message** (arg 2, `p_message`): The message content
 - **Recipients** (arg 3, `p_recipients`): Array of recipient agent names, or `ARRAY['*']` for broadcast
 - **TTL** (arg 4, `p_ttl`, optional, default `NULL`): An `interval`; when provided, `expires_at` is computed as `NOW() + p_ttl` at insert time
-- **Reply-to** (arg 5, `p_reply_to`, optional, default `NULL`, added in nova-mind#548): The `id` of the message this one replies to. Passed through to `agent_chat.reply_to` in the same atomic INSERT — there is no follow-up `UPDATE`. An invalid/deleted parent id raises a foreign-key violation (SQLSTATE `23503`), which callers should handle distinctly from other failure classes (see `cognition/focus/agent_chat/src/channel.ts`'s `insertOutboundMessage`).
+- **Reply-to** (arg 5, `p_reply_to`, optional, default `NULL`, added in nova-mind#548): The `id` of the message this one replies to. Passed through to `agent_chat.reply_to` in the same atomic INSERT — there is no follow-up `UPDATE`. An invalid/deleted parent id raises a foreign-key violation (SQLSTATE `23503`), which callers should handle distinctly from other failure classes (see the `NOVA-Openclaw/agent-chat` plugin's `src/channel.ts`'s `insertOutboundMessage`).
 
 `send_agent_message()`:
 - Validates that `LOWER(p_sender)` matches `session_user` — a caller cannot spoof another agent's identity by passing a different `p_sender`, because the check uses `session_user` (the actual connected role), not `current_user` (which the function's own `SECURITY DEFINER` context sets to the function owner, `postgres`).
@@ -216,7 +216,7 @@ CREATE TABLE agent_chat_processed (
 
 `status` is one of `received`, `routed`, `responded`, `failed`. Each recipient agent gets its own row keyed on `(chat_id, agent)`, so a single broadcast message can have independent processing state per recipient. An "unacknowledged message" check (e.g. used by the Proactive Mode heartbeat cascade) looks for `agent_chat` rows addressed to an agent with no matching `agent_chat_processed` row for that agent.
 
-**Status transition guard (nova-mind#548):** the `markMessageRouted()` UPDATE (used by `cognition/focus/agent_chat/src/channel.ts` when routing an inbound message to a session) now includes `AND status NOT IN ('failed', 'responded')`. This prevents a downstream "routed" transition from clobbering a terminal status (`failed`, `responded`) already written earlier in the same reply cycle — specifically, `deliver()`'s `markMessageFailed()` call on a reply failure (e.g. a `reply_to` foreign-key violation). Without the guard, a `routed` write racing after a `failed` write would silently erase the failure record.
+**Status transition guard (nova-mind#548):** the `markMessageRouted()` UPDATE (used by the `NOVA-Openclaw/agent-chat` plugin's `src/channel.ts` when routing an inbound message to a session) now includes `AND status NOT IN ('failed', 'responded')`. This prevents a downstream "routed" transition from clobbering a terminal status (`failed`, `responded`) already written earlier in the same reply cycle — specifically, `deliver()`'s `markMessageFailed()` call on a reply failure (e.g. a `reply_to` foreign-key violation). Without the guard, a `routed` write racing after a `failed` write would silently erase the failure record.
 
 ## Implementation Notes
 

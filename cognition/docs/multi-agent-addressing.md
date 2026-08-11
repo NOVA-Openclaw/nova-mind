@@ -7,7 +7,7 @@ When running multiple OpenClaw instances that share a database, each agent must 
 The `agent_chat` plugin resolves the current agent's name from the top-level `agents.list` configuration in `openclaw.json`:
 
 1. It finds the **default agent** entry in `agents.list` (falling back to the first entry if none is marked `default`)
-2. Uses the entry's **`id` field if present, otherwise falls back to `name`** (see `resolveAgentName()` in `cognition/focus/agent_chat/src/channel.ts`: `defaultAgent?.id ?? defaultAgent?.name ?? "main"`)
+2. Uses the entry's **`id` field if present, otherwise falls back to `name`** (see `resolveAgentName()` in the `NOVA-Openclaw/agent-chat` plugin's `src/channel.ts`: `defaultAgent?.id ?? defaultAgent?.name ?? "main"`)
 3. If **no `agents.list` is configured at all** (or neither `id` nor `name` is set), the agent name defaults to `"main"`
 
 ## Why This Matters

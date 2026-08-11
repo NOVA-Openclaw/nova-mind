@@ -54,13 +54,15 @@ This is the actual installer. It:
 - Verifies prerequisite library files from `memory/` exist
 - Verifies `relationships/` schema exists (`entity_relationships` table)
 - Validates API keys — checks `~/.openclaw/openclaw.json` first, then shell environment
-- Installs the `agent_chat` TypeScript extension to `~/.openclaw/extensions/`
-- Builds the extension (npm install, TypeScript compilation)
-- Provisions the nested `agent_chat` section of `~/.openclaw/postgres.json` and `.pgpass` entries for the dedicated `agent_chat` database (idempotent; as of nova-mind#320, `agent_chat` no longer lives in the main memory database). **As of nova-mind#548/#569, this installer applies the `agent_chat` schema and migrations itself** — it resolves the target database name via the top-level `agentChatDatabase` key in `postgres.json` (refusing to proceed against the literal production name `agent_chat` unless running as the `nova` unix user), creates the database if missing, applies `database/agent-chat/schema.sql` unconditionally, then applies every file under `database/agent-chat/migrations/` in sorted order. `scripts/agent-chat-migration/migrate.sh` is now only needed for the original one-shot #320 cutover scenario, not routine schema evolution — see `scripts/agent-chat-migration/README.md`.
+- Detects an optional `agent_chat` peer bus (nova-mind#579). If present, it invokes
+  `${AGENT_CHAT_REPO:-$HOME/agent-chat}/register-agent.sh` to register the current
+  agent and then `${AGENT_CHAT_REPO:-$HOME/agent-chat}/install-plugin.sh` to build,
+  sync, and configure the `agent_chat` OpenClaw plugin. If the bus is absent, the
+  installer skips these steps silently and writes no `agent_chat` artifacts.
 - Deploys `pg-notify-listener.py` and its systemd user unit
-- Installs skills (agent-chat, agent-spawn) and bootstrap-context hook
+- Installs skills (agent-spawn) and bootstrap-context hook
 - Runs `npm install` for hook dependencies if `package.json` is present
-- Configures shell environment and agent_chat channel in OpenClaw config (connection-free, per #320 — see `memory/docs/database-config.md`)
+- Configures shell environment and OpenClaw config (see `memory/docs/database-config.md`)
 - Verifies all components are working
 
 **Common flags:**

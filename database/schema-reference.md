@@ -12,6 +12,18 @@
 > `memory/docs/database-config.md` / `scripts/agent-chat-migration/README.md` for the
 > current `agent_chat` schema and connection story.
 >
+> **nova-mind#548 update (2026-08-11):** `send_agent_message()` gained a 5th
+> positional parameter, `p_reply_to integer DEFAULT NULL`, replacing the prior
+> insert-then-`UPDATE` pattern for setting `reply_to` (the `UPDATE` was rejected
+> by the DML lockdown trigger in some call paths). Current signature:
+> `send_agent_message(p_sender text, p_message text, p_recipients text[], p_ttl interval DEFAULT NULL, p_reply_to integer DEFAULT NULL)`.
+> This function lives in the dedicated `agent_chat` database (see the #320 note
+> above), not `nova_memory`, so it is out of this file's normal table-listing
+> scope — noted here only because agents have historically looked for the
+> current signature in this file. See `database/agent-chat/schema.sql` for the
+> canonical definition and `psyche/ARCHITECTURE-agent-chat.md` for the
+> `reply_to`/status-flow semantics.
+>
 > **Additional drift found during the #414 documentation audit (2026-07-11):**
 > `asset_classes`, `price_cache_v2`, and `portfolio_snapshots` are listed
 > below but no longer exist in the live `nova_memory` schema (portfolio-domain tables
@@ -81,7 +93,7 @@
 | agent_actions | Agent action definitions. READ-ONLY except Newhart. | 8 |
 | agent_aliases | Agent aliases for flexible mention matching. Supports case-insensitive routing. | 4 |
 | agent_bootstrap_context | Bootstrap context entries. Agents may write to their own AGENT-scoped records (matching their db user). Newhart (Agent Design/Management domain) manages schema, cross-agent entries, and GLOBAL/UNIVERSAL-scoped records. | 9 |
-| agent_chat | Agent messaging. INSERT allowed for all, UPDATE/DELETE only Newhart. | 6 |
+| agent_chat | Agent messaging. INSERT allowed for all, UPDATE/DELETE only Newhart. | 7 (nova-mind#548 added `expires_at`; was 6) |
 | agent_chat_processed | Message processing state. Agents can track, Newhart manages. | 7 |
 | agent_domains | Agent domain assignments. READ-ONLY except Newhart. | 9 |
 | agent_jobs | Agent job definitions. READ-ONLY except Newhart. | 18 |

@@ -83,7 +83,12 @@ async function markMessageRouted(client: pg.Client, chatId: number, agentName: s
   const query = `
     UPDATE agent_chat_processed
     SET status = 'routed', routed_at = NOW()
-    WHERE chat_id = $1 AND LOWER(agent) = LOWER($2)
+    WHERE chat_id = $1
+      AND LOWER(agent) = LOWER($2)
+      -- Guard against a downstream "success" transition clobbering a terminal
+      -- status already written earlier in the same reply cycle (e.g. the
+      -- deliver callback's markMessageFailed call on FK-violation failures).
+      AND status NOT IN ('failed', 'responded')
   `;
 
   await client.query(query, [chatId, agentName]);
@@ -123,7 +128,7 @@ async function markMessageFailed(
 /**
  * Insert outbound message into agent_chat via send_agent_message()
  */
-async function insertOutboundMessage(
+export async function insertOutboundMessage(
   client: pg.Client,
   {
     sender,
@@ -138,20 +143,14 @@ async function insertOutboundMessage(
   },
 ) {
   // All inserts must go through send_agent_message() — direct INSERT is blocked.
-  // reply_to is set separately after insert since send_agent_message doesn't accept it.
+  // reply_to is carried in the same SECURITY DEFINER call so the insert is
+  // atomic (no separate UPDATE that can fail after the body commits).
   const result = await client.query(
-    `SELECT send_agent_message($1::text, $2::text, $3::text[]) AS id`,
-    [sender, message, recipients],
+    `SELECT send_agent_message($1::text, $2::text, $3::text[], p_ttl => $4::interval, p_reply_to => $5::integer) AS id`,
+    [sender, message, recipients, null, replyTo],
   );
 
   const newId: number = result.rows[0].id;
-
-  if (replyTo !== null) {
-    await client.query(
-      `UPDATE agent_chat SET reply_to = $1 WHERE id = $2`,
-      [replyTo, newId],
-    );
-  }
 
   return { id: newId };
 }
@@ -166,7 +165,7 @@ function buildSessionLabel({ agentName }: { agentName: string }) {
 /**
  * Process a single message from agent_chat
  */
-async function processAgentChatMessage({
+export async function processAgentChatMessage({
   message,
   client,
   agentName,
@@ -256,7 +255,24 @@ async function processAgentChatMessage({
             await markMessageResponded(client, message.id, agentName);
             log?.info?.(`Sent reply for message ${message.id}`);
           } catch (err) {
-            log?.error?.(`Failed to send reply for message ${message.id}: ${err}`);
+            const pgErr = err as { code?: string; message?: string };
+            const errorMsg =
+              pgErr.code === "23503"
+                ? `Reply for message ${message.id} rejected: invalid reply_to (foreign key violation)`
+                : `Failed to send reply for message ${message.id}: ${err}`;
+
+            // Foreign-key violation on reply_to (e.g. parent row deleted/race).
+            // Log distinctly from the old permission-denied class so operators
+            // can tell the DML lockdown is no longer the failure path.
+            log?.error?.(errorMsg);
+
+            // The OpenClaw runtime's reply dispatcher wraps deliver() in a
+            // .then().catch(onError) chain, so this throw is swallowed and never
+            // reaches processAgentChatMessage's outer catch. Update the
+            // operational state table directly here; the throw below still feeds
+            // onError's log line but is not the sole failure mechanism.
+            await markMessageFailed(client, message.id, agentName, errorMsg);
+
             throw err;
           }
         },

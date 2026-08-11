@@ -72,10 +72,25 @@ else
     exit 1
 fi
 
+# Resolve agent_chat database target.
+# Prefer the top-level key agentChatDatabase in ~/.openclaw/postgres.json,
+# then the AGENT_CHAT_DB_NAME environment override, then the production
+# default 'agent_chat'. Staging installs set agentChatDatabase to an isolated
+# name (e.g. 'agent_chat_staging') so they do not mutate the shared production
+# agent_chat bus (nova-mind#569).
+_resolve_agent_chat_db_name() {
+    local pg_config="${HOME}/.openclaw/postgres.json"
+    local configured=""
+    if [ -f "$pg_config" ] && command -v jq &>/dev/null; then
+        configured=$(jq -r '.agentChatDatabase // ""' "$pg_config" 2>/dev/null || true)
+    fi
+    printf '%s' "${configured:-${AGENT_CHAT_DB_NAME:-agent_chat}}"
+}
+
 # Derived variables
 DB_USER="${PGUSER:-$(whoami)}"
 DB_NAME="${PGDATABASE:-${DB_USER//-/_}_memory}"
-AGENT_CHAT_DB_NAME="agent_chat"
+AGENT_CHAT_DB_NAME="$(_resolve_agent_chat_db_name)"
 
 # PostgreSQL password file path
 PGPASS_FILE="${HOME}/.pgpass"
@@ -201,15 +216,16 @@ _ensure_agent_chat_postgres_json() {
 
     local new_json
     new_json=$(jq --arg db "$database" --arg user "$user" --arg pass "$password" \
-        'if (.agent_chat // null) | type == "object" then
-            .agent_chat |= . + {
-                database: (.database // $db),
-                user: (.user // $user),
-                password: (.password // $pass)
-            }
-         else
-            .agent_chat = {"database": $db, "user": $user, "password": $pass}
-         end' "$pg_config" 2>/dev/null) || return 1
+        'if (.agentChatDatabase // null) | type == "string" then . else .agentChatDatabase = $db end
+         | if (.agent_chat // null) | type == "object" then
+             .agent_chat |= . + {
+                 database: (.database // $db),
+                 user: (.user // $user),
+                 password: (.password // $pass)
+             }
+           else
+             .agent_chat = {"database": $db, "user": $user, "password": $pass}
+           end' "$pg_config" 2>/dev/null) || return 1
 
     # Only write if something changed.
     if [ "$(printf '%s\n' "$new_json" | jq -Sc .)" = "$(jq -Sc . < "$pg_config")" ]; then
@@ -484,6 +500,75 @@ _install_pg_notify_listener() {
     else
         echo -e "  ${WARNING} systemctl not available — service not started"
     fi
+}
+
+# Apply sorted .sql migrations from database/agent-chat/migrations/ against the
+# dedicated agent_chat database. Hard failure on any migration error so the DB
+# cannot be left in a half-migrated state.
+_apply_agent_chat_migrations() {
+    local db_name="${1:-$AGENT_CHAT_DB_NAME}"
+    local migrations_dir="$SCRIPT_DIR/database/agent-chat/migrations"
+
+    # Belt-and-braces guard: the literal production database name must only be
+    # touched by the production unix account. This prevents a staging install
+    # from mutating the shared production agent_chat bus (nova-mind#569).
+    if [ "$db_name" = "agent_chat" ] && [ "$(whoami)" != "nova" ]; then
+        echo -e "  ${CROSS_MARK} Refusing to target production agent_chat database as user '$(whoami)'"
+        echo "      This install is running against the shared production Postgres cluster."
+        echo "      Set AGENT_CHAT_DB_NAME or configure agentChatDatabase in ~/.openclaw/postgres.json"
+        echo "      to point at an isolated staging database (e.g. 'agent_chat_staging')."
+        exit 1
+    fi
+
+    if [ ! -d "$migrations_dir" ]; then
+        return 0
+    fi
+
+    local mig_files=()
+    while IFS= read -r -d '' f; do
+        mig_files+=("$f")
+    done < <(find "$migrations_dir" -maxdepth 1 -name "*.sql" -print0 | sort -z)
+
+    if [ ${#mig_files[@]} -eq 0 ]; then
+        return 0
+    fi
+
+    # Ensure the dedicated agent_chat database exists before applying migrations.
+    if ! psql -U "$DB_USER" -lqt | cut -d \| -f 1 | grep -qw "$db_name"; then
+        echo "  Creating agent_chat database '$db_name'..."
+        _superuser_createdb "$db_name"
+        echo -e "  ${CHECK_MARK} Created database '$db_name'"
+    fi
+
+    # Apply the canonical base schema before migrations. The schema file is
+    # idempotent (CREATE IF NOT EXISTS / CREATE OR REPLACE), so applying it on
+    # every install run is safe and guarantees a fresh install gets the tables,
+    # triggers, and functions that migrations assume already exist.
+    local schema_file="$SCRIPT_DIR/database/agent-chat/schema.sql"
+    if [ ! -f "$schema_file" ]; then
+        echo -e "  ${CROSS_MARK} agent_chat schema file not found: $schema_file"
+        exit 1
+    fi
+
+    echo "  Applying agent_chat base schema..."
+    if _superuser_psql "$db_name" -v ON_ERROR_STOP=1 -f "$schema_file" >/dev/null 2>&1; then
+        echo -e "  ${CHECK_MARK} Base schema applied"
+    else
+        echo -e "  ${CROSS_MARK} Base schema apply failed"
+        exit 1
+    fi
+
+    echo "  Applying agent_chat migrations..."
+    for sql_file in "${mig_files[@]}"; do
+        local mig_name
+        mig_name=$(basename "$sql_file")
+        if _superuser_psql "$db_name" -v ON_ERROR_STOP=1 -f "$sql_file" >/dev/null 2>&1; then
+            echo -e "    ${CHECK_MARK} Migration: $mig_name"
+        else
+            echo -e "    ${CROSS_MARK} Migration failed: $mig_name"
+            exit 1
+        fi
+    done
 }
 
 echo "  Agent DB user: $DB_USER"
@@ -1023,7 +1108,7 @@ verify_cognition() {
 
     # agent_chat tables live in the dedicated agent_chat DB, not the memory DB.
     local agent_chat_db
-    agent_chat_db=$(jq -r '.agent_chat.database // "agent_chat"' "$PG_CONFIG" 2>/dev/null || echo "agent_chat")
+    agent_chat_db=$(jq -r '.agentChatDatabase // "agent_chat"' "$PG_CONFIG" 2>/dev/null || echo "agent_chat")
     if psql -U "$DB_USER" -d "$agent_chat_db" -c '\q' >/dev/null 2>&1; then
         local required_tables=("agent_chat" "agent_chat_processed")
         for table in "${required_tables[@]}"; do
@@ -1908,7 +1993,8 @@ fi
 # --- agent_chat runtime configuration ---
 # The agent_chat messaging bus now lives in a dedicated `agent_chat` database.
 # Schema/objects for that database are managed by database/agent-chat/schema.sql
-# and applied by scripts/agent-chat-migration/migrate.sh, not by this installer.
+# and migrations under database/agent-chat/migrations/, which this installer
+# applies automatically after the extension is built.
 # Logical replication for agent_chat (#64/#67) was superseded by the shared-DB
 # design and is no longer configured here.
 echo ""
@@ -1934,6 +2020,10 @@ else
     echo -e "  ${WARNING} PGPASSWORD not set — skipping ~/.pgpass provisioning"
 fi
 
+# Preserve an explicit agent_chat database name (agentChatDatabase) in
+# postgres.json so the runtime and future installer runs resolve the same
+# target. Production default is 'agent_chat'; staging should set this to an
+# isolated name (e.g. 'agent_chat_staging') before running the installer.
 if _ensure_agent_chat_postgres_json "$PG_CONFIG" "$AGENT_CHAT_DB_NAME" "$DB_USER" "${PGPASSWORD:-}"; then
     echo -e "  ${CHECK_MARK} Wrote nested agent_chat section to $PG_CONFIG"
 else
@@ -2053,6 +2143,9 @@ if [ -d "$EXTENSION_SOURCE" ]; then
 else
     echo -e "  ${WARNING} cognition/focus/agent_chat not found (skipping extension)"
 fi
+
+# Apply agent_chat database migrations after the extension source is in place.
+_apply_agent_chat_migrations "$AGENT_CHAT_DB_NAME"
 
 # --- Cognition focus skills (managed tier — all sessions) ---
 echo ""

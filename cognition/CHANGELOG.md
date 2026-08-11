@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### Fixed (#548/#569/#403 — agent_chat reply_to param, atomic insert, installer provisioning, pg-env TS parity)
+
+See root `CHANGELOG.md` (batch `agent-chat-reply-to-548`) for full detail. Summary of the `cognition/` pieces:
+
+- **`send_agent_message()` gains a 5th positional parameter `p_reply_to integer DEFAULT NULL`** (#548) — `cognition/focus/agent_chat/schema.sql` (marked deprecated post-#320, kept in sync with the canonical `database/agent-chat/schema.sql` to prevent drift) was updated identically: session_user sender validation, self-address guard, `expires_at` column/index, and the `postgres`-owned `SECURITY DEFINER` function with a defensive `DROP FUNCTION IF EXISTS` for all three historical signatures before `CREATE OR REPLACE`.
+- **`enforce_agent_chat_function_use()` rewritten to gate on `current_user = 'postgres'`** (#548) — replaces the old `agent_chat.bypass_gate` session-variable check; also now blocks direct `UPDATE`/`DELETE`, not just `INSERT`.
+- **`cognition/focus/agent_chat/src/channel.ts`: `insertOutboundMessage()` now passes `p_reply_to` in the same atomic `send_agent_message()` call** (#548) — removes the separate post-insert `UPDATE agent_chat SET reply_to = ...` that the DML lockdown trigger could reject. FK violations (SQLSTATE 23503) on an invalid `reply_to` are logged as a distinct error class. `markMessageFailed()` is now called directly inside `deliver()`'s catch (the real dispatcher's `.then().catch(onError)` chain swallows a plain throw before it reaches the outer catch), and `markMessageRouted()`'s `UPDATE` now guards `AND status NOT IN ('failed', 'responded')` so it cannot clobber a terminal status written earlier in the same cycle. `insertOutboundMessage`/`processAgentChatMessage` are exported for testability.
+- **`cognition/focus/agent_chat/lib/pg-env.ts` per-field section precedence over ENV** (#403) — Same fix as the canonical `lib/pg-env.ts`/`memory/lib/pg-env.ts` (see root `CHANGELOG.md`): a field explicitly defined in the `agent_chat` section now wins over a pre-exported ambient ENV var for that field only. Closes a confirmed gap in `channel.ts`'s `loadPgEnv(undefined, "agent_chat")` call.
+- **Installer `agentChatDatabase` provisioning + refusal guard** (#569) — `agent-install.sh`'s agent_chat DB target now resolves via `agentChatDatabase` (`postgres.json`) → `AGENT_CHAT_DB_NAME` env → `agent_chat` default, persisted back to `postgres.json`. Refuses to target the literal production `agent_chat` name unless running as the `nova` unix account. Base schema is now applied unconditionally before the migrations loop.
+
+#### Tests (#548/#569/#403)
+- `cognition/focus/agent_chat/tests/agent-chat-function.test.mjs`, `cognition/focus/agent_chat/tests/channel-insert.test.mjs` — SQL and channel-level coverage for the reply_to param, atomicity, ownership, and status-guard behavior.
+- `cognition/focus/agent_chat/lib/pg-env.test.ts` — ported Python TC-30–TC-43 per-field precedence coverage.
+- `tests/install/test_agent_chat_installer.bats` — `agentChatDatabase` assertions and refusal-guard simulation.
+
 ### Fixed (#508 — pg-notify-listener alerts use PGUSER sender and self-safe recipients)
 
 - **`pg-notify-listener.py` alerts (`_send_push_alert` and `_send_branch_alert`) now use connecting PGUSER as sender** ([#508](https://github.com/NOVA-Openclaw/nova-mind/issues/508)) — Replaced the hardcoded `'schema-sync'` sender string with dynamic `_agent_chat_env.get('PGUSER')` in both alert paths. Since `send_agent_message()` enforces `LOWER(p_sender) == session_user` and no `'schema-sync'` database role exists, every listener alert had silently failed to deliver in production since 2026-07-12.

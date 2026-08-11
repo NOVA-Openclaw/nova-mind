@@ -64,15 +64,16 @@ _ensure_agent_chat_postgres_json() {
 
     local new_json
     new_json=$(jq --arg db "$database" --arg user "$user" --arg pass "$password" \
-        'if (.agent_chat // null) | type == "object" then
-            .agent_chat |= . + {
-                database: (.database // $db),
-                user: (.user // $user),
-                password: (.password // $pass)
-            }
-         else
-            .agent_chat = {"database": $db, "user": $user, "password": $pass}
-         end' "$pg_config" 2>/dev/null) || return 1
+        'if (.agentChatDatabase // null) | type == "string" then . else .agentChatDatabase = $db end
+         | if (.agent_chat // null) | type == "object" then
+             .agent_chat |= . + {
+                 database: (.database // $db),
+                 user: (.user // $user),
+                 password: (.password // $pass)
+             }
+           else
+             .agent_chat = {"database": $db, "user": $user, "password": $pass}
+           end' "$pg_config" 2>/dev/null) || return 1
 
     # Only write if something changed.
     if [ "$(printf '%s\n' "$new_json" | jq -Sc .)" = "$(jq -Sc . < "$pg_config")" ]; then
@@ -179,9 +180,9 @@ teardown() {
     grep -qxF "localhost:5432:agent_chat:nova:newpass" "$PGPASS_FILE"
 }
 
-# ─── postgres.json nested section ───────────────────────────────────────────
+# ─── postgres.json agent_chat target ────────────────────────────────────────
 
-@test "agent_chat: writes nested section to postgres.json" {
+@test "agent_chat: writes agentChatDatabase and nested section to postgres.json" {
     local pg_config="$FAKE_HOME/postgres.json"
     cat > "$pg_config" <<'EOF'
 {
@@ -196,13 +197,14 @@ EOF
     run _ensure_agent_chat_postgres_json "$pg_config" "agent_chat" "nova" "secret1"
     [ "$status" -eq 0 ]
 
+    [ "$(jq -r '.agentChatDatabase' "$pg_config")" = "agent_chat" ]
     [ "$(jq -r '.agent_chat.database' "$pg_config")" = "agent_chat" ]
     [ "$(jq -r '.agent_chat.user' "$pg_config")" = "nova" ]
     [ "$(jq -r '.agent_chat.password' "$pg_config")" = "secret1" ]
     [ "$(jq -r '.database' "$pg_config")" = "nova_memory" ]
 }
 
-@test "agent_chat: postgres.json nested section is idempotent" {
+@test "agent_chat: postgres.json agent_chat target is idempotent" {
     local pg_config="$FAKE_HOME/postgres.json"
     cat > "$pg_config" <<'EOF'
 {
@@ -210,6 +212,7 @@ EOF
   "database": "nova_memory",
   "user": "nova",
   "password": "secret1",
+  "agentChatDatabase": "agent_chat",
   "agent_chat": {
     "database": "agent_chat",
     "user": "nova",
@@ -240,6 +243,7 @@ EOF
     run _ensure_agent_chat_postgres_json "$pg_config" "agent_chat" "nova" "secret1"
     [ "$status" -eq 0 ]
 
+    [ "$(jq -r '.agentChatDatabase' "$pg_config")" = "agent_chat" ]
     [ "$(jq -r '.agent_chat.database' "$pg_config")" = "agent_chat" ]
     [ "$(jq -r '.agent_chat.user' "$pg_config")" = "nova" ]
     [ "$(jq -r '.agent_chat.password' "$pg_config")" = "secret1" ]
@@ -263,9 +267,12 @@ EOF
 }
 EOF
 
+    # With the new top-level agentChatDatabase key, the function also writes
+    # that key while leaving the existing nested password/host untouched.
     run _ensure_agent_chat_postgres_json "$pg_config" "agent_chat" "nova" "secret1"
-    [ "$status" -eq 1 ]
+    [ "$status" -eq 0 ]
 
+    [ "$(jq -r '.agentChatDatabase' "$pg_config")" = "agent_chat" ]
     [ "$(jq -r '.agent_chat.password' "$pg_config")" = "manual-password" ]
     [ "$(jq -r '.agent_chat.host' "$pg_config")" = "db.internal" ]
 }
@@ -401,7 +408,7 @@ EOF
 # ─── TC-68-adjacent / ordering / static checks ─────────────────────────────
 
 @test "TC-68-adjacent: installer derives agent_chat DB from postgres.json" {
-    grep -q "agent_chat_db=.*jq -r '.agent_chat.database" "$INSTALLER"
+    grep -q "agent_chat_db=.*jq -r '.agentChatDatabase" "$INSTALLER"
 }
 
 @test "Ordering: agent_config_sync is configured before agent_chat channel cleanup" {
@@ -432,6 +439,47 @@ EOF
     [ -n "$listener_line" ]
     [ -n "$build_line" ]
     [ "$listener_line" -lt "$build_line" ]
+}
+
+# ─── nova-mind#569 production-mutation guard ───────────────────────────────
+
+@test "refusal guard: rejects targeting production agent_chat as non-nova user" {
+  run bash -c '
+    whoami() { echo "nova-staging"; }
+    _guard_agent_chat_db() {
+      local db_name="$1"
+      if [ "$db_name" = "agent_chat" ] && [ "$(whoami)" != "nova" ]; then
+        echo "Refusing to target production agent_chat database as user \"$(whoami)\""
+        echo "This install is running against the shared production Postgres cluster."
+        echo "Set AGENT_CHAT_DB_NAME or configure agentChatDatabase in ~/.openclaw/postgres.json"
+        echo "to point at an isolated staging database (e.g. \"agent_chat_staging\")."
+        exit 1
+      fi
+      echo "guard passed"
+    }
+    _guard_agent_chat_db agent_chat
+  '
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"Refusing to target production agent_chat database"* ]]
+  [[ "$output" == *"agentChatDatabase"* ]]
+  [[ "$output" == *"agent_chat_staging"* ]]
+}
+
+@test "refusal guard: allows agent_chat target when run as nova user" {
+  run bash -c '
+    whoami() { echo "nova"; }
+    _guard_agent_chat_db() {
+      local db_name="$1"
+      if [ "$db_name" = "agent_chat" ] && [ "$(whoami)" != "nova" ]; then
+        echo "Refusing to target production agent_chat database"
+        exit 1
+      fi
+      echo "guard passed"
+    }
+    _guard_agent_chat_db agent_chat
+  '
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"guard passed"* ]]
 }
 
 @test "agent-install.sh passes bash -n" {

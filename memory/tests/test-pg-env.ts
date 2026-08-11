@@ -179,6 +179,209 @@ async function run() {
     assertEnvUnset("PGUSER unset after config load", "PGUSER");
     assertEnvUnset("PGPASSWORD unset after config load", "PGPASSWORD");
 
+    // TC-30–TC-43: per-field section precedence over ENV (nova-mind#403)
+    console.log("TC-30: section field present + ENV set for same field -> section wins");
+    clearPgVars();
+    const cfgSec30 = writeConfig(join(tmp, "tc30"), {
+      database: "nova_memory",
+      agent_chat: { database: "agent_chat" },
+    });
+    process.env.PGDATABASE = "env_db";
+    r = loadPgEnv(cfgSec30, "agent_chat");
+    assertEq("database from section", "agent_chat", r.database);
+
+    console.log("TC-31: section field present + ENV unset -> section wins");
+    clearPgVars();
+    const cfgSec31 = writeConfig(join(tmp, "tc31"), {
+      database: "nova_memory",
+      agent_chat: { database: "agent_chat" },
+    });
+    r = loadPgEnv(cfgSec31, "agent_chat");
+    assertEq("database from section", "agent_chat", r.database);
+
+    console.log("TC-32: section=None + ENV set -> ENV wins (legacy behavior)");
+    clearPgVars();
+    const cfgSec32 = writeConfig(join(tmp, "tc32"), { database: "nova_memory" });
+    process.env.PGDATABASE = "env_db";
+    r = loadPgEnv(cfgSec32);
+    assertEq("database from ENV", "env_db", r.database);
+
+    console.log("TC-33: ENV wins for fields omitted from section");
+    clearPgVars();
+    const cfgSec33 = writeConfig(join(tmp, "tc33"), {
+      database: "nova_memory",
+      agent_chat: { database: "agent_chat" },
+    });
+    process.env.PGUSER = "env_user";
+    r = loadPgEnv(cfgSec33, "agent_chat");
+    assertEq("database from section", "agent_chat", r.database);
+    assertEq("user from ENV", "env_user", r.user);
+
+    console.log("TC-34: empty-string section value falls back to ENV");
+    clearPgVars();
+    const cfgSec34 = writeConfig(join(tmp, "tc34"), {
+      database: "nova_memory",
+      agent_chat: { database: "" },
+    });
+    process.env.PGDATABASE = "env_db";
+    r = loadPgEnv(cfgSec34, "agent_chat");
+    assertEq("database from ENV", "env_db", r.database);
+
+    console.log("TC-35: empty-string ENV treated as unset, section wins");
+    clearPgVars();
+    const cfgSec35 = writeConfig(join(tmp, "tc35"), {
+      database: "nova_memory",
+      agent_chat: { database: "agent_chat" },
+    });
+    process.env.PGDATABASE = "";
+    r = loadPgEnv(cfgSec35, "agent_chat");
+    assertEq("database from section", "agent_chat", r.database);
+
+    console.log("TC-36: missing section name falls through to ENV/flat/default chain");
+    clearPgVars();
+    const cfgSec36 = writeConfig(join(tmp, "tc36"), {
+      host: "flat-host",
+      database: "nova_memory",
+      user: "flat-user",
+      password: "flat-pass",
+    });
+    process.env.PGDATABASE = "env_db";
+    r = loadPgEnv(cfgSec36, "agent_chat");
+    assertEq("database from ENV", "env_db", r.database);
+
+    console.log("TC-37: section defines DB but not host; ENV defines host");
+    clearPgVars();
+    const cfgSec37 = writeConfig(join(tmp, "tc37"), {
+      host: "flat-host",
+      database: "nova_memory",
+      agent_chat: { database: "agent_chat" },
+    });
+    process.env.PGHOST = "env-host";
+    r = loadPgEnv(cfgSec37, "agent_chat");
+    assertEq("host from ENV", "env-host", r.host);
+    assertEq("database from section", "agent_chat", r.database);
+
+    console.log("TC-38: section silent on password preserves flat-config behavior");
+    clearPgVars();
+    const cfgSec38 = writeConfig(join(tmp, "tc38"), {
+      database: "nova_memory",
+      user: "flat-user",
+      password: "flat-pass",
+      agent_chat: { database: "agent_chat", user: "chat-user" },
+    });
+    r = loadPgEnv(cfgSec38, "agent_chat");
+    assertEq("password from flat config", "flat-pass", r.password);
+
+    console.log("TC-39: section password wins over ENV");
+    clearPgVars();
+    const cfgSec39 = writeConfig(join(tmp, "tc39"), {
+      database: "nova_memory",
+      password: "flat-pass",
+      agent_chat: { password: "chat-pass" },
+    });
+    process.env.PGPASSWORD = "env-pass";
+    r = loadPgEnv(cfgSec39, "agent_chat");
+    assertEq("password from section", "chat-pass", r.password);
+
+    console.log("TC-40: all 5 fields in section, all 5 in ENV -> section wins all");
+    clearPgVars();
+    Object.assign(process.env, {
+      PGHOST: "env-host",
+      PGPORT: "9999",
+      PGDATABASE: "env_db",
+      PGUSER: "env_user",
+      PGPASSWORD: "env-pass",
+    });
+    const cfgSec40 = writeConfig(join(tmp, "tc40"), {
+      host: "flat-host",
+      port: 5432,
+      database: "nova_memory",
+      user: "flat-user",
+      password: "flat-pass",
+      agent_chat: {
+        host: "sect-host",
+        port: 5433,
+        database: "agent_chat",
+        user: "sect-user",
+        password: "sect-pass",
+      },
+    });
+    r = loadPgEnv(cfgSec40, "agent_chat");
+    assertEq("host from section", "sect-host", r.host);
+    assertEq("port from section", 5433, r.port);
+    assertEq("database from section", "agent_chat", r.database);
+    assertEq("user from section", "sect-user", r.user);
+    assertEq("password from section", "sect-pass", r.password);
+
+    console.log("TC-41: all 5 fields in section, ENV unset -> section wins all");
+    clearPgVars();
+    const cfgSec41 = writeConfig(join(tmp, "tc41"), {
+      host: "flat-host",
+      port: 5432,
+      database: "nova_memory",
+      user: "flat-user",
+      password: "flat-pass",
+      agent_chat: {
+        host: "sect-host",
+        port: 5433,
+        database: "agent_chat",
+        user: "sect-user",
+        password: "sect-pass",
+      },
+    });
+    r = loadPgEnv(cfgSec41, "agent_chat");
+    assertEq("host from section", "sect-host", r.host);
+    assertEq("port from section", 5433, r.port);
+    assertEq("database from section", "agent_chat", r.database);
+    assertEq("user from section", "sect-user", r.user);
+    assertEq("password from section", "sect-pass", r.password);
+
+    console.log("TC-42: empty section dict behaves like no section");
+    clearPgVars();
+    const cfgSec42 = writeConfig(join(tmp, "tc42"), {
+      host: "flat-host",
+      port: 5432,
+      database: "nova_memory",
+      user: "flat-user",
+      password: "flat-pass",
+      agent_chat: {},
+    });
+    process.env.PGDATABASE = "env_db";
+    r = loadPgEnv(cfgSec42, "agent_chat");
+    assertEq("database from ENV", "env_db", r.database);
+    assertEq("host from flat", "flat-host", r.host);
+    assertEq("user from flat", "flat-user", r.user);
+    assertEq("password from flat", "flat-pass", r.password);
+
+    console.log("TC-43: per-field independence");
+    const fieldSpecs: Array<[string, string, string, string | number]> = [
+      ["host", "PGHOST", "env-host", "sect-host"],
+      ["port", "PGPORT", "9999", 5433],
+      ["database", "PGDATABASE", "env_db", "agent_chat"],
+      ["user", "PGUSER", "env_user", "sect-user"],
+      ["password", "PGPASSWORD", "env_pass", "sect-pass"],
+    ];
+    for (const [jsonKey, envVar, envVal, sectVal] of fieldSpecs) {
+      clearPgVars();
+      const cfgSec43 = writeConfig(join(tmp, `tc43_${jsonKey}`), {
+        [jsonKey]: "flat-val",
+        agent_chat: { [jsonKey]: sectVal },
+      });
+      process.env[envVar] = envVal;
+      r = loadPgEnv(cfgSec43, "agent_chat");
+      assertEq(`${envVar} section wins`, sectVal, r[jsonKey as keyof PgConnectionConfig]);
+    }
+
+    console.log("Regression: agent_chat database wins over gateway PGDATABASE");
+    clearPgVars();
+    const cfgSecReg = writeConfig(join(tmp, "tc-regression"), {
+      database: "nova_memory",
+      agent_chat: { database: "agent_chat_staging" },
+    });
+    process.env.PGDATABASE = "nova_staging_memory";
+    r = loadPgEnv(cfgSecReg, "agent_chat");
+    assertEq("database from agent_chat section", "agent_chat_staging", r.database);
+
   } finally {
     clearPgVars();
     rmSync(tmp, { recursive: true, force: true });

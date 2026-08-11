@@ -2,8 +2,8 @@
  * pg-env.ts — Centralized PostgreSQL config loader for TypeScript/Node.js
  * with optional nested-section support.
  *
- * Resolution order: ENV vars → section → ~/.openclaw/postgres.json (flat keys) → defaults
- * Issue: nova-memory #94, nova-mind #330, nova-mind #320
+ * Per-field resolution order: section (when field is explicitly defined) → ENV vars → ~/.openclaw/postgres.json (flat keys) → defaults
+ * Issue: nova-memory #94, nova-mind #330, nova-mind #320, nova-mind #403
  */
 
 import { readFileSync } from "fs";
@@ -46,7 +46,7 @@ const DEFAULTS: Record<string, string | (() => string)> = {
 };
 
 /**
- * Load PostgreSQL config with resolution: ENV → section → config file → defaults.
+ * Load PostgreSQL config with per-field resolution: section → ENV → config file → defaults.
  *
  * Returns connection config object suitable for pg.Client / pg.Pool constructor,
  * without modifying process.env to avoid pollution of the environment
@@ -56,7 +56,9 @@ const DEFAULTS: Record<string, string | (() => string)> = {
  * Malformed JSON is caught and warned about (falls through to defaults).
  *
  * If `section` is provided and the parsed config contains a valid object for that
- * key, section fields take precedence over top-level keys (ENV still wins).
+ * key, a field defined in the section (non-null, non-empty) wins over ENV and
+ * top-level keys for that field only. Fields absent from the section preserve
+ * the existing ENV → flat-config → default chain.
  */
 export function loadPgEnv(
   configPath?: string,
@@ -104,19 +106,11 @@ export function loadPgEnv(
   const result: PgConnectionConfig = {};
 
   for (const [jsonKey, envVar] of FIELD_MAP) {
-    // 1. Check ENV (empty string = unset)
-    const envVal = process.env[envVar];
-    if (envVal) {
-      if (jsonKey === "port") {
-        const portNum = Number(envVal);
-        if (!isNaN(portNum)) result[jsonKey] = portNum;
-      } else {
-        result[jsonKey] = envVal;
-      }
-      continue;
-    }
-
-    // 2. Check section config (null/undefined = absent, empty string = absent)
+    // 1. Check section config first when the section explicitly defines
+    //    this field. Per-field precedence: a non-null, non-empty section
+    //    value wins over ENV and top-level keys for that field only. Fields
+    //    absent from the section fall through to the ENV → flat-config →
+    //    default chain below.
     if (sectionConfig) {
       const sectionVal = sectionConfig[jsonKey];
       if (sectionVal != null) {
@@ -131,6 +125,18 @@ export function loadPgEnv(
           continue;
         }
       }
+    }
+
+    // 2. Check ENV (empty string = unset)
+    const envVal = process.env[envVar];
+    if (envVal) {
+      if (jsonKey === "port") {
+        const portNum = Number(envVal);
+        if (!isNaN(portNum)) result[jsonKey] = portNum;
+      } else {
+        result[jsonKey] = envVal;
+      }
+      continue;
     }
 
     // 3. Check top-level config file (null/undefined = absent, empty string = absent)

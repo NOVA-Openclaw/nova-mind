@@ -126,13 +126,13 @@ This file is **auto-generated** by `shell-install.sh` after database setup. You 
 ### Resolution order
 
 The config file also supports nested, named sections for additional databases
-(e.g. `agent_chat` — see `memory/docs/database-config.md#nested-sections-multiple-databases`),
-and **the precedence between environment variables and a nested section now
-differs by language**: as of #405, Python's `load_pg_env(section=...)` gives a
-section-defined field precedence over ENV for that field; Bash (no section
-support at all) and TypeScript's `loadPgEnv()` still let ENV win over the
-section (TS parity tracked in #403). For top-level flat keys (no section
-involved), all three loaders agree:
+(e.g. `agent_chat` — see `memory/docs/database-config.md#nested-sections-multiple-databases`).
+**As of #403, Python's and TypeScript's `load_pg_env()`/`loadPgEnv()` agree**:
+a field explicitly defined (non-null, non-empty) inside a requested `section`
+takes precedence over ENV for that field only (Python got there first via
+#405; #403 ported the identical per-field contract to all three TypeScript
+`loadPgEnv()` copies). Bash still has no section support at all. For
+top-level flat keys (no section involved), all three loaders agree:
 
 1. **Environment variables** (`PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGPASSWORD`) — checked first
 2. **Config file** (`~/.openclaw/postgres.json`, flat top-level keys) — fills in any vars not set by the environment

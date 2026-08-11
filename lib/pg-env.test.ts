@@ -1,16 +1,9 @@
 /**
- * Unit tests for loadPgEnv() section-key fallback.
+ * Unit tests for loadPgEnv() section-key precedence.
  *
- * TC-23  Section present and valid → uses section fields
- * TC-24  Section absent → falls back to flat keys
- * TC-25  Section partial → per-field fallback to flat keys / defaults
- * TC-26  Malformed JSON file → warn and fall through to defaults
- * TC-27  Section present but not an object → warn and fall back to flat keys
- * TC-28  Python-only env overwrite semantics (see memory/tests/test_pg_env.py)
- * TC-29  Section absent fallback (covered by TC-24)
- * TC-30–TC-43  Per-field section precedence over ENV (nova-mind#403)
+ * Mirrors the Python coverage TC-23 through TC-43 from lib/tests/test_pg_env.py
+ * for the TypeScript loader in lib/pg-env.ts.
  *
- * Framework: Node built-in test runner + tsx.
  * Run: npx tsx --test lib/pg-env.test.ts
  */
 
@@ -47,7 +40,6 @@ function restorePgEnv(saved: Record<string, string | undefined>) {
   }
 }
 
-// Run all describes sequentially and isolate env within each describe.
 describe("TC-23: section present and valid uses section fields", { concurrency: false }, () => {
   let tmpDir: string;
   let configPath: string;
@@ -239,7 +231,7 @@ describe("TC-30: section field present + ENV set for same field -> section wins"
     restorePgEnv(savedEnv);
   });
 
-  it("uses section value when both section and ENV define database", () => {
+  it("uses section value when both section and ENV define the field", () => {
     const cfg = loadPgEnv(configPath, "agent_chat");
     assert.strictEqual(cfg.database, "agent_chat");
   });

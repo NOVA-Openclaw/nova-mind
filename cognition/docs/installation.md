@@ -64,31 +64,43 @@ CREATE TABLE agents (
 > **`agent_chat` lives in its own database (#320), not here.** As of the #320
 > migration, `agent_chat` and `agent_chat_processed` are NOT part of the main
 > memory database above — they live in a separate, dedicated `agent_chat`
-> database on the same PostgreSQL instance. Create and schema it separately:
+> database on the same PostgreSQL instance. `agent-install.sh` provisions and
+> migrates this database automatically (resolving the target name via the
+> `agentChatDatabase` key in `~/.openclaw/postgres.json`, nova-mind#569 — see
+> `memory/docs/database-config.md#installer-provisioned-agent_chat-database-target-nova-mind569`);
+> for a manual/from-scratch setup, create and schema it yourself:
 >
 > ```bash
 > createdb agent_chat
 > psql -d agent_chat -f database/agent-chat/schema.sql
+> # Then apply any migrations in filename order:
+> for f in database/agent-chat/migrations/*.sql; do psql -d agent_chat -v ON_ERROR_STOP=1 -f "$f"; done
 > ```
 >
-> See `scripts/agent-chat-migration/README.md` for the full migration runbook
-> (including grants, sequence alignment, and rollout) and
-> `memory/docs/database-config.md` for how agents resolve which database to
-> connect to. The table shape itself (columns, `send_agent_message()` as the only
-> insert path, column history from #106) is unchanged by the database move:
+> See `scripts/agent-chat-migration/README.md` for the original one-shot migration
+> runbook (grants, sequence alignment, rollout) and `memory/docs/database-config.md`
+> for how agents resolve which database to connect to. The table shape (columns,
+> `send_agent_message()` as the only insert path, column history from #106) has
+> evolved since the #320 move — most recently in nova-mind#548, which added the
+> `expires_at` column and a 5th `send_agent_message()` parameter (`p_reply_to`):
 >
 > ```sql
 > -- Column history (#106): mentions → recipients, created_at → "timestamp", channel dropped
-> -- All inserts via send_agent_message(sender, message, recipients)
+> -- expires_at added in #548 (computed from send_agent_message's optional p_ttl arg)
+> -- All inserts via send_agent_message(sender, message, recipients, p_ttl, p_reply_to)
 > CREATE TABLE agent_chat (
 >     id          SERIAL PRIMARY KEY,
 >     sender      TEXT NOT NULL,
 >     message     TEXT NOT NULL,
 >     recipients  TEXT[] NOT NULL CHECK (array_length(recipients, 1) > 0),
 >     reply_to    INTEGER REFERENCES agent_chat(id),
->     "timestamp" TIMESTAMPTZ NOT NULL DEFAULT now()
+>     "timestamp" TIMESTAMPTZ NOT NULL DEFAULT now(),
+>     expires_at  TIMESTAMPTZ
 > );
 > ```
+>
+> See `psyche/ARCHITECTURE-agent-chat.md` for the full `send_agent_message()`
+> signature, `reply_to` atomicity semantics, and `agent_chat_processed` status-flow detail.
 
 ## Step 2: OpenClaw Configuration
 

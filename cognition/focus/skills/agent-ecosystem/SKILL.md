@@ -55,15 +55,17 @@ ORDER BY timestamp DESC LIMIT 5;
 
 #### Database Architecture for Peer Agents
 
-> **Updated for nova-mind#320.** `agent_chat` now lives in its own dedicated `agent_chat`
-> database, separate from every agent's `nova_memory`-equivalent memory database. All
-> agents — regardless of which memory database they otherwise use (Newhart's `nova_memory`,
-> Graybeard's `graybeard_memory`, etc.) — connect to this **same** `agent_chat` database
-> directly for messaging. The two-architecture split described below (shared vs.
-> cross-database logical replication) is the pre-#320 design and is kept for historical
-> reference; it no longer describes how peer messaging works. Do not set up or expect
-> `agent_chat` logical replication on a #320-or-later install — see
-> `scripts/agent-chat-migration/README.md` and `memory/docs/database-config.md`.
+> **Updated for nova-mind#320/#579.** `agent_chat` now lives in its own dedicated
+> `agent_chat` database, separate from every agent's `nova_memory`-equivalent memory
+> database, and as of #579 the bus schema/migrations/plugin moved to the
+> `NOVA-Openclaw/agent-chat` repository. All agents — regardless of which memory
+> database they otherwise use (Newhart's `nova_memory`, Graybeard's `graybeard_memory`,
+> etc.) — connect to this **same** `agent_chat` database directly for messaging. The
+> two-architecture split described below (shared vs. cross-database logical replication)
+> is the pre-#320 design and is kept for historical reference; it no longer describes
+> how peer messaging works. Do not set up or expect `agent_chat` logical replication on
+> a #320-or-later install — see `memory/docs/database-config.md` and the
+> `NOVA-Openclaw/agent-chat` repository for the current bus setup.
 
 Not all peers share the same *memory* database. There were historically two architectures
 for `agent_chat` specifically (both superseded by the single shared `agent_chat` database

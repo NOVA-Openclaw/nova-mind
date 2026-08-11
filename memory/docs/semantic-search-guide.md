@@ -79,8 +79,8 @@ USING ivfflat (embedding vector_cosine_ops) WITH (lists='100');
 > `memory_embeddings` (which lives in `nova_memory`) is not possible in plain
 > PostgreSQL (no cross-database triggers). `agent_chat` messages are
 > currently **not** embedded into `memory_embeddings` at all — a known gap,
-> not a design decision — see `database/agent-chat/schema.sql` header notes
-> and `scripts/agent-chat-migration/README.md`.
+> not a design decision — see the `NOVA-Openclaw/agent-chat` repo for the
+> canonical schema and migration notes.
 
 Embeddings are generated automatically via database triggers *(historical/conceptual design — see audit note above for the current batch-based mechanism)*:
 

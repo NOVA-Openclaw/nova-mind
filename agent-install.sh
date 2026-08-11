@@ -72,25 +72,13 @@ else
     exit 1
 fi
 
-# Resolve agent_chat database target.
-# Prefer the top-level key agentChatDatabase in ~/.openclaw/postgres.json,
-# then the AGENT_CHAT_DB_NAME environment override, then the production
-# default 'agent_chat'. Staging installs set agentChatDatabase to an isolated
-# name (e.g. 'agent_chat_staging') so they do not mutate the shared production
-# agent_chat bus (nova-mind#569).
-_resolve_agent_chat_db_name() {
-    local pg_config="${HOME}/.openclaw/postgres.json"
-    local configured=""
-    if [ -f "$pg_config" ] && command -v jq &>/dev/null; then
-        configured=$(jq -r '.agentChatDatabase // ""' "$pg_config" 2>/dev/null || true)
-    fi
-    printf '%s' "${configured:-${AGENT_CHAT_DB_NAME:-agent_chat}}"
-}
-
 # Derived variables
 DB_USER="${PGUSER:-$(whoami)}"
 DB_NAME="${PGDATABASE:-${DB_USER//-/_}_memory}"
-AGENT_CHAT_DB_NAME="$(_resolve_agent_chat_db_name)"
+
+# Optional agent_chat message-bus peer detection (nova-mind#579).
+# shellcheck disable=SC1090,SC1091
+source "$SCRIPT_DIR/lib/agent-chat-peer-detection.sh"
 
 # PostgreSQL password file path
 PGPASS_FILE="${HOME}/.pgpass"
@@ -196,45 +184,6 @@ _ensure_pgpass_entry() {
     mv "$tmpfile" "$pgpass"
     chmod 600 "$pgpass"
     return 0
-}
-
-# Write the nested agent_chat section to ~/.openclaw/postgres.json.
-# Host/port fall back to the flat keys at runtime, so only database/user/password
-# are written in the nested block.  Idempotent: if the section already exists as
-# an object, missing keys are merged in and existing keys are preserved (no
-# clobber).  If it is missing or not an object, the section is created from the
-# supplied values.
-_ensure_agent_chat_postgres_json() {
-    local pg_config="$1"
-    local database="$2"
-    local user="$3"
-    local password="$4"
-
-    if [ ! -f "$pg_config" ] || ! command -v jq &>/dev/null; then
-        return 1
-    fi
-
-    local new_json
-    new_json=$(jq --arg db "$database" --arg user "$user" --arg pass "$password" \
-        'if (.agentChatDatabase // null) | type == "string" then . else .agentChatDatabase = $db end
-         | if (.agent_chat // null) | type == "object" then
-             .agent_chat |= . + {
-                 database: (.database // $db),
-                 user: (.user // $user),
-                 password: (.password // $pass)
-             }
-           else
-             .agent_chat = {"database": $db, "user": $user, "password": $pass}
-           end' "$pg_config" 2>/dev/null) || return 1
-
-    # Only write if something changed.
-    if [ "$(printf '%s\n' "$new_json" | jq -Sc .)" = "$(jq -Sc . < "$pg_config")" ]; then
-        return 1
-    fi
-
-    printf '%s\n' "$new_json" >"${pg_config}.tmp" && \
-        mv "${pg_config}.tmp" "$pg_config" && \
-        chmod 600 "$pg_config"
 }
 
 # Install or verify daily memory log cron entries into the current user's crontab.
@@ -502,75 +451,6 @@ _install_pg_notify_listener() {
     fi
 }
 
-# Apply sorted .sql migrations from database/agent-chat/migrations/ against the
-# dedicated agent_chat database. Hard failure on any migration error so the DB
-# cannot be left in a half-migrated state.
-_apply_agent_chat_migrations() {
-    local db_name="${1:-$AGENT_CHAT_DB_NAME}"
-    local migrations_dir="$SCRIPT_DIR/database/agent-chat/migrations"
-
-    # Belt-and-braces guard: the literal production database name must only be
-    # touched by the production unix account. This prevents a staging install
-    # from mutating the shared production agent_chat bus (nova-mind#569).
-    if [ "$db_name" = "agent_chat" ] && [ "$(whoami)" != "nova" ]; then
-        echo -e "  ${CROSS_MARK} Refusing to target production agent_chat database as user '$(whoami)'"
-        echo "      This install is running against the shared production Postgres cluster."
-        echo "      Set AGENT_CHAT_DB_NAME or configure agentChatDatabase in ~/.openclaw/postgres.json"
-        echo "      to point at an isolated staging database (e.g. 'agent_chat_staging')."
-        exit 1
-    fi
-
-    if [ ! -d "$migrations_dir" ]; then
-        return 0
-    fi
-
-    local mig_files=()
-    while IFS= read -r -d '' f; do
-        mig_files+=("$f")
-    done < <(find "$migrations_dir" -maxdepth 1 -name "*.sql" -print0 | sort -z)
-
-    if [ ${#mig_files[@]} -eq 0 ]; then
-        return 0
-    fi
-
-    # Ensure the dedicated agent_chat database exists before applying migrations.
-    if ! psql -U "$DB_USER" -lqt | cut -d \| -f 1 | grep -qw "$db_name"; then
-        echo "  Creating agent_chat database '$db_name'..."
-        _superuser_createdb "$db_name"
-        echo -e "  ${CHECK_MARK} Created database '$db_name'"
-    fi
-
-    # Apply the canonical base schema before migrations. The schema file is
-    # idempotent (CREATE IF NOT EXISTS / CREATE OR REPLACE), so applying it on
-    # every install run is safe and guarantees a fresh install gets the tables,
-    # triggers, and functions that migrations assume already exist.
-    local schema_file="$SCRIPT_DIR/database/agent-chat/schema.sql"
-    if [ ! -f "$schema_file" ]; then
-        echo -e "  ${CROSS_MARK} agent_chat schema file not found: $schema_file"
-        exit 1
-    fi
-
-    echo "  Applying agent_chat base schema..."
-    if _superuser_psql "$db_name" -v ON_ERROR_STOP=1 -f "$schema_file" >/dev/null 2>&1; then
-        echo -e "  ${CHECK_MARK} Base schema applied"
-    else
-        echo -e "  ${CROSS_MARK} Base schema apply failed"
-        exit 1
-    fi
-
-    echo "  Applying agent_chat migrations..."
-    for sql_file in "${mig_files[@]}"; do
-        local mig_name
-        mig_name=$(basename "$sql_file")
-        if _superuser_psql "$db_name" -v ON_ERROR_STOP=1 -f "$sql_file" >/dev/null 2>&1; then
-            echo -e "    ${CHECK_MARK} Migration: $mig_name"
-        else
-            echo -e "    ${CROSS_MARK} Migration failed: $mig_name"
-            exit 1
-        fi
-    done
-}
-
 echo "  Agent DB user: $DB_USER"
 if [ "$PG_SUPERUSER" != "$DB_USER" ]; then
     echo "  Superuser:     $PG_SUPERUSER (for DDL operations)"
@@ -638,13 +518,13 @@ while [[ $# -gt 0 ]]; do
             echo "Installs:"
             echo "  [relationships] entity-resolver lib, relationship skills"
             echo "  [memory]        schema (pgschema), shared PG libs, hooks, scripts, skills, venv, embeddings"
-            echo "  [cognition]     hooks, workflows, bootstrap context, agent_chat plugin,"
-            echo "                  agent_config_sync plugin, turn-context plugin, shell aliases"
+            echo "  [cognition]     hooks, workflows, bootstrap context, agent_config_sync plugin,"
+            echo "                  turn-context plugin, shell aliases (agent_chat plugin is optional peer repo)"
             echo ""
             echo "Components get installed to:"
             echo "  ~/.openclaw/hooks/           — memory-extract, session-init, db-bootstrap-context"
             echo "  ~/.openclaw/plugins/         — turn-context"
-            echo "  ~/.openclaw/extensions/      — agent_chat, agent_config_sync"
+            echo "  ~/.openclaw/extensions/      — agent_config_sync"
             echo "  ~/.openclaw/lib/             — PG loader libraries, entity-resolver"
             echo "  ~/.local/share/nova/         — shell-aliases.sh"
             exit 0
@@ -1066,19 +946,6 @@ verify_cognition() {
     echo ""
     echo "Verification (cognition)..."
 
-    if [ -d "$EXTENSIONS_DIR/agent_chat" ]; then
-        echo -e "  ${CHECK_MARK} agent_chat extension directory exists"
-        if [ -f "$EXTENSIONS_DIR/agent_chat/dist/index.js" ]; then
-            echo -e "  ${CHECK_MARK} agent_chat compiled"
-        else
-            echo -e "  ${CROSS_MARK} agent_chat not compiled"
-            VERIFICATION_ERRORS=$((VERIFICATION_ERRORS + 1))
-        fi
-    else
-        echo -e "  ${CROSS_MARK} agent_chat extension not installed"
-        VERIFICATION_ERRORS=$((VERIFICATION_ERRORS + 1))
-    fi
-
     if [ -f "$OPENCLAW_DIR/plugins/turn-context/dist/index.js" ]; then
         echo -e "  ${CHECK_MARK} turn-context plugin installed"
     else
@@ -1106,25 +973,6 @@ verify_cognition() {
         VERIFICATION_ERRORS=$((VERIFICATION_ERRORS + 1))
     fi
 
-    # agent_chat tables live in the dedicated agent_chat DB, not the memory DB.
-    local agent_chat_db
-    agent_chat_db=$(jq -r '.agentChatDatabase // "agent_chat"' "$PG_CONFIG" 2>/dev/null || echo "agent_chat")
-    if psql -U "$DB_USER" -d "$agent_chat_db" -c '\q' >/dev/null 2>&1; then
-        local required_tables=("agent_chat" "agent_chat_processed")
-        for table in "${required_tables[@]}"; do
-            local TABLE_EXISTS
-            TABLE_EXISTS=$(psql -U "$DB_USER" -d "$agent_chat_db" -tAc "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name = '$table'" | tr -d '[:space:]')
-            if [ "$TABLE_EXISTS" -eq 0 ]; then
-                echo -e "  ${WARNING} Table '$table' not yet created in '$agent_chat_db'"
-                VERIFICATION_WARNINGS=$((VERIFICATION_WARNINGS + 1))
-            else
-                echo -e "  ${CHECK_MARK} Table '$table' exists in '$agent_chat_db'"
-            fi
-        done
-    else
-        echo -e "  ${WARNING} Cannot verify agent_chat tables (database '$agent_chat_db' unreachable)"
-        VERIFICATION_WARNINGS=$((VERIFICATION_WARNINGS + 1))
-    fi
 }
 
 verify_config() {
@@ -1990,29 +1838,16 @@ else
     echo -e "  ${CHECK_MARK} Database '$DB_NAME' created"
 fi
 
-# --- agent_chat runtime configuration ---
-# The agent_chat messaging bus now lives in a dedicated `agent_chat` database.
-# Schema/objects for that database are managed by database/agent-chat/schema.sql
-# and migrations under database/agent-chat/migrations/, which this installer
-# applies automatically after the extension is built.
-# Logical replication for agent_chat (#64/#67) was superseded by the shared-DB
-# design and is no longer configured here.
+# --- Configure PostgreSQL password file (memory DB only) ---
 echo ""
-echo "Agent chat schema..."
-echo -e "  ${INFO} agent_chat bus is a dedicated database; trigger/schema config lives in database/agent-chat/schema.sql"
-
-# --- Configure PostgreSQL password file and agent_chat DB config ---
-echo ""
-echo "PostgreSQL password file and agent_chat DB config..."
+echo "PostgreSQL password file..."
 
 if [ -n "${PGPASSWORD:-}" ]; then
     pgpass_changed=0
     _ensure_pgpass_entry "localhost" "5432" "$DB_NAME" "$DB_USER" "$PGPASSWORD" && pgpass_changed=1
     _ensure_pgpass_entry "127.0.0.1" "5432" "$DB_NAME" "$DB_USER" "$PGPASSWORD" && pgpass_changed=1
-    _ensure_pgpass_entry "localhost" "5432" "$AGENT_CHAT_DB_NAME" "$DB_USER" "$PGPASSWORD" && pgpass_changed=1
-    _ensure_pgpass_entry "127.0.0.1" "5432" "$AGENT_CHAT_DB_NAME" "$DB_USER" "$PGPASSWORD" && pgpass_changed=1
     if [ "$pgpass_changed" -eq 1 ]; then
-        echo -e "  ${CHECK_MARK} Updated ~/.pgpass with memory and agent_chat DB entries"
+        echo -e "  ${CHECK_MARK} Updated ~/.pgpass with memory DB entries"
     else
         echo -e "  ${CHECK_MARK} ~/.pgpass entries already correct"
     fi
@@ -2020,15 +1855,8 @@ else
     echo -e "  ${WARNING} PGPASSWORD not set — skipping ~/.pgpass provisioning"
 fi
 
-# Preserve an explicit agent_chat database name (agentChatDatabase) in
-# postgres.json so the runtime and future installer runs resolve the same
-# target. Production default is 'agent_chat'; staging should set this to an
-# isolated name (e.g. 'agent_chat_staging') before running the installer.
-if _ensure_agent_chat_postgres_json "$PG_CONFIG" "$AGENT_CHAT_DB_NAME" "$DB_USER" "${PGPASSWORD:-}"; then
-    echo -e "  ${CHECK_MARK} Wrote nested agent_chat section to $PG_CONFIG"
-else
-    echo -e "  ${CHECK_MARK} Nested agent_chat section already correct in $PG_CONFIG (or could not update)"
-fi
+# --- Optional agent_chat peer integration (nova-mind#579) ---
+_agent_chat_integrate_peer
 
 # --- PostgreSQL NOTIFY listener ---
 # Local listener that reacts to postgres channels (schema_changed, gambling_changed,
@@ -2060,92 +1888,9 @@ else
     echo -e "  ${CHECK_MARK} Installed generate-delegation-context.sh → $GENERATE_DELEGATION_TARGET"
 fi
 
-# --- agent_chat extension ---
-echo ""
-echo "Agent Chat extension installation..."
-
-EXTENSION_SOURCE="$SCRIPT_DIR/cognition/focus/agent_chat"
-EXTENSION_TARGET="$EXTENSIONS_DIR/agent_chat"
-
-mkdir -p "$EXTENSIONS_DIR"
-
-if [ -d "$EXTENSION_SOURCE" ]; then
-    echo "  Syncing agent_chat extension source files..."
-    mkdir -p "$EXTENSION_TARGET"
-    sync_directory "$EXTENSION_SOURCE" "$EXTENSION_TARGET" "extension files"
-
-    # Fix main field in openclaw.plugin.json
-    if [ -f "$EXTENSION_TARGET/openclaw.plugin.json" ]; then
-        if ! grep -q '"main":' "$EXTENSION_TARGET/openclaw.plugin.json"; then
-            sed -i '/"id":/a\  "main": "./dist/index.js",' "$EXTENSION_TARGET/openclaw.plugin.json"
-        elif ! grep -q '"main": "./dist/index.js"' "$EXTENSION_TARGET/openclaw.plugin.json"; then
-            sed -i 's|"main": "[^"]*"|"main": "./dist/index.js"|' "$EXTENSION_TARGET/openclaw.plugin.json"
-        fi
-    fi
-
-    # Install pg to shared ~/.openclaw/node_modules/
-    echo ""
-    echo "  Installing pg to shared $OPENCLAW_DIR/node_modules/..."
-
-    if [ -d "$EXTENSION_TARGET/node_modules/pg" ]; then
-        echo -e "  ${INFO} Removing old per-extension node_modules/pg"
-        rm -rf "$EXTENSION_TARGET/node_modules/pg"
-    fi
-
-    if [ -d "$OPENCLAW_DIR/node_modules/pg" ] && [ "$FORCE_INSTALL" -eq 0 ]; then
-        echo -e "  ${CHECK_MARK} pg already installed in shared node_modules"
-    else
-        NPM_INSTALL_LOG="${TMPDIR:-/tmp}/npm-install-pg-shared-$$.log"
-        if (cd "$OPENCLAW_DIR" && npm install pg --save) >"$NPM_INSTALL_LOG" 2>&1; then
-            echo -e "  ${CHECK_MARK} pg installed to shared $OPENCLAW_DIR/node_modules/"
-            rm -f "$NPM_INSTALL_LOG"
-        else
-            echo -e "  ${CROSS_MARK} npm install pg failed"
-            tail -20 "$NPM_INSTALL_LOG"
-            exit 1
-        fi
-    fi
-
-    # Install extension dependencies
-    echo ""
-    echo "  Installing agent_chat extension dependencies..."
-    cd "$EXTENSION_TARGET"
-
-    NPM_INSTALL_LOG="${TMPDIR:-/tmp}/npm-install-agent-chat-$$.log"
-    if npm install >"$NPM_INSTALL_LOG" 2>&1; then
-        echo -e "  ${CHECK_MARK} Extension dependencies installed"
-        rm -f "$NPM_INSTALL_LOG"
-    else
-        echo -e "  ${CROSS_MARK} npm install failed for agent_chat"
-        tail -20 "$NPM_INSTALL_LOG"
-        exit 1
-    fi
-
-    # Build TypeScript
-    echo ""
-    echo "  Building agent_chat TypeScript..."
-
-    NPM_BUILD_LOG="${TMPDIR:-/tmp}/npm-build-agent-chat-$$.log"
-    if npm run build >"$NPM_BUILD_LOG" 2>&1; then
-        echo -e "  ${CHECK_MARK} Build completed"
-        rm -f "$NPM_BUILD_LOG"
-    else
-        echo -e "  ${CROSS_MARK} Build failed"
-        tail -20 "$NPM_BUILD_LOG"
-        exit 1
-    fi
-
-    # shellcheck disable=SC2015
-    [ -f "dist/index.js" ] && echo -e "  ${CHECK_MARK} Build output verified: dist/index.js" || \
-        { echo -e "  ${CROSS_MARK} Build output not found"; exit 1; }
-
-    cd "$SCRIPT_DIR"
-else
-    echo -e "  ${WARNING} cognition/focus/agent_chat not found (skipping extension)"
-fi
-
-# Apply agent_chat database migrations after the extension source is in place.
-_apply_agent_chat_migrations "$AGENT_CHAT_DB_NAME"
+# --- agent_chat extension (moved to NOVA-Openclaw/agent-chat, nova-mind#579) ---
+# If a bus is detected, _agent_chat_integrate_peer() already invoked the peer
+# repo's install-plugin.sh to build/sync the extension. Nothing to do here.
 
 # --- Cognition focus skills (managed tier — all sessions) ---
 echo ""
@@ -2875,29 +2620,7 @@ if [ -f "$OPENCLAW_CONFIG" ] && command -v jq &>/dev/null; then
     fi
 fi
 
-# --- Configure agent_chat channel ---
-echo ""
-echo "Configuring agent_chat channel..."
-
-OPENCLAW_CONFIG="$OPENCLAW_DIR/openclaw.json"
-if [ -f "$OPENCLAW_CONFIG" ] && command -v jq &>/dev/null; then
-    # The plugin now resolves agent_chat DB credentials from ~/.openclaw/postgres.json.
-    # Keep only the operational keys here; drop the dead connection keys that the
-    # installer used to write (and that agent_config_sync could otherwise misread).
-    jq '.channels.agent_chat |= ((. // {}) | del(.database, .host, .port, .user, .password) + {"enabled": true})' \
-        "$OPENCLAW_CONFIG" >"$OPENCLAW_CONFIG.tmp" && \
-        mv "$OPENCLAW_CONFIG.tmp" "$OPENCLAW_CONFIG" && \
-        echo -e "  ${CHECK_MARK} Configured channels.agent_chat (connection keys removed, enabled=true)" || \
-        echo -e "  ${WARNING} Could not configure agent_chat channel"
-
-    jq '.plugins.entries.agent_chat |= (. + {"enabled": true} | .config |= ((. // {}) | del(.database, .host, .port, .user, .password) + {"routeToSession": "main"}))' \
-        "$OPENCLAW_CONFIG" >"$OPENCLAW_CONFIG.tmp" && \
-        mv "$OPENCLAW_CONFIG.tmp" "$OPENCLAW_CONFIG" && \
-        echo -e "  ${CHECK_MARK} Configured plugins.entries.agent_chat (connection keys removed, routeToSession=main)" || \
-        echo -e "  ${WARNING} Could not configure agent_chat plugin"
-else
-    echo -e "  ${WARNING} Cannot configure agent_chat (missing config or jq)"
-fi
+# --- agent_chat OpenClaw config is managed by the optional peer repo (nova-mind#579) ---
 
 # --- Generate hooks.token if hooks are enabled or internal hooks are enabled ---
 echo ""
@@ -2975,7 +2698,6 @@ fi
 echo "    • Scripts → $SCRIPTS_TARGET_OPENCLAW"
 echo "    • Python venv → $VENV_DIR"
 echo "  [cognition]"
-echo "    • agent_chat extension → $EXTENSIONS_DIR/agent_chat"
 echo "    • agent_config_sync extension → $EXTENSIONS_DIR/agent_config_sync"
 echo "    • turn-context plugin → $OPENCLAW_DIR/plugins/turn-context"
 echo "    • Motivation system → $MOTIVATION_DIR"

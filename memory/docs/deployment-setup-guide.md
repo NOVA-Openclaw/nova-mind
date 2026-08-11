@@ -303,7 +303,7 @@ openclaw plugins enable agent-chat-channel
 
 ### 2. Configure NOTIFY/LISTEN
 
-> **As of nova-mind#320, `agent_chat` lives in its own dedicated `agent_chat` database, not `nova_memory`.** Every `psql` command in this section (and the rest of this guide's `agent_chat` references) must target that database explicitly — e.g. `psql -d agent_chat -c ...` — rather than relying on the default connection database used elsewhere in this guide. See `memory/docs/database-config.md` and `scripts/agent-chat-migration/README.md`.
+> **As of nova-mind#320/#579, `agent_chat` lives in its own dedicated `agent_chat` database, not `nova_memory`, and the bus code/schema/plugin moved to the `NOVA-Openclaw/agent-chat` repository.** Every `psql` command in this section (and the rest of this guide's `agent_chat` references) must target that database explicitly — e.g. `psql -d agent_chat -c ...` — rather than relying on the default connection database used elsewhere in this guide. See `memory/docs/database-config.md#optional-agent_chat-bus-peer-integration-nova-mind579` and the `NOVA-Openclaw/agent-chat` repo.
 
 PostgreSQL configuration for inter-agent messaging:
 

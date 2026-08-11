@@ -1,5 +1,17 @@
 # Issue #151: Install Script Overwrites Existing Config Values
 
+> **Historical note (post-#320, post-#579):** The specific scenario below
+> (`channels.agent_chat.password` in `openclaw.json`) is no longer possible as
+> described — since #320, the plugin does not read `database`/`host`/`port`/
+> `user`/`password` from `channels.agent_chat` at all (credentials resolve from
+> `postgres.json`'s nested `agent_chat` section instead), and as of nova-mind#579
+> the `NOVA-Openclaw/agent-chat` repo's `install-plugin.sh` actively strips those
+> keys from `channels.agent_chat`/`plugins.entries.agent_chat.config` on every
+> run rather than writing them. The general merge-strategy principle below (never
+> overwrite existing non-empty config values) remains valid guidance for any
+> config-writing installer step; left as historical record of the original
+> `agent_chat`-specific incident.
+
 ## Problem
 Running `shell-install.sh` (via `agent-install.sh`) overwrites existing values in `~/.openclaw/openclaw.json` instead of preserving them. Specifically observed: the `channels.agent_chat.password` field was reset to an empty string `""` after running the installer, wiping out a previously configured strong password.
 

@@ -1,9 +1,33 @@
 # Objects to exclude from pgschema management
 # See https://www.pgschema.com/cli/ignore
 #
-# Example:
-# [tables]
-# patterns = ["temp_*", "test_*"]
+# schema.sql is a dump of nova_memory. Peer agents (victoria, newhart,
+# graybeard) carry agent-local tables in their own <agent>_memory databases
+# that nova_memory does not have. Without these ignore patterns, the
+# installer's declarative diff plans DROPs for every table it doesn't know
+# about (2026-08-11: plan attempted to drop Victoria's entire live trading
+# stack on victoria_memory).
 #
-# [views]
-# patterns = ["debug_*"]
+# Victoria's trading stack (automated-strategies):
+# portfolios, trades, positions, cash_ledger, strategies, instruments, etc.
+#
+# Generic pattern: any table suffixed _local is agent-local by convention
+# and never managed by the shared schema.
+
+[tables]
+patterns = [
+  "portfolios",
+  "portfolio_snapshots",
+  "portfolio_asset_classes",
+  "positions",
+  "trades",
+  "cash_ledger",
+  "strategies",
+  "strategy_notes",
+  "instruments",
+  "asset_classes",
+  "open_orders",
+  "order_adjustments",
+  "price_cache_v2",
+  "*_local"
+]

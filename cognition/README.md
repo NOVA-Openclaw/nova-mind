@@ -56,7 +56,7 @@ This is the actual installer. It:
 - Validates API keys — checks `~/.openclaw/openclaw.json` first, then shell environment
 - Installs the `agent_chat` TypeScript extension to `~/.openclaw/extensions/`
 - Builds the extension (npm install, TypeScript compilation)
-- Provisions the nested `agent_chat` section of `~/.openclaw/postgres.json` and `.pgpass` entries for the dedicated `agent_chat` database (idempotent; as of nova-mind#320, `agent_chat` no longer lives in the main memory database, and its schema is applied separately by `scripts/agent-chat-migration/migrate.sh` against `database/agent-chat/schema.sql` — not by this installer)
+- Provisions the nested `agent_chat` section of `~/.openclaw/postgres.json` and `.pgpass` entries for the dedicated `agent_chat` database (idempotent; as of nova-mind#320, `agent_chat` no longer lives in the main memory database). **As of nova-mind#548/#569, this installer applies the `agent_chat` schema and migrations itself** — it resolves the target database name via the top-level `agentChatDatabase` key in `postgres.json` (refusing to proceed against the literal production name `agent_chat` unless running as the `nova` unix user), creates the database if missing, applies `database/agent-chat/schema.sql` unconditionally, then applies every file under `database/agent-chat/migrations/` in sorted order. `scripts/agent-chat-migration/migrate.sh` is now only needed for the original one-shot #320 cutover scenario, not routine schema evolution — see `scripts/agent-chat-migration/README.md`.
 - Deploys `pg-notify-listener.py` and its systemd user unit
 - Installs skills (agent-chat, agent-spawn) and bootstrap-context hook
 - Runs `npm install` for hook dependencies if `package.json` is present

@@ -261,7 +261,7 @@ COMMENT ON TABLE agents IS 'Agent definitions. READ-ONLY except Newhart (Agent D
 
 > **As of nova-mind#320, this table lives in a dedicated `agent_chat` database, not `nova_memory`.** The schema and protocol below are otherwise accurate and unchanged by the move — they describe the table shape, not which database hosts it. Agents resolve the connection via the nested `agent_chat` section of `~/.openclaw/postgres.json` (`load_pg_env(section="agent_chat")` / `loadPgEnv(undefined, "agent_chat")`); see `memory/docs/database-config.md` and `scripts/agent-chat-migration/README.md`.
 
-> **Column history (#106):** `mentions → recipients`, `created_at → "timestamp"` (TIMESTAMPTZ), `channel` dropped. All inserts via `send_agent_message()`.
+> **Column history (#106):** `mentions → recipients`, `created_at → "timestamp"` (TIMESTAMPTZ), `channel` dropped. **`expires_at` added in nova-mind#548.** All inserts via `send_agent_message()`.
 
 ```sql
 CREATE TABLE agent_chat (
@@ -270,13 +270,14 @@ CREATE TABLE agent_chat (
     message     TEXT NOT NULL,
     recipients  TEXT[] NOT NULL CHECK (array_length(recipients, 1) > 0),
     reply_to    INT REFERENCES agent_chat(id),
-    "timestamp" TIMESTAMPTZ NOT NULL DEFAULT NOW()  -- quoted: reserved word
+    "timestamp" TIMESTAMPTZ NOT NULL DEFAULT NOW(),  -- quoted: reserved word
+    expires_at  TIMESTAMPTZ  -- optional, computed from send_agent_message's p_ttl arg (#548)
 );
 ```
 
 **How inter-agent chat works:**
-1. Agent A calls `send_agent_message('nova', 'message', ARRAY['agent_b'])`
-2. `send_agent_message()` validates sender and recipients, normalizes to lowercase
+1. Agent A calls `send_agent_message('nova', 'message', ARRAY['agent_b'])` (optionally with `p_ttl` and/or `p_reply_to`, nova-mind#548)
+2. `send_agent_message()` validates that `LOWER(p_sender) = session_user` (spoofing-proof — cannot claim to be a different agent than the one actually connected), rejects self-addressed messages, and normalizes sender/recipients to lowercase
 3. PostgreSQL trigger fires `pg_notify('agent_chat', payload)` with `id`, `sender`, `recipients`
 4. Agent B (listening via `LISTEN agent_chat`) receives notification
 5. Agent B's plugin routes message to session
@@ -288,7 +289,18 @@ SELECT send_agent_message('nova', 'Can you review the latest PR?', ARRAY['coder'
 
 -- Broadcast to all agents
 SELECT send_agent_message('nova', 'Deploying at 5pm today', ARRAY['*']);
+
+-- Reply to a specific message, with a 24h TTL (nova-mind#548)
+SELECT send_agent_message(
+  p_sender => 'nova',
+  p_message => 'Following up on your question',
+  p_recipients => ARRAY['coder'],
+  p_ttl => interval '24 hours',
+  p_reply_to => 1234
+);
 ```
+
+See `psyche/ARCHITECTURE-agent-chat.md` for the full signature and semantics.
 
 **Useful views:**
 ```sql

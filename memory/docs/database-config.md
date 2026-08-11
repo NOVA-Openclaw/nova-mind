@@ -52,23 +52,70 @@ Only `database`, `user`, and `password` are typically needed inside a nested
 section — `host` and `port` fall back to the top-level flat keys (or their
 defaults) if omitted from the section. Every loader function accepts an
 optional `section` parameter; when given, fields inside that named object take
-precedence over the top-level flat keys. **Whether environment variables can
-still override a section value depends on the language** — see "Resolution
-Order" below: Python (as of #405) gives a section-defined field precedence
-over ENV, while Bash/TypeScript still let ENV win over the section (TS parity
-fix tracked in #403). See "Loader Functions" below for the exact call
-signature per language.
+precedence over the top-level flat keys. **As of nova-mind#403, Python and
+TypeScript agree on per-field section-over-ENV precedence** — see "Resolution
+Order" below. Bash still has no section support at all. See "Loader Functions"
+below for the exact call signature per language.
+
+`postgres.json` also supports a flat, top-level `agentChatDatabase` string key
+(nova-mind#569) that names which database `agent-install.sh` provisions and
+targets as the `agent_chat` bus — distinct from the nested `agent_chat`
+section above, which carries connection *credentials* (`database`/`user`/`password`)
+for runtime loaders. Production installs default to `agentChatDatabase: "agent_chat"`;
+staging/dev installs should set it to an isolated name (e.g. `"agent_chat_staging"`)
+so a staging `agent-install.sh` run cannot mutate the shared production bus. See
+"Installer-Provisioned agent_chat Database Target" below.
 
 `agent-install.sh` provisions the `agent_chat` section automatically and is
 idempotent — re-running it reports the section is already correct rather than
 clobbering existing values. See `scripts/agent-chat-migration/README.md` for
 the full rollout runbook.
 
+## Installer-Provisioned agent_chat Database Target (nova-mind#569)
+
+`agent-install.sh` resolves which database name to target as the `agent_chat`
+bus (for both schema/migration application and the runtime `agent_chat`
+section above) via this order:
+
+1. **`agentChatDatabase`** top-level string key in `~/.openclaw/postgres.json`, if present
+2. **`AGENT_CHAT_DB_NAME`** environment variable
+3. **Default:** `agent_chat`
+
+The installer writes the resolved value back to `postgres.json` as
+`agentChatDatabase` (creating the key on first run, never overwriting an
+existing string value on re-run), so subsequent installer runs and any script
+that needs the target name — for example `verify_cognition()`'s
+`jq -r '.agentChatDatabase // "agent_chat"'` lookup — agree on the same value.
+
+**Production-mutation guard:** if the resolved name is the literal string
+`agent_chat` (the production default) and the installer is *not* running as
+the `nova` unix account, it refuses to proceed and exits non-zero. This
+prevents a staging or per-developer install from accidentally applying schema
+or migrations against the shared production `agent_chat` bus. Staging/dev
+installs must set `agentChatDatabase` (or `AGENT_CHAT_DB_NAME`) to an isolated
+name such as `agent_chat_staging` before running `agent-install.sh`. The guard
+checks `whoami` (the actual connected unix user), not `$PGUSER`, so it cannot
+be bypassed by exporting a different `PGUSER` value.
+
+Once the target database is resolved, `agent-install.sh`:
+1. Creates the database if it does not already exist.
+2. Applies `database/agent-chat/schema.sql` unconditionally (idempotent —
+   `CREATE IF NOT EXISTS` / `CREATE OR REPLACE` throughout) — this guarantees a
+   fresh install has the tables/triggers/functions that migrations assume
+   already exist, even before any migration file runs.
+3. Applies every `*.sql` file under `database/agent-chat/migrations/`, in
+   filename-sorted order, with `ON_ERROR_STOP=1` — any migration failure is a
+   hard installer failure, never a silent partial-migration state.
+
+See `scripts/agent-chat-migration/README.md` for the original one-shot
+cutover runbook (superseded for day-to-day schema evolution by the migrations
+directory above, which the installer now applies automatically on every run).
+
 ## Resolution Order
 
-**As of nova-mind#405 (originally reported as [nova-workspace#33](https://github.com/NOVA-Openclaw/nova-workspace/issues/33)), the Python loader's resolution order differs from Bash and TypeScript.** The three loaders are no longer identical — see the per-language notes below before assuming a shared precedence.
+**As of nova-mind#403, Python and TypeScript share the same per-field resolution order.** (Python got there first via #405; #403 ported the identical contract to all three TypeScript `loadPgEnv()` copies — `lib/pg-env.ts`, `memory/lib/pg-env.ts`, and `cognition/focus/agent_chat/lib/pg-env.ts`.) Bash remains the odd one out — see below.
 
-### Python (`lib/pg_env.py` / `memory/lib/pg_env.py`) — per-field precedence
+### Python (`lib/pg_env.py` / `memory/lib/pg_env.py`) and TypeScript (`lib/pg-env.ts` / `memory/lib/pg-env.ts` / `cognition/focus/agent_chat/lib/pg-env.ts`) — per-field precedence
 
 Resolution happens **per field**, not once for the whole config:
 
@@ -79,16 +126,11 @@ Resolution happens **per field**, not once for the whole config:
 
 A field the section **omits** is unaffected by the section at all — it falls through to the normal ENV → flat-config → default chain, exactly as if no section had been requested. This is why it's a *per-field* rule rather than a single global switch: a section that only sets `database` still lets ENV win for `host`/`port`/`user`/`password`.
 
-### Bash (`pg-env.sh`) and TypeScript (`pg-env.ts`) — ENV-first (no per-field section override)
+This closes the gap that used to let a pre-exported ambient var (e.g. a gateway shell already exporting `PGDATABASE=nova_memory`) override a TypeScript-side `section` value — `cognition/focus/agent_chat/src/channel.ts`'s `loadPgEnv(undefined, "agent_chat")` call is a confirmed beneficiary; it now reliably resolves the `agent_chat` database section even when `PGDATABASE` is set in the environment.
 
-Bash has no section support at all (see the Bash loader note below). TypeScript's `loadPgEnv()` still uses the older, simpler order for every field:
+### Bash (`pg-env.sh`) — no section support
 
-1. **Environment variables** — `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGPASSWORD`
-2. **Nested section** (TypeScript only; if a `section` name is passed to the loader and the config file has a matching object at that key)
-3. **Config file top-level (flat) keys** — `~/.openclaw/postgres.json`
-4. **Defaults** — `localhost` for host, `5432` for port, current OS user for username
-
-**Known gap:** because ENV wins first here, a pre-exported ambient var (e.g. a gateway shell already exporting `PGDATABASE=nova_memory`) can still override a TypeScript-side `section` value — the same class of bug fixed in Python by #405. Porting the per-field fix to TypeScript is tracked in **#403**; `cognition/focus/agent_chat/src/channel.ts` (`loadPgEnv(undefined, "agent_chat")`) is a confirmed affected caller until that lands.
+Bash has no section support at all (see the Bash loader note below) — only the flat top-level keys and the ENV → flat-config → default chain apply.
 
 ### Shared rules (all languages)
 
@@ -192,6 +234,10 @@ shell-install.sh
 agent-install.sh
   └─ Installs lib/ → ~/.openclaw/lib/
   └─ source ~/.openclaw/lib/pg-env.sh → load_pg_env() → reads postgres.json → creates DB & runs migrations
+  └─ Resolves agentChatDatabase (postgres.json → AGENT_CHAT_DB_NAME env → "agent_chat" default)
+  └─ Refuses to proceed if target is literal "agent_chat" and not running as the nova unix user
+  └─ Creates the agent_chat-target DB if missing, applies database/agent-chat/schema.sql, then
+     applies database/agent-chat/migrations/*.sql in sorted order
 
 hooks & scripts
   └─ source ~/.openclaw/lib/pg-env.sh (or import equivalent) → PG* vars set → use psql/psycopg2/pg natively

@@ -45,6 +45,17 @@ SELECT send_agent_message(
 ```
 
 - Peers process messages asynchronously — don't expect an immediate response.
+- To reply to a specific message (nova-mind#548), pass its `id` as the optional 5th `p_reply_to` argument (named-arg form recommended once you're passing it):
+
+```sql
+SELECT send_agent_message(
+  p_sender => 'nova',
+  p_message => 'Following up on your last message',
+  p_recipients => ARRAY['graybeard'],
+  p_reply_to => 1234   -- id of the message you're replying to
+);
+```
+
 - Replies arrive via agent_chat. Check for responses:
 
 ```sql

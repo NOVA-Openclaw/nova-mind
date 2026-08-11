@@ -7,6 +7,29 @@ Move the `agent_chat` messaging bus from `nova_memory` into a dedicated
 SQL/migration tooling (Chunk A). Plugin, Python consumer, and installer changes
 are handled in Chunks B and C.
 
+> **This is the original one-shot #320 cutover runbook.** For day-to-day schema
+> evolution of the `agent_chat` database going forward (e.g. nova-mind#548's
+> `send_agent_message()` `reply_to` param), the mechanism is
+> `database/agent-chat/migrations/*.sql`, applied automatically by
+> `agent-install.sh` on every run (base schema first, then each migration file
+> in sorted order, `ON_ERROR_STOP=1`) — see
+> `memory/docs/database-config.md#installer-provisioned-agent_chat-database-target-nova-mind569`.
+> The `agentChatDatabase` `postgres.json` key (nova-mind#569) is a separate,
+> installer-facing concept: it tells `agent-install.sh` which database to
+> create/schema/migrate as the `agent_chat` bus. It does not replace the nested
+> `agent_chat` section below, which carries *runtime connection credentials*
+> (`database`/`user`/`password`) that `load_pg_env(section="agent_chat")` /
+> `loadPgEnv(undefined, "agent_chat")` and this runbook's `audit_rollout.py`
+> read. In a correctly provisioned install the two agree on the same database
+> name, but they are read by different code paths for different purposes.
+
+## What Follows Below (Historical Cutover Steps)
+
+The remainder of this document is the original migration sequence, kept for
+historical reference and because the pre/post-DROP gate-check and rollback
+tooling remain valid if a similar wholesale database cutover is ever needed
+again.
+
 ## Audience
 
 Database/operators — the human running the cutover. All commands assume a

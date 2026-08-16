@@ -26,4 +26,8 @@ jobs:
         run: shellcheck agent-install.sh
 
       - name: Run installer BATS tests
-        run: bats tests/install/test_agent_chat_installer.bats tests/install/test_agents_json_safety.bats
+        # Derivation: #579 extracted agent_chat to a peer repo and replaced the
+        # legacy test_agent_chat_installer.bats suite with the focused peer
+        # detection coverage in test_agent_chat_peer_detection.bats. This
+        # workflow invocation is updated to match the renamed test file.
+        run: bats tests/install/test_agent_chat_peer_detection.bats tests/install/test_agents_json_safety.bats

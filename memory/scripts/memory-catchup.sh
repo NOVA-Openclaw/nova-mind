@@ -21,8 +21,29 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 STATE_FILE="${HOME}/.openclaw/memory-catchup-state.json"
 CACHE_FILE="${HOME}/.openclaw/memory-message-cache.json"
 TRANSCRIPT_DIR="${HOME}/.openclaw/agents/main/sessions"
-EXTRACT_SCRIPT="${SCRIPT_DIR}/process-input.sh"
+EXTRACT_SCRIPT="${SCRIPT_DIR}/extract_memories.py"
 CACHE_SIZE=20
+
+EXTRACTION_CONFIG_FILE="${HOME}/.openclaw/scripts/memory-extraction-config.json"
+
+max_prior_messages() {
+    local val
+    val=$(jq -r '.max_prior_messages // 10' "$EXTRACTION_CONFIG_FILE" 2>/dev/null || echo '10')
+    if [[ "$val" =~ ^[0-9]+$ ]]; then
+        echo "$val"
+    else
+        echo '10'
+    fi
+}
+
+is_context_window_enabled() {
+    local val
+    val=$(jq -r '.context_window_enabled // true' "$EXTRACTION_CONFIG_FILE" 2>/dev/null || echo 'true')
+    case "$(echo "$val" | tr '[:upper:]' '[:lower:]')" in
+        false|0|off|no|disabled) return 1 ;;
+        *) return 0 ;;
+    esac
+}
 
 # Ensure state/cache files exist
 mkdir -p "$(dirname "$STATE_FILE")"
@@ -105,55 +126,83 @@ jq -c '
     select(.content != "" and .content != null)
 ' "$MAIN_SESSION" 2>/dev/null | tail -100 > "$ALL_MESSAGES" || true
 
-# Function to build context and check for duplicates
+# Function to build context, update cache, and check for duplicates.
+# Outputs a JSON array of prior context messages (oldest first) suitable for
+# EXTRACTION_CONTEXT_JSON. Prints "DUPLICATE" if the message is a repeat.
 add_to_cache_and_get_context() {
     local target_ts="$1"
     local target_content="$2"
     local target_role="$3"
-    
+
     # Read current cache
-    local cache=$(cat "$CACHE_FILE")
-    
+    local cache
+    cache=$(cat "$CACHE_FILE")
+
     # Check for duplicate (same content in last 5 messages)
-    local is_dup=$(echo "$cache" | jq -r --arg content "$target_content" '
+    local is_dup
+    is_dup=$(echo "$cache" | jq -r --arg content "$target_content" '
         .[-5:] | map(select(.content == $content)) | length > 0
     ')
-    
+
     if [ "$is_dup" = "true" ]; then
         echo "DUPLICATE"
         return
     fi
-    
+
+    # How many prior messages to include is driven by the same config key as
+    # the per-turn path (#611).
+    local prior_limit
+    prior_limit=$(max_prior_messages)
+    # The cache keeps room for the current message plus prior context; cap at
+    # CACHE_SIZE - 1 so the rolling window stays bounded.
+    if [ "$prior_limit" -ge "$CACHE_SIZE" ]; then
+        prior_limit=$((CACHE_SIZE - 1))
+    fi
+
     # Get messages BEFORE target timestamp for context
-    local context_messages=$(cat "$ALL_MESSAGES" | jq -c --arg ts "$target_ts" '
-        select(.timestamp < $ts)
-    ' | tail -19)
-    
-    # Build new cache
-    local new_cache=$(echo "$context_messages" | jq -s --arg content "$target_content" --arg ts "$target_ts" --arg role "$target_role" '
-        . + [{content: $content, timestamp: $ts, role: $role}] | .[-20:]
+    local context_messages
+    context_messages=$(jq -c --arg ts "$target_ts" 'select(.timestamp < $ts)' < "$ALL_MESSAGES" | tail -n "$prior_limit")
+
+    # Build new cache (includes the current message at the end)
+    local new_cache
+    new_cache=$(echo "$context_messages" | jq -s --arg content "$target_content" --arg ts "$target_ts" --arg role "$target_role" '
+        . + [{content: $content, timestamp: $ts, role: $role}] | .[-'$CACHE_SIZE':]
     ')
-    
+
     # Save updated cache
     echo "$new_cache" > "$CACHE_FILE"
-    
-    # Format context with speaker labels
+
+    # Output the context messages as a JSON array (oldest first).
+    echo "$context_messages" | jq -s '.'
+}
+
+# Format a context array + current message for human-readable logging.
+format_context_for_log() {
+    local context_json="$1"
+    local current_content="$2"
+    local current_role="$3"
+
     local speaker_label
-    if [ "$target_role" = "assistant" ]; then
+    if [ "$current_role" = "assistant" ]; then
         speaker_label="[CURRENT NOVA MESSAGE - EXTRACT FROM THIS]"
     else
         speaker_label="[CURRENT USER MESSAGE - EXTRACT FROM THIS]"
     fi
-    
-    echo "$new_cache" | jq -r --arg current_label "$speaker_label" '
-        to_entries | map(
-            if .key == (length - 1) then
-                $current_label + "\n" + .value.content
-            else
-                (if .value.role == "assistant" then "[NOVA]" else "[USER]" end) + " " + 
+
+    echo "$context_json" | jq -r --arg current_label "$speaker_label" --arg current "$current_content" '
+        "========================================\n" +
+        "PRIOR CONVERSATION CONTEXT (for disambiguation only)\n" +
+        "========================================\n" +
+        (
+            to_entries | map(
+                (if .value.role == "assistant" then "[NOVA]" else "[USER]" end) + " " +
                 (.key + 1 | tostring) + ":\n" + .value.content
-            end
-        ) | join("\n\n---\n\n")
+            ) | join("\n---\n")
+        ) +
+        "\n========================================\n" +
+        $current_label + "\n" +
+        "========================================\n" +
+        $current
     '
 }
 
@@ -182,17 +231,17 @@ while IFS= read -r line; do
     fi
     
     # Build context
-    CONTEXT=$(add_to_cache_and_get_context "$MSG_TS" "$CONTENT" "$MSG_ROLE")
-    
-    if [ "$CONTEXT" = "DUPLICATE" ]; then
+    CONTEXT_JSON=$(add_to_cache_and_get_context "$MSG_TS" "$CONTENT" "$MSG_ROLE")
+
+    if [ "$CONTEXT_JSON" = "DUPLICATE" ]; then
         echo "[memory-catchup] Skipping duplicate: ${CONTENT:0:50}..."
         continue
     fi
-    
+
     SPEAKER="USER"
     [ "$MSG_ROLE" = "assistant" ] && SPEAKER="NOVA"
     echo "[memory-catchup] Processing $SPEAKER message: ${CONTENT:0:70}..."
-    
+
     # Set sender info based on role
     if [ "$MSG_ROLE" = "assistant" ]; then
         export SENDER_NAME="NOVA"
@@ -201,26 +250,51 @@ while IFS= read -r line; do
         export SENDER_NAME="${SENDER_NAME:-I)ruid}"
         # SENDER_ID should come from the hook for user messages
     fi
-    
+
+    # Resolve Python interpreter for extract_memories.py (same order as handler.ts / replay).
+    PYTHON_CMD='python3'
+    if [ -n "${EXTRACTION_PYTHON_CMD_OVERRIDE:-}" ]; then
+        PYTHON_CMD="$EXTRACTION_PYTHON_CMD_OVERRIDE"
+    elif [ -f "${HOME}/.local/share/$(id -un)/venv/bin/python3" ]; then
+        PYTHON_CMD="${HOME}/.local/share/$(id -un)/venv/bin/python3"
+    fi
+
     # Run extraction (API key must be in environment, inherited from OpenClaw)
-    if [ -z "$ANTHROPIC_API_KEY" ]; then
-        echo "[memory-catchup] WARNING: ANTHROPIC_API_KEY not set — skipping LLM extraction (transcript ingest will still run)" >&2
+    if [ -z "$OPENROUTER_API_KEY" ] && [ -z "$ANTHROPIC_API_KEY" ]; then
+        echo "[memory-catchup] WARNING: No extraction API key set — skipping LLM extraction (transcript ingest will still run)" >&2
         rm -f "$MESSAGES_TO_PROCESS" "$ALL_MESSAGES"
         break
     fi
-    
+
+    # Timestamp for this extraction pass.
+    MSG_EXTRACT_TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
     if [ "$VERBOSE_LOG" = true ]; then
         EXTRACT_LOG="${HOME}/.openclaw/logs/memory-extractions.log"
         echo "---" >> "$EXTRACT_LOG"
         echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $SPEAKER MESSAGE (with conversation context):" >> "$EXTRACT_LOG"
-        echo "$CONTEXT" | head -60 >> "$EXTRACT_LOG"
+        format_context_for_log "$CONTEXT_JSON" "$CONTENT" "$MSG_ROLE" | head -60 >> "$EXTRACT_LOG"
         echo "..." >> "$EXTRACT_LOG"
-        
-        RESULT=$("$EXTRACT_SCRIPT" "$CONTEXT" 2>&1) || true
+
+        RESULT=$(printf '%s' "$CONTENT" | \
+            SENDER_NAME="$SENDER_NAME" \
+            SENDER_ID="$SENDER_ID" \
+            IS_GROUP="false" \
+            SOURCE_SESSION_ID="" \
+            SOURCE_TIMESTAMP="$MSG_EXTRACT_TS" \
+            EXTRACTION_CONTEXT_JSON="$CONTEXT_JSON" \
+            "$PYTHON_CMD" "$EXTRACT_SCRIPT" 2>&1) || true
         echo "$RESULT" | tail -25 >> "$EXTRACT_LOG"
         echo "" >> "$EXTRACT_LOG"
     else
-        "$EXTRACT_SCRIPT" "$CONTEXT" &>/dev/null &
+        printf '%s' "$CONTENT" | \
+            SENDER_NAME="$SENDER_NAME" \
+            SENDER_ID="$SENDER_ID" \
+            IS_GROUP="false" \
+            SOURCE_SESSION_ID="" \
+            SOURCE_TIMESTAMP="$MSG_EXTRACT_TS" \
+            EXTRACTION_CONTEXT_JSON="$CONTEXT_JSON" \
+            "$PYTHON_CMD" "$EXTRACT_SCRIPT" &>/dev/null &
     fi
     
     PROCESSED=$((PROCESSED + 1))

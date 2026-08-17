@@ -2,9 +2,9 @@
 
 The memory extraction pipeline automatically transforms natural language conversations into structured database records. This guide covers how it works, how to troubleshoot issues, and how to optimize performance.
 
-> **Note:** This doc previously described a three-script shell pipeline (`extract-memories.sh` → `store-memories.sh`, driven by `process-input.sh`). That pipeline was consolidated into a single Python script, `memory/scripts/extract_memories.py`, as part of the #174 grammar-parser removal. None of `extract-memories.sh`, `store-memories.sh`, or `process-input.sh` exist in this repo's `memory/scripts/` anymore. This revision documents the current pipeline.
+> **Note:** This doc previously described a three-script shell pipeline (`extract-memories.sh` → `store-memories.sh`, driven by `process-input.sh`). That pipeline was consolidated into a single Python script, `memory/scripts/extract_memories.py`, as part of the #174 grammar-parser removal. None of `extract-memories.sh`, `store-memories.sh`, or `process-input.sh` exist in this repo's `memory/scripts/` anymore.
 >
-> **Known issue:** `memory/scripts/memory-catchup.sh` (current repo source) still references `EXTRACT_SCRIPT="${SCRIPT_DIR}/process-input.sh"` and calls it directly — that script does not exist in this repo. A `process-input.sh` happens to exist as a stale deployed artifact at `~/.openclaw/scripts/`/`~/.openclaw/workspace/scripts/` on at least one host, but it in turn calls `extract-memories.sh`, which also does not exist. This is a real latent bug in `memory-catchup.sh` worth a GitHub issue and a fix from the Software Engineering domain — flagging here rather than silently patching the script, since that's outside Technical Writing's scope.
+> **Fixed (#611):** `memory/scripts/memory-catchup.sh` now calls `extract_memories.py` directly and passes the same prior-message context as the per-turn hook path via the `EXTRACTION_CONTEXT_JSON` environment variable.
 
 ## Overview
 
@@ -72,6 +72,8 @@ Both the hook (`handler.ts`) and `extract_memories.py` read `~/.openclaw/scripts
 | `max_tokens` | `extract_memories.py` (`CONFIG_MAX_TOKENS`) | `2048` | |
 | `extraction_timeout_ms` | `handler.ts` (`loadExtractionTimeoutMs()`) | `90000` (90s) | See precedence and rationale below |
 | `python_cmd` | `handler.ts` (`resolvePythonCmd()`) / `extraction-replay.sh` (`resolve_python_cmd()`) | none — resolution falls through to venv detection when absent | Optional. See "Interpreter resolution" below |
+| `max_prior_messages` | `handler.ts` (`loadMaxPriorMessages()`), `extraction-replay.sh` (`max_prior_messages()`), `memory-catchup.sh` (`max_prior_messages()`) | `10` | Number of prior same-session messages to pass as disambiguation context (#611). `0` disables context gathering. Hot-reloaded per event/run. |
+| `context_window_enabled` | `handler.ts` (`isContextWindowEnabled()`), `extraction-replay.sh` (`is_context_window_enabled()`), `memory-catchup.sh` (`is_context_window_enabled()`) | `true` | Master toggle for the context window. When explicitly disabled, no transcript lookup is performed (#611, TC-A8). Hot-reloaded per event/run. |
 
 Example (current deployed shape):
 ```json
@@ -284,9 +286,46 @@ Imports `get_initial_confidence` from `confidence_helper.py` to set a starting c
 
 ## Context Window System
 
-Real-time extraction context resolution happens per-message via the hook's own context passing (not a separate cache file for that path). `memory-catchup.sh` separately maintains its own rolling cache at `~/.openclaw/memory-message-cache.json` for its ingestion path.
+As of #611, both extraction paths share a configurable conversation-context window:
 
-### Cache Structure
+- **Per-turn path:** The `memory-extract` hook queries `channel_transcripts` for the
+  most recent `max_prior_messages` rows in the same `channel_sessions` row as the
+  incoming message, then passes them to `extract_memories.py` via the
+  `EXTRACTION_CONTEXT_JSON` environment variable.
+- **Batch/replay path:** `extraction-replay.sh` reconstructs the same prior-message
+  context from `channel_transcripts` for replay rows that have a transcript FK.
+  `memory-catchup.sh` builds context from its rolling message cache and also passes
+  it via `EXTRACTION_CONTEXT_JSON`.
+
+The context is used **ONLY for disambiguation**. `extract_memories.py`'s prompt
+explicitly instructs the model to extract facts/entities/events/vocabulary from
+the current message only and never from context messages themselves (#611, C2).
+
+### Configuration
+
+See the table above for `max_prior_messages` and `context_window_enabled`. Both are
+hot-reloaded per event/run. Setting `context_window_enabled` to `false` skips the
+context fetch entirely (not just the usage step), which matters for latency/cost
+(#611, TC-A8). Setting `max_prior_messages` to `0` has the same behavioral effect.
+
+### Size limits
+
+`context_window_helper.py` enforces:
+
+- At most `max_prior_messages` prior messages.
+- Per-message cap of 2000 characters (truncated with `...[truncated]`).
+- Total context cap of 8000 characters (oldest messages dropped first if exceeded).
+
+These bounds are applied by `extract_memories.py` as a defense-in-depth backstop;
+callers are encouraged to pass reasonably-sized context already.
+
+### Graceful degradation
+
+If context assembly fails for any reason (DB error, malformed JSON, missing FK),
+extraction proceeds as a no-context single-message extraction. Context-fetch
+failure is never treated as an extraction failure (#611, C8/F1-F3).
+
+### Cache Structure (catchup path only)
 
 **File:** `~/.openclaw/memory-message-cache.json`
 

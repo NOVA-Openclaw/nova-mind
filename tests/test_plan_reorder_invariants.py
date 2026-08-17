@@ -139,3 +139,45 @@ def test_invariant_holds_for_real_staging_plan():
             f"metadata statement at flat index {loc} does not follow "
             f"CREATE FUNCTION at flat index {create_location}"
         )
+
+
+R2_PLAN = FIXTURES_DIR / "pgschema-debug-plan-r2.json"
+
+
+def test_invariant_holds_for_r2_retest_plan_and_view_follows_add_column():
+    """SE #709 retest r2 artifact: view must follow ALTER TABLE ADD COLUMN.
+
+    The original analyzer failed to resolve column references through table
+    aliases (``ef`` -> ``entity_facts``), so ``CREATE VIEW v_fact_grades``
+    did not depend on ``ALTER TABLE entity_facts ADD COLUMN assertion_intent``.
+    The reorderer placed the view in group 0 and the ADD COLUMN in group 3,
+    which caused a 42703 error at apply time.  This test pins the fix.
+    """
+    if not R2_PLAN.exists():
+        pytest.skip("r2 plan fixture not present")
+    plan = load_plan(R2_PLAN)
+    out = reorder_plan(plan)
+    validate_plan_invariants(out)
+
+    def _flat_index(gidx: int, sidx: int) -> int:
+        return sum(len(g["steps"]) for g in out["groups"][:gidx]) + sidx
+
+    view_location = None
+    alter_location = None
+    view_prefix = "CREATE OR REPLACE VIEW v_fact_grades AS"
+    alter_prefix = "ALTER TABLE entity_facts ADD COLUMN assertion_intent"
+
+    for gidx, group in enumerate(out["groups"]):
+        for sidx, step in enumerate(group["steps"]):
+            sql = step["sql"]
+            if sql.startswith(view_prefix):
+                view_location = _flat_index(gidx, sidx)
+            elif sql.startswith(alter_prefix):
+                alter_location = _flat_index(gidx, sidx)
+
+    assert alter_location is not None, "ALTER TABLE ADD COLUMN assertion_intent not found"
+    assert view_location is not None, "CREATE VIEW v_fact_grades not found"
+    assert view_location > alter_location, (
+        f"view at flat index {view_location} must follow "
+        f"ADD COLUMN at flat index {alter_location}"
+    )

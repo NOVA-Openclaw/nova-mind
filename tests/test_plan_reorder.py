@@ -112,6 +112,30 @@ def test_tc09_create_view_direct_table_column():
     assert analysis["refs"] == {"table:entity_facts", "column:entity_facts.mutability_class"}
 
 
+def test_tc09a_create_view_aliased_table_column():
+    """CREATE VIEW resolves column refs through table aliases."""
+    analysis = analyze_statement(
+        "CREATE VIEW v_x AS SELECT ef.mutability_class FROM entity_facts ef;"
+    )
+    assert analysis["defines"] == {"table:v_x"}
+    assert analysis["refs"] == {"table:entity_facts", "column:entity_facts.mutability_class"}
+
+
+def test_tc09b_create_view_joined_aliased_columns():
+    """CREATE VIEW resolves aliases inside JOIN trees."""
+    analysis = analyze_statement(
+        "CREATE VIEW v_x AS SELECT ef.mutability_class, e.name "
+        "FROM entity_facts ef LEFT JOIN entities e ON ef.entity_id = e.id;"
+    )
+    assert analysis["defines"] == {"table:v_x"}
+    assert "column:entity_facts.mutability_class" in analysis["refs"]
+    assert "column:entities.name" in analysis["refs"]
+    assert "column:entity_facts.entity_id" in analysis["refs"]
+    assert "column:entities.id" in analysis["refs"]
+    assert "table:ef" not in analysis["refs"]
+    assert "table:e" not in analysis["refs"]
+
+
 def test_tc10_create_view_chained():
     """TC-10: second view depends on first view (treated as table)."""
     analysis_a = analyze_statement("CREATE VIEW v_a AS SELECT * FROM base_table;")
@@ -164,6 +188,21 @@ def test_tc15_create_index_concurrently():
     assert analysis["non_txn"] is True
 
 
+def test_tc15a_create_index_expression_and_partial():
+    """Expression and partial-index WHERE clauses reference columns."""
+    analysis = analyze_statement(
+        "CREATE INDEX idx_expr ON t ((a + b), c) WHERE d = 'x';"
+    )
+    assert analysis["defines"] == {"index:idx_expr"}
+    assert analysis["refs"] == {
+        "table:t",
+        "column:t.a",
+        "column:t.b",
+        "column:t.c",
+        "column:t.d",
+    }
+
+
 def test_tc16_create_trigger():
     """TC-16: CREATE TRIGGER depends on table and trigger function."""
     analysis = analyze_statement(
@@ -187,6 +226,26 @@ def test_tc18_fk_inline_create_table():
     )
     # v2 doc requires dependency on table b (column dependency is acceptable but not required).
     assert "table:b" in analysis["refs"]
+
+
+def test_tc18a_check_constraint_inline_create_table():
+    """Inline CHECK constraint expression references table columns."""
+    analysis = analyze_statement(
+        "CREATE TABLE a (id int, status text, CHECK (status IN ('x', 'y')));"
+    )
+    assert analysis["defines"] == {"table:a", "column:a.id", "column:a.status"}
+    assert "column:a.status" in analysis["refs"]
+
+
+def test_tc18b_check_constraint_alter_table():
+    """ALTER TABLE ADD CHECK expression references table columns."""
+    analysis = analyze_statement(
+        "ALTER TABLE a ADD CONSTRAINT chk_status CHECK (status IN ('x', 'y'));"
+    )
+    # ADD CONSTRAINT defines the table (for ordering) but not a separate
+    # constraint identity; the column refs still drive ordering.
+    assert analysis["defines"] == {"table:a"}
+    assert "column:a.status" in analysis["refs"]
 
 
 # ---------------------------------------------------------------------------

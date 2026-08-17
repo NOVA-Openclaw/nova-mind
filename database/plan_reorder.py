@@ -241,6 +241,11 @@ class _ReferenceExtractor:
         self.table_stack: list[str] = []
 
     def _resolve_column(self, column: str, *, explicit_table: str | None = None) -> None:
+        # Wildcards do not name a specific column; rely on table-level deps.
+        if column == "*":
+            if explicit_table is not None:
+                self.refs.add(_obj("table", explicit_table))
+            return
         if explicit_table is not None:
             # Resolve aliases to the underlying table so that ``ef.col`` where
             # ``ef`` aliases ``entity_facts`` records ``column:entity_facts.col``.
@@ -252,10 +257,11 @@ class _ReferenceExtractor:
             table = self.table_stack[0]
             self.refs.add(_obj("table", table))
             self.refs.add(_obj("column", f"{table}.{column}"))
-        elif column != "*":
-            # Ambiguous or parameter reference; record a weak column ref only.
-            for table in self.table_stack:
-                self.refs.add(_obj("column", f"{table}.{column}"))
+            return
+        # Ambiguous unqualified column reference (0 or >1 tables in scope).
+        # Do NOT emit speculative column: edges: a missing edge is preferable
+        # to a wrong edge.  Table-level dependencies are already recorded by
+        # the range vars in the FROM clause.
 
     def _range_var_name(self, node) -> str | None:
         """Return the normalized table/view name, or None for catalog refs."""
@@ -273,11 +279,12 @@ class _ReferenceExtractor:
             self.refs.add(_obj("table", name))
             alias = getattr(node, "alias", None)
             if alias:
+                # In current pglast versions aliasname is a plain str; older
+                # versions may wrap it in a String node.  Accept both.
                 alias_name = getattr(alias, "aliasname", None)
-                if alias_name is not None:
-                    # pglast 6.x returns aliasname as a plain str, not a String node.
-                    if hasattr(alias_name, "sval"):
-                        alias_name = alias_name.sval
+                if alias_name is not None and hasattr(alias_name, "sval"):
+                    alias_name = alias_name.sval
+                if alias_name:
                     self.table_aliases[alias_name] = name
             self.table_stack.append(name)
 
@@ -609,6 +616,10 @@ def analyze_statement(sql: str) -> dict[str, Any]:
                                 col = getattr(attr, "sval", None)
                                 if col:
                                     result["refs"].add(_obj("column", f"{ref_table}.{col}"))
+                    if con_type_name == "CONSTR_CHECK" and table:
+                        expr = getattr(con, "raw_expr", None) or getattr(con, "expr", None)
+                        if expr is not None:
+                            result["refs"].update(_extract_refs_with_table_context(expr, table))
                     result["refs"].update(_extract_refs_from_node(con))
 
             elif subtype_name == "AT_DropConstraint":
@@ -645,6 +656,10 @@ def analyze_statement(sql: str) -> dict[str, Any]:
                             col = getattr(attr, "sval", None)
                             if col:
                                 result["refs"].add(_obj("column", f"{ref_table}.{col}"))
+                if con_type_name == "CONSTR_CHECK" and table:
+                    expr = getattr(elt, "raw_expr", None) or getattr(elt, "expr", None)
+                    if expr is not None:
+                        result["refs"].update(_extract_refs_with_table_context(expr, table))
                 result["refs"].update(_extract_refs_from_node(elt))
         return result
 
@@ -675,6 +690,14 @@ def analyze_statement(sql: str) -> dict[str, Any]:
                 col = getattr(param, "name", None)
                 if col:
                     result["refs"].add(_obj("column", f"{table}.{col}"))
+                # Expression indexes: extract columns from the expression.
+                expr = getattr(param, "expr", None)
+                if expr is not None:
+                    result["refs"].update(_extract_refs_with_table_context(expr, table))
+            # Partial-index WHERE clauses reference columns too.
+            where_clause = getattr(stmt, "whereClause", None)
+            if where_clause is not None:
+                result["refs"].update(_extract_refs_with_table_context(where_clause, table))
         if getattr(stmt, "concurrent", False):
             result["non_txn"] = True
         return result
@@ -854,6 +877,14 @@ def analyze_statement(sql: str) -> dict[str, Any]:
 def _extract_refs_from_node(node: Any) -> set[str]:
     """Extract references from an arbitrary AST node."""
     extractor = _ReferenceExtractor()
+    extractor.visit(node)
+    return extractor.refs
+
+
+def _extract_refs_with_table_context(node: Any, table: str) -> set[str]:
+    """Extract references assuming unqualified columns belong to ``table``."""
+    extractor = _ReferenceExtractor()
+    extractor.table_stack.append(table)
     extractor.visit(node)
     return extractor.refs
 
@@ -1174,7 +1205,8 @@ def validate_plan_invariants(plan: dict[str, Any]) -> None:
                     ],
                 )
 
-    # Column invariant: every referenced column is defined earlier (or never).
+    # Column invariant: every referenced column is defined no later than the
+    # referencing statement (self-references inside CREATE TABLE are fine).
     column_def_index: dict[str, int] = {}
     for idx, analysis in enumerate(analyses):
         if analysis["is_drop"]:
@@ -1192,7 +1224,7 @@ def validate_plan_invariants(plan: dict[str, Any]) -> None:
             if not ref.startswith("column:"):
                 continue
             def_idx = column_def_index.get(ref)
-            if def_idx is not None and def_idx >= idx:
+            if def_idx is not None and def_idx > idx:
                 raise PlanReorderError(
                     f"Invariant violation: statement {idx} references column "
                     f"{ref.split(':', 1)[1]} before it is defined at statement {def_idx}",

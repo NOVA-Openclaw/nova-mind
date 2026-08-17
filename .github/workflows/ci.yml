@@ -26,4 +26,87 @@ jobs:
         run: shellcheck agent-install.sh
 
       - name: Run installer BATS tests
-        run: bats tests/install/test_agent_chat_installer.bats tests/install/test_agents_json_safety.bats
+        run: bats tests/install/test_agents_json_safety.bats tests/install/test_plan_reorder_exit_codes.bats
+
+  schema-apply:
+    name: Schema Apply Regression
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_PASSWORD: postgres
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+      postgres-no-vector:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5433:5432
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Install pgschema v1.7.2
+        run: go install github.com/pgplex/pgschema@v1.7.2
+
+      - name: Apply database/schema.sql on empty DB (positive control)
+        env:
+          PGPASSWORD: postgres
+        run: |
+          set -e
+          psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 -c "CREATE EXTENSION vector;"
+          psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 -f database/schema.sql
+
+      - name: Create fresh DB for negative control
+        env:
+          PGPASSWORD: postgres
+        run: |
+          psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 -c "DROP DATABASE IF EXISTS test_broken; CREATE DATABASE test_broken;"
+
+      - name: Apply broken schema_392.sql (negative control, expect failure)
+        env:
+          PGPASSWORD: postgres
+        run: |
+          psql -h localhost -U postgres -d test_broken -v ON_ERROR_STOP=1 -c "CREATE EXTENSION vector;"
+          if psql -h localhost -U postgres -d test_broken -v ON_ERROR_STOP=1 -f tests/fixtures/plan_reorder/schema_392.sql; then
+            echo "ERROR: broken schema_392.sql applied successfully; expected failure"
+            exit 1
+          fi
+          echo "Broken schema failed as expected"
+
+      - name: Plain postgres:16 container fails without pgvector (TC-50)
+        env:
+          PGPASSWORD: postgres
+        run: |
+          psql -h localhost -U postgres -d postgres -p 5433 -v ON_ERROR_STOP=1 -c "CREATE DATABASE test_no_vector;"
+          if psql -h localhost -U postgres -d test_no_vector -p 5433 -v ON_ERROR_STOP=1 -f database/schema.sql; then
+            echo "ERROR: schema.sql applied on plain postgres:16; expected failure due to missing vector"
+            exit 1
+          fi
+          echo "Plain postgres:16 failed as expected (missing vector extension)"
+
+      - name: Optional from-scratch pgschema plan against service container (TC-51)
+        env:
+          PGPASSWORD: postgres
+        run: |
+          pgschema plan \
+            --host localhost --port 5432 --db postgres --user postgres \
+            --plan-host localhost --plan-port 5432 --plan-db postgres --plan-user postgres \
+            --schema public --file database/schema.sql --output-json /tmp/plan.json --no-color

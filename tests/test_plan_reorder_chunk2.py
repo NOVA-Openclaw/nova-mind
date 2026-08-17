@@ -10,7 +10,13 @@ from pathlib import Path
 
 import pytest
 
-from database.plan_reorder import load_plan, reorder_plan
+from database.plan_reorder import (
+    PlanReorderError,
+    analyze_statement,
+    load_plan,
+    reorder_plan,
+    validate_plan_invariants,
+)
 
 
 FIXTURES = Path(__file__).parent / "fixtures" / "plan_reorder"
@@ -174,3 +180,63 @@ def test_tc39_drop_ordering_across_groups():
     out = reorder_plan(plan)
     sqls = [s["sql"] for g in out["groups"] for s in g["steps"]]
     assert sqls.index("DROP VIEW v_foo;") < sqls.index("DROP TABLE foo;")
+
+
+# ---------------------------------------------------------------------------
+# Fix loop 3: view -> column dependency edges (nova-mind#597 staging retest 2)
+# ---------------------------------------------------------------------------
+
+
+def test_tc40_create_view_join_alias_resolves_to_column():
+    """TC-40: view with JOIN aliases records column refs on real tables."""
+    analysis = analyze_statement(
+        "CREATE VIEW v_joined AS SELECT ef.assertion_intent "
+        "FROM entity_facts ef JOIN entity_fact_sources efs ON efs.fact_id = ef.id;"
+    )
+    assert analysis["defines"] == {"table:v_joined"}
+    assert "column:entity_facts.assertion_intent" in analysis["refs"]
+    assert "column:entity_fact_sources.fact_id" in analysis["refs"]
+    # Alias names must not leak into the dependency graph as phony objects.
+    assert "table:ef" not in analysis["refs"]
+    assert "column:ef.assertion_intent" not in analysis["refs"]
+
+
+def test_tc41_regression_597_staging_retest2_view_after_add_column():
+    """TC-41: #597 staging retest 2 fixture reorders view after ADD COLUMN."""
+    plan = load_plan(FIXTURES / "pgschema-debug-plan-r2.json")
+    out = reorder_plan(plan)
+
+    def _find(sql_prefix):
+        for gidx, group in enumerate(out["groups"]):
+            for sidx, step in enumerate(group["steps"]):
+                if step["sql"].startswith(sql_prefix):
+                    return (gidx, sidx, step["sql"])
+        raise AssertionError(f"step not found: {sql_prefix!r}")
+
+    add_col = _find("ALTER TABLE entity_facts ADD COLUMN assertion_intent")
+    view = _find("CREATE OR REPLACE VIEW v_fact_grades")
+    # The view references ef.assertion_intent, so it must run after the ALTER.
+    assert view[:2] > add_col[:2], (
+        f"v_fact_grades {view[:2]} must follow ADD COLUMN assertion_intent {add_col[:2]}"
+    )
+
+
+def test_tc42_validate_invariants_catches_stranded_view():
+    """TC-42: invariant validator flags the staging retest 2 defective plan."""
+    plan = load_plan(
+        Path("/home/nova/.openclaw/workspace/se-runs/se709/staging-fail2")
+        / "pgschema-debug-plan-r2-reordered.json"
+    )
+    with pytest.raises(PlanReorderError) as exc_info:
+        validate_plan_invariants(plan)
+    assert "Invariant violation" in exc_info.value.message
+    # The violation must involve v_fact_grades referencing a column.
+    sqls = {s["sql"] for s in exc_info.value.statements}
+    assert any("v_fact_grades" in sql for sql in sqls)
+
+
+def test_tc43_validate_invariants_accepts_fixed_reorder():
+    """TC-43: invariant validator accepts the corrected reorder of the r2 fixture."""
+    plan = load_plan(FIXTURES / "pgschema-debug-plan-r2.json")
+    out = reorder_plan(plan)
+    validate_plan_invariants(out)  # must not raise

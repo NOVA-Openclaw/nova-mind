@@ -242,8 +242,11 @@ class _ReferenceExtractor:
 
     def _resolve_column(self, column: str, *, explicit_table: str | None = None) -> None:
         if explicit_table is not None:
-            self.refs.add(_obj("table", explicit_table))
-            self.refs.add(_obj("column", f"{explicit_table}.{column}"))
+            # Resolve aliases to the underlying table so that ``ef.col`` where
+            # ``ef`` aliases ``entity_facts`` records ``column:entity_facts.col``.
+            table = self.table_aliases.get(explicit_table, explicit_table)
+            self.refs.add(_obj("table", table))
+            self.refs.add(_obj("column", f"{table}.{column}"))
             return
         if len(self.table_stack) == 1:
             table = self.table_stack[0]
@@ -270,8 +273,11 @@ class _ReferenceExtractor:
             self.refs.add(_obj("table", name))
             alias = getattr(node, "alias", None)
             if alias:
-                alias_name = getattr(getattr(alias, "aliasname", None), "sval", None)
-                if alias_name:
+                alias_name = getattr(alias, "aliasname", None)
+                if alias_name is not None:
+                    # pglast 6.x returns aliasname as a plain str, not a String node.
+                    if hasattr(alias_name, "sval"):
+                        alias_name = alias_name.sval
                     self.table_aliases[alias_name] = name
             self.table_stack.append(name)
 
@@ -367,7 +373,8 @@ class _ReferenceExtractor:
         for attr in ("query", "stmt", "targetList", "fromClause", "whereClause",
                      "args", "arg", "raw_expr", "def_", "constraints", "tableElts",
                      "indexParams", "pktable", "fk_attrs", "pk_attrs", "body",
-                     "expr", "val", "left", "right"):
+                     "expr", "val", "left", "right", "lexpr", "rexpr",
+                     "larg", "rarg", "quals"):
             child = getattr(node, attr, None)
             if child is None:
                 continue
@@ -1145,9 +1152,16 @@ def validate_plan_invariants(plan: dict[str, Any]) -> None:
     appear earlier in the flattened group/step order than the dependent.  This
     is the invariant the reordered output must satisfy regardless of group
     boundaries.
+
+    Additionally checks a stricter column-level invariant: a statement that
+    references ``table.column`` must not appear before the (non-DROP)
+    statement that creates that column.  This catches missing view->column
+    edges even if the main graph builder has a subtle identity mismatch.
     """
     flat = _flatten_steps(plan)
     analyses = [analyze_statement(step["sql"]) for step in flat]
+
+    # Graph invariant: every edge's source must precede its target.
     graph, _ = _build_statement_graph(flat, analyses)
     for src, targets in graph.items():
         for dst in targets:
@@ -1157,6 +1171,34 @@ def validate_plan_invariants(plan: dict[str, Any]) -> None:
                     statements=[
                         {"sql": flat[src]["sql"], "index": src},
                         {"sql": flat[dst]["sql"], "index": dst},
+                    ],
+                )
+
+    # Column invariant: every referenced column is defined earlier (or never).
+    column_def_index: dict[str, int] = {}
+    for idx, analysis in enumerate(analyses):
+        if analysis["is_drop"]:
+            continue
+        for defined in analysis["defines"]:
+            if defined.startswith("column:"):
+                # Keep the earliest definition index.
+                if defined not in column_def_index:
+                    column_def_index[defined] = idx
+
+    for idx, analysis in enumerate(analyses):
+        if analysis["is_drop"]:
+            continue
+        for ref in analysis["refs"]:
+            if not ref.startswith("column:"):
+                continue
+            def_idx = column_def_index.get(ref)
+            if def_idx is not None and def_idx >= idx:
+                raise PlanReorderError(
+                    f"Invariant violation: statement {idx} references column "
+                    f"{ref.split(':', 1)[1]} before it is defined at statement {def_idx}",
+                    statements=[
+                        {"sql": flat[def_idx]["sql"], "index": def_idx},
+                        {"sql": flat[idx]["sql"], "index": idx},
                     ],
                 )
 

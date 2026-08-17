@@ -81,9 +81,14 @@ def test_tc07_create_function_plpgsql_body_column_ref():
         "END; $$ LANGUAGE plpgsql;"
     )
     assert analysis["defines"] == {"function:get_strictest_mutability(int8,text)"}
+    # DERIVATION: fix loop 3 extended AST traversal into A_Expr lexpr/rexpr,
+    # so the WHERE clause now contributes column refs for entity_id and key in
+    # addition to the SELECT target mutability_class.
     assert analysis["refs"] == {
         "table:entity_facts",
         "column:entity_facts.mutability_class",
+        "column:entity_facts.entity_id",
+        "column:entity_facts.key",
         "type:text",
     }
 
@@ -431,9 +436,12 @@ def test_tc58_dynamic_sql_in_plpgsql_never_hard_fails():
     )
     # Dynamic portion yields no edges; static portion yields entity_facts refs.
     # Parameter/return types contribute harmless built-in type refs.
+    # DERIVATION: fix loop 3 extended AST traversal into A_Expr lexpr/rexpr,
+    # so the WHERE clause now contributes column:entity_facts.entity_id.
     assert analysis["refs"] == {
         "table:entity_facts",
         "column:entity_facts.mutability_class",
+        "column:entity_facts.entity_id",
         "type:text",
         "type:void",
     }

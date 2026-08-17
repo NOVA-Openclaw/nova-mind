@@ -62,9 +62,14 @@ def test_tc06_create_function_sql_body_column_ref():
         "RETURNS text AS $$ SELECT mutability_class FROM entity_facts "
         "WHERE entity_id = $1 AND key = $2; $$ LANGUAGE sql;"
     )
-    assert analysis["defines"] == {"function:get_strictest_mutability"}
-    # Body references the entity_facts table and the mutability_class column.
-    assert analysis["refs"] == {"table:entity_facts", "column:entity_facts.mutability_class"}
+    assert analysis["defines"] == {"function:get_strictest_mutability(int8,text)"}
+    # Body references the entity_facts table and the mutability_class column;
+    # the `key text` parameter contributes a (harmless) built-in type ref.
+    assert analysis["refs"] == {
+        "table:entity_facts",
+        "column:entity_facts.mutability_class",
+        "type:text",
+    }
 
 
 def test_tc07_create_function_plpgsql_body_column_ref():
@@ -75,8 +80,12 @@ def test_tc07_create_function_plpgsql_body_column_ref():
         "RETURN (SELECT mutability_class FROM entity_facts WHERE entity_id = $1 AND key = $2); "
         "END; $$ LANGUAGE plpgsql;"
     )
-    assert analysis["defines"] == {"function:get_strictest_mutability"}
-    assert analysis["refs"] == {"table:entity_facts", "column:entity_facts.mutability_class"}
+    assert analysis["defines"] == {"function:get_strictest_mutability(int8,text)"}
+    assert analysis["refs"] == {
+        "table:entity_facts",
+        "column:entity_facts.mutability_class",
+        "type:text",
+    }
 
 
 def test_tc08_create_function_self_contained():
@@ -84,7 +93,7 @@ def test_tc08_create_function_self_contained():
     analysis = analyze_statement(
         "CREATE FUNCTION add_one(x int) RETURNS int AS $$ SELECT x + 1; $$ LANGUAGE sql;"
     )
-    assert analysis["defines"] == {"function:add_one"}
+    assert analysis["defines"] == {"function:add_one(int4)"}
     assert analysis["refs"] == set()
 
 
@@ -421,7 +430,13 @@ def test_tc58_dynamic_sql_in_plpgsql_never_hard_fails():
         "END; $$ LANGUAGE plpgsql;"
     )
     # Dynamic portion yields no edges; static portion yields entity_facts refs.
-    assert analysis["refs"] == {"table:entity_facts", "column:entity_facts.mutability_class"}
+    # Parameter/return types contribute harmless built-in type refs.
+    assert analysis["refs"] == {
+        "table:entity_facts",
+        "column:entity_facts.mutability_class",
+        "type:text",
+        "type:void",
+    }
 
 
 def test_tc59_catalog_and_extension_refs_no_edges():

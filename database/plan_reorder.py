@@ -46,10 +46,27 @@ from pathlib import Path
 from typing import Any, Iterable
 
 import pglast
+from pglast.enums import ObjectType
 
 SUPPORTED_PLAN_VERSIONS = {"1.0.0"}
 
 EXTERNAL_SCHEMAS = {"pg_catalog", "information_schema"}
+
+# Object-type to dependency-kind mapping for COMMENT/GRANT statements.
+# Where PostgreSQL namespaces overlap (e.g. tables/views/sequences) we use the
+# same kind that the corresponding CREATE statement emits.
+OBJECT_KIND_MAP: dict[int, str] = {
+    ObjectType.OBJECT_TABLE: "table",
+    ObjectType.OBJECT_VIEW: "table",
+    ObjectType.OBJECT_SEQUENCE: "table",
+    ObjectType.OBJECT_FUNCTION: "function",
+    ObjectType.OBJECT_PROCEDURE: "function",
+    ObjectType.OBJECT_ROUTINE: "function",
+    ObjectType.OBJECT_INDEX: "index",
+    ObjectType.OBJECT_TYPE: "type",
+    ObjectType.OBJECT_TRIGGER: "trigger",
+    ObjectType.OBJECT_COLUMN: "column",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -110,6 +127,79 @@ def _type_name(names: Iterable[Any]) -> str | None:
     if len(parts) == 2 and parts[0] in EXTERNAL_SCHEMAS:
         return None
     return parts[-1]
+
+
+def _type_name_for_signature(type_name_node: Any) -> str | None:
+    """Return a canonical type name suitable for a function signature identity.
+
+    Unlike `_type_name`, catalog types are kept (with the ``pg_catalog.``
+    prefix stripped) so that ``integer``, ``int``, and ``int4`` all collapse to
+    the same identity.  Array bounds are appended as ``[]`` markers.
+    """
+    names = [getattr(n, "sval", None) for n in getattr(type_name_node, "names", [])]
+    names = [n for n in names if n]
+    if not names:
+        return None
+    if len(names) >= 2 and names[0] in EXTERNAL_SCHEMAS:
+        names = names[1:]
+    base = ".".join(names)
+    array_bounds = getattr(type_name_node, "arrayBounds", None) or []
+    if array_bounds:
+        base += "[]" * len(array_bounds)
+    return base
+
+
+def _function_name(funcname: Iterable[Any]) -> str | None:
+    parts = [getattr(p, "sval", None) for p in funcname]
+    parts = [p for p in parts if p]
+    if not parts:
+        return None
+    return parts[-1]
+
+
+def _function_identity(name: str, arg_types: list[str]) -> str:
+    """Build a dependency-graph identity for a function, including its signature."""
+    if arg_types:
+        return _obj("function", f"{name}({','.join(arg_types)})")
+    return _obj("function", f"{name}()")
+
+
+def _function_identity_from_create(stmt: Any) -> str | None:
+    """Build a function identity from a CreateFunctionStmt."""
+    name = _function_name(getattr(stmt, "funcname", []))
+    if not name:
+        return None
+    arg_types: list[str] = []
+    for param in getattr(stmt, "parameters", []) or []:
+        arg_type = getattr(param, "argType", None)
+        if arg_type is None:
+            continue
+        tname = _type_name_for_signature(arg_type)
+        if tname:
+            arg_types.append(tname)
+    return _function_identity(name, arg_types)
+
+
+def _function_identity_from_object_with_args(obj: Any) -> str | None:
+    """Build a function identity from an ObjectWithArgs node (DROP/COMMENT/GRANT)."""
+    name = _function_name(getattr(obj, "objname", []))
+    if not name:
+        return None
+    arg_types: list[str] = []
+    for arg in getattr(obj, "objargs", []) or []:
+        tname = _type_name_for_signature(arg)
+        if tname:
+            arg_types.append(tname)
+    return _function_identity(name, arg_types)
+
+
+def _object_name_from_strings(parts: Iterable[Any]) -> str | None:
+    """Join a tuple/list of String nodes into a dotted object name."""
+    names = [getattr(p, "sval", None) for p in parts]
+    names = [n for n in names if n]
+    if not names:
+        return None
+    return ".".join(names)
 
 
 # ---------------------------------------------------------------------------
@@ -368,14 +458,6 @@ def _walk_plpgsql_statements(plpgsql: Any) -> set[str]:
     return refs
 
 
-def _function_name(funcname: Iterable[Any]) -> str | None:
-    parts = [getattr(p, "sval", None) for p in funcname]
-    parts = [p for p in parts if p]
-    if not parts:
-        return None
-    return parts[-1]
-
-
 def _statement_kind_from_create(create_stmt: Any) -> str:
     """Map a CreateStmt/ViewStmt/IndexStmt/etc. to a dependency kind."""
     name_map = {
@@ -437,11 +519,16 @@ def analyze_statement(sql: str) -> dict[str, Any]:
         }
         remove_type_name = getattr(remove_type, "name", str(remove_type)) if remove_type is not None else ""
         kind = kind_map.get(remove_type_name, "table")
-        for obj_list in getattr(stmt, "objects", []):
-            name_parts = [getattr(p, "sval", None) for p in obj_list]
-            name_parts = [p for p in name_parts if p]
-            if name_parts:
-                result["defines"].add(_obj(kind, name_parts[-1]))
+        for obj in getattr(stmt, "objects", []) or []:
+            if obj.__class__.__name__ == "ObjectWithArgs":
+                # DROP FUNCTION / PROCEDURE includes the signature.
+                identity = _function_identity_from_object_with_args(obj)
+                if identity:
+                    result["defines"].add(identity)
+            else:
+                name = _object_name_from_strings(obj)
+                if name:
+                    result["defines"].add(_obj(kind, name))
         return result
 
     # ------------------------------------------------------------------
@@ -558,16 +645,28 @@ def analyze_statement(sql: str) -> dict[str, Any]:
     # CREATE FUNCTION / CREATE PROCEDURE
     # ------------------------------------------------------------------
     if class_name == "CreateFunctionStmt":
-        funcname = _function_name(getattr(stmt, "funcname", []))
-        if funcname:
-            result["defines"].add(_obj("function", funcname))
+        identity = _function_identity_from_create(stmt)
+        if identity:
+            result["defines"].add(identity)
         params: set[str] = set()
-        for param in getattr(stmt, "parameters", []):
+        for param in getattr(stmt, "parameters", []) or []:
             pname = getattr(param, "name", None)
             if pname:
                 params.add(pname)
+            # Parameter types are dependencies (e.g. a user-defined enum).
+            arg_type = getattr(param, "argType", None)
+            if arg_type:
+                tname = _type_name(getattr(arg_type, "names", []))
+                if tname:
+                    result["refs"].add(_obj("type", tname))
+        # Return type is also a dependency.
+        return_type = getattr(stmt, "returnType", None)
+        if return_type:
+            tname = _type_name(getattr(return_type, "names", []))
+            if tname:
+                result["refs"].add(_obj("type", tname))
         language = None
-        for option in getattr(stmt, "options", []):
+        for option in getattr(stmt, "options", []) or []:
             if getattr(option, "defname", None) == "language":
                 language = getattr(getattr(option, "arg", None), "sval", None)
         if language == "plpgsql":
@@ -590,6 +689,9 @@ def analyze_statement(sql: str) -> dict[str, Any]:
             result["refs"].add(_obj("table", table))
         funcname = _function_name(getattr(stmt, "funcname", []))
         if funcname:
+            # Trigger functions are referenced by name only; the signature is
+            # implicit in the trigger context, so we keep the simple identity
+            # and resolve it via the function-name fallback in the graph builder.
             result["refs"].add(_obj("function", funcname))
         return result
 
@@ -603,20 +705,54 @@ def analyze_statement(sql: str) -> dict[str, Any]:
         return result
 
     # ------------------------------------------------------------------
+    # COMMENT ON <object>
+    # ------------------------------------------------------------------
+    if class_name == "CommentStmt":
+        objtype = getattr(stmt, "objtype", None)
+        kind = OBJECT_KIND_MAP.get(objtype) if objtype is not None else None
+        if kind:
+            obj = getattr(stmt, "object", None)
+            if obj is not None:
+                if obj.__class__.__name__ == "ObjectWithArgs":
+                    identity = _function_identity_from_object_with_args(obj)
+                    if identity:
+                        result["refs"].add(identity)
+                elif obj.__class__.__name__ == "TypeName":
+                    type_name = _type_name(getattr(obj, "names", []))
+                    if type_name:
+                        result["refs"].add(_obj(kind, type_name))
+                else:
+                    name = _object_name_from_strings(obj)
+                    if name:
+                        result["refs"].add(_obj(kind, name))
+        return result
+
+    # ------------------------------------------------------------------
     # GRANT / REVOKE
     # ------------------------------------------------------------------
     if class_name in {"GrantStmt", "RevokeStmt"}:
-        for obj in getattr(stmt, "objects", []):
-            name = getattr(obj, "relname", None)
-            schema = getattr(obj, "schemaname", None)
-            if name and not _is_external_ref(schema, name):
-                result["refs"].add(_obj("table", name))
-                for priv in getattr(stmt, "privileges", []):
-                    cols = getattr(priv, "cols", []) or []
-                    for col in cols:
-                        cname = getattr(col, "sval", None)
-                        if cname:
-                            result["refs"].add(_obj("column", f"{name}.{cname}"))
+        objtype = getattr(stmt, "objtype", None)
+        kind = OBJECT_KIND_MAP.get(objtype) if objtype is not None else "table"
+        for obj in getattr(stmt, "objects", []) or []:
+            if obj.__class__.__name__ == "ObjectWithArgs":
+                identity = _function_identity_from_object_with_args(obj)
+                if identity:
+                    result["refs"].add(identity)
+            elif obj.__class__.__name__ == "RangeVar":
+                name = getattr(obj, "relname", None)
+                schema = getattr(obj, "schemaname", None)
+                if name and not _is_external_ref(schema, name):
+                    result["refs"].add(_obj(kind, name))
+                    for priv in getattr(stmt, "privileges", []):
+                        cols = getattr(priv, "cols", []) or []
+                        for col in cols:
+                            cname = getattr(col, "sval", None)
+                            if cname:
+                                result["refs"].add(_obj("column", f"{name}.{cname}"))
+            else:
+                name = _object_name_from_strings(obj)
+                if name:
+                    result["refs"].add(_obj(kind, name))
         return result
 
     # ------------------------------------------------------------------
@@ -723,6 +859,30 @@ def _build_statement_graph(
             if analysis["is_drop"] and obj not in object_to_drop_statement:
                 object_to_drop_statement[obj] = idx
 
+    # Function calls in views/bodies/triggers are recorded by simple name only
+    # (the AST does not carry argument type information for a call site).  When
+    # the plan contains exactly one signature-aware identity for that name,
+    # resolve the simple-name reference to it.
+    simple_func_to_identity: dict[str, str] = {}
+    for obj in object_to_statement:
+        if obj.startswith("function:") and "(" not in obj:
+            continue
+        if obj.startswith("function:"):
+            simple_name = obj.split("(", 1)[0]
+            if simple_name not in simple_func_to_identity:
+                simple_func_to_identity[simple_name] = obj
+            else:
+                simple_func_to_identity[simple_name] = ""
+
+    def _resolve_ref(ref: str) -> int | None:
+        if ref in object_to_statement:
+            return object_to_statement[ref]
+        if ref.startswith("function:") and "(" not in ref:
+            identity = simple_func_to_identity.get(ref)
+            if identity:
+                return object_to_statement.get(identity)
+        return None
+
     n = len(steps)
     graph: dict[int, set[int]] = {i: set() for i in range(n)}
 
@@ -750,7 +910,7 @@ def _build_statement_graph(
             # objects it references.  Dependencies on objects being dropped in
             # the same plan are a user conflict; we do not try to order them.
             for ref in analysis["refs"]:
-                provider_idx = object_to_statement.get(ref)
+                provider_idx = _resolve_ref(ref)
                 if provider_idx is not None and provider_idx != idx:
                     if not analyses[provider_idx]["is_drop"]:
                         # T defines O, S references O => T must come before S.

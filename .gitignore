@@ -2,3 +2,5 @@ __pycache__/
 lib/__pycache__/
 **/node_modules/
 **/dist/
+.venv/
+tmp_issue_597/

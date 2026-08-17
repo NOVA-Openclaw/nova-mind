@@ -183,6 +183,10 @@
 | workflows | Defines multi-agent workflows with ordered steps and deliverable handoffs | 10 |
 | works | - | 14 |
 
+## Schema Apply Pipeline (nova-mind#597)
+
+Schema changes declared in `database/schema.sql` are applied via `pgschema plan` → **dependency-aware reorder** (`database/plan_reorder.py`, new in this batch) → hazard check → `pgschema apply`, run in that order by the root `agent-install.sh`. The reorder stage exists because `pgschema`'s own plan ordering is not guaranteed to be dependency-safe — it has produced plans that place a `GRANT`, `COMMENT`, or view-referencing-a-column statement before the statement that creates the object/column it depends on (issues #597, #447, #392), aborting the entire implicit transaction group on a fresh install. `plan_reorder.py` parses each planned statement with `pglast`, builds an object-level dependency graph, and topologically sorts the plan; a malformed plan, unparseable statement, or true dependency cycle aborts the install with a statement-level diagnostic (exit codes 2/3/4) rather than a silent partial apply. See `ARCHITECTURE.md#3-declarative-schema-via-pgschema` and `CHANGELOG.md`'s `plan-dependency-ordering-597` batch entry for the full history. Known unmodeled dependency classes are tracked in nova-mind#600.
+
 ## Functions
 
 This file's original scope (per its auto-generated header) is table listings only — it has never

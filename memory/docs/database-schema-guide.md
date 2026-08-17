@@ -647,8 +647,11 @@ Nova-memory uses **declarative schema management** via [`pgschema`](https://gith
 
 1. Runs any scripts in `pre-migrations/` (data transformations before the diff)
 2. Calls `pgschema plan` to diff `schema.sql` against the live DB
-3. Blocks destructive drops automatically
-4. Calls `pgschema apply` with the approved plan
+3. Reorders the plan by dependency (`database/plan_reorder.py`, nova-mind#597) — a `pglast`-based topological sort so a `GRANT`/`COMMENT`/view statement never lands before the object it depends on
+4. Blocks destructive drops automatically
+5. Calls `pgschema apply` with the approved (reordered) plan
+
+A failure at any of these stages now aborts the installer with a nonzero exit code (previously a failed `pgschema apply` only warned and the installer still exited 0). See `ARCHITECTURE.md`'s Declarative Schema section and the repo-root `CHANGELOG.md`'s `plan-dependency-ordering-597` entry for the full rationale and fix history.
 
 ### Adding or Changing Schema Objects
 

@@ -59,6 +59,20 @@ The installer is **idempotent** — safe to run multiple times. Use `./agent-ins
 
 ## Recent Changes
 
+### 2026-08-17: Dependency-Aware Schema Plan Reordering (#597, #447, #392)
+
+Fresh installs could fail deterministically when `pgschema`'s own plan ordering placed a `GRANT`, `COMMENT`, or view-referencing-a-column statement before the statement that creates the object/column it depends on — aborting the entire implicit transaction group (52 statements lost in the #597 case). `agent-install.sh` now runs the `pgschema plan` output through a new dependency-aware reorderer before calling `pgschema apply`.
+
+**What Changed:**
+- **`database/plan_reorder.py`** (new file) — parses each planned SQL statement with `pglast`, builds an object-level dependency graph (tables, columns, types, functions, views — including alias-resolved view→column edges and materialized views — plus `COMMENT`/`GRANT`/`ALTER OWNER`/`SECURITY LABEL` reassigned to follow the `CREATE` they target), and emits a topologically-sorted plan. `null`/absent/empty `groups` (pgschema's no-op-plan shape) pass through unchanged for installer idempotency. CLI exit codes: `0` ok, `2` malformed plan, `3` unparseable statement, `4` dependency cycle.
+- `agent-install.sh` — new stage between `pgschema plan` and `pgschema apply`; a reorder failure aborts the install with a clear stage message and the installer's own exit code is now nonzero on any unrecovered schema-apply-stage failure (previously it warned and exited 0)
+- `REQUIRED_PACKAGES` now pins `pglast==6.16` in the installer venv; `pkg_import_name()` strips PEP 440 version specifiers before mapping a package name to its importable module (fixes a false-negative "missing after install" report)
+- **CI:** new `schema-apply` regression job (`.github/workflows/ci.yml`) applies `database/schema.sql` from scratch against disposable Postgres containers on every `feature/*` push and PR to `main`, using `.github/scripts/provision-schema-roles.sh` to provision the roles the schema's `GRANT` statements target
+
+**Known limitations** (non-blocking, tracked in nova-mind#600): CTE column dependencies, `ADD COLUMN ... DEFAULT <expr>` references, cross-table index predicates, `DROP TYPE` identity, and function-overload disambiguation are not yet modeled by the dependency extractor.
+
+See `CHANGELOG.md`'s `plan-dependency-ordering-597` entry (repo root) for the full fix-loop history and `ARCHITECTURE.md`'s Declarative Schema section for the architectural rationale.
+
 ### 2026-08-11: agent_chat Extraction to Dedicated Repo (#579)
 
 `agent-install.sh` no longer owns the `agent_chat` schema, migrations, plugin,
@@ -416,8 +430,9 @@ Nova-memory uses **declarative schema management** via [`pgschema`](https://gith
 1. **Ensures extensions** — attempts `CREATE EXTENSION IF NOT EXISTS` for each extension defined in `schema/schema.sql`
 2. **Runs pre-migrations** — executes all `*.sql` files in **`database/pre-migrations/`** (repo root — read via `$SCRIPT_DIR/database/pre-migrations` in `agent-install.sh`) in filename order for any data transformations that must happen before the schema diff. Note: `memory/pre-migrations/` also exists but is empty (just `.gitkeep`) and is not read by the installer — do not confuse it with `database/pre-migrations/`.
 3. **Plans changes** — runs `pgschema plan` to diff `schema/schema.sql` against the live database, using `--plan-db` pointing at the target DB for accurate extension type resolution (e.g., `vector` from pgvector)
-4. **Hazard check** — blocks destructive operations (DROP TABLE, DROP COLUMN) automatically; the plan is rejected if any are found
-5. **Applies changes** — calls `pgschema apply` with the approved plan
+4. **Reorders the plan** (nova-mind#597) — runs the plan JSON through `database/plan_reorder.py`, which parses each statement with `pglast` and topologically sorts them by dependency so a `GRANT`/`COMMENT`/view statement never lands before the object it depends on. A reorder failure (malformed plan, unparseable SQL, or a true dependency cycle) aborts the install before apply is attempted.
+5. **Hazard check** — blocks destructive operations (DROP TABLE, DROP COLUMN) automatically; the plan is rejected if any are found
+6. **Applies changes** — calls `pgschema apply` with the approved (reordered) plan
 
 ### Key properties
 

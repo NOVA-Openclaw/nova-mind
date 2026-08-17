@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, 'issue-*', 'feat/*', 'fix/*']
+    branches: [main, 'issue-*', 'feat/*', 'feature/*', 'fix/*']
   pull_request:
     branches: [main]
 
@@ -30,4 +30,4 @@ jobs:
         # legacy test_agent_chat_installer.bats suite with the focused peer
         # detection coverage in test_agent_chat_peer_detection.bats. This
         # workflow invocation is updated to match the renamed test file.
-        run: bats tests/install/test_agent_chat_peer_detection.bats tests/install/test_agents_json_safety.bats
+        run: bats tests/install/test_agent_chat_peer_detection.bats tests/install/test_agents_json_safety.bats tests/install/test_plan_reorder_exit_codes.bats

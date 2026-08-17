@@ -93,7 +93,7 @@ The `agent_turn_context` table stores short, high-priority context records that 
 **Key properties:**
 - Each record capped at **500 characters** (CHECK constraint in DB)
 - Total injected per agent capped at **2000 characters** (enforced by `get_agent_turn_context()`)
-- Truncation appends a visible warning to the agent: `⚠️ Turn context truncated — some critical rules may be missing.`
+- Truncation appends a visible warning to the agent: `⚠️ Turn context truncated — some critical rules may be missing. Alert I)ruid.`
 - Cache TTL: **5 minutes** per agent — avoids per-turn DB queries
 - Scopes: `UNIVERSAL` (all agents), `GLOBAL` (all agents), `DOMAIN` (agents in matching `agent_domains`), `AGENT` (specific agent)
 

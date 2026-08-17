@@ -46,7 +46,7 @@ This is the human-facing wrapper. It:
 This is the actual installer. It:
 - Installs shared library files to `~/.openclaw/lib/` (pg-env.sh, pg_env.py, env-loader.sh, etc.)
 - Creates and initializes the database (named `{username}_memory` by default)
-- Applies schema declaratively via `pgschema` (plan → hazard-check → apply)
+- Applies schema declaratively via `pgschema` (plan → dependency-aware reorder [`database/plan_reorder.py`, nova-mind#597] → hazard-check → apply)
 - Installs hooks to OpenClaw hooks directory
 - Copies scripts to `~/.openclaw/scripts/` and workspace `scripts/`
 - Installs skills to `~/.openclaw/skills/`
@@ -60,7 +60,7 @@ This is the actual installer. It:
 - `--force` — Force overwrite existing files
 - `--database NAME` or `-d NAME` — Override database name (default: `${USER}_memory`)
 
-> **Upgrading?** Re-running `agent-install.sh` on an existing installation is safe. It uses `pgschema` to declaratively diff and apply only the changes needed — no manual `ALTER TABLE` commands required. Destructive changes (DROP TABLE, DROP COLUMN) are blocked automatically. (#127, #155)
+> **Upgrading?** Re-running `agent-install.sh` on an existing installation is safe. It uses `pgschema` to declaratively diff and apply only the changes needed — no manual `ALTER TABLE` commands required. Destructive changes (DROP TABLE, DROP COLUMN) are blocked automatically. (#127, #155) The plan is topologically reordered by dependency before apply (nova-mind#597) so `GRANT`/`COMMENT`/view statements never run before the object they depend on; a schema-apply failure at any stage now aborts the install with a nonzero exit code instead of warning and continuing.
 
 **After installation, enable the hooks** (the installer auto-enables these if `enable-hooks.sh` succeeds; run manually if needed):
 ```bash

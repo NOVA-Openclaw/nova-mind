@@ -127,8 +127,11 @@ The installer runs these steps in order:
 | Pre-migrations | Runs `*.sql` files in `database/pre-migrations/` (repo root; data transforms before schema diff — not the unrelated root-level `pre-migrations/` directory, which is not read by the installer) |
 | **Step 1.5** | Reads `memory/database/renames.json` and applies column/table renames idempotently via `ALTER TABLE … RENAME COLUMN`. Drops listed are whitelisted in the pgschema hazard filter. |
 | pgschema plan | Diffs `database/schema.sql` against live DB |
+| **Plan reorder (nova-mind#597)** | Runs the plan JSON through `database/plan_reorder.py`, a `pglast`-based dependency reorderer that topologically sorts statements so a `GRANT`/`COMMENT`/view statement never lands before the object it depends on (fixes the fresh-install failure class behind #597, #447, #392). A malformed plan, unparseable statement, or true dependency cycle aborts the install with a statement-level diagnostic before apply is attempted. |
 | Hazard check | Blocks destructive operations (DROP TABLE, DROP COLUMN) unless whitelisted in `renames.json` |
-| pgschema apply | Applies the approved plan |
+| pgschema apply | Applies the approved (reordered) plan |
+
+**Exit-code behavior (#597):** a failure at any of these stages — pre-migrations, renames, plan, reorder, apply, or post-apply grant reconciliation — now aborts the installer with a nonzero exit code. Previously a failed `pgschema apply` printed a warning and the installer still exited 0.
 
 **When you update the schema with renames:** Add an entry to `memory/database/renames.json` so Step 1.5 can apply the rename before pgschema sees the diff. Without this, pgschema would interpret a rename as a drop + add, which would be blocked by the hazard check or lose existing data.
 

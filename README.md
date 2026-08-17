@@ -81,6 +81,8 @@ bash agent-install.sh
 
 The installer is **idempotent** — safe to run multiple times. It installs all three subsystems in order (relationships → memory → cognition), applying only what has changed.
 
+Schema changes go through `pgschema plan` → dependency-aware reorder (`database/plan_reorder.py`, nova-mind#597) → hazard check → `pgschema apply`. The reorder stage fixes fresh-install failures where `pgschema`'s own plan ordering placed a `GRANT`/`COMMENT`/view statement before the object it depends on (#597, #447, #392); a failure at any schema-apply stage now aborts the install with a nonzero exit code instead of continuing silently. See `ARCHITECTURE.md#installer-architecture` for details.
+
 ### Prerequisites
 
 - PostgreSQL 12+ with `pgvector` extension

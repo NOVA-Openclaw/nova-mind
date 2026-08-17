@@ -29,14 +29,14 @@ The semantic recall system searches embedded memories when messages arrive and i
 Main search script with configurable limits:
 
 ```bash
-# Basic usage
-python proactive-recall.py "search query"
+# Basic usage (query is read from stdin, not a positional argument)
+echo "search query" | python proactive-recall.py
 
 # With token budget
-python proactive-recall.py "query" --max-tokens 500
+echo "query" | python proactive-recall.py --max-tokens 500
 
 # Formatted for injection
-python proactive-recall.py "query" --inject
+echo "query" | python proactive-recall.py --inject
 ```
 
 **Configuration:**

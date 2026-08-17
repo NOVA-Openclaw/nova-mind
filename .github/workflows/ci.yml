@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, 'issue-*', 'feat/*', 'fix/*']
+    branches: [main, 'issue-*', 'feat/*', 'feature/*', 'fix/*']
   pull_request:
     branches: [main]
 
@@ -66,19 +66,29 @@ jobs:
       - name: Install pgschema v1.7.2
         run: go install github.com/pgplex/pgschema@v1.7.2
 
+      - name: Provision schema roles on both service containers (TC-49 prerequisite)
+        env:
+          PGPASSWORD: postgres
+        run: |
+          set -e
+          bash .github/scripts/provision-schema-roles.sh database/schema.sql
+          PGPORT=5433 bash .github/scripts/provision-schema-roles.sh database/schema.sql
+
       - name: Apply database/schema.sql on empty DB (positive control)
         env:
           PGPASSWORD: postgres
         run: |
           set -e
-          psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 -c "CREATE EXTENSION vector;"
+          psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 -c "CREATE EXTENSION IF NOT EXISTS vector;"
+          psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 -c "CREATE EXTENSION IF NOT EXISTS pg_trgm;"
           psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 -f database/schema.sql
 
       - name: Create fresh DB for negative control
         env:
           PGPASSWORD: postgres
         run: |
-          psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 -c "DROP DATABASE IF EXISTS test_broken; CREATE DATABASE test_broken;"
+          psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 -c "DROP DATABASE IF EXISTS test_broken;"
+          psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 -c "CREATE DATABASE test_broken;"
 
       - name: Apply broken schema_392.sql (negative control, expect failure)
         env:
@@ -95,7 +105,10 @@ jobs:
         env:
           PGPASSWORD: postgres
         run: |
+          psql -h localhost -U postgres -d postgres -p 5433 -v ON_ERROR_STOP=1 -c "DROP DATABASE IF EXISTS test_no_vector;"
           psql -h localhost -U postgres -d postgres -p 5433 -v ON_ERROR_STOP=1 -c "CREATE DATABASE test_no_vector;"
+          # pg_trgm is available in stock postgres:16; create it so the schema fails specifically on pgvector.
+          psql -h localhost -U postgres -d test_no_vector -p 5433 -v ON_ERROR_STOP=1 -c "CREATE EXTENSION IF NOT EXISTS pg_trgm;"
           if psql -h localhost -U postgres -d test_no_vector -p 5433 -v ON_ERROR_STOP=1 -f database/schema.sql; then
             echo "ERROR: schema.sql applied on plain postgres:16; expected failure due to missing vector"
             exit 1

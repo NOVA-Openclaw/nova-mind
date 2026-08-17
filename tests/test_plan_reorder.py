@@ -136,6 +136,15 @@ def test_tc09b_create_view_joined_aliased_columns():
     assert "table:e" not in analysis["refs"]
 
 
+def test_tc09c_create_materialized_view_aliased_column():
+    """CREATE MATERIALIZED VIEW resolves column refs through aliases."""
+    analysis = analyze_statement(
+        "CREATE MATERIALIZED VIEW mv_x AS SELECT ef.mutability_class FROM entity_facts ef;"
+    )
+    assert analysis["defines"] == {"table:mv_x"}
+    assert analysis["refs"] == {"table:entity_facts", "column:entity_facts.mutability_class"}
+
+
 def test_tc10_create_view_chained():
     """TC-10: second view depends on first view (treated as table)."""
     analysis_a = analyze_statement("CREATE VIEW v_a AS SELECT * FROM base_table;")

@@ -664,7 +664,7 @@ def analyze_statement(sql: str) -> dict[str, Any]:
         return result
 
     # ------------------------------------------------------------------
-    # CREATE VIEW
+    # CREATE VIEW / CREATE MATERIALIZED VIEW
     # ------------------------------------------------------------------
     if class_name == "ViewStmt":
         view = getattr(stmt, "view", None)
@@ -673,6 +673,19 @@ def analyze_statement(sql: str) -> dict[str, Any]:
             # Views occupy the same namespace as tables for dependency ordering.
             result["defines"].add(_obj("table", view_name))
         result["refs"].update(_extract_refs_from_node(getattr(stmt, "query", None)))
+        return result
+
+    if class_name == "CreateTableAsStmt":
+        # CREATE MATERIALIZED VIEW stores its target in into.rel.
+        into = getattr(stmt, "into", None)
+        relation = getattr(into, "rel", None) if into else None
+        mv_name = getattr(relation, "relname", None) if relation else None
+        if mv_name:
+            # Materialized views share the table namespace.
+            result["defines"].add(_obj("table", mv_name))
+        query = getattr(stmt, "query", None)
+        if query is not None:
+            result["refs"].update(_extract_refs_from_node(query))
         return result
 
     # ------------------------------------------------------------------

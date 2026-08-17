@@ -1509,14 +1509,17 @@ else
         "$VENV_PYTHON" "$SCRIPT_DIR/database/plan_reorder.py" \
             --plan "$PLAN_FILE" \
             --output "$REORDERED_PLAN_FILE" 2>&1 || REORDER_EXIT=$?
+        DO_APPLY=1
         if [ $REORDER_EXIT -eq 0 ]; then
             mv "$REORDERED_PLAN_FILE" "$PLAN_FILE"
             echo -e "  ${CHECK_MARK} Plan reordered by dependencies"
         else
             echo -e "  ${CROSS_MARK} Plan reorder failed (exit $REORDER_EXIT) — schema apply skipped"
             SCHEMA_DIFF_SKIPPED=1
+            DO_APPLY=0
         fi
 
+        if [ "$DO_APPLY" -eq 1 ]; then
         # Build list of intentional drop column paths from renames.json (table.column format)
         INTENTIONAL_DROPS=()
         if [ -f "$RENAMES_FILE" ]; then
@@ -1605,6 +1608,7 @@ else
                 echo -e "  ${CROSS_MARK} Schema apply failed (exit $APPLY_EXIT)"
                 SCHEMA_DIFF_SKIPPED=1
             fi
+        fi
         fi
     fi
 

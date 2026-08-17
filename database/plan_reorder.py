@@ -537,9 +537,20 @@ def analyze_statement(sql: str) -> dict[str, Any]:
     if class_name == "AlterTableStmt":
         relation = getattr(stmt, "relation", None)
         table = getattr(relation, "relname", None) if relation else None
+        objtype = getattr(stmt, "objtype", None)
+        cmds = getattr(stmt, "cmds", []) or []
+        has_owner_change = any(
+            getattr(getattr(cmd, "subtype", None), "name", "") == "AT_ChangeOwner"
+            for cmd in cmds
+        )
         if table:
-            result["defines"].add(_obj("table", table))
-        for cmd in getattr(stmt, "cmds", []):
+            if has_owner_change:
+                # OWNER TO is a metadata change; it depends on the object.
+                kind = OBJECT_KIND_MAP.get(objtype, "table")
+                result["refs"].add(_obj(kind, table))
+            else:
+                result["defines"].add(_obj("table", table))
+        for cmd in cmds:
             subtype = getattr(cmd, "subtype", None)
             subtype_name = getattr(subtype, "name", str(subtype)) if subtype is not None else ""
 
@@ -702,6 +713,53 @@ def analyze_statement(sql: str) -> dict[str, Any]:
         type_name = _type_name(getattr(stmt, "typeName", []))
         if type_name:
             result["defines"].add(_obj("type", type_name))
+        return result
+
+    # ------------------------------------------------------------------
+    # CREATE SEQUENCE
+    # ------------------------------------------------------------------
+    if class_name == "CreateSeqStmt":
+        seq = getattr(stmt, "sequence", None)
+        seq_name = getattr(seq, "relname", None) if seq else None
+        if seq_name:
+            # Sequences share a namespace with tables in PostgreSQL.
+            result["defines"].add(_obj("table", seq_name))
+        return result
+
+    # ------------------------------------------------------------------
+    # ALTER ... OWNER TO
+    # ------------------------------------------------------------------
+    if class_name == "AlterOwnerStmt":
+        objtype = getattr(stmt, "objectType", None)
+        kind = OBJECT_KIND_MAP.get(objtype, "table")
+        obj = getattr(stmt, "object", None)
+        if obj is not None:
+            if obj.__class__.__name__ == "ObjectWithArgs":
+                identity = _function_identity_from_object_with_args(obj)
+                if identity:
+                    result["refs"].add(identity)
+            else:
+                name = _object_name_from_strings(obj)
+                if name:
+                    result["refs"].add(_obj(kind, name))
+        return result
+
+    # ------------------------------------------------------------------
+    # SECURITY LABEL ON <object>
+    # ------------------------------------------------------------------
+    if class_name == "SecLabelStmt":
+        objtype = getattr(stmt, "objtype", None)
+        kind = OBJECT_KIND_MAP.get(objtype, "table")
+        obj = getattr(stmt, "object", None)
+        if obj is not None:
+            if obj.__class__.__name__ == "ObjectWithArgs":
+                identity = _function_identity_from_object_with_args(obj)
+                if identity:
+                    result["refs"].add(identity)
+            else:
+                name = _object_name_from_strings(obj)
+                if name:
+                    result["refs"].add(_obj(kind, name))
         return result
 
     # ------------------------------------------------------------------
@@ -1054,6 +1112,29 @@ def reorder_plan(plan: dict[str, Any]) -> dict[str, Any]:
         "groups": new_groups,
     }
     return new_plan
+
+
+def validate_plan_invariants(plan: dict[str, Any]) -> None:
+    """Verify that the reordered plan respects all extracted dependencies.
+
+    For every dependency edge between two statements, the prerequisite must
+    appear earlier in the flattened group/step order than the dependent.  This
+    is the invariant the reordered output must satisfy regardless of group
+    boundaries.
+    """
+    flat = _flatten_steps(plan)
+    analyses = [analyze_statement(step["sql"]) for step in flat]
+    graph, _ = _build_statement_graph(flat, analyses)
+    for src, targets in graph.items():
+        for dst in targets:
+            if src >= dst:
+                raise PlanReorderError(
+                    f"Invariant violation: statement {src} must precede statement {dst}",
+                    statements=[
+                        {"sql": flat[src]["sql"], "index": src},
+                        {"sql": flat[dst]["sql"], "index": dst},
+                    ],
+                )
 
 
 # ---------------------------------------------------------------------------

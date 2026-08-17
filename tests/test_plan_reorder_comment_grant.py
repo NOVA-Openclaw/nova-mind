@@ -295,3 +295,106 @@ def test_regression_597_staging_fixture_no_group_zero_function_dependents():
         for step in out["groups"][0]["steps"]:
             assert not step["sql"].startswith(comment_sql)
             assert not step["sql"].startswith(grant_sql)
+
+
+# ---------------------------------------------------------------------------
+# ALTER ... OWNER TO and SECURITY LABEL metadata dependents
+# ---------------------------------------------------------------------------
+
+
+def test_alter_table_owner_to_depends_on_create_table():
+    """ALTER TABLE ... OWNER TO is ordered after CREATE TABLE."""
+    plan = _make_plan([
+        _step("ALTER TABLE foo OWNER TO some_role;", type="table", operation="alter", path="public.foo"),
+        _step("CREATE TABLE foo (id int);"),
+    ])
+    out = reorder_plan(plan)
+    sqls = [s["sql"] for s in out["groups"][0]["steps"]]
+    assert sqls == [
+        "CREATE TABLE foo (id int);",
+        "ALTER TABLE foo OWNER TO some_role;",
+    ]
+
+
+def test_alter_sequence_owner_to_depends_on_create_sequence():
+    """ALTER SEQUENCE ... OWNER TO is ordered after the sequence definition."""
+    plan = _make_plan([
+        _step("ALTER SEQUENCE seq1 OWNER TO some_role;", type="sequence", operation="alter", path="public.seq1"),
+        _step("CREATE SEQUENCE seq1;", type="sequence", operation="create", path="public.seq1"),
+    ])
+    out = reorder_plan(plan)
+    sqls = [s["sql"] for s in out["groups"][0]["steps"]]
+    assert sqls == [
+        "CREATE SEQUENCE seq1;",
+        "ALTER SEQUENCE seq1 OWNER TO some_role;",
+    ]
+
+
+def test_alter_function_owner_to_depends_on_create_function():
+    """ALTER FUNCTION ... OWNER TO follows the signature-matched CREATE FUNCTION."""
+    plan = _make_plan([
+        _step(
+            "ALTER FUNCTION get_strictest_mutability(integer, varchar) OWNER TO some_role;",
+            type="function",
+            operation="alter",
+            path="public.get_strictest_mutability",
+        ),
+        _step(
+            "CREATE FUNCTION get_strictest_mutability(x int, y varchar) RETURNS int AS $$ SELECT 1; $$ LANGUAGE sql;",
+            type="function",
+            operation="create",
+            path="public.get_strictest_mutability",
+        ),
+    ])
+    out = reorder_plan(plan)
+    sqls = [s["sql"] for s in out["groups"][0]["steps"]]
+    assert sqls[0].startswith("CREATE FUNCTION get_strictest_mutability")
+    assert sqls[1].startswith("ALTER FUNCTION get_strictest_mutability")
+
+
+def test_alter_type_owner_to_depends_on_create_type():
+    """ALTER TYPE ... OWNER TO is ordered after CREATE TYPE."""
+    plan = _make_plan([
+        _step("ALTER TYPE my_enum OWNER TO some_role;", type="type", operation="alter", path="public.my_enum"),
+        _step("CREATE TYPE my_enum AS ENUM ('a');", type="type", operation="create", path="public.my_enum"),
+    ])
+    out = reorder_plan(plan)
+    sqls = [s["sql"] for s in out["groups"][0]["steps"]]
+    assert sqls == [
+        "CREATE TYPE my_enum AS ENUM ('a');",
+        "ALTER TYPE my_enum OWNER TO some_role;",
+    ]
+
+
+def test_security_label_on_table_depends_on_create_table():
+    """SECURITY LABEL ON TABLE is ordered after CREATE TABLE."""
+    plan = _make_plan([
+        _step("SECURITY LABEL FOR selinux ON TABLE foo IS 'system_u:object_r:sepgsql_table_t:s0';", type="table", operation="alter", path="public.foo"),
+        _step("CREATE TABLE foo (id int);"),
+    ])
+    out = reorder_plan(plan)
+    sqls = [s["sql"] for s in out["groups"][0]["steps"]]
+    assert sqls[0] == "CREATE TABLE foo (id int);"
+    assert sqls[1].startswith("SECURITY LABEL")
+
+
+def test_security_label_on_function_depends_on_create_function():
+    """SECURITY LABEL ON FUNCTION follows the signature-matched CREATE FUNCTION."""
+    plan = _make_plan([
+        _step(
+            "SECURITY LABEL ON FUNCTION get_strictest_mutability(integer, varchar) IS 'label';",
+            type="function",
+            operation="alter",
+            path="public.get_strictest_mutability",
+        ),
+        _step(
+            "CREATE FUNCTION get_strictest_mutability(x int, y varchar) RETURNS int AS $$ SELECT 1; $$ LANGUAGE sql;",
+            type="function",
+            operation="create",
+            path="public.get_strictest_mutability",
+        ),
+    ])
+    out = reorder_plan(plan)
+    sqls = [s["sql"] for s in out["groups"][0]["steps"]]
+    assert sqls[0].startswith("CREATE FUNCTION get_strictest_mutability")
+    assert sqls[1].startswith("SECURITY LABEL")

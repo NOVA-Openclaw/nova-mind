@@ -1241,6 +1241,91 @@ else
     echo -e "  ${CHECK_MARK} Database '$DB_NAME' created"
 fi
 
+# --- Python virtual environment ---
+echo ""
+echo "Python virtual environment setup..."
+
+VENV_DIR="$HOME/.local/share/$USER/venv"
+REQUIRED_PACKAGES=("openai" "tiktoken" "psycopg2-binary" "pillow" "json_repair" "pglast==6.16")
+
+declare -A PACKAGE_MODULE_MAP=(
+    ["psycopg2-binary"]="psycopg2"
+    ["pillow"]="PIL"
+)
+
+pkg_import_name() {
+    local pkg="$1"
+    if [[ -v PACKAGE_MODULE_MAP["$pkg"] ]]; then
+        echo "${PACKAGE_MODULE_MAP[$pkg]}"
+    else
+        echo "${pkg//-/_}"
+    fi
+}
+
+if python3 -m venv --help &>/dev/null; then
+    echo -e "  ${CHECK_MARK} python3-venv available"
+else
+    echo -e "  ${CROSS_MARK} python3-venv module not found"
+    echo "  Install: sudo apt install python3-venv"
+    exit 1
+fi
+
+if [ -d "$VENV_DIR" ]; then
+    echo -e "  ${CHECK_MARK} Virtual environment exists at $VENV_DIR"
+else
+    mkdir -p "$(dirname "$VENV_DIR")"
+    if python3 -m venv "$VENV_DIR" &>/dev/null; then
+        echo -e "  ${CHECK_MARK} Virtual environment created at $VENV_DIR"
+    else
+        echo -e "  ${CROSS_MARK} Failed to create virtual environment"
+        exit 1
+    fi
+fi
+
+VENV_PYTHON="$VENV_DIR/bin/python"
+VENV_PIP="$VENV_DIR/bin/pip"
+
+PACKAGES_TO_INSTALL=()
+PACKAGES_INSTALLED=()
+
+for package in "${REQUIRED_PACKAGES[@]}"; do
+    mod=$(pkg_import_name "$package")
+    if "$VENV_PYTHON" -c "import $mod" &>/dev/null; then
+        PACKAGES_INSTALLED+=("$package")
+    else
+        PACKAGES_TO_INSTALL+=("$package")
+    fi
+done
+
+[ ${#PACKAGES_INSTALLED[@]} -gt 0 ] && echo -e "  ${CHECK_MARK} ${#PACKAGES_INSTALLED[@]} packages already installed: ${PACKAGES_INSTALLED[*]}"
+
+if [ ${#PACKAGES_TO_INSTALL[@]} -gt 0 ]; then
+    echo "  Installing missing packages: ${PACKAGES_TO_INSTALL[*]}"
+    if "$VENV_PIP" install "${PACKAGES_TO_INSTALL[@]}" &>/dev/null; then
+        echo -e "  ${CHECK_MARK} ${#PACKAGES_TO_INSTALL[@]} packages installed"
+    else
+        echo -e "  ${WARNING} Some packages failed to install"
+        echo "      Try manually: $VENV_PIP install ${PACKAGES_TO_INSTALL[*]}"
+        VERIFICATION_WARNINGS=$((VERIFICATION_WARNINGS + 1))
+    fi
+else
+    echo -e "  ${CHECK_MARK} All required packages already installed"
+fi
+
+# Verify
+MISSING_PACKAGES=()
+for package in "${REQUIRED_PACKAGES[@]}"; do
+    mod=$(pkg_import_name "$package")
+    "$VENV_PYTHON" -c "import $mod" &>/dev/null || MISSING_PACKAGES+=("$package")
+done
+if [ ${#MISSING_PACKAGES[@]} -gt 0 ]; then
+    echo -e "  ${WARNING} Missing after install: ${MISSING_PACKAGES[*]}"
+    VERIFICATION_WARNINGS=$((VERIFICATION_WARNINGS + ${#MISSING_PACKAGES[@]}))
+else
+    echo -e "  ${CHECK_MARK} All Python dependencies verified"
+fi
+
+
 # --- Schema management via pgschema ---
 SCHEMA_FILE="$SCRIPT_DIR/database/schema.sql"
 
@@ -1250,6 +1335,7 @@ if [ ! -f "$SCHEMA_FILE" ]; then
 fi
 
 SCHEMA_DIFF_SKIPPED=0
+SCHEMA_DIFF_HAZARD=0
 
 echo ""
 echo "Schema management (pgschema)..."
@@ -1265,7 +1351,7 @@ if [ -n "$EXTENSIONS" ]; then
             if _superuser_psql "$DB_NAME" -c "CREATE EXTENSION IF NOT EXISTS \"$ext\";" >/dev/null 2>&1; then
                 echo -e "  ${CHECK_MARK} Extension '$ext' installed"
             else
-                echo -e "  ${WARNING} Extension '$ext' not installed — requires superuser"
+                echo -e "  ${CROSS_MARK} Extension '$ext' not installed — requires superuser"
                 SCHEMA_DIFF_SKIPPED=1
             fi
         fi
@@ -1289,7 +1375,8 @@ if [ -d "$PRE_MIGRATIONS_DIR" ]; then
             if _superuser_psql "$DB_NAME" -f "$sql_file" >/dev/null 2>&1; then
                 echo -e "  ${CHECK_MARK} Pre-migration: $local_filename"
             else
-                echo -e "  ${WARNING} Pre-migration failed: $local_filename (continuing)"
+                echo -e "  ${CROSS_MARK} Pre-migration failed: $local_filename"
+                SCHEMA_DIFF_SKIPPED=1
             fi
         done
     else
@@ -1368,7 +1455,7 @@ else
 fi
 
 if [ "$SCHEMA_DIFF_SKIPPED" -eq 1 ]; then
-    echo -e "  ${WARNING} Skipping pgschema plan/apply (extension install failed above)"
+    echo -e "  ${WARNING} Skipping pgschema plan/apply (pre-schema step failed above)"
 else
     # Build connection args for DDL operations.
     # When superuser differs from DB_USER, _superuser_pgschema runs via sudo -u,
@@ -1386,11 +1473,9 @@ else
         "--plan-user" "$PG_SUPERUSER"
     )
 
-    # Optionally use .pgschemaignore from memory/
-    PGSCHEMA_IGNORE_OPT=()
-    if [ -f "$SCRIPT_DIR/database/.pgschemaignore" ]; then
-        PGSCHEMA_IGNORE_OPT+=("--ignore-file" "$SCRIPT_DIR/database/.pgschemaignore")
-    fi
+    # Pin cwd so database/.pgschemaignore is discovered deterministically.
+    # pgschema v1.7.2 reads .pgschemaignore from cwd, not from --ignore-file.
+    pushd "$SCRIPT_DIR" >/dev/null || exit 1
 
     PLAN_FILE=$(mktemp /tmp/pgschema-plan-XXXXXX.json)
     TMPFILES+=("$PLAN_FILE")
@@ -1413,9 +1498,25 @@ else
         --no-color 2>&1 || PLAN_EXIT=$?
 
     if [ $PLAN_EXIT -ne 0 ]; then
-        echo -e "  ${WARNING} pgschema plan failed (exit $PLAN_EXIT) — schema apply skipped"
+        echo -e "  ${CROSS_MARK} pgschema plan failed (exit $PLAN_EXIT) — schema apply skipped"
         SCHEMA_DIFF_SKIPPED=1
     else
+        # Reorder the plan so dependencies are satisfied on fresh installs.
+        REORDERED_PLAN_FILE=$(mktemp /tmp/pgschema-plan-reordered-XXXXXX.json)
+        TMPFILES+=("$REORDERED_PLAN_FILE")
+        echo "  Reordering plan by dependencies..."
+        REORDER_EXIT=0
+        "$VENV_PYTHON" "$SCRIPT_DIR/database/plan_reorder.py" \
+            --plan "$PLAN_FILE" \
+            --output "$REORDERED_PLAN_FILE" 2>&1 || REORDER_EXIT=$?
+        if [ $REORDER_EXIT -eq 0 ]; then
+            mv "$REORDERED_PLAN_FILE" "$PLAN_FILE"
+            echo -e "  ${CHECK_MARK} Plan reordered by dependencies"
+        else
+            echo -e "  ${CROSS_MARK} Plan reorder failed (exit $REORDER_EXIT) — schema apply skipped"
+            SCHEMA_DIFF_SKIPPED=1
+        fi
+
         # Build list of intentional drop column paths from renames.json (table.column format)
         INTENTIONAL_DROPS=()
         if [ -f "$RENAMES_FILE" ]; then
@@ -1457,7 +1558,7 @@ else
                 jq -r '(.groups // [])[] | .steps[] | select(.type != "privilege") | select(.operation == "drop") | select(.type | test("^table")) | "      • " + .path' "$PLAN_FILE" 2>/dev/null || true
             fi
             echo "      To apply manually: $PGSCHEMA_BIN apply ${PGSCHEMA_CONN_ARGS[*]} --schema public --plan $PLAN_FILE --auto-approve"
-            SCHEMA_DIFF_SKIPPED=1
+            SCHEMA_DIFF_HAZARD=1
         elif [ "$TOTAL_STEPS" -eq 0 ] 2>/dev/null; then
             echo -e "  ${CHECK_MARK} Schema is up to date — no changes needed"
         else
@@ -1494,19 +1595,28 @@ else
                     if grep -E '^[[:space:]]*(GRANT|REVOKE)[[:space:]]+' "$SCHEMA_FILE_TMP" | _superuser_psql "$DB_NAME" -v ON_ERROR_STOP=1 -f - >/dev/null 2>&1; then
                         echo -e "  ${CHECK_MARK} Applied $GRANT_COUNT explicit grant/revoke statement(s)"
                     else
-                        echo -e "  ${WARNING} Grant reconciliation failed (non-fatal)"
+                        echo -e "  ${CROSS_MARK} Grant reconciliation failed"
+                        SCHEMA_DIFF_SKIPPED=1
                     fi
                 else
                     echo -e "  ${INFO} No explicit grant/revoke statements found"
                 fi
             else
-                echo -e "  ${WARNING} Schema apply failed (exit $APPLY_EXIT) — continuing"
+                echo -e "  ${CROSS_MARK} Schema apply failed (exit $APPLY_EXIT)"
                 SCHEMA_DIFF_SKIPPED=1
             fi
         fi
     fi
 
+    popd >/dev/null || true
     rm -f "$PLAN_FILE"
+fi
+
+# --- Schema apply exit-code gate (#597) ---
+if [ "$SCHEMA_DIFF_SKIPPED" -eq 1 ] && [ "$SCHEMA_DIFF_HAZARD" -eq 0 ]; then
+    echo ""
+    echo -e "  ${CROSS_MARK} Schema apply stage failed — installation aborting"
+    exit 1
 fi
 
 # --- Memory hooks ---
@@ -1732,90 +1842,6 @@ else
         echo -e "  ${WARNING} Failed to patch OpenClaw config"
         echo "      Run manually: $ENABLE_HOOKS_SCRIPT"
     fi
-fi
-
-# --- Python virtual environment ---
-echo ""
-echo "Python virtual environment setup..."
-
-VENV_DIR="$HOME/.local/share/$USER/venv"
-REQUIRED_PACKAGES=("openai" "tiktoken" "psycopg2-binary" "pillow" "json_repair")
-
-declare -A PACKAGE_MODULE_MAP=(
-    ["psycopg2-binary"]="psycopg2"
-    ["pillow"]="PIL"
-)
-
-pkg_import_name() {
-    local pkg="$1"
-    if [[ -v PACKAGE_MODULE_MAP["$pkg"] ]]; then
-        echo "${PACKAGE_MODULE_MAP[$pkg]}"
-    else
-        echo "${pkg//-/_}"
-    fi
-}
-
-if python3 -m venv --help &>/dev/null; then
-    echo -e "  ${CHECK_MARK} python3-venv available"
-else
-    echo -e "  ${CROSS_MARK} python3-venv module not found"
-    echo "  Install: sudo apt install python3-venv"
-    exit 1
-fi
-
-if [ -d "$VENV_DIR" ]; then
-    echo -e "  ${CHECK_MARK} Virtual environment exists at $VENV_DIR"
-else
-    mkdir -p "$(dirname "$VENV_DIR")"
-    if python3 -m venv "$VENV_DIR" &>/dev/null; then
-        echo -e "  ${CHECK_MARK} Virtual environment created at $VENV_DIR"
-    else
-        echo -e "  ${CROSS_MARK} Failed to create virtual environment"
-        exit 1
-    fi
-fi
-
-VENV_PYTHON="$VENV_DIR/bin/python"
-VENV_PIP="$VENV_DIR/bin/pip"
-
-PACKAGES_TO_INSTALL=()
-PACKAGES_INSTALLED=()
-
-for package in "${REQUIRED_PACKAGES[@]}"; do
-    mod=$(pkg_import_name "$package")
-    if "$VENV_PYTHON" -c "import $mod" &>/dev/null; then
-        PACKAGES_INSTALLED+=("$package")
-    else
-        PACKAGES_TO_INSTALL+=("$package")
-    fi
-done
-
-[ ${#PACKAGES_INSTALLED[@]} -gt 0 ] && echo -e "  ${CHECK_MARK} ${#PACKAGES_INSTALLED[@]} packages already installed: ${PACKAGES_INSTALLED[*]}"
-
-if [ ${#PACKAGES_TO_INSTALL[@]} -gt 0 ]; then
-    echo "  Installing missing packages: ${PACKAGES_TO_INSTALL[*]}"
-    if "$VENV_PIP" install "${PACKAGES_TO_INSTALL[@]}" &>/dev/null; then
-        echo -e "  ${CHECK_MARK} ${#PACKAGES_TO_INSTALL[@]} packages installed"
-    else
-        echo -e "  ${WARNING} Some packages failed to install"
-        echo "      Try manually: $VENV_PIP install ${PACKAGES_TO_INSTALL[*]}"
-        VERIFICATION_WARNINGS=$((VERIFICATION_WARNINGS + 1))
-    fi
-else
-    echo -e "  ${CHECK_MARK} All required packages already installed"
-fi
-
-# Verify
-MISSING_PACKAGES=()
-for package in "${REQUIRED_PACKAGES[@]}"; do
-    mod=$(pkg_import_name "$package")
-    "$VENV_PYTHON" -c "import $mod" &>/dev/null || MISSING_PACKAGES+=("$package")
-done
-if [ ${#MISSING_PACKAGES[@]} -gt 0 ]; then
-    echo -e "  ${WARNING} Missing after install: ${MISSING_PACKAGES[*]}"
-    VERIFICATION_WARNINGS=$((VERIFICATION_WARNINGS + ${#MISSING_PACKAGES[@]}))
-else
-    echo -e "  ${CHECK_MARK} All Python dependencies verified"
 fi
 
 # ============================================

@@ -969,7 +969,10 @@ def _object_dependency_map(analyses: list[dict[str, Any]]) -> dict[str, set[str]
     """Build object-level dependency map from all non-DROP analyses.
 
     For each object D defined by a non-DROP statement, record the set of
-    objects O it depends on.
+    objects O it depends on.  Self-dependencies (D == O) are skipped: a
+    statement can never genuinely depend on itself, and retaining them
+    causes false statement-level self-loops via the DROP reverse-dependency
+    rule (nova-mind#605).
     """
     obj_deps: dict[str, set[str]] = defaultdict(set)
     for analysis in analyses:
@@ -977,6 +980,8 @@ def _object_dependency_map(analyses: list[dict[str, Any]]) -> dict[str, set[str]
             continue
         for defined in analysis["defines"]:
             for ref in analysis["refs"]:
+                if ref == defined:
+                    continue
                 obj_deps[defined].add(ref)
     return obj_deps
 

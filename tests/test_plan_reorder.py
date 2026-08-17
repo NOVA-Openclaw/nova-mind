@@ -260,6 +260,40 @@ def test_tc18b_check_constraint_alter_table():
     assert "column:a.status" in analysis["refs"]
 
 
+def test_tc18c_check_constraint_create_table_self_ref_not_a_cycle():
+    """CREATE TABLE CHECK on own columns must not create a self-dependency.
+
+    analyze_statement intentionally records both the table definition and the
+    table reference; the graph builder must drop the self-dependency.
+    """
+    analysis = analyze_statement(
+        "CREATE TABLE a (id int, status text, CHECK (status IN ('x', 'y')));"
+    )
+    assert analysis["defines"] == {"table:a", "column:a.id", "column:a.status"}
+    assert "column:a.status" in analysis["refs"]
+    from database.plan_reorder import _object_dependency_map
+
+    obj_deps = _object_dependency_map([analysis])
+    assert "table:a" not in obj_deps.get("table:a", set())
+
+
+def test_tc18d_check_constraint_alter_table_self_ref_not_a_cycle():
+    """ALTER TABLE ADD CHECK on own columns must not create a self-dependency.
+
+    analyze_statement intentionally records both the table definition and the
+    table reference; the graph builder must drop the self-dependency.
+    """
+    analysis = analyze_statement(
+        "ALTER TABLE a ADD CONSTRAINT chk_status CHECK (status IN ('x', 'y'));"
+    )
+    assert analysis["defines"] == {"table:a"}
+    assert "column:a.status" in analysis["refs"]
+    from database.plan_reorder import _object_dependency_map
+
+    obj_deps = _object_dependency_map([analysis])
+    assert "table:a" not in obj_deps.get("table:a", set())
+
+
 # ---------------------------------------------------------------------------
 # DROP reverse dependency (Section 2)
 # ---------------------------------------------------------------------------
@@ -304,6 +338,42 @@ def test_tc21_mixed_create_drop_rename_pattern():
     # View depends on ADD COLUMN, so ADD COLUMN must precede CREATE VIEW.
     assert sqls.index("ALTER TABLE foo ADD COLUMN new_name text;") < sqls.index(
         "CREATE VIEW v_new AS SELECT new_name FROM foo;"
+    )
+
+
+def test_tc21a_drop_view_then_create_table_same_name_no_self_loop():
+    """TC-21a: view->table conversion with CHECK self-reference must not cycle."""
+    plan = _make_plan([
+        _step("DROP VIEW IF EXISTS agent_boot CASCADE;", type="view", operation="drop", path="public.agent_boot"),
+        _step(
+            "CREATE TABLE IF NOT EXISTS agent_boot (id int, status text, CHECK (status IN ('x', 'y')));",
+            type="table", operation="create", path="public.agent_boot",
+        ),
+    ])
+    # Must not raise CycleError; DROP VIEW should precede CREATE TABLE.
+    out = reorder_plan(plan)
+    sqls = [s["sql"] for s in out["groups"][0]["steps"]]
+    assert sqls.index("DROP VIEW IF EXISTS agent_boot CASCADE;") < sqls.index(
+        "CREATE TABLE IF NOT EXISTS agent_boot (id int, status text, CHECK (status IN ('x', 'y')));"
+    )
+
+
+def test_tc21b_drop_constraint_then_add_constraint_check_no_self_loop():
+    """TC-21b: ALTER TABLE DROP/ADD CHECK on same table must not cycle."""
+    plan = _make_plan([
+        _step(
+            "ALTER TABLE a DROP CONSTRAINT assertion_intent_not_null;",
+            type="table.constraint", operation="drop", path="public.a.assertion_intent_not_null",
+        ),
+        _step(
+            "ALTER TABLE a ADD CONSTRAINT assertion_intent_not_null CHECK (assertion_intent IS NOT NULL) NOT VALID;",
+            type="table.constraint", operation="add", path="public.a.assertion_intent_not_null",
+        ),
+    ])
+    out = reorder_plan(plan)
+    sqls = [s["sql"] for s in out["groups"][0]["steps"]]
+    assert sqls.index("ALTER TABLE a DROP CONSTRAINT assertion_intent_not_null;") < sqls.index(
+        "ALTER TABLE a ADD CONSTRAINT assertion_intent_not_null CHECK (assertion_intent IS NOT NULL) NOT VALID;"
     )
 
 

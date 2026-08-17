@@ -1,0 +1,4454 @@
+{
+  "version": "1.0.0",
+  "pgschema_version": "1.7.2",
+  "created_at": "2026-08-17T18:43:31Z",
+  "source_fingerprint": {
+    "hash": "6f2c52e71d00e3e4de035baaccc9a8d04d17596ade906d03cd1c1d511a57023e"
+  },
+  "groups": [
+    {
+      "steps": [
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE agent_actions_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.agent_actions_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE SELECT, USAGE ON SEQUENCE agent_bootstrap_context_local_id_seq FROM athena;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.agent_bootstrap_context_local_id_seq.athena"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE agent_bootstrap_context_local_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.agent_bootstrap_context_local_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE SELECT, USAGE ON SEQUENCE agent_bootstrap_context_local_id_seq FROM scout;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.agent_bootstrap_context_local_id_seq.scout"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE agent_domains_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.agent_domains_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE agent_jobs_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.agent_jobs_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE agent_modifications_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.agent_modifications_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE agent_spawns_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.agent_spawns_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE agent_turn_context_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.agent_turn_context_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE agents_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.agents_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE ai_models_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.ai_models_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE artwork_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.artwork_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE blockers_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.blockers_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE certificates_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.certificates_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE channel_sessions_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.channel_sessions_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE channel_transcripts_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.channel_transcripts_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE comms_checks_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.comms_checks_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE comms_digests_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.comms_digests_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE comms_items_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.comms_items_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE comms_responses_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.comms_responses_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE d100_roll_log_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.d100_roll_log_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE entities_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.entities_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE entity_credibility_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.entity_credibility_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE entity_fact_conflicts_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.entity_fact_conflicts_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE entity_fact_sources_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.entity_fact_sources_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE entity_facts_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.entity_facts_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE entity_relationships_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.entity_relationships_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE events_archive_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.events_archive_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE events_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.events_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE extraction_failures_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.extraction_failures_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE extraction_metrics_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.extraction_metrics_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE fact_change_log_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.fact_change_log_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE gambling_entries_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.gambling_entries_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE gambling_logs_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.gambling_logs_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE git_issue_queue_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.git_issue_queue_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE income_sources_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.income_sources_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE income_transactions_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.income_transactions_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE job_messages_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.job_messages_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE journal_entries_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.journal_entries_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE lessons_archive_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.lessons_archive_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE lessons_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.lessons_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE library_authors_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.library_authors_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE library_tags_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.library_tags_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE library_works_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.library_works_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE media_consumed_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.media_consumed_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE media_queue_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.media_queue_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE media_tags_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.media_tags_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE memory_embeddings_archive_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.memory_embeddings_archive_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE memory_embeddings_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.memory_embeddings_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE music_analysis_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.music_analysis_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE music_library_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.music_library_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE music_works_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.music_works_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE place_properties_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.place_properties_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE places_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.places_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE preferences_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.preferences_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE proactive_outreach_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.proactive_outreach_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE project_tasks_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.project_tasks_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE projects_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.projects_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE prompt_helper_config_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.prompt_helper_config_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE publications_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.publications_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE ralph_sessions_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.ralph_sessions_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE research_citations_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.research_citations_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE research_conclusions_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.research_conclusions_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE research_findings_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.research_findings_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE research_projects_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.research_projects_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE research_provenance_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.research_provenance_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE research_taggings_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.research_taggings_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE research_tags_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.research_tags_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE research_tasks_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.research_tasks_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE self_awareness_triggers_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.self_awareness_triggers_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE shopping_history_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.shopping_history_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE shopping_preferences_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.shopping_preferences_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE shopping_wishlist_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.shopping_wishlist_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE skills_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.skills_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE tags_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.tags_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE tasks_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.tasks_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE tools_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.tools_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE unsolved_problems_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.unsolved_problems_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE user_domains_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.user_domains_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE user_insights_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.user_insights_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE vehicles_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.vehicles_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE vocabulary_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.vocabulary_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE workflow_runs_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.workflow_runs_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE workflow_steps_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.workflow_steps_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE workflows_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.workflows_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE works_id_seq FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.SEQUENCE.works_id_seq.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_actions FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.agent_actions.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_aliases FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.agent_aliases.recon"
+        },
+        {
+          "sql": "REVOKE INSERT, SELECT, UPDATE ON TABLE agent_bootstrap_context_local FROM graybeard;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.agent_bootstrap_context_local.graybeard"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_bootstrap_context_local FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.agent_bootstrap_context_local.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_domains FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.agent_domains.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_jobs FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.agent_jobs.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_modifications FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.agent_modifications.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_spawns FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.agent_spawns.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_system_config FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.agent_system_config.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_turn_context FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.agent_turn_context.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agents FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.agents.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE ai_models FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.ai_models.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE artwork FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.artwork.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE blockers FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.blockers.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE bootstrap_context_config FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.bootstrap_context_config.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE certificates FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.certificates.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE channel_activity FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.channel_activity.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE channel_sessions FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.channel_sessions.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE channel_transcripts FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.channel_transcripts.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE comms_checks FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.comms_checks.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE comms_digests FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.comms_digests.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE comms_items FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.comms_items.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE comms_responses FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.comms_responses.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE comms_state FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.comms_state.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE d100_roll_log FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.d100_roll_log.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE entities FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.entities.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE entity_credibility FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.entity_credibility.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE entity_fact_conflicts FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.entity_fact_conflicts.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE entity_fact_sources FROM \"nova-staging\";",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.entity_fact_sources.nova-staging"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE entity_fact_sources FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.entity_fact_sources.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE entity_facts FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.entity_facts.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE entity_facts_archive FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.entity_facts_archive.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE entity_relationships FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.entity_relationships.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE event_entities FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.event_entities.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE event_places FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.event_places.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE event_projects FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.event_projects.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE events FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.events.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE events_archive FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.events_archive.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE extraction_failures FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.extraction_failures.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE extraction_metrics FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.extraction_metrics.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE fact_change_log FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.fact_change_log.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE gambling_entries FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.gambling_entries.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE gambling_logs FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.gambling_logs.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE git_issue_queue FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.git_issue_queue.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE income_sources FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.income_sources.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE income_transactions FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.income_transactions.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE job_messages FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.job_messages.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE journal_entries FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.journal_entries.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE lessons FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.lessons.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE lessons_archive FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.lessons_archive.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE library_authors FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.library_authors.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE library_tags FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.library_tags.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE library_work_authors FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.library_work_authors.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE library_work_relationships FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.library_work_relationships.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE library_work_tags FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.library_work_tags.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE library_works FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.library_works.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE media_consumed FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.media_consumed.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE media_queue FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.media_queue.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE media_tags FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.media_tags.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE memory_embeddings FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.memory_embeddings.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE memory_embeddings_archive FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.memory_embeddings_archive.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE memory_type_priorities FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.memory_type_priorities.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE motivation_d100 FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.motivation_d100.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_analysis FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.music_analysis.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_library FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.music_library.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_works FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.music_works.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE place_properties FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.place_properties.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE places FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.places.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE preferences FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.preferences.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE proactive_outreach FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.proactive_outreach.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE project_entities FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.project_entities.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE project_tasks FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.project_tasks.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE projects FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.projects.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE prompt_helper_config FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.prompt_helper_config.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE publications FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.publications.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE ralph_sessions FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.ralph_sessions.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE research_citations FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.research_citations.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE research_conclusions FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.research_conclusions.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE research_findings FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.research_findings.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE research_projects FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.research_projects.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE research_provenance FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.research_provenance.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE research_taggings FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.research_taggings.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE research_tags FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.research_tags.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE research_tasks FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.research_tasks.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE self_awareness_triggers FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.self_awareness_triggers.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE shopping_history FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.shopping_history.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE shopping_preferences FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.shopping_preferences.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE shopping_wishlist FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.shopping_wishlist.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE skills FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.skills.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE tags FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.tags.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE tasks FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.tasks.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE tools FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.tools.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE unsolved_problems FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.unsolved_problems.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE user_domains FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.user_domains.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE user_insights FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.user_insights.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE vehicles FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.vehicles.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE vocabulary FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.vocabulary.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE work_tags FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.work_tags.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE workflow_runs FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.workflow_runs.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE workflow_steps FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.workflow_steps.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE workflows FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.workflows.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE works FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.works.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_bootstrap_context FROM argus;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.VIEW.agent_bootstrap_context.argus"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_bootstrap_context FROM athena;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.VIEW.agent_bootstrap_context.athena"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_bootstrap_context FROM coder;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.VIEW.agent_bootstrap_context.coder"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_bootstrap_context FROM conductor;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.VIEW.agent_bootstrap_context.conductor"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_bootstrap_context FROM erato;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.VIEW.agent_bootstrap_context.erato"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_bootstrap_context FROM flint;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.VIEW.agent_bootstrap_context.flint"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_bootstrap_context FROM gem;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.VIEW.agent_bootstrap_context.gem"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_bootstrap_context FROM gidget;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.VIEW.agent_bootstrap_context.gidget"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_bootstrap_context FROM hermes;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.VIEW.agent_bootstrap_context.hermes"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_bootstrap_context FROM iris;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.VIEW.agent_bootstrap_context.iris"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_bootstrap_context FROM marcie;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.VIEW.agent_bootstrap_context.marcie"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_bootstrap_context FROM newhart;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.VIEW.agent_bootstrap_context.newhart"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_bootstrap_context FROM nova;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.VIEW.agent_bootstrap_context.nova"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_bootstrap_context FROM quill;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.VIEW.agent_bootstrap_context.quill"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_bootstrap_context FROM scout;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.VIEW.agent_bootstrap_context.scout"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_bootstrap_context FROM scribe;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.VIEW.agent_bootstrap_context.scribe"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_bootstrap_context FROM ticker;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.VIEW.agent_bootstrap_context.ticker"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE delegation_knowledge FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.VIEW.delegation_knowledge.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE v_agent_spawn_stats FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.VIEW.v_agent_spawn_stats.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE v_agents FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.VIEW.v_agents.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE v_entity_facts FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.VIEW.v_entity_facts.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE v_event_timeline FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.VIEW.v_event_timeline.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE v_gambling_summary FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.VIEW.v_gambling_summary.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE v_media_queue_pending FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.VIEW.v_media_queue_pending.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE v_media_with_tags FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.VIEW.v_media_with_tags.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE v_metamours FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.VIEW.v_metamours.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE v_pending_tasks FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.VIEW.v_pending_tasks.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE v_pending_test_failures FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.VIEW.v_pending_test_failures.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE v_ralph_active FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.VIEW.v_ralph_active.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE v_relationships FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.VIEW.v_relationships.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE v_task_tree FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.VIEW.v_task_tree.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE v_users FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.VIEW.v_users.recon"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE workflow_steps_detail FROM recon;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.VIEW.workflow_steps_detail.recon"
+        },
+        {
+          "sql": "ALTER DEFAULT PRIVILEGES FOR ROLE newhart IN SCHEMA public REVOKE USAGE ON SEQUENCES FROM recon;",
+          "type": "default_privilege",
+          "operation": "drop",
+          "path": "default_privileges.newhart.SEQUENCES.recon"
+        },
+        {
+          "sql": "ALTER DEFAULT PRIVILEGES FOR ROLE newhart IN SCHEMA public REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLES FROM recon;",
+          "type": "default_privilege",
+          "operation": "drop",
+          "path": "default_privileges.newhart.TABLES.recon"
+        },
+        {
+          "sql": "DROP FUNCTION IF EXISTS resolve_entity_by_identifier(text, text);",
+          "type": "function",
+          "operation": "drop",
+          "path": "public.resolve_entity_by_identifier"
+        },
+        {
+          "sql": "DROP FUNCTION IF EXISTS bootstrap_context_view_update();",
+          "type": "function",
+          "operation": "drop",
+          "path": "public.bootstrap_context_view_update"
+        },
+        {
+          "sql": "DROP FUNCTION IF EXISTS bootstrap_context_view_insert();",
+          "type": "function",
+          "operation": "drop",
+          "path": "public.bootstrap_context_view_insert"
+        },
+        {
+          "sql": "DROP FUNCTION IF EXISTS bootstrap_context_view_delete();",
+          "type": "function",
+          "operation": "drop",
+          "path": "public.bootstrap_context_view_delete"
+        },
+        {
+          "sql": "DROP VIEW IF EXISTS agent_bootstrap_context CASCADE;",
+          "type": "view",
+          "operation": "drop",
+          "path": "public.agent_bootstrap_context"
+        },
+        {
+          "sql": "CREATE TYPE assertion_intent_enum AS ENUM (\n    'asserted',\n    'speculative',\n    'fictional',\n    'disclaimed',\n    'hypothetical'\n);",
+          "type": "type",
+          "operation": "create",
+          "path": "public.assertion_intent_enum"
+        },
+        {
+          "sql": "CREATE TYPE mutability_class_enum AS ENUM (\n    'immutable',\n    'slow_changing',\n    'stateful'\n);",
+          "type": "type",
+          "operation": "create",
+          "path": "public.mutability_class_enum"
+        },
+        {
+          "sql": "CREATE TABLE IF NOT EXISTS agent_bootstrap_context (\n    id SERIAL,\n    context_type text NOT NULL,\n    file_key text NOT NULL,\n    content text NOT NULL,\n    description text,\n    updated_at timestamptz DEFAULT now(),\n    updated_by text DEFAULT CURRENT_USER,\n    agent_name text,\n    domain_names text[],\n    CONSTRAINT agent_bootstrap_context_pkey PRIMARY KEY (id),\n    CONSTRAINT agent_bootstrap_context_context_type_check CHECK (context_type IN ('UNIVERSAL'::text, 'GLOBAL'::text, 'DOMAIN'::text, 'AGENT'::text, 'SYSTEM'::text)),\n    CONSTRAINT chk_domain_no_agent_name CHECK (context_type <> 'DOMAIN'::text OR agent_name IS NULL),\n    CONSTRAINT chk_system_file_key CHECK (context_type <> 'SYSTEM'::text OR file_key = 'SYSTEM_PROMPT'::text),\n    CONSTRAINT chk_universal_global_no_names CHECK ((context_type <> ALL (ARRAY['UNIVERSAL'::text, 'GLOBAL'::text])) OR agent_name IS NULL AND domain_names IS NULL)\n);",
+          "type": "table",
+          "operation": "create",
+          "path": "public.agent_bootstrap_context"
+        },
+        {
+          "sql": "COMMENT ON TABLE agent_bootstrap_context IS 'Unified bootstrap context: UNIVERSAL/GLOBAL from nova_memory via FDW, AGENT/DOMAIN/SYSTEM from local table';",
+          "type": "table.comment",
+          "operation": "create",
+          "path": "public.agent_bootstrap_context"
+        },
+        {
+          "sql": "COMMENT ON COLUMN agent_bootstrap_context.context_type IS 'GLOBAL (all agents) or DOMAIN (agents in specific domain)';",
+          "type": "table.column.comment",
+          "operation": "create",
+          "path": "public.agent_bootstrap_context.context_type"
+        },
+        {
+          "sql": "COMMENT ON COLUMN agent_bootstrap_context.file_key IS 'Identifier for context block, becomes filename in bootstrap';",
+          "type": "table.column.comment",
+          "operation": "create",
+          "path": "public.agent_bootstrap_context.file_key"
+        },
+        {
+          "sql": "CREATE UNIQUE INDEX IF NOT EXISTS agent_bootstrap_context_domain_unique_idx ON agent_bootstrap_context (file_key) WHERE (context_type = 'DOMAIN'::text);",
+          "type": "table.index",
+          "operation": "create",
+          "path": "public.agent_bootstrap_context.agent_bootstrap_context_domain_unique_idx"
+        },
+        {
+          "sql": "CREATE UNIQUE INDEX IF NOT EXISTS agent_bootstrap_context_system_unique_idx ON agent_bootstrap_context (context_type, COALESCE(agent_name, ''::text)) WHERE (context_type = 'SYSTEM'::text);",
+          "type": "table.index",
+          "operation": "create",
+          "path": "public.agent_bootstrap_context.agent_bootstrap_context_system_unique_idx"
+        },
+        {
+          "sql": "CREATE UNIQUE INDEX IF NOT EXISTS agent_bootstrap_context_unique_idx ON agent_bootstrap_context (context_type, COALESCE(agent_name, ''::text), file_key) WHERE context_type IN ('UNIVERSAL'::text, 'GLOBAL'::text, 'AGENT'::text);",
+          "type": "table.index",
+          "operation": "create",
+          "path": "public.agent_bootstrap_context.agent_bootstrap_context_unique_idx"
+        },
+        {
+          "sql": "CREATE INDEX IF NOT EXISTS idx_abc_agent_name ON agent_bootstrap_context (agent_name) WHERE (agent_name IS NOT NULL);",
+          "type": "table.index",
+          "operation": "create",
+          "path": "public.agent_bootstrap_context.idx_abc_agent_name"
+        },
+        {
+          "sql": "CREATE TABLE IF NOT EXISTS agent_model_denylists (\n    id SERIAL,\n    agent_id integer NOT NULL,\n    model varchar(100) NOT NULL,\n    reason text NOT NULL,\n    failure_details text,\n    denied_at timestamptz DEFAULT now() NOT NULL,\n    denied_by varchar(100) DEFAULT CURRENT_USER NOT NULL,\n    workflow_context text,\n    CONSTRAINT agent_model_denylists_pkey PRIMARY KEY (id),\n    CONSTRAINT agent_model_denylists_agent_id_model_key UNIQUE (agent_id, model),\n    CONSTRAINT agent_model_denylists_agent_id_fkey FOREIGN KEY (agent_id) REFERENCES agents (id) ON DELETE CASCADE\n);",
+          "type": "table",
+          "operation": "create",
+          "path": "public.agent_model_denylists"
+        },
+        {
+          "sql": "COMMENT ON TABLE agent_model_denylists IS 'Per-agent model denylist. Records models tried and rejected for specific agents, with failure reasoning. Consulted during weekly model reviews to avoid re-assigning broken combinations.';",
+          "type": "table.comment",
+          "operation": "create",
+          "path": "public.agent_model_denylists"
+        },
+        {
+          "sql": "COMMENT ON COLUMN agent_model_denylists.failure_details IS 'Specific symptoms observed (e.g., \"echoes file content without edits\", \"ignores tool calls\")';",
+          "type": "table.column.comment",
+          "operation": "create",
+          "path": "public.agent_model_denylists.failure_details"
+        },
+        {
+          "sql": "COMMENT ON COLUMN agent_model_denylists.workflow_context IS 'Which workflow/task exposed the failure, for traceability';",
+          "type": "table.column.comment",
+          "operation": "create",
+          "path": "public.agent_model_denylists.workflow_context"
+        },
+        {
+          "sql": "CREATE INDEX IF NOT EXISTS idx_agent_model_denylists_agent ON agent_model_denylists (agent_id);",
+          "type": "table.index",
+          "operation": "create",
+          "path": "public.agent_model_denylists.idx_agent_model_denylists_agent"
+        },
+        {
+          "sql": "CREATE INDEX IF NOT EXISTS idx_agent_model_denylists_model ON agent_model_denylists (model);",
+          "type": "table.index",
+          "operation": "create",
+          "path": "public.agent_model_denylists.idx_agent_model_denylists_model"
+        },
+        {
+          "sql": "CREATE TABLE IF NOT EXISTS social_interactions (\n    id SERIAL,\n    platform text NOT NULL,\n    mention_id text NOT NULL,\n    thread_id text,\n    author_handle text,\n    content text,\n    status text DEFAULT 'seen' NOT NULL,\n    draft_response text,\n    response_id text,\n    approved_by text,\n    approved_at timestamptz,\n    responded_at timestamptz,\n    dismissed_reason text,\n    notes text,\n    created_at timestamptz DEFAULT now() NOT NULL,\n    updated_at timestamptz DEFAULT now() NOT NULL,\n    kind text DEFAULT 'mention' NOT NULL,\n    CONSTRAINT social_interactions_pkey PRIMARY KEY (id),\n    CONSTRAINT social_interactions_platform_mention_id_key UNIQUE (platform, mention_id),\n    CONSTRAINT social_interactions_kind_check CHECK (kind IN ('mention'::text, 'engagement_candidate'::text)),\n    CONSTRAINT social_interactions_status_check CHECK (status IN ('seen'::text, 'needs_response'::text, 'drafted'::text, 'approved'::text, 'posted'::text, 'dismissed'::text))\n);",
+          "type": "table",
+          "operation": "create",
+          "path": "public.social_interactions"
+        },
+        {
+          "sql": "COMMENT ON TABLE social_interactions IS 'Tracks the full lifecycle of inbound social media mentions: seen → needs_response → drafted → approved → posted (or dismissed). Enforces the approval gate for outbound social media responses. Hermes comms check writes new entries; NOVA updates status on approval and posting. Domain: NOVA Operations.';",
+          "type": "table.comment",
+          "operation": "create",
+          "path": "public.social_interactions"
+        },
+        {
+          "sql": "COMMENT ON COLUMN social_interactions.status IS 'Lifecycle: seen (just noticed), needs_response (verified no existing reply in thread), drafted (proposed response written), approved (I)ruid approved), posted (response sent), dismissed (no response needed).';",
+          "type": "table.column.comment",
+          "operation": "create",
+          "path": "public.social_interactions.status"
+        },
+        {
+          "sql": "COMMENT ON COLUMN social_interactions.kind IS 'mention = inbound mention/reply to NOVA (draft-gated response flow); engagement_candidate = original post by another user surfaced by Hermes for NOVA to evaluate and respond to autonomously (per I)ruid 2026-07-21). Candidates use statuses: seen (awaiting evaluation), posted (responded), dismissed (evaluated, no response).';",
+          "type": "table.column.comment",
+          "operation": "create",
+          "path": "public.social_interactions.kind"
+        },
+        {
+          "sql": "CREATE INDEX IF NOT EXISTS idx_social_interactions_created ON social_interactions (created_at DESC);",
+          "type": "table.index",
+          "operation": "create",
+          "path": "public.social_interactions.idx_social_interactions_created"
+        },
+        {
+          "sql": "CREATE INDEX IF NOT EXISTS idx_social_interactions_platform_status ON social_interactions (platform, status);",
+          "type": "table.index",
+          "operation": "create",
+          "path": "public.social_interactions.idx_social_interactions_platform_status"
+        },
+        {
+          "sql": "CREATE TABLE IF NOT EXISTS work_queue (\n    id SERIAL,\n    created_at timestamptz DEFAULT now() NOT NULL,\n    created_by text DEFAULT CURRENT_USER NOT NULL,\n    owner_session text NOT NULL,\n    kind text NOT NULL,\n    ref text NOT NULL,\n    description text NOT NULL,\n    expected_outcome text,\n    next_action_hint text,\n    status text DEFAULT 'pending' NOT NULL,\n    last_checked_at timestamptz,\n    check_count integer DEFAULT 0 NOT NULL,\n    completed_at timestamptz,\n    notes text,\n    completion_logged_at timestamptz,\n    CONSTRAINT work_queue_pkey PRIMARY KEY (id),\n    CONSTRAINT work_queue_kind_check CHECK (kind IN ('subagent_session'::text, 'pr'::text, 'process'::text, 'cron_job'::text, 'workflow_step'::text, 'other'::text)),\n    CONSTRAINT work_queue_status_check CHECK (status IN ('pending'::text, 'done'::text, 'failed'::text, 'stale'::text, 'cancelled'::text))\n);",
+          "type": "table",
+          "operation": "create",
+          "path": "public.work_queue"
+        },
+        {
+          "sql": "COMMENT ON TABLE work_queue IS 'Active-work watch queue: entries for in-flight subagent sessions, PRs, long-running processes. A 5m cron sweeps pending entries, checks live status, and wakes the owner session when items complete. Add an entry whenever dispatching fire-and-forget work; the sweeper closes the loop. Designed 2026-07-25 per I)ruid to replace ad-hoc dead-man timers.';",
+          "type": "table.comment",
+          "operation": "create",
+          "path": "public.work_queue"
+        },
+        {
+          "sql": "COMMENT ON COLUMN work_queue.completion_logged_at IS 'Watermark set when the row''s completion line was appended to the daily log. Seeded by migration 087 for pre-existing closed rows; updated by completion-log-reconcile.py.';",
+          "type": "table.column.comment",
+          "operation": "create",
+          "path": "public.work_queue.completion_logged_at"
+        },
+        {
+          "sql": "CREATE INDEX IF NOT EXISTS idx_work_queue_pending ON work_queue (status) WHERE (status = 'pending'::text);",
+          "type": "table.index",
+          "operation": "create",
+          "path": "public.work_queue.idx_work_queue_pending"
+        },
+        {
+          "sql": "CREATE OR REPLACE FUNCTION get_strictest_mutability(\n    p_entity_id integer,\n    p_key varchar\n)\nRETURNS mutability_class_enum\nLANGUAGE sql\nSTABLE\nAS $$\n    SELECT CASE\n        WHEN bool_or(mutability_class = 'immutable') THEN 'immutable'::mutability_class_enum\n        WHEN bool_or(mutability_class = 'slow_changing') THEN 'slow_changing'::mutability_class_enum\n        ELSE 'stateful'::mutability_class_enum\n    END\n    FROM entity_facts\n    WHERE entity_id = p_entity_id AND key = p_key;\n$$;",
+          "type": "function",
+          "operation": "create",
+          "path": "public.get_strictest_mutability"
+        },
+        {
+          "sql": "COMMENT ON FUNCTION get_strictest_mutability(integer, varchar) IS 'Returns the strictest mutability class present for a (entity_id, key) group. Ordering: immutable > slow_changing > stateful. Used by contradiction detection: if ANY row for this key is immutable, conflicting values are genuine contradictions regardless of other rows'' classes.';",
+          "type": "function",
+          "operation": "create",
+          "path": "public.get_strictest_mutability"
+        },
+        {
+          "sql": "CREATE OR REPLACE TRIGGER heartbeat_content_changed\n    AFTER INSERT OR UPDATE ON agent_bootstrap_context\n    FOR EACH ROW\n    WHEN (((NEW.file_key = 'HEARTBEAT'::text)))\n    EXECUTE FUNCTION notify_heartbeat_content_changed();",
+          "type": "table.trigger",
+          "operation": "create",
+          "path": "public.agent_bootstrap_context.heartbeat_content_changed"
+        },
+        {
+          "sql": "CREATE OR REPLACE TRIGGER protect_bootstrap_context\n    BEFORE INSERT OR UPDATE OR DELETE ON agent_bootstrap_context\n    FOR EACH ROW\n    EXECUTE FUNCTION protect_bootstrap_context_writes_v2();",
+          "type": "table.trigger",
+          "operation": "create",
+          "path": "public.agent_bootstrap_context.protect_bootstrap_context"
+        },
+        {
+          "sql": "CREATE OR REPLACE VIEW v_current_stateful_facts AS\n SELECT DISTINCT ON (entity_id, key) id,\n    entity_id,\n    key,\n    value,\n    last_confirmed_at,\n    learned_at,\n    confidence\n   FROM entity_facts ef\n  WHERE mutability_class = 'stateful'::mutability_class_enum\n  ORDER BY entity_id, key, last_confirmed_at DESC NULLS LAST;",
+          "type": "view",
+          "operation": "create",
+          "path": "public.v_current_stateful_facts"
+        },
+        {
+          "sql": "COMMENT ON VIEW v_current_stateful_facts IS 'Resolves stateful (preference/current-state) facts to the latest value per (entity, key). Full trajectory remains in entity_facts — this view gives the current snapshot. Supersession is query-time, not deletion.';",
+          "type": "view.comment",
+          "operation": "create",
+          "path": "public.v_current_stateful_facts"
+        },
+        {
+          "sql": "CREATE OR REPLACE VIEW v_fact_grades AS\n SELECT ef.id AS fact_id,\n    ef.entity_id,\n    ef.key,\n    ef.value,\n    ef.assertion_intent,\n    ef.mutability_class,\n    efs.id AS source_id,\n    efs.source_entity_id,\n    efs.reporting_distance AS d_axis,\n    COALESCE(efs.verification_quality, 0.5::real) AS v_axis,\n    COALESCE(ec_domain.score, ec_global.score, 0.5::real) AS s_axis,\n    COALESCE(ec_domain.score, ec_global.score, 0.5::real) * efs.reporting_distance * COALESCE(efs.verification_quality, 0.5::real) AS composite_grade,\n    efs.source_session_id\n   FROM entity_facts ef\n     JOIN entity_fact_sources efs ON efs.fact_id = ef.id\n     LEFT JOIN entity_credibility ec_domain ON ec_domain.entity_id = efs.source_entity_id AND ec_domain.domain::text = ef.category\n     LEFT JOIN entity_credibility ec_global ON ec_global.entity_id = efs.source_entity_id AND ec_global.domain::text = '_global'::text\n  WHERE ef.assertion_intent = ANY (ARRAY['asserted'::assertion_intent_enum, 'speculative'::assertion_intent_enum]);",
+          "type": "view",
+          "operation": "create",
+          "path": "public.v_fact_grades"
+        },
+        {
+          "sql": "COMMENT ON VIEW v_fact_grades IS 'Query-time S×D×V grade computation. Only includes gradable claims (asserted/speculative). S looked up from entity_credibility (domain-specific with _global fallback). D from entity_fact_sources.reporting_distance. V from entity_fact_sources.verification_quality (NULL → 0.5 neutral). Never materialized — three multiplications per row is trivially fast.';",
+          "type": "view.comment",
+          "operation": "create",
+          "path": "public.v_fact_grades"
+        },
+        {
+          "sql": "REVOKE SELECT ON TABLE agent_bootstrap_context FROM argus;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.agent_bootstrap_context.argus"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_bootstrap_context FROM argus;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.agent_bootstrap_context.argus"
+        },
+        {
+          "sql": "REVOKE SELECT ON TABLE agent_bootstrap_context FROM athena;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.agent_bootstrap_context.athena"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_bootstrap_context FROM athena;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.agent_bootstrap_context.athena"
+        },
+        {
+          "sql": "REVOKE SELECT ON TABLE agent_bootstrap_context FROM coder;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.agent_bootstrap_context.coder"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_bootstrap_context FROM coder;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.agent_bootstrap_context.coder"
+        },
+        {
+          "sql": "REVOKE SELECT ON TABLE agent_bootstrap_context FROM conductor;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.agent_bootstrap_context.conductor"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_bootstrap_context FROM conductor;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.agent_bootstrap_context.conductor"
+        },
+        {
+          "sql": "REVOKE SELECT ON TABLE agent_bootstrap_context FROM erato;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.agent_bootstrap_context.erato"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_bootstrap_context FROM erato;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.agent_bootstrap_context.erato"
+        },
+        {
+          "sql": "REVOKE SELECT ON TABLE agent_bootstrap_context FROM flint;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.agent_bootstrap_context.flint"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_bootstrap_context FROM flint;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.agent_bootstrap_context.flint"
+        },
+        {
+          "sql": "REVOKE SELECT ON TABLE agent_bootstrap_context FROM gem;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.agent_bootstrap_context.gem"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_bootstrap_context FROM gem;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.agent_bootstrap_context.gem"
+        },
+        {
+          "sql": "REVOKE SELECT ON TABLE agent_bootstrap_context FROM gidget;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.agent_bootstrap_context.gidget"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_bootstrap_context FROM gidget;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.agent_bootstrap_context.gidget"
+        },
+        {
+          "sql": "REVOKE SELECT ON TABLE agent_bootstrap_context FROM hermes;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.agent_bootstrap_context.hermes"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_bootstrap_context FROM hermes;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.agent_bootstrap_context.hermes"
+        },
+        {
+          "sql": "REVOKE SELECT ON TABLE agent_bootstrap_context FROM iris;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.agent_bootstrap_context.iris"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_bootstrap_context FROM iris;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.agent_bootstrap_context.iris"
+        },
+        {
+          "sql": "REVOKE SELECT ON TABLE agent_bootstrap_context FROM marcie;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.agent_bootstrap_context.marcie"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_bootstrap_context FROM marcie;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.agent_bootstrap_context.marcie"
+        },
+        {
+          "sql": "REVOKE SELECT ON TABLE agent_bootstrap_context FROM newhart;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.agent_bootstrap_context.newhart"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_bootstrap_context FROM newhart;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.agent_bootstrap_context.newhart"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_bootstrap_context FROM nova;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.agent_bootstrap_context.nova"
+        },
+        {
+          "sql": "REVOKE SELECT ON TABLE agent_bootstrap_context FROM \"nova-staging\";",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.agent_bootstrap_context.nova-staging"
+        },
+        {
+          "sql": "REVOKE SELECT ON TABLE agent_bootstrap_context FROM openproject_user;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.agent_bootstrap_context.openproject_user"
+        },
+        {
+          "sql": "REVOKE SELECT ON TABLE agent_bootstrap_context FROM quill;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.agent_bootstrap_context.quill"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_bootstrap_context FROM quill;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.agent_bootstrap_context.quill"
+        },
+        {
+          "sql": "REVOKE SELECT ON TABLE agent_bootstrap_context FROM scout;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.agent_bootstrap_context.scout"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_bootstrap_context FROM scout;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.agent_bootstrap_context.scout"
+        },
+        {
+          "sql": "REVOKE SELECT ON TABLE agent_bootstrap_context FROM scribe;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.agent_bootstrap_context.scribe"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_bootstrap_context FROM scribe;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.agent_bootstrap_context.scribe"
+        },
+        {
+          "sql": "REVOKE SELECT ON TABLE agent_bootstrap_context FROM ticker;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.agent_bootstrap_context.ticker"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_bootstrap_context FROM ticker;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.agent_bootstrap_context.ticker"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_model_denylists FROM argus;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.agent_model_denylists.argus"
+        },
+        {
+          "sql": "REVOKE SELECT ON TABLE agent_model_denylists FROM argus;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.agent_model_denylists.argus"
+        },
+        {
+          "sql": "REVOKE SELECT ON TABLE agent_model_denylists FROM athena;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.agent_model_denylists.athena"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_model_denylists FROM athena;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.agent_model_denylists.athena"
+        },
+        {
+          "sql": "REVOKE SELECT ON TABLE agent_model_denylists FROM coder;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.agent_model_denylists.coder"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_model_denylists FROM coder;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.agent_model_denylists.coder"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_model_denylists FROM conductor;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.agent_model_denylists.conductor"
+        },
+        {
+          "sql": "REVOKE SELECT ON TABLE agent_model_denylists FROM conductor;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.agent_model_denylists.conductor"
+        },
+        {
+          "sql": "REVOKE SELECT ON TABLE agent_model_denylists FROM erato;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.agent_model_denylists.erato"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_model_denylists FROM erato;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.agent_model_denylists.erato"
+        },
+        {
+          "sql": "REVOKE SELECT ON TABLE agent_model_denylists FROM flint;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.agent_model_denylists.flint"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_model_denylists FROM flint;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.agent_model_denylists.flint"
+        },
+        {
+          "sql": "REVOKE SELECT ON TABLE agent_model_denylists FROM gem;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.agent_model_denylists.gem"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_model_denylists FROM gem;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.agent_model_denylists.gem"
+        },
+        {
+          "sql": "REVOKE SELECT ON TABLE agent_model_denylists FROM gidget;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.agent_model_denylists.gidget"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_model_denylists FROM gidget;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.agent_model_denylists.gidget"
+        },
+        {
+          "sql": "REVOKE SELECT ON TABLE agent_model_denylists FROM graybeard;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.agent_model_denylists.graybeard"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_model_denylists FROM hermes;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.agent_model_denylists.hermes"
+        },
+        {
+          "sql": "REVOKE SELECT ON TABLE agent_model_denylists FROM hermes;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.agent_model_denylists.hermes"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_model_denylists FROM iris;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.agent_model_denylists.iris"
+        },
+        {
+          "sql": "REVOKE SELECT ON TABLE agent_model_denylists FROM iris;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.agent_model_denylists.iris"
+        },
+        {
+          "sql": "REVOKE SELECT ON TABLE agent_model_denylists FROM marcie;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.agent_model_denylists.marcie"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_model_denylists FROM marcie;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.agent_model_denylists.marcie"
+        },
+        {
+          "sql": "REVOKE SELECT ON TABLE agent_model_denylists FROM newhart;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.agent_model_denylists.newhart"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_model_denylists FROM newhart;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.agent_model_denylists.newhart"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_model_denylists FROM nova;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.agent_model_denylists.nova"
+        },
+        {
+          "sql": "REVOKE SELECT ON TABLE agent_model_denylists FROM \"nova-staging\";",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.agent_model_denylists.nova-staging"
+        },
+        {
+          "sql": "REVOKE SELECT ON TABLE agent_model_denylists FROM openproject_user;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.agent_model_denylists.openproject_user"
+        },
+        {
+          "sql": "REVOKE SELECT ON TABLE agent_model_denylists FROM quill;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.agent_model_denylists.quill"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_model_denylists FROM quill;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.agent_model_denylists.quill"
+        },
+        {
+          "sql": "REVOKE SELECT ON TABLE agent_model_denylists FROM scout;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.agent_model_denylists.scout"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_model_denylists FROM scout;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.agent_model_denylists.scout"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_model_denylists FROM scribe;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.agent_model_denylists.scribe"
+        },
+        {
+          "sql": "REVOKE SELECT ON TABLE agent_model_denylists FROM scribe;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.agent_model_denylists.scribe"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_model_denylists FROM ticker;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.agent_model_denylists.ticker"
+        },
+        {
+          "sql": "REVOKE SELECT ON TABLE agent_model_denylists FROM ticker;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.agent_model_denylists.ticker"
+        },
+        {
+          "sql": "REVOKE SELECT ON TABLE social_interactions FROM argus;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.social_interactions.argus"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE social_interactions FROM argus;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.social_interactions.argus"
+        },
+        {
+          "sql": "REVOKE SELECT ON TABLE social_interactions FROM athena;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.social_interactions.athena"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE social_interactions FROM athena;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.social_interactions.athena"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE social_interactions FROM coder;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.social_interactions.coder"
+        },
+        {
+          "sql": "REVOKE SELECT ON TABLE social_interactions FROM coder;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.social_interactions.coder"
+        },
+        {
+          "sql": "REVOKE SELECT ON TABLE social_interactions FROM conductor;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.social_interactions.conductor"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE social_interactions FROM conductor;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.social_interactions.conductor"
+        },
+        {
+          "sql": "REVOKE SELECT ON TABLE social_interactions FROM erato;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.social_interactions.erato"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE social_interactions FROM erato;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.social_interactions.erato"
+        },
+        {
+          "sql": "REVOKE SELECT ON TABLE social_interactions FROM flint;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.social_interactions.flint"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE social_interactions FROM flint;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.social_interactions.flint"
+        },
+        {
+          "sql": "REVOKE SELECT ON TABLE social_interactions FROM gem;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.social_interactions.gem"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE social_interactions FROM gem;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.social_interactions.gem"
+        },
+        {
+          "sql": "REVOKE SELECT ON TABLE social_interactions FROM gidget;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.social_interactions.gidget"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE social_interactions FROM gidget;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.social_interactions.gidget"
+        },
+        {
+          "sql": "REVOKE SELECT ON TABLE social_interactions FROM graybeard;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.social_interactions.graybeard"
+        },
+        {
+          "sql": "REVOKE SELECT ON TABLE social_interactions FROM hermes;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.social_interactions.hermes"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE social_interactions FROM hermes;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.social_interactions.hermes"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE social_interactions FROM iris;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.social_interactions.iris"
+        },
+        {
+          "sql": "REVOKE SELECT ON TABLE social_interactions FROM iris;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.social_interactions.iris"
+        },
+        {
+          "sql": "REVOKE SELECT ON TABLE social_interactions FROM marcie;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.social_interactions.marcie"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE social_interactions FROM marcie;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.social_interactions.marcie"
+        },
+        {
+          "sql": "REVOKE SELECT ON TABLE social_interactions FROM newhart;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.social_interactions.newhart"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE social_interactions FROM newhart;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.social_interactions.newhart"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE social_interactions FROM nova;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.social_interactions.nova"
+        },
+        {
+          "sql": "REVOKE SELECT ON TABLE social_interactions FROM \"nova-staging\";",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.social_interactions.nova-staging"
+        },
+        {
+          "sql": "REVOKE SELECT ON TABLE social_interactions FROM openproject_user;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.social_interactions.openproject_user"
+        },
+        {
+          "sql": "REVOKE SELECT ON TABLE social_interactions FROM quill;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.social_interactions.quill"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE social_interactions FROM quill;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.social_interactions.quill"
+        },
+        {
+          "sql": "REVOKE SELECT ON TABLE social_interactions FROM scout;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.social_interactions.scout"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE social_interactions FROM scout;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.social_interactions.scout"
+        },
+        {
+          "sql": "REVOKE SELECT ON TABLE social_interactions FROM scribe;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.social_interactions.scribe"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE social_interactions FROM scribe;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.social_interactions.scribe"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE social_interactions FROM ticker;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.social_interactions.ticker"
+        },
+        {
+          "sql": "REVOKE SELECT ON TABLE social_interactions FROM ticker;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.social_interactions.ticker"
+        },
+        {
+          "sql": "REVOKE SELECT ON TABLE work_queue FROM argus;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.work_queue.argus"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE work_queue FROM argus;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.work_queue.argus"
+        },
+        {
+          "sql": "REVOKE SELECT ON TABLE work_queue FROM athena;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.work_queue.athena"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE work_queue FROM athena;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.work_queue.athena"
+        },
+        {
+          "sql": "REVOKE SELECT ON TABLE work_queue FROM coder;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.work_queue.coder"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE work_queue FROM coder;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.work_queue.coder"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE work_queue FROM conductor;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.work_queue.conductor"
+        },
+        {
+          "sql": "REVOKE SELECT ON TABLE work_queue FROM conductor;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.work_queue.conductor"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE work_queue FROM erato;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.work_queue.erato"
+        },
+        {
+          "sql": "REVOKE SELECT ON TABLE work_queue FROM erato;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.work_queue.erato"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE work_queue FROM flint;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.work_queue.flint"
+        },
+        {
+          "sql": "REVOKE SELECT ON TABLE work_queue FROM flint;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.work_queue.flint"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE work_queue FROM gem;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.work_queue.gem"
+        },
+        {
+          "sql": "REVOKE SELECT ON TABLE work_queue FROM gem;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.work_queue.gem"
+        },
+        {
+          "sql": "REVOKE SELECT ON TABLE work_queue FROM gidget;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.work_queue.gidget"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE work_queue FROM gidget;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.work_queue.gidget"
+        },
+        {
+          "sql": "REVOKE SELECT ON TABLE work_queue FROM graybeard;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.work_queue.graybeard"
+        },
+        {
+          "sql": "REVOKE SELECT ON TABLE work_queue FROM hermes;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.work_queue.hermes"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE work_queue FROM hermes;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.work_queue.hermes"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE work_queue FROM iris;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.work_queue.iris"
+        },
+        {
+          "sql": "REVOKE SELECT ON TABLE work_queue FROM iris;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.work_queue.iris"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE work_queue FROM marcie;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.work_queue.marcie"
+        },
+        {
+          "sql": "REVOKE SELECT ON TABLE work_queue FROM marcie;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.work_queue.marcie"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE work_queue FROM newhart;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.work_queue.newhart"
+        },
+        {
+          "sql": "REVOKE SELECT ON TABLE work_queue FROM newhart;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.work_queue.newhart"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE work_queue FROM nova;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.work_queue.nova"
+        },
+        {
+          "sql": "REVOKE SELECT ON TABLE work_queue FROM \"nova-staging\";",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.work_queue.nova-staging"
+        },
+        {
+          "sql": "REVOKE SELECT ON TABLE work_queue FROM openproject_user;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.work_queue.openproject_user"
+        },
+        {
+          "sql": "REVOKE SELECT ON TABLE work_queue FROM quill;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.work_queue.quill"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE work_queue FROM quill;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.work_queue.quill"
+        },
+        {
+          "sql": "REVOKE SELECT ON TABLE work_queue FROM scout;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.work_queue.scout"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE work_queue FROM scout;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.work_queue.scout"
+        },
+        {
+          "sql": "REVOKE SELECT ON TABLE work_queue FROM scribe;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.work_queue.scribe"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE work_queue FROM scribe;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.work_queue.scribe"
+        },
+        {
+          "sql": "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE work_queue FROM ticker;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.work_queue.ticker"
+        },
+        {
+          "sql": "REVOKE SELECT ON TABLE work_queue FROM ticker;",
+          "type": "privilege",
+          "operation": "drop",
+          "path": "privileges.TABLE.work_queue.ticker"
+        },
+        {
+          "sql": "GRANT EXECUTE ON FUNCTION get_strictest_mutability(p_entity_id integer, p_key character varying) TO argus;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.FUNCTION.get_strictest_mutability(p_entity_id integer, p_key character varying).argus"
+        },
+        {
+          "sql": "GRANT EXECUTE ON FUNCTION get_strictest_mutability(p_entity_id integer, p_key character varying) TO athena;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.FUNCTION.get_strictest_mutability(p_entity_id integer, p_key character varying).athena"
+        },
+        {
+          "sql": "GRANT EXECUTE ON FUNCTION get_strictest_mutability(p_entity_id integer, p_key character varying) TO coder;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.FUNCTION.get_strictest_mutability(p_entity_id integer, p_key character varying).coder"
+        },
+        {
+          "sql": "GRANT EXECUTE ON FUNCTION get_strictest_mutability(p_entity_id integer, p_key character varying) TO conductor;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.FUNCTION.get_strictest_mutability(p_entity_id integer, p_key character varying).conductor"
+        },
+        {
+          "sql": "GRANT EXECUTE ON FUNCTION get_strictest_mutability(p_entity_id integer, p_key character varying) TO gem;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.FUNCTION.get_strictest_mutability(p_entity_id integer, p_key character varying).gem"
+        },
+        {
+          "sql": "GRANT EXECUTE ON FUNCTION get_strictest_mutability(p_entity_id integer, p_key character varying) TO gidget;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.FUNCTION.get_strictest_mutability(p_entity_id integer, p_key character varying).gidget"
+        },
+        {
+          "sql": "GRANT EXECUTE ON FUNCTION get_strictest_mutability(p_entity_id integer, p_key character varying) TO iris;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.FUNCTION.get_strictest_mutability(p_entity_id integer, p_key character varying).iris"
+        },
+        {
+          "sql": "GRANT EXECUTE ON FUNCTION get_strictest_mutability(p_entity_id integer, p_key character varying) TO marcie;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.FUNCTION.get_strictest_mutability(p_entity_id integer, p_key character varying).marcie"
+        },
+        {
+          "sql": "GRANT EXECUTE ON FUNCTION get_strictest_mutability(p_entity_id integer, p_key character varying) TO quill;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.FUNCTION.get_strictest_mutability(p_entity_id integer, p_key character varying).quill"
+        },
+        {
+          "sql": "GRANT EXECUTE ON FUNCTION get_strictest_mutability(p_entity_id integer, p_key character varying) TO scout;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.FUNCTION.get_strictest_mutability(p_entity_id integer, p_key character varying).scout"
+        },
+        {
+          "sql": "GRANT EXECUTE ON FUNCTION get_strictest_mutability(p_entity_id integer, p_key character varying) TO scribe;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.FUNCTION.get_strictest_mutability(p_entity_id integer, p_key character varying).scribe"
+        },
+        {
+          "sql": "GRANT EXECUTE ON FUNCTION get_strictest_mutability(p_entity_id integer, p_key character varying) TO ticker;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.FUNCTION.get_strictest_mutability(p_entity_id integer, p_key character varying).ticker"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE agent_actions_id_seq TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.agent_actions_id_seq.cadence"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE agent_bootstrap_context_id_seq TO argus;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.agent_bootstrap_context_id_seq.argus"
+        },
+        {
+          "sql": "GRANT SELECT, USAGE ON SEQUENCE agent_bootstrap_context_id_seq TO athena;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.agent_bootstrap_context_id_seq.athena"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE agent_bootstrap_context_id_seq TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.agent_bootstrap_context_id_seq.cadence"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE agent_bootstrap_context_id_seq TO coder;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.agent_bootstrap_context_id_seq.coder"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE agent_bootstrap_context_id_seq TO conductor;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.agent_bootstrap_context_id_seq.conductor"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE agent_bootstrap_context_id_seq TO erato;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.agent_bootstrap_context_id_seq.erato"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE agent_bootstrap_context_id_seq TO flint;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.agent_bootstrap_context_id_seq.flint"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE agent_bootstrap_context_id_seq TO gem;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.agent_bootstrap_context_id_seq.gem"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE agent_bootstrap_context_id_seq TO gidget;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.agent_bootstrap_context_id_seq.gidget"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE agent_bootstrap_context_id_seq TO hermes;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.agent_bootstrap_context_id_seq.hermes"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE agent_bootstrap_context_id_seq TO iris;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.agent_bootstrap_context_id_seq.iris"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE agent_bootstrap_context_id_seq TO marcie;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.agent_bootstrap_context_id_seq.marcie"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE agent_bootstrap_context_id_seq TO nova;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.agent_bootstrap_context_id_seq.nova"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE agent_bootstrap_context_id_seq TO quill;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.agent_bootstrap_context_id_seq.quill"
+        },
+        {
+          "sql": "GRANT SELECT, USAGE ON SEQUENCE agent_bootstrap_context_id_seq TO scout;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.agent_bootstrap_context_id_seq.scout"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE agent_bootstrap_context_id_seq TO scribe;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.agent_bootstrap_context_id_seq.scribe"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE agent_bootstrap_context_id_seq TO ticker;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.agent_bootstrap_context_id_seq.ticker"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE agent_domains_id_seq TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.agent_domains_id_seq.cadence"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE agent_jobs_id_seq TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.agent_jobs_id_seq.cadence"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE agent_model_denylists_id_seq TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.agent_model_denylists_id_seq.cadence"
+        },
+        {
+          "sql": "GRANT SELECT, USAGE ON SEQUENCE agent_model_denylists_id_seq TO nova;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.agent_model_denylists_id_seq.nova"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE agent_modifications_id_seq TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.agent_modifications_id_seq.cadence"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE agent_spawns_id_seq TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.agent_spawns_id_seq.cadence"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE agent_turn_context_id_seq TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.agent_turn_context_id_seq.cadence"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE agents_id_seq TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.agents_id_seq.cadence"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE ai_models_id_seq TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.ai_models_id_seq.cadence"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE blockers_id_seq TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.blockers_id_seq.cadence"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE certificates_id_seq TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.certificates_id_seq.cadence"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE channel_sessions_id_seq TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.channel_sessions_id_seq.cadence"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE channel_transcripts_id_seq TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.channel_transcripts_id_seq.cadence"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE comms_checks_id_seq TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.comms_checks_id_seq.cadence"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE comms_digests_id_seq TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.comms_digests_id_seq.cadence"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE comms_items_id_seq TO argus;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.comms_items_id_seq.argus"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE comms_items_id_seq TO athena;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.comms_items_id_seq.athena"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE comms_items_id_seq TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.comms_items_id_seq.cadence"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE comms_items_id_seq TO coder;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.comms_items_id_seq.coder"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE comms_items_id_seq TO conductor;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.comms_items_id_seq.conductor"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE comms_items_id_seq TO erato;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.comms_items_id_seq.erato"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE comms_items_id_seq TO flint;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.comms_items_id_seq.flint"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE comms_items_id_seq TO gem;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.comms_items_id_seq.gem"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE comms_items_id_seq TO gidget;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.comms_items_id_seq.gidget"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE comms_items_id_seq TO hermes;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.comms_items_id_seq.hermes"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE comms_items_id_seq TO iris;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.comms_items_id_seq.iris"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE comms_items_id_seq TO marcie;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.comms_items_id_seq.marcie"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE comms_items_id_seq TO quill;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.comms_items_id_seq.quill"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE comms_items_id_seq TO scout;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.comms_items_id_seq.scout"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE comms_items_id_seq TO scribe;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.comms_items_id_seq.scribe"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE comms_items_id_seq TO ticker;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.comms_items_id_seq.ticker"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE comms_responses_id_seq TO argus;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.comms_responses_id_seq.argus"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE comms_responses_id_seq TO athena;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.comms_responses_id_seq.athena"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE comms_responses_id_seq TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.comms_responses_id_seq.cadence"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE comms_responses_id_seq TO coder;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.comms_responses_id_seq.coder"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE comms_responses_id_seq TO conductor;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.comms_responses_id_seq.conductor"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE comms_responses_id_seq TO erato;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.comms_responses_id_seq.erato"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE comms_responses_id_seq TO flint;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.comms_responses_id_seq.flint"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE comms_responses_id_seq TO gem;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.comms_responses_id_seq.gem"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE comms_responses_id_seq TO gidget;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.comms_responses_id_seq.gidget"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE comms_responses_id_seq TO hermes;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.comms_responses_id_seq.hermes"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE comms_responses_id_seq TO iris;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.comms_responses_id_seq.iris"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE comms_responses_id_seq TO marcie;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.comms_responses_id_seq.marcie"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE comms_responses_id_seq TO quill;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.comms_responses_id_seq.quill"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE comms_responses_id_seq TO scout;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.comms_responses_id_seq.scout"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE comms_responses_id_seq TO scribe;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.comms_responses_id_seq.scribe"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE comms_responses_id_seq TO ticker;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.comms_responses_id_seq.ticker"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE d100_roll_log_id_seq TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.d100_roll_log_id_seq.cadence"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE entities_id_seq TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.entities_id_seq.cadence"
+        },
+        {
+          "sql": "GRANT SELECT, USAGE ON SEQUENCE entity_credibility_id_seq TO argus;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.entity_credibility_id_seq.argus"
+        },
+        {
+          "sql": "GRANT SELECT, USAGE ON SEQUENCE entity_credibility_id_seq TO athena;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.entity_credibility_id_seq.athena"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE entity_credibility_id_seq TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.entity_credibility_id_seq.cadence"
+        },
+        {
+          "sql": "GRANT SELECT, USAGE ON SEQUENCE entity_credibility_id_seq TO coder;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.entity_credibility_id_seq.coder"
+        },
+        {
+          "sql": "GRANT SELECT, USAGE ON SEQUENCE entity_credibility_id_seq TO conductor;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.entity_credibility_id_seq.conductor"
+        },
+        {
+          "sql": "GRANT SELECT, USAGE ON SEQUENCE entity_credibility_id_seq TO gem;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.entity_credibility_id_seq.gem"
+        },
+        {
+          "sql": "GRANT SELECT, USAGE ON SEQUENCE entity_credibility_id_seq TO gidget;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.entity_credibility_id_seq.gidget"
+        },
+        {
+          "sql": "GRANT SELECT, USAGE ON SEQUENCE entity_credibility_id_seq TO iris;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.entity_credibility_id_seq.iris"
+        },
+        {
+          "sql": "GRANT SELECT, USAGE ON SEQUENCE entity_credibility_id_seq TO marcie;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.entity_credibility_id_seq.marcie"
+        },
+        {
+          "sql": "GRANT SELECT, USAGE ON SEQUENCE entity_credibility_id_seq TO nova;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.entity_credibility_id_seq.nova"
+        },
+        {
+          "sql": "GRANT SELECT, USAGE ON SEQUENCE entity_credibility_id_seq TO quill;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.entity_credibility_id_seq.quill"
+        },
+        {
+          "sql": "GRANT SELECT, USAGE ON SEQUENCE entity_credibility_id_seq TO scout;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.entity_credibility_id_seq.scout"
+        },
+        {
+          "sql": "GRANT SELECT, USAGE ON SEQUENCE entity_credibility_id_seq TO scribe;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.entity_credibility_id_seq.scribe"
+        },
+        {
+          "sql": "GRANT SELECT, USAGE ON SEQUENCE entity_credibility_id_seq TO ticker;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.entity_credibility_id_seq.ticker"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE entity_fact_conflicts_id_seq TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.entity_fact_conflicts_id_seq.cadence"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE entity_fact_sources_id_seq TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.entity_fact_sources_id_seq.cadence"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE entity_facts_id_seq TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.entity_facts_id_seq.cadence"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE entity_relationships_id_seq TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.entity_relationships_id_seq.cadence"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE events_archive_id_seq TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.events_archive_id_seq.cadence"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE events_id_seq TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.events_id_seq.cadence"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE extraction_failures_id_seq TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.extraction_failures_id_seq.cadence"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE extraction_metrics_id_seq TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.extraction_metrics_id_seq.cadence"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE fact_change_log_id_seq TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.fact_change_log_id_seq.cadence"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE gambling_entries_id_seq TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.gambling_entries_id_seq.cadence"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE gambling_logs_id_seq TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.gambling_logs_id_seq.cadence"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE income_sources_id_seq TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.income_sources_id_seq.cadence"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE income_transactions_id_seq TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.income_transactions_id_seq.cadence"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE job_messages_id_seq TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.job_messages_id_seq.cadence"
+        },
+        {
+          "sql": "GRANT SELECT, USAGE ON SEQUENCE journal_entries_id_seq TO argus;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.journal_entries_id_seq.argus"
+        },
+        {
+          "sql": "GRANT SELECT, USAGE ON SEQUENCE journal_entries_id_seq TO athena;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.journal_entries_id_seq.athena"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE journal_entries_id_seq TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.journal_entries_id_seq.cadence"
+        },
+        {
+          "sql": "GRANT SELECT, USAGE ON SEQUENCE journal_entries_id_seq TO coder;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.journal_entries_id_seq.coder"
+        },
+        {
+          "sql": "GRANT SELECT, USAGE ON SEQUENCE journal_entries_id_seq TO flint;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.journal_entries_id_seq.flint"
+        },
+        {
+          "sql": "GRANT SELECT, USAGE ON SEQUENCE journal_entries_id_seq TO gem;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.journal_entries_id_seq.gem"
+        },
+        {
+          "sql": "GRANT SELECT, USAGE ON SEQUENCE journal_entries_id_seq TO gidget;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.journal_entries_id_seq.gidget"
+        },
+        {
+          "sql": "GRANT SELECT, USAGE ON SEQUENCE journal_entries_id_seq TO hermes;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.journal_entries_id_seq.hermes"
+        },
+        {
+          "sql": "GRANT SELECT, USAGE ON SEQUENCE journal_entries_id_seq TO iris;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.journal_entries_id_seq.iris"
+        },
+        {
+          "sql": "GRANT SELECT, USAGE ON SEQUENCE journal_entries_id_seq TO marcie;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.journal_entries_id_seq.marcie"
+        },
+        {
+          "sql": "GRANT SELECT, USAGE ON SEQUENCE journal_entries_id_seq TO quill;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.journal_entries_id_seq.quill"
+        },
+        {
+          "sql": "GRANT SELECT, USAGE ON SEQUENCE journal_entries_id_seq TO scout;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.journal_entries_id_seq.scout"
+        },
+        {
+          "sql": "GRANT SELECT, USAGE ON SEQUENCE journal_entries_id_seq TO scribe;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.journal_entries_id_seq.scribe"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE lessons_archive_id_seq TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.lessons_archive_id_seq.cadence"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE lessons_id_seq TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.lessons_id_seq.cadence"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE media_consumed_id_seq TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.media_consumed_id_seq.cadence"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE media_queue_id_seq TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.media_queue_id_seq.cadence"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE media_tags_id_seq TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.media_tags_id_seq.cadence"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE memory_embeddings_archive_id_seq TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.memory_embeddings_archive_id_seq.cadence"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE memory_embeddings_id_seq TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.memory_embeddings_id_seq.cadence"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE music_works_id_seq TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.music_works_id_seq.cadence"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE place_properties_id_seq TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.place_properties_id_seq.cadence"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE places_id_seq TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.places_id_seq.cadence"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE preferences_id_seq TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.preferences_id_seq.cadence"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE proactive_outreach_id_seq TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.proactive_outreach_id_seq.cadence"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE project_tasks_id_seq TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.project_tasks_id_seq.cadence"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE projects_id_seq TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.projects_id_seq.cadence"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE prompt_helper_config_id_seq TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.prompt_helper_config_id_seq.cadence"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE publications_id_seq TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.publications_id_seq.cadence"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE ralph_sessions_id_seq TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.ralph_sessions_id_seq.cadence"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE self_awareness_triggers_id_seq TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.self_awareness_triggers_id_seq.cadence"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE shopping_history_id_seq TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.shopping_history_id_seq.cadence"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE shopping_preferences_id_seq TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.shopping_preferences_id_seq.cadence"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE shopping_wishlist_id_seq TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.shopping_wishlist_id_seq.cadence"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE skills_id_seq TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.skills_id_seq.cadence"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE social_interactions_id_seq TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.social_interactions_id_seq.cadence"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE tags_id_seq TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.tags_id_seq.cadence"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE tasks_id_seq TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.tasks_id_seq.cadence"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE tools_id_seq TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.tools_id_seq.cadence"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE unsolved_problems_id_seq TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.unsolved_problems_id_seq.cadence"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE user_domains_id_seq TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.user_domains_id_seq.cadence"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE user_insights_id_seq TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.user_insights_id_seq.cadence"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE vehicles_id_seq TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.vehicles_id_seq.cadence"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE vocabulary_id_seq TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.vocabulary_id_seq.cadence"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE workflow_runs_id_seq TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.workflow_runs_id_seq.cadence"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE workflow_steps_id_seq TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.workflow_steps_id_seq.cadence"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE workflows_id_seq TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.workflows_id_seq.cadence"
+        },
+        {
+          "sql": "GRANT USAGE ON SEQUENCE works_id_seq TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.SEQUENCE.works_id_seq.cadence"
+        },
+        {
+          "sql": "GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE agent_actions TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.agent_actions.cadence"
+        },
+        {
+          "sql": "GRANT SELECT ON TABLE agent_aliases TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.agent_aliases.cadence"
+        },
+        {
+          "sql": "GRANT SELECT ON TABLE agent_bootstrap_context TO bootstrap_reader;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.agent_bootstrap_context.bootstrap_reader"
+        },
+        {
+          "sql": "GRANT INSERT, SELECT, UPDATE ON TABLE agent_bootstrap_context TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.agent_bootstrap_context.cadence"
+        },
+        {
+          "sql": "GRANT INSERT, SELECT, UPDATE ON TABLE agent_bootstrap_context TO graybeard;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.agent_bootstrap_context.graybeard"
+        },
+        {
+          "sql": "GRANT SELECT ON TABLE agent_domains TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.agent_domains.cadence"
+        },
+        {
+          "sql": "GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE agent_jobs TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.agent_jobs.cadence"
+        },
+        {
+          "sql": "GRANT INSERT, SELECT, UPDATE ON TABLE agent_modifications TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.agent_modifications.cadence"
+        },
+        {
+          "sql": "GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE agent_spawns TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.agent_spawns.cadence"
+        },
+        {
+          "sql": "GRANT SELECT ON TABLE agent_system_config TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.agent_system_config.cadence"
+        },
+        {
+          "sql": "GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE agent_turn_context TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.agent_turn_context.cadence"
+        },
+        {
+          "sql": "GRANT SELECT ON TABLE agents TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.agents.cadence"
+        },
+        {
+          "sql": "GRANT SELECT ON TABLE ai_models TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.ai_models.cadence"
+        },
+        {
+          "sql": "GRANT SELECT ON TABLE blockers TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.blockers.cadence"
+        },
+        {
+          "sql": "GRANT SELECT ON TABLE bootstrap_context_config TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.bootstrap_context_config.cadence"
+        },
+        {
+          "sql": "GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE certificates TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.certificates.cadence"
+        },
+        {
+          "sql": "GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE channel_activity TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.channel_activity.cadence"
+        },
+        {
+          "sql": "GRANT SELECT ON TABLE channel_sessions TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.channel_sessions.cadence"
+        },
+        {
+          "sql": "GRANT SELECT ON TABLE channel_transcripts TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.channel_transcripts.cadence"
+        },
+        {
+          "sql": "GRANT SELECT ON TABLE comms_checks TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.comms_checks.cadence"
+        },
+        {
+          "sql": "GRANT SELECT ON TABLE comms_digests TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.comms_digests.cadence"
+        },
+        {
+          "sql": "GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE comms_items TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.comms_items.cadence"
+        },
+        {
+          "sql": "GRANT DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE comms_items TO hermes;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.comms_items.hermes"
+        },
+        {
+          "sql": "GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE comms_responses TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.comms_responses.cadence"
+        },
+        {
+          "sql": "GRANT DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE comms_responses TO hermes;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.comms_responses.hermes"
+        },
+        {
+          "sql": "GRANT SELECT ON TABLE comms_state TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.comms_state.cadence"
+        },
+        {
+          "sql": "GRANT SELECT ON TABLE d100_roll_log TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.d100_roll_log.cadence"
+        },
+        {
+          "sql": "GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE entities TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.entities.cadence"
+        },
+        {
+          "sql": "GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE entity_fact_conflicts TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.entity_fact_conflicts.cadence"
+        },
+        {
+          "sql": "GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE entity_fact_sources TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.entity_fact_sources.cadence"
+        },
+        {
+          "sql": "GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE entity_facts TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.entity_facts.cadence"
+        },
+        {
+          "sql": "GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE entity_facts_archive TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.entity_facts_archive.cadence"
+        },
+        {
+          "sql": "GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE entity_relationships TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.entity_relationships.cadence"
+        },
+        {
+          "sql": "GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE event_entities TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.event_entities.cadence"
+        },
+        {
+          "sql": "GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE event_places TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.event_places.cadence"
+        },
+        {
+          "sql": "GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE event_projects TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.event_projects.cadence"
+        },
+        {
+          "sql": "GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE events TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.events.cadence"
+        },
+        {
+          "sql": "GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE events_archive TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.events_archive.cadence"
+        },
+        {
+          "sql": "GRANT SELECT ON TABLE extraction_failures TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.extraction_failures.cadence"
+        },
+        {
+          "sql": "GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE extraction_metrics TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.extraction_metrics.cadence"
+        },
+        {
+          "sql": "GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE fact_change_log TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.fact_change_log.cadence"
+        },
+        {
+          "sql": "GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE gambling_entries TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.gambling_entries.cadence"
+        },
+        {
+          "sql": "GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE gambling_logs TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.gambling_logs.cadence"
+        },
+        {
+          "sql": "GRANT SELECT ON TABLE income_sources TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.income_sources.cadence"
+        },
+        {
+          "sql": "GRANT SELECT ON TABLE income_transactions TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.income_transactions.cadence"
+        },
+        {
+          "sql": "GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE job_messages TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.job_messages.cadence"
+        },
+        {
+          "sql": "GRANT INSERT, SELECT, UPDATE ON TABLE journal_entries TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.journal_entries.cadence"
+        },
+        {
+          "sql": "GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE lessons TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.lessons.cadence"
+        },
+        {
+          "sql": "GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE lessons_archive TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.lessons_archive.cadence"
+        },
+        {
+          "sql": "GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE media_consumed TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.media_consumed.cadence"
+        },
+        {
+          "sql": "GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE media_queue TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.media_queue.cadence"
+        },
+        {
+          "sql": "GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE media_tags TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.media_tags.cadence"
+        },
+        {
+          "sql": "GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE memory_embeddings TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.memory_embeddings.cadence"
+        },
+        {
+          "sql": "GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE memory_embeddings_archive TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.memory_embeddings_archive.cadence"
+        },
+        {
+          "sql": "GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE memory_type_priorities TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.memory_type_priorities.cadence"
+        },
+        {
+          "sql": "GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE motivation_d100 TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.motivation_d100.cadence"
+        },
+        {
+          "sql": "GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE music_works TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.music_works.cadence"
+        },
+        {
+          "sql": "GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE place_properties TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.place_properties.cadence"
+        },
+        {
+          "sql": "GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE places TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.places.cadence"
+        },
+        {
+          "sql": "GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE preferences TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.preferences.cadence"
+        },
+        {
+          "sql": "GRANT SELECT ON TABLE proactive_outreach TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.proactive_outreach.cadence"
+        },
+        {
+          "sql": "GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE project_entities TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.project_entities.cadence"
+        },
+        {
+          "sql": "GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE project_tasks TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.project_tasks.cadence"
+        },
+        {
+          "sql": "GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE projects TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.projects.cadence"
+        },
+        {
+          "sql": "GRANT SELECT ON TABLE prompt_helper_config TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.prompt_helper_config.cadence"
+        },
+        {
+          "sql": "GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE publications TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.publications.cadence"
+        },
+        {
+          "sql": "GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE ralph_sessions TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.ralph_sessions.cadence"
+        },
+        {
+          "sql": "GRANT SELECT ON TABLE self_awareness_triggers TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.self_awareness_triggers.cadence"
+        },
+        {
+          "sql": "GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE shopping_history TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.shopping_history.cadence"
+        },
+        {
+          "sql": "GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE shopping_preferences TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.shopping_preferences.cadence"
+        },
+        {
+          "sql": "GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE shopping_wishlist TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.shopping_wishlist.cadence"
+        },
+        {
+          "sql": "GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE skills TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.skills.cadence"
+        },
+        {
+          "sql": "GRANT SELECT ON TABLE social_interactions TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.social_interactions.cadence"
+        },
+        {
+          "sql": "GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE tags TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.tags.cadence"
+        },
+        {
+          "sql": "GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE tasks TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.tasks.cadence"
+        },
+        {
+          "sql": "GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE tools TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.tools.cadence"
+        },
+        {
+          "sql": "GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE unsolved_problems TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.unsolved_problems.cadence"
+        },
+        {
+          "sql": "GRANT SELECT ON TABLE user_domains TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.user_domains.cadence"
+        },
+        {
+          "sql": "GRANT SELECT ON TABLE user_insights TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.user_insights.cadence"
+        },
+        {
+          "sql": "GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE vehicles TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.vehicles.cadence"
+        },
+        {
+          "sql": "GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE vocabulary TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.vocabulary.cadence"
+        },
+        {
+          "sql": "GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE work_tags TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.work_tags.cadence"
+        },
+        {
+          "sql": "GRANT SELECT ON TABLE workflow_runs TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.workflow_runs.cadence"
+        },
+        {
+          "sql": "GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE workflow_steps TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.workflow_steps.cadence"
+        },
+        {
+          "sql": "GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE workflows TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.workflows.cadence"
+        },
+        {
+          "sql": "GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE works TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.TABLE.works.cadence"
+        },
+        {
+          "sql": "GRANT SELECT ON TABLE delegation_knowledge TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.VIEW.delegation_knowledge.cadence"
+        },
+        {
+          "sql": "GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_agent_spawn_stats TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.VIEW.v_agent_spawn_stats.cadence"
+        },
+        {
+          "sql": "GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_agents TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.VIEW.v_agents.cadence"
+        },
+        {
+          "sql": "GRANT SELECT ON TABLE v_current_stateful_facts TO argus;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.VIEW.v_current_stateful_facts.argus"
+        },
+        {
+          "sql": "GRANT SELECT ON TABLE v_current_stateful_facts TO athena;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.VIEW.v_current_stateful_facts.athena"
+        },
+        {
+          "sql": "GRANT SELECT ON TABLE v_current_stateful_facts TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.VIEW.v_current_stateful_facts.cadence"
+        },
+        {
+          "sql": "GRANT SELECT ON TABLE v_current_stateful_facts TO coder;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.VIEW.v_current_stateful_facts.coder"
+        },
+        {
+          "sql": "GRANT SELECT ON TABLE v_current_stateful_facts TO conductor;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.VIEW.v_current_stateful_facts.conductor"
+        },
+        {
+          "sql": "GRANT SELECT ON TABLE v_current_stateful_facts TO gem;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.VIEW.v_current_stateful_facts.gem"
+        },
+        {
+          "sql": "GRANT SELECT ON TABLE v_current_stateful_facts TO gidget;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.VIEW.v_current_stateful_facts.gidget"
+        },
+        {
+          "sql": "GRANT SELECT ON TABLE v_current_stateful_facts TO iris;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.VIEW.v_current_stateful_facts.iris"
+        },
+        {
+          "sql": "GRANT SELECT ON TABLE v_current_stateful_facts TO marcie;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.VIEW.v_current_stateful_facts.marcie"
+        },
+        {
+          "sql": "GRANT SELECT ON TABLE v_current_stateful_facts TO quill;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.VIEW.v_current_stateful_facts.quill"
+        },
+        {
+          "sql": "GRANT SELECT ON TABLE v_current_stateful_facts TO scout;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.VIEW.v_current_stateful_facts.scout"
+        },
+        {
+          "sql": "GRANT SELECT ON TABLE v_current_stateful_facts TO scribe;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.VIEW.v_current_stateful_facts.scribe"
+        },
+        {
+          "sql": "GRANT SELECT ON TABLE v_current_stateful_facts TO ticker;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.VIEW.v_current_stateful_facts.ticker"
+        },
+        {
+          "sql": "GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_entity_facts TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.VIEW.v_entity_facts.cadence"
+        },
+        {
+          "sql": "GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_event_timeline TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.VIEW.v_event_timeline.cadence"
+        },
+        {
+          "sql": "GRANT SELECT ON TABLE v_fact_grades TO argus;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.VIEW.v_fact_grades.argus"
+        },
+        {
+          "sql": "GRANT SELECT ON TABLE v_fact_grades TO athena;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.VIEW.v_fact_grades.athena"
+        },
+        {
+          "sql": "GRANT SELECT ON TABLE v_fact_grades TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.VIEW.v_fact_grades.cadence"
+        },
+        {
+          "sql": "GRANT SELECT ON TABLE v_fact_grades TO coder;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.VIEW.v_fact_grades.coder"
+        },
+        {
+          "sql": "GRANT SELECT ON TABLE v_fact_grades TO conductor;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.VIEW.v_fact_grades.conductor"
+        },
+        {
+          "sql": "GRANT SELECT ON TABLE v_fact_grades TO gem;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.VIEW.v_fact_grades.gem"
+        },
+        {
+          "sql": "GRANT SELECT ON TABLE v_fact_grades TO gidget;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.VIEW.v_fact_grades.gidget"
+        },
+        {
+          "sql": "GRANT SELECT ON TABLE v_fact_grades TO iris;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.VIEW.v_fact_grades.iris"
+        },
+        {
+          "sql": "GRANT SELECT ON TABLE v_fact_grades TO marcie;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.VIEW.v_fact_grades.marcie"
+        },
+        {
+          "sql": "GRANT SELECT ON TABLE v_fact_grades TO quill;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.VIEW.v_fact_grades.quill"
+        },
+        {
+          "sql": "GRANT SELECT ON TABLE v_fact_grades TO scout;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.VIEW.v_fact_grades.scout"
+        },
+        {
+          "sql": "GRANT SELECT ON TABLE v_fact_grades TO scribe;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.VIEW.v_fact_grades.scribe"
+        },
+        {
+          "sql": "GRANT SELECT ON TABLE v_fact_grades TO ticker;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.VIEW.v_fact_grades.ticker"
+        },
+        {
+          "sql": "GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_gambling_summary TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.VIEW.v_gambling_summary.cadence"
+        },
+        {
+          "sql": "GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_media_queue_pending TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.VIEW.v_media_queue_pending.cadence"
+        },
+        {
+          "sql": "GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_media_with_tags TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.VIEW.v_media_with_tags.cadence"
+        },
+        {
+          "sql": "GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_metamours TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.VIEW.v_metamours.cadence"
+        },
+        {
+          "sql": "GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_pending_tasks TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.VIEW.v_pending_tasks.cadence"
+        },
+        {
+          "sql": "GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_pending_test_failures TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.VIEW.v_pending_test_failures.cadence"
+        },
+        {
+          "sql": "GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_ralph_active TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.VIEW.v_ralph_active.cadence"
+        },
+        {
+          "sql": "GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_relationships TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.VIEW.v_relationships.cadence"
+        },
+        {
+          "sql": "GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_task_tree TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.VIEW.v_task_tree.cadence"
+        },
+        {
+          "sql": "GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_users TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.VIEW.v_users.cadence"
+        },
+        {
+          "sql": "GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE workflow_steps_detail TO cadence;",
+          "type": "privilege",
+          "operation": "create",
+          "path": "privileges.VIEW.workflow_steps_detail.cadence"
+        },
+        {
+          "sql": "COMMENT ON TABLE agents IS NULL;",
+          "type": "table.comment",
+          "operation": "alter",
+          "path": "public.agents"
+        },
+        {
+          "sql": "COMMENT ON TABLE comms_digests IS 'Daily/weekly communications digests. Replaces hermes-social-digest-*.md and NOVA_Comms_Digest_*.html. Owner: Communications domain (hermes).';",
+          "type": "table.comment",
+          "operation": "alter",
+          "path": "public.comms_digests"
+        },
+        {
+          "sql": "COMMENT ON COLUMN entity_credibility.computation_version IS 'Algorithm version that produced this score. Allows phased upgrades (v1 = simple ratio, v2 = TruthFinder-style iteration) without invalidating audit trail.';",
+          "type": "table.column.comment",
+          "operation": "alter",
+          "path": "public.entity_credibility.computation_version"
+        },
+        {
+          "sql": "COMMENT ON COLUMN entity_credibility.evidence_snapshot IS 'Audit trail: inputs that fed the last computation (claim ids, corroboration events, contradiction events, recency weights). Supports debugging and algorithm upgrades.';",
+          "type": "table.column.comment",
+          "operation": "alter",
+          "path": "public.entity_credibility.evidence_snapshot"
+        },
+        {
+          "sql": "ALTER TABLE entity_fact_sources\nADD COLUMN reporting_distance real DEFAULT 1.0 NOT NULL CONSTRAINT entity_fact_sources_reporting_distance_check CHECK (reporting_distance > 0.0::double precision AND reporting_distance <= 1.0::double precision);",
+          "type": "table.column",
+          "operation": "create",
+          "path": "public.entity_fact_sources.reporting_distance"
+        },
+        {
+          "sql": "ALTER TABLE entity_fact_sources\nADD COLUMN verification_quality real CONSTRAINT entity_fact_sources_verification_quality_check CHECK (verification_quality >= 0.0::double precision AND verification_quality <= 1.0::double precision);",
+          "type": "table.column",
+          "operation": "create",
+          "path": "public.entity_fact_sources.verification_quality"
+        },
+        {
+          "sql": "ALTER TABLE entity_fact_sources\nADD COLUMN source_session_id bigint CONSTRAINT entity_fact_sources_source_session_id_fkey REFERENCES channel_sessions (id);",
+          "type": "table.column",
+          "operation": "create",
+          "path": "public.entity_fact_sources.source_session_id"
+        },
+        {
+          "sql": "COMMENT ON COLUMN entity_fact_sources.reporting_distance IS 'Transmission hops from the subject (D axis). Self-report/autobiography = 1.0; direct observation ≈ 0.9; secondhand ≈ 0.8; further decays. Decay rate is tunable per source type (a cited biography does not decay like barroom gossip). Set at extraction time based on source relationship to subject.';",
+          "type": "table.column.comment",
+          "operation": "create",
+          "path": "public.entity_fact_sources.reporting_distance"
+        },
+        {
+          "sql": "COMMENT ON COLUMN entity_fact_sources.verification_quality IS 'Citation density, corroboration, peer review quality (V axis). NULL = not yet assessed (query-time computation treats as neutral 0.5). 0.0 = assessed and FAILED verification. Maps to research_citations.reliability scale (0–1). This distinction matters: NULL sources participate at neutral weight; 0.0 sources actively drag down.';",
+          "type": "table.column.comment",
+          "operation": "create",
+          "path": "public.entity_fact_sources.verification_quality"
+        },
+        {
+          "sql": "COMMENT ON COLUMN entity_fact_sources.source_session_id IS 'FK to channel_sessions — identifies the originating conversation. Used for corroboration independence: two facts from the same session are one witness, not two. Required for the v1 corroboration ratio in entity_credibility recompute.';",
+          "type": "table.column.comment",
+          "operation": "create",
+          "path": "public.entity_fact_sources.source_session_id"
+        }
+      ]
+    },
+    {
+      "steps": [
+        {
+          "sql": "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_efs_source_session ON entity_fact_sources (source_session_id) WHERE (source_session_id IS NOT NULL);",
+          "type": "table.index",
+          "operation": "create",
+          "path": "public.entity_fact_sources.idx_efs_source_session"
+        }
+      ]
+    },
+    {
+      "steps": [
+        {
+          "sql": "SELECT \n    COALESCE(i.indisvalid, false) as done,\n    CASE \n        WHEN p.blocks_total > 0 THEN p.blocks_done * 100 / p.blocks_total\n        ELSE 0\n    END as progress\nFROM pg_class c\nLEFT JOIN pg_index i ON c.oid = i.indexrelid\nLEFT JOIN pg_stat_progress_create_index p ON c.oid = p.index_relid\nWHERE c.relname = 'idx_efs_source_session';",
+          "directive": {
+            "type": "wait",
+            "message": "Creating index idx_efs_source_session"
+          },
+          "type": "table.index",
+          "operation": "create",
+          "path": "public.entity_fact_sources.idx_efs_source_session"
+        }
+      ]
+    },
+    {
+      "steps": [
+        {
+          "sql": "ALTER TABLE entity_facts ALTER COLUMN assertion_intent TYPE assertion_intent_enum USING assertion_intent::assertion_intent_enum;",
+          "type": "table.column",
+          "operation": "alter",
+          "path": "public.entity_facts.assertion_intent"
+        },
+        {
+          "sql": "ALTER TABLE entity_facts ADD CONSTRAINT assertion_intent_not_null CHECK (assertion_intent IS NOT NULL) NOT VALID;",
+          "type": "table.column",
+          "operation": "alter",
+          "path": "public.entity_facts.assertion_intent"
+        },
+        {
+          "sql": "ALTER TABLE entity_facts VALIDATE CONSTRAINT assertion_intent_not_null;",
+          "type": "table.column",
+          "operation": "alter",
+          "path": "public.entity_facts.assertion_intent"
+        },
+        {
+          "sql": "ALTER TABLE entity_facts ALTER COLUMN assertion_intent SET NOT NULL;",
+          "type": "table.column",
+          "operation": "alter",
+          "path": "public.entity_facts.assertion_intent"
+        },
+        {
+          "sql": "ALTER TABLE entity_facts DROP CONSTRAINT assertion_intent_not_null;",
+          "type": "table.column",
+          "operation": "alter",
+          "path": "public.entity_facts.assertion_intent"
+        },
+        {
+          "sql": "ALTER TABLE entity_facts ALTER COLUMN assertion_intent SET DEFAULT 'asserted'::assertion_intent_enum;",
+          "type": "table.column",
+          "operation": "alter",
+          "path": "public.entity_facts.assertion_intent"
+        },
+        {
+          "sql": "ALTER TABLE entity_facts ALTER COLUMN mutability_class TYPE mutability_class_enum USING mutability_class::mutability_class_enum;",
+          "type": "table.column",
+          "operation": "alter",
+          "path": "public.entity_facts.mutability_class"
+        },
+        {
+          "sql": "ALTER TABLE entity_facts ADD CONSTRAINT mutability_class_not_null CHECK (mutability_class IS NOT NULL) NOT VALID;",
+          "type": "table.column",
+          "operation": "alter",
+          "path": "public.entity_facts.mutability_class"
+        },
+        {
+          "sql": "ALTER TABLE entity_facts VALIDATE CONSTRAINT mutability_class_not_null;",
+          "type": "table.column",
+          "operation": "alter",
+          "path": "public.entity_facts.mutability_class"
+        },
+        {
+          "sql": "ALTER TABLE entity_facts ALTER COLUMN mutability_class SET NOT NULL;",
+          "type": "table.column",
+          "operation": "alter",
+          "path": "public.entity_facts.mutability_class"
+        },
+        {
+          "sql": "ALTER TABLE entity_facts DROP CONSTRAINT mutability_class_not_null;",
+          "type": "table.column",
+          "operation": "alter",
+          "path": "public.entity_facts.mutability_class"
+        },
+        {
+          "sql": "ALTER TABLE entity_facts ALTER COLUMN mutability_class SET DEFAULT 'slow_changing'::mutability_class_enum;",
+          "type": "table.column",
+          "operation": "alter",
+          "path": "public.entity_facts.mutability_class"
+        },
+        {
+          "sql": "COMMENT ON COLUMN entity_facts.assertion_intent IS 'Epistemological intent of the claim. Grading machinery (S×D×V) only engages for asserted+speculative. fictional/disclaimed/hypothetical are stored with full provenance but never compete as truth claims. Determination happens at ingestion/extraction time.';",
+          "type": "table.column.comment",
+          "operation": "alter",
+          "path": "public.entity_facts.assertion_intent"
+        },
+        {
+          "sql": "COMMENT ON COLUMN entity_facts.mutability_class IS 'Controls query-time resolution and contradiction detection. immutable: conflicting values = genuine contradiction → credibility impact. slow_changing: conflict within short window suspicious, across years = natural drift. stateful: latest value is current; full trajectory preserved; no credibility damage from drift. When mixed classes exist for the same (entity_id, key), resolution uses the STRICTEST class (immutable > slow_changing > stateful).';",
+          "type": "table.column.comment",
+          "operation": "alter",
+          "path": "public.entity_facts.mutability_class"
+        }
+      ]
+    },
+    {
+      "steps": [
+        {
+          "sql": "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_entity_facts_assertion_intent ON entity_facts (assertion_intent);",
+          "type": "table.index",
+          "operation": "create",
+          "path": "public.entity_facts.idx_entity_facts_assertion_intent"
+        }
+      ]
+    },
+    {
+      "steps": [
+        {
+          "sql": "SELECT \n    COALESCE(i.indisvalid, false) as done,\n    CASE \n        WHEN p.blocks_total > 0 THEN p.blocks_done * 100 / p.blocks_total\n        ELSE 0\n    END as progress\nFROM pg_class c\nLEFT JOIN pg_index i ON c.oid = i.indexrelid\nLEFT JOIN pg_stat_progress_create_index p ON c.oid = p.index_relid\nWHERE c.relname = 'idx_entity_facts_assertion_intent';",
+          "directive": {
+            "type": "wait",
+            "message": "Creating index idx_entity_facts_assertion_intent"
+          },
+          "type": "table.index",
+          "operation": "create",
+          "path": "public.entity_facts.idx_entity_facts_assertion_intent"
+        }
+      ]
+    },
+    {
+      "steps": [
+        {
+          "sql": "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_entity_facts_gradable ON entity_facts (entity_id, key) WHERE assertion_intent IN ('asserted'::public.assertion_intent_enum, 'speculative'::public.assertion_intent_enum);",
+          "type": "table.index",
+          "operation": "create",
+          "path": "public.entity_facts.idx_entity_facts_gradable"
+        }
+      ]
+    },
+    {
+      "steps": [
+        {
+          "sql": "SELECT \n    COALESCE(i.indisvalid, false) as done,\n    CASE \n        WHEN p.blocks_total > 0 THEN p.blocks_done * 100 / p.blocks_total\n        ELSE 0\n    END as progress\nFROM pg_class c\nLEFT JOIN pg_index i ON c.oid = i.indexrelid\nLEFT JOIN pg_stat_progress_create_index p ON c.oid = p.index_relid\nWHERE c.relname = 'idx_entity_facts_gradable';",
+          "directive": {
+            "type": "wait",
+            "message": "Creating index idx_entity_facts_gradable"
+          },
+          "type": "table.index",
+          "operation": "create",
+          "path": "public.entity_facts.idx_entity_facts_gradable"
+        }
+      ]
+    },
+    {
+      "steps": [
+        {
+          "sql": "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_entity_facts_mutability ON entity_facts (mutability_class) WHERE (mutability_class = 'immutable'::public.mutability_class_enum);",
+          "type": "table.index",
+          "operation": "create",
+          "path": "public.entity_facts.idx_entity_facts_mutability"
+        }
+      ]
+    },
+    {
+      "steps": [
+        {
+          "sql": "SELECT \n    COALESCE(i.indisvalid, false) as done,\n    CASE \n        WHEN p.blocks_total > 0 THEN p.blocks_done * 100 / p.blocks_total\n        ELSE 0\n    END as progress\nFROM pg_class c\nLEFT JOIN pg_index i ON c.oid = i.indexrelid\nLEFT JOIN pg_stat_progress_create_index p ON c.oid = p.index_relid\nWHERE c.relname = 'idx_entity_facts_mutability';",
+          "directive": {
+            "type": "wait",
+            "message": "Creating index idx_entity_facts_mutability"
+          },
+          "type": "table.index",
+          "operation": "create",
+          "path": "public.entity_facts.idx_entity_facts_mutability"
+        }
+      ]
+    },
+    {
+      "steps": [
+        {
+          "sql": "ALTER TABLE lessons\nADD CONSTRAINT lessons_learned_by_fkey FOREIGN KEY (learned_by) REFERENCES agents (id) NOT VALID;",
+          "type": "table.constraint",
+          "operation": "create",
+          "path": "public.lessons.lessons_learned_by_fkey"
+        },
+        {
+          "sql": "ALTER TABLE lessons VALIDATE CONSTRAINT lessons_learned_by_fkey;",
+          "type": "table.constraint",
+          "operation": "create",
+          "path": "public.lessons.lessons_learned_by_fkey"
+        }
+      ]
+    },
+    {
+      "steps": [
+        {
+          "sql": "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS idx_tasks_watchdog_recovery_open ON tasks (title) WHERE ((title)::text ~~ '[watchdog-recovery]%'::text) AND ((status)::text IN (('pending'::character varying)::text, ('in_progress'::character varying)::text));",
+          "type": "table.index",
+          "operation": "create",
+          "path": "public.tasks.idx_tasks_watchdog_recovery_open"
+        }
+      ]
+    },
+    {
+      "steps": [
+        {
+          "sql": "SELECT \n    COALESCE(i.indisvalid, false) as done,\n    CASE \n        WHEN p.blocks_total > 0 THEN p.blocks_done * 100 / p.blocks_total\n        ELSE 0\n    END as progress\nFROM pg_class c\nLEFT JOIN pg_index i ON c.oid = i.indexrelid\nLEFT JOIN pg_stat_progress_create_index p ON c.oid = p.index_relid\nWHERE c.relname = 'idx_tasks_watchdog_recovery_open';",
+          "directive": {
+            "type": "wait",
+            "message": "Creating index idx_tasks_watchdog_recovery_open"
+          },
+          "type": "table.index",
+          "operation": "create",
+          "path": "public.tasks.idx_tasks_watchdog_recovery_open"
+        }
+      ]
+    },
+    {
+      "steps": [
+        {
+          "sql": "ALTER TABLE workflow_runs ADD COLUMN completion_logged_at timestamptz;",
+          "type": "table.column",
+          "operation": "create",
+          "path": "public.workflow_runs.completion_logged_at"
+        },
+        {
+          "sql": "COMMENT ON COLUMN workflow_runs.completion_logged_at IS 'Watermark set when the row''s completion line was appended to the daily log. Seeded by migration 087 for pre-existing closed rows; updated by completion-log-reconcile.py.';",
+          "type": "table.column.comment",
+          "operation": "create",
+          "path": "public.workflow_runs.completion_logged_at"
+        },
+        {
+          "sql": "COMMENT ON TABLE workflows IS NULL;",
+          "type": "table.comment",
+          "operation": "alter",
+          "path": "public.workflows"
+        },
+        {
+          "sql": "REVOKE USAGE ON SEQUENCE entity_fact_sources_id_seq FROM \"nova-staging\";",
+          "type": "privilege",
+          "operation": "alter",
+          "path": "privileges.SEQUENCE.entity_fact_sources_id_seq.nova-staging"
+        }
+      ]
+    }
+  ]
+}

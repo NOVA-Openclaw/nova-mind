@@ -240,3 +240,18 @@ def test_tc43_validate_invariants_accepts_fixed_reorder():
     plan = load_plan(FIXTURES / "pgschema-debug-plan-r2.json")
     out = reorder_plan(plan)
     validate_plan_invariants(out)  # must not raise
+    # Also assert the concrete ordering: the view must follow the ADD COLUMN.
+    # This makes TC-43 fail if the analyzer is reverted, even though the
+    # validator extension alone cannot catch the defect with a broken analyzer.
+    def _find(sql_prefix):
+        for gidx, group in enumerate(out["groups"]):
+            for sidx, step in enumerate(group["steps"]):
+                if step["sql"].startswith(sql_prefix):
+                    return (gidx, sidx)
+        raise AssertionError(f"step not found: {sql_prefix!r}")
+
+    add_col = _find("ALTER TABLE entity_facts ADD COLUMN assertion_intent")
+    view = _find("CREATE OR REPLACE VIEW v_fact_grades")
+    assert view > add_col, (
+        f"v_fact_grades {view} must follow ADD COLUMN assertion_intent {add_col}"
+    )

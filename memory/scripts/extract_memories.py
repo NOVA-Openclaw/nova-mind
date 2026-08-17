@@ -31,6 +31,20 @@ import requests
 
 sys.path.insert(0, os.path.expanduser("~/.openclaw/lib"))
 
+# Shared context-window helpers (#611) live next to this script.
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+if _SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPT_DIR)
+try:
+    import context_window_helper as cwh
+except ImportError:
+    cwh = None  # type: ignore
+
+try:
+    from confidence_helper import get_initial_confidence
+except ImportError:
+    get_initial_confidence = None  # type: ignore
+
 try:
     from env_loader import load_openclaw_env
     load_openclaw_env()
@@ -71,6 +85,20 @@ CONFIG = load_config_file(CONFIG_PATH)
 DEFAULT_MODEL = CONFIG.get("model") or "deepseek/deepseek-v4-flash"
 OPENROUTER_API_URL = CONFIG.get("api_url") or "https://openrouter.ai/api/v1/chat/completions"
 CONFIG_MAX_TOKENS = CONFIG.get("max_tokens") or 2048
+
+# Context-window config (#611): prefer shared helper, fall back to local parsing.
+if cwh is not None:
+    MAX_PRIOR_MESSAGES = cwh.resolve_max_prior_messages(CONFIG)
+    CONTEXT_WINDOW_ENABLED = cwh.is_context_window_enabled(CONFIG)
+else:
+    _mpm = CONFIG.get("max_prior_messages")
+    MAX_PRIOR_MESSAGES = _mpm if isinstance(_mpm, int) and _mpm >= 0 else 10
+    _cwe = CONFIG.get("context_window_enabled")
+    CONTEXT_WINDOW_ENABLED = _cwe if isinstance(_cwe, bool) else True
+
+# Character length threshold below which a message is considered "short" for
+# confidence-honesty adjustments (#611).
+SHORT_MESSAGE_THRESHOLD = 60
 
 # ── DB helpers ────────────────────────────────────────────────────────────────
 
@@ -689,6 +717,8 @@ def build_extraction_prompt(
     sender_provider: str,
     is_group: bool,
     default_visibility: str,
+    context_messages: Optional[list[dict]] = None,
+    current_role: str = "user",
 ) -> str:
     # Build a platform-aware sender label
     provider_label = sender_provider.lower() if sender_provider else "unknown"
@@ -712,6 +742,24 @@ def build_extraction_prompt(
     else:
         sender_label = f"{provider_label.capitalize()} user: {sender_id}" if sender_id else f"User: {sender}"
 
+    # Build context-aware message block (#611)
+    if cwh is not None:
+        message_block = cwh.format_context_for_prompt(
+            context_messages or [], text, current_role
+        )
+    else:
+        # Minimal fallback if the helper module is somehow unavailable.
+        if context_messages:
+            ctx_lines = ["PRIOR CONTEXT (for disambiguation only):"]
+            for msg in context_messages:
+                label = "NOVA" if msg.get("role") == "assistant" else "USER"
+                ctx_lines.append(f"[{label}] {msg.get('content', '')}")
+            ctx_lines.append("CURRENT MESSAGE:")
+            ctx_lines.append(text)
+            message_block = "\n".join(ctx_lines)
+        else:
+            message_block = f"MESSAGE:\n{text}"
+
     return f"""Extract memory data as JSON from a conversation message.
 
 SENDER: {sender}
@@ -719,20 +767,22 @@ SENDER_ID_LABEL: {sender_label}
 IS_GROUP_CHAT: {is_group}
 USER_DEFAULT_VISIBILITY: {default_visibility}
 {agent_instructions}
-MESSAGE:
-{text}
+{message_block}
 
 IMPORTANT INSTRUCTIONS:
 
-1. EXTRACT facts, opinions, events, decisions, and other memory-worthy information from the message above.
+1. EXTRACT facts, opinions, events, decisions, and other memory-worthy information from the CURRENT MESSAGE above ONLY.
 
-2. FOR EVERY EXTRACTED ITEM, include:
+2. CONTEXT MESSAGES (the numbered [USER]/[NOVA] block above the "CURRENT MESSAGE" marker) are DISAMBIGUATION CONTEXT ONLY. Use them only to interpret pronouns, abbreviations, typos, and shorthand in the CURRENT MESSAGE. NEVER extract facts, entities, events, or vocabulary from context messages themselves. Context messages MUST NOT generate their own extractions in this pass.
+
+3. FOR EVERY EXTRACTED ITEM, include:
    - subject: who the fact is ABOUT (may be the sender or someone else they're talking about)
    - visibility: privacy level (see below)
    - visibility_reason: ONLY if visibility differs from user default
    - durability: one of permanent, long_term, short_term, ephemeral (see DURABILITY GUIDANCE)
    - category: one of observation, preference, identity, mood, decision, routine, state, obligation (or other appropriate category)
    - expires: ISO-8601 timestamp if the statement implies a temporal boundary (e.g., "until Friday", "this week", "temporarily"), otherwise omit
+   - confidence: a number from 0.0 to 1.0 reflecting genuine certainty (see CONFIDENCE GUIDANCE below)
    NOTE: Do NOT include source_person. Source attribution (who said it) is handled automatically from the sender metadata.
 
 DURABILITY GUIDANCE:
@@ -744,6 +794,13 @@ DURABILITY GUIDANCE:
 CATEGORY LIST (examples, not exhaustive):
 observation, preference, identity, mood, decision, routine, state, obligation
 The LLM may use other appropriate categories not in this list.
+
+CONFIDENCE GUIDANCE:
+- confidence is NOT a constant. Do NOT default every extraction to 1.0.
+- Use 1.0 only for directly stated, unambiguous, well-supported facts.
+- Use lower values (0.4-0.7) for short, ambiguous, inferred, or typo-laden messages, especially when there is little or no usable context.
+- Example: "nopassword was added to soudoers" with no context is ambiguous → confidence should be well below 1.0.
+- Example: "My name is Dustin and I was born in Austin, Texas" is directly stated and clear → confidence can be high (≥0.9).
 
 PRIVACY DETECTION:
 The user's default visibility is "{default_visibility}".
@@ -788,7 +845,7 @@ TEMPLATE:
       "value": "the actual information",
       "category": "preference|observation|identity|mood|decision|routine|state|obligation",
       "durability": "permanent|long_term|short_term|ephemeral",
-      "confidence": 1.0,
+      "confidence": 0.85,
       "visibility": "public|private|trusted",
       "visibility_reason": "optional",
       "expires": "optional ISO-8601 timestamp"
@@ -798,7 +855,7 @@ TEMPLATE:
     {{"name": "Full name", "type": "person|ai|organization|place", "visibility": "public"}}
   ],
   "events": [
-    {{"description": "what happened", "date": "ISO-8601 or natural language", "visibility": "public"}}
+    {{"description": "what happened", "date": "ISO-8601 or natural language", "environment": "host/system identifier (e.g. nova-local, blockhenge-sarsen-2) or null if not inferable", "visibility": "public"}}
   ],
   "vocabulary": [
     {{"word": "the term", "category": "name|brand|technical|slang", "misheard_as": "optional", "visibility": "public"}}
@@ -816,7 +873,11 @@ RULES:
 - "key" must be a descriptive snake_case identifier (e.g., favorite_animals, current_city, opinion_on_vim, decision_package_manager). NEVER use generic keys like "preference_preference" or "observation_observation".
 - Milestones are events — put them in "events".
 
+ENVIRONMENT RULE (events only): If the message or context clearly identifies a host/system/environment (e.g. "nova-local", "blockhenge-sarsen-2", "my laptop"), set the event's "environment" field to a short identifier. If no environment is inferable, set environment to null or omit it. NEVER fabricate or guess an environment value.
+
 PHONE NUMBER RULE: ANY extracted phone number MUST have visibility="private" regardless of the user's default_visibility or any explicit override in the message. This is a hard security rule.
+
+CONFIDENCE RULE: Set confidence honestly. Do NOT anchor on 1.0. Short, ambiguous, or out-of-context messages deserve lower confidence.
 
 TEMPORAL BOUNDARY RULE: When a statement implies a time limit (e.g., "I'll be in Austin until Friday", "working remotely this week"), set the "expires" field to an ISO-8601 timestamp. Do NOT set expires for permanent facts ("My name is Dustin").
 
@@ -972,6 +1033,76 @@ def coerce_fact_value(raw_value: Any, key: str = "") -> Optional[str]:
     if isinstance(raw_value, str):
         return raw_value.strip()
     return str(raw_value).strip()
+
+
+def apply_confidence_honesty(
+    data: dict,
+    current_message: str,
+    context_messages: list[dict],
+    source_entity_id: Optional[int],
+    conn,
+) -> None:
+    """Cap overconfident extractions when context is absent and message is short.
+
+    The prompt asks the model to set confidence honestly, but models sometimes
+    anchor on the example value. This function is a safety net: if there is no
+    usable context, the current message is short/ambiguous, and a fact claims
+    1.0 confidence, cap it using the source entity's trust level (#611).
+
+    This REDUCES unearned confidence without replacing the LLM's judgment for
+    clear, well-supported statements.
+    """
+    if context_messages:
+        return
+
+    stripped = current_message.strip()
+    if len(stripped) >= SHORT_MESSAGE_THRESHOLD:
+        return
+
+    facts = data.get("facts") or []
+    if not facts:
+        return
+
+    # Only compute the cap if at least one fact actually claims 1.0.
+    needs_cap = False
+    for fact in facts:
+        try:
+            conf = fact.get("confidence")
+            if conf is None:
+                continue
+            if isinstance(conf, str):
+                conf = float(conf)
+            if conf >= 1.0:
+                needs_cap = True
+                break
+        except Exception:
+            continue
+
+    if not needs_cap:
+        return
+
+    if get_initial_confidence is None:
+        return
+
+    cap = get_initial_confidence(source_entity_id or 0, source="inferred", conn=conn)
+    # Ensure cap is sane even if helper returns something unexpected.
+    if not isinstance(cap, (int, float)) or cap < 0 or cap > 1:
+        cap = 0.5
+
+    if cap >= 1.0:
+        return
+
+    for fact in facts:
+        try:
+            conf = fact.get("confidence")
+            if conf is None:
+                continue
+            if isinstance(conf, str):
+                conf = float(conf)
+            if conf >= 1.0:
+                fact["confidence"] = cap
+        except Exception:
+            continue
 
 
 def store_extracted(
@@ -1137,6 +1268,9 @@ def store_extracted(
     for event in data.get("events", []) or []:
         description = (event.get("description") or "").strip()
         date_val = (event.get("date") or "").strip() or None
+        environment = (event.get("environment") or "").strip() or None
+        if environment:
+            environment = environment[:255]
 
         if not description:
             continue
@@ -1158,20 +1292,19 @@ def store_extracted(
                 event_date_expr = "%s::timestamptz" if event_date else "NOW()"
 
                 cols = ["title", "description", "event_date", "source"]
-                vals_list: list[Any] = [title, description]
-                if event_date:
-                    vals_list.append(event_date)
-                else:
-                    vals_list = [title, description]  # event_date uses NOW() literal
-
-                vals_list.append(sender_name or "auto-extracted")
+                vals_list: list[Any] = [title, description, event_date, sender_name or "auto-extracted"]
                 ph_list = ["%s", "%s", event_date_expr, "%s"]
+
+                if environment:
+                    cols.append("environment")
+                    vals_list.append(environment)
+                    ph_list.append("%s")
 
                 cur.execute(
                     f"INSERT INTO events ({', '.join(cols)}) VALUES ({', '.join(ph_list)}) ON CONFLICT DO NOTHING",
                     vals_list,
                 )
-                print(f"[extract_memories]   event stored: {description[:60]}", file=sys.stderr)
+                print(f"[extract_memories]   event stored: {description[:60]} environment={environment!r}", file=sys.stderr)
         except Exception as e:
             print(f"[extract_memories] WARNING: event storage failed: {e}", file=sys.stderr)
             try:
@@ -1229,11 +1362,41 @@ def main() -> int:
     source_context = os.environ.get('SOURCE_CONTEXT', '')
     if source_context:
         print(f"[extract_memories] Source context: {source_context}", file=sys.stderr)
+
+    # Parse optional conversation-context window (#611).
+    # EXTRACTION_CONTEXT_JSON carries prior same-session messages as a JSON array.
+    # Missing/invalid JSON gracefully degrades to no-context extraction.
+    context_messages: list[dict] = []
+    raw_context_json = os.environ.get("EXTRACTION_CONTEXT_JSON", "").strip()
+    if raw_context_json:
+        if cwh is not None:
+            context_messages = cwh.parse_context_json(raw_context_json)
+        else:
+            try:
+                parsed = json.loads(raw_context_json)
+                if isinstance(parsed, list):
+                    context_messages = [
+                        {"role": str(m.get("role", "user")), "content": str(m.get("content", ""))}
+                        for m in parsed if isinstance(m, dict) and m.get("content")
+                    ]
+            except json.JSONDecodeError as e:
+                print(
+                    f"[extract_memories] WARNING: Could not parse EXTRACTION_CONTEXT_JSON: {e}. "
+                    "Proceeding without context.",
+                    file=sys.stderr,
+                )
+
+    if context_messages:
+        print(
+            f"[extract_memories] Loaded {len(context_messages)} prior message(s) as context",
+            file=sys.stderr,
+        )
+
     model = os.environ.get("MEMORY_EXTRACTION_MODEL", DEFAULT_MODEL).strip() or DEFAULT_MODEL
 
     print(
         f"[extract_memories] Processing message from {sender_name!r} "
-        f"(len={len(text.strip())}, model={model})",
+        f"(len={len(text.strip())}, context={len(context_messages)}, model={model})",
         file=sys.stderr,
     )
 
@@ -1270,11 +1433,26 @@ def main() -> int:
                             )
                         conn.commit()
 
+        # Resolve sender entity once for confidence-honesty and storage.
+        source_entity_id = resolve_source_entity_id(sender_name, sender_id, sender_provider, conn)
+
         # Build extraction prompt
-        prompt = build_extraction_prompt(text.strip(), sender_name, sender_id, sender_provider, is_group, default_visibility)
+        prompt = build_extraction_prompt(
+            text.strip(),
+            sender_name,
+            sender_id,
+            sender_provider,
+            is_group,
+            default_visibility,
+            context_messages=context_messages,
+            current_role="assistant" if sender_name.lower() == "nova" else "user",
+        )
 
         # Call LLM
         extracted = call_llm(prompt, api_key, model)
+
+        # Apply confidence-honesty safety net for short/ambiguous no-context messages.
+        apply_confidence_honesty(extracted, text.strip(), context_messages, source_entity_id, conn)
 
         # Output extracted JSON to stdout
         print(json.dumps(extracted))

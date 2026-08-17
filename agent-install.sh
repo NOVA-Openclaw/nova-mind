@@ -1255,6 +1255,10 @@ declare -A PACKAGE_MODULE_MAP=(
 
 pkg_import_name() {
     local pkg="$1"
+    # Strip PEP 440 version specifiers (e.g. pglast==6.16) before mapping to
+    # the importable module name.  Without this, "import pglast==6.16" is a
+    # syntax error and the installer falsely reports the package missing.
+    pkg="${pkg%%[<>=!~]*}"
     if [[ -v PACKAGE_MODULE_MAP["$pkg"] ]]; then
         echo "${PACKAGE_MODULE_MAP[$pkg]}"
     else

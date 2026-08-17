@@ -771,21 +771,24 @@ def _topological_sort(
     """Kahn's algorithm with stable tie-breaking preserving input order.
 
     The input order is the original step order across all groups flattened.
+    At each iteration the ready node with the smallest original index is
+    chosen, which keeps independent statements in their original relative
+    position whenever dependencies allow.
     """
     graph, in_degree = _build_statement_graph(steps, analyses)
     n = len(steps)
 
-    # Stable queue: process nodes with in-degree 0 in input order.
-    queue = deque(sorted([i for i in range(n) if in_degree[i] == 0]))
+    ready = sorted(i for i in range(n) if in_degree[i] == 0)
     order: list[int] = []
 
-    while queue:
-        node = queue.popleft()
+    while ready:
+        node = ready.pop(0)
         order.append(node)
         for target in sorted(graph[node]):
             in_degree[target] -= 1
             if in_degree[target] == 0:
-                queue.append(target)
+                ready.append(target)
+                ready.sort()
 
     if len(order) != n:
         # Cycle detected: collect remaining nodes for the diagnostic.

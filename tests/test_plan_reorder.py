@@ -6,6 +6,9 @@ Every computed expected literal is traced to the v2 doc in a comment.
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 
 from database.plan_reorder import (
@@ -443,6 +446,63 @@ def test_tc32_empty_plan_passes_through():
     }
     out = reorder_plan(plan)
     assert out["groups"] == []
+
+
+def test_tc32a_null_groups_passes_through():
+    """TC-32a: pgschema no-change plan with groups:null is an empty plan."""
+    plan = {
+        "version": "1.0.0",
+        "pgschema_version": "1.7.2",
+        "created_at": "2026-08-17T14:16:45Z",
+        "source_fingerprint": {"hash": "x"},
+        "groups": None,
+    }
+    out = reorder_plan(plan)
+    assert out["groups"] == []
+    assert out["version"] == plan["version"]
+    assert out["pgschema_version"] == plan["pgschema_version"]
+    assert out["created_at"] == plan["created_at"]
+    assert out["source_fingerprint"] == plan["source_fingerprint"]
+
+
+def test_tc32b_missing_groups_key_passes_through():
+    """TC-32b: absent groups key is treated as an empty plan."""
+    plan = {
+        "version": "1.0.0",
+        "pgschema_version": "1.7.2",
+        "created_at": "2026-08-17T14:16:45Z",
+        "source_fingerprint": {"hash": "x"},
+    }
+    out = reorder_plan(plan)
+    assert out["groups"] == []
+    assert out["version"] == plan["version"]
+    assert out["pgschema_version"] == plan["pgschema_version"]
+    assert out["created_at"] == plan["created_at"]
+    assert out["source_fingerprint"] == plan["source_fingerprint"]
+
+
+def test_tc31_still_rejects_non_array_groups():
+    """TC-31: non-null non-array groups remains a structural error."""
+    plan = {
+        "version": "1.0.0",
+        "pgschema_version": "1.7.2",
+        "source_fingerprint": {"hash": "x"},
+        "groups": "not-an-array",
+    }
+    with pytest.raises(PlanFormatError):
+        reorder_plan(plan)
+
+
+def test_tc32c_real_idempotent_fixture_passes_through():
+    """TC-32c: captured staging no-change plan passes through unchanged."""
+    fixture = Path(__file__).parent / "fixtures" / "plan_reorder" / "idempotent-diag-plan.json"
+    plan = json.loads(fixture.read_text())
+    out = reorder_plan(plan)
+    assert out["groups"] == []
+    assert out["version"] == plan["version"]
+    assert out["pgschema_version"] == plan["pgschema_version"]
+    assert out["created_at"] == plan["created_at"]
+    assert out["source_fingerprint"] == plan["source_fingerprint"]
 
 
 def test_tc33_single_statement_plan():

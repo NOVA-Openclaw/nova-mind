@@ -93,6 +93,29 @@ JSON
     rm -f "$PLAN" "$OUT"
 }
 
+@test "TC-32a: plan_reorder CLI returns 0 on null groups (idempotent no-change plan)" {
+    if [ ! -x "$VENV_PYTHON" ]; then skip "venv python not available at $VENV_PYTHON"; fi
+    if ! "$VENV_PYTHON" -c "import pglast" 2>/dev/null; then skip "pglast not installed"; fi
+    PLAN=$(mktemp)
+    OUT=$(mktemp)
+    cat >"$PLAN" <<'JSON'
+{
+  "version": "1.0.0",
+  "pgschema_version": "1.7.2",
+  "created_at": "2026-08-17T14:16:45Z",
+  "source_fingerprint": {"hash": "x"},
+  "groups": null
+}
+JSON
+    run "$VENV_PYTHON" "$REORDERER" --plan "$PLAN" --output "$OUT"
+    [ "$status" -eq 0 ]
+    # Output must preserve top-level metadata and normalize groups to [].
+    run "$VENV_PYTHON" -c "import json; p=json.load(open('$OUT')); print(p['version'], p['pgschema_version'], p['created_at'], p['source_fingerprint']['hash'], len(p['groups']))"
+    [ "$status" -eq 0 ]
+    [[ "$output" == "1.0.0 1.7.2 2026-08-17T14:16:45Z x 0" ]]
+    rm -f "$PLAN" "$OUT"
+}
+
 # ---------------------------------------------------------------------------
 # Installer-level schema-apply stub
 #

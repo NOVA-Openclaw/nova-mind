@@ -908,11 +908,16 @@ def _extract_refs_with_table_context(node: Any, table: str) -> set[str]:
 
 
 def _validate_plan(data: Any) -> None:
-    """Validate a parsed plan JSON object in memory."""
+    """Validate a parsed plan JSON object in memory.
+
+    ``groups`` may be absent, ``null``, or an array; all three are treated as
+    a valid empty plan (no statements to reorder).  Any other type for
+    ``groups`` is still a structural error.
+    """
     if not isinstance(data, dict):
         raise PlanFormatError("Plan JSON must be an object")
 
-    required_keys = {"version", "pgschema_version", "source_fingerprint", "groups"}
+    required_keys = {"version", "pgschema_version", "source_fingerprint"}
     missing = required_keys - set(data.keys())
     if missing:
         raise PlanFormatError(f"Malformed plan JSON: missing keys {sorted(missing)}")
@@ -924,10 +929,13 @@ def _validate_plan(data: Any) -> None:
             f"supported versions: {sorted(SUPPORTED_PLAN_VERSIONS)}"
         )
 
-    if not isinstance(data.get("groups"), list):
+    groups = data.get("groups")
+    if groups is None:
+        return
+    if not isinstance(groups, list):
         raise PlanFormatError("Malformed plan JSON: 'groups' must be an array")
 
-    for gidx, group in enumerate(data["groups"]):
+    for gidx, group in enumerate(groups):
         if not isinstance(group, dict) or not isinstance(group.get("steps"), list):
             raise PlanFormatError(
                 f"Malformed plan JSON: groups[{gidx}] must be an object with a 'steps' array"
@@ -1102,7 +1110,8 @@ def _topological_sort(
 def _flatten_steps(plan: dict[str, Any]) -> list[dict[str, Any]]:
     """Flatten all steps from all groups, preserving group index for stability."""
     flat: list[dict[str, Any]] = []
-    for gidx, group in enumerate(plan["groups"]):
+    groups = plan.get("groups") or []
+    for gidx, group in enumerate(groups):
         for sidx, step in enumerate(group["steps"]):
             enriched = dict(step)
             enriched["_group_index"] = gidx
@@ -1160,12 +1169,19 @@ def reorder_plan(plan: dict[str, Any]) -> dict[str, Any]:
     """Return a new plan with reordered groups/steps.
 
     The top-level verbatim fields are preserved exactly; only ``groups`` is
-    rewritten.
+    rewritten.  A missing or ``null`` ``groups`` is normalized to an empty
+    array and returned with all metadata verbatim.
     """
     _validate_plan(plan)
     flat = _flatten_steps(plan)
     if not flat:
-        return plan
+        return {
+            "version": plan["version"],
+            "pgschema_version": plan["pgschema_version"],
+            "created_at": plan.get("created_at"),
+            "source_fingerprint": plan["source_fingerprint"],
+            "groups": [],
+        }
 
     analyses: list[dict[str, Any]] = []
     for step in flat:

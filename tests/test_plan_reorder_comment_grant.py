@@ -109,6 +109,65 @@ def test_grant_on_type():
 
 
 # ---------------------------------------------------------------------------
+# Object extraction with schema-qualified names (nova-mind#597 F1)
+# ---------------------------------------------------------------------------
+
+
+def test_comment_on_table_qualified():
+    """Schema-qualified COMMENT ON TABLE strips the schema."""
+    analysis = analyze_statement("COMMENT ON TABLE public.foo IS 'docs';")
+    assert analysis["refs"] == {"table:foo"}
+
+
+def test_comment_on_view_qualified():
+    """Schema-qualified COMMENT ON VIEW strips the schema."""
+    analysis = analyze_statement("COMMENT ON VIEW public.v_foo IS 'docs';")
+    assert analysis["refs"] == {"table:v_foo"}
+
+
+def test_comment_on_index_qualified():
+    """Schema-qualified COMMENT ON INDEX strips the schema."""
+    analysis = analyze_statement("COMMENT ON INDEX public.idx_foo IS 'docs';")
+    assert analysis["refs"] == {"index:idx_foo"}
+
+
+def test_comment_on_sequence_qualified():
+    """Schema-qualified COMMENT ON SEQUENCE strips the schema."""
+    analysis = analyze_statement("COMMENT ON SEQUENCE public.seq1 IS 'docs';")
+    assert analysis["refs"] == {"table:seq1"}
+
+
+def test_comment_on_trigger_qualified():
+    """Schema-qualified COMMENT ON TRIGGER strips only the schema."""
+    analysis = analyze_statement("COMMENT ON TRIGGER trig ON public.foo IS 'docs';")
+    assert analysis["refs"] == {"trigger:foo.trig"}
+
+
+def test_comment_on_column_qualified_three_part():
+    """COMMENT ON COLUMN schema.table.column keeps the table identity."""
+    analysis = analyze_statement("COMMENT ON COLUMN public.foo.bar IS 'docs';")
+    assert analysis["refs"] == {"column:foo.bar"}
+
+
+def test_comment_on_type_qualified():
+    """Schema-qualified COMMENT ON TYPE strips the schema."""
+    analysis = analyze_statement("COMMENT ON TYPE public.my_enum IS 'docs';")
+    assert analysis["refs"] == {"type:my_enum"}
+
+
+def test_grant_on_sequence_qualified():
+    """Schema-qualified GRANT ON SEQUENCE strips the schema."""
+    analysis = analyze_statement("GRANT USAGE ON SEQUENCE public.seq1 TO some_role;")
+    assert analysis["refs"] == {"table:seq1"}
+
+
+def test_grant_on_type_qualified():
+    """Schema-qualified GRANT ON TYPE strips the schema."""
+    analysis = analyze_statement("GRANT USAGE ON TYPE public.my_enum TO some_role;")
+    assert analysis["refs"] == {"type:my_enum"}
+
+
+# ---------------------------------------------------------------------------
 # Reordering: dependents follow the CREATE
 # ---------------------------------------------------------------------------
 
@@ -224,6 +283,80 @@ def test_comment_and_grant_follow_create_type():
         "CREATE TYPE my_enum AS ENUM ('a');",
         "COMMENT ON TYPE my_enum IS 'docs';",
         "GRANT USAGE ON TYPE my_enum TO some_role;",
+    ]
+
+
+def test_qa_repro_qualified_comment_follows_unqualified_create():
+    """QA repro: COMMENT ON TABLE public.foo must follow CREATE TABLE public.foo."""
+    plan = _make_plan([
+        _step("COMMENT ON TABLE public.foo IS 'docs';", type="comment", operation="create", path="public.foo"),
+        _step("CREATE TABLE public.foo (id int);", type="table", operation="create", path="public.foo"),
+    ])
+    out = reorder_plan(plan)
+    sqls = [s["sql"] for s in out["groups"][0]["steps"]]
+    assert sqls == [
+        "CREATE TABLE public.foo (id int);",
+        "COMMENT ON TABLE public.foo IS 'docs';",
+    ]
+
+
+def test_qualified_comment_and_grant_follow_unqualified_create_table():
+    """Qualified COMMENT/GRANT depend on unqualified CREATE table identity."""
+    plan = _make_plan([
+        _step("COMMENT ON TABLE public.foo IS 'docs';", type="comment", operation="create", path="public.foo"),
+        _step("GRANT SELECT ON TABLE public.foo TO some_role;", type="privilege", operation="grant", path="public.foo"),
+        _step("CREATE TABLE foo (id int);", type="table", operation="create", path="public.foo"),
+    ])
+    out = reorder_plan(plan)
+    sqls = [s["sql"] for s in out["groups"][0]["steps"]]
+    assert sqls == [
+        "CREATE TABLE foo (id int);",
+        "COMMENT ON TABLE public.foo IS 'docs';",
+        "GRANT SELECT ON TABLE public.foo TO some_role;",
+    ]
+
+
+def test_qualified_comment_and_grant_follow_qualified_create_table():
+    """Qualified COMMENT/GRANT depend on qualified CREATE table identity."""
+    plan = _make_plan([
+        _step("COMMENT ON TABLE public.foo IS 'docs';", type="comment", operation="create", path="public.foo"),
+        _step("GRANT SELECT ON TABLE public.foo TO some_role;", type="privilege", operation="grant", path="public.foo"),
+        _step("CREATE TABLE public.foo (id int);", type="table", operation="create", path="public.foo"),
+    ])
+    out = reorder_plan(plan)
+    sqls = [s["sql"] for s in out["groups"][0]["steps"]]
+    assert sqls == [
+        "CREATE TABLE public.foo (id int);",
+        "COMMENT ON TABLE public.foo IS 'docs';",
+        "GRANT SELECT ON TABLE public.foo TO some_role;",
+    ]
+
+
+def test_qualified_comment_on_column_three_part_follows_create_table():
+    """COMMENT ON COLUMN public.foo.bar depends on CREATE TABLE public.foo."""
+    plan = _make_plan([
+        _step("COMMENT ON COLUMN public.foo.bar IS 'docs';", type="comment", operation="create", path="public.foo.bar"),
+        _step("CREATE TABLE public.foo (id int, bar int);", type="table", operation="create", path="public.foo"),
+    ])
+    out = reorder_plan(plan)
+    sqls = [s["sql"] for s in out["groups"][0]["steps"]]
+    assert sqls == [
+        "CREATE TABLE public.foo (id int, bar int);",
+        "COMMENT ON COLUMN public.foo.bar IS 'docs';",
+    ]
+
+
+def test_qualified_grant_on_type_follows_create_type():
+    """GRANT ON TYPE public.my_enum depends on CREATE TYPE public.my_enum."""
+    plan = _make_plan([
+        _step("GRANT USAGE ON TYPE public.my_enum TO some_role;", type="privilege", operation="grant", path="public.my_enum"),
+        _step("CREATE TYPE public.my_enum AS ENUM ('a');", type="type", operation="create", path="public.my_enum"),
+    ])
+    out = reorder_plan(plan)
+    sqls = [s["sql"] for s in out["groups"][0]["steps"]]
+    assert sqls == [
+        "CREATE TYPE public.my_enum AS ENUM ('a');",
+        "GRANT USAGE ON TYPE public.my_enum TO some_role;",
     ]
 
 

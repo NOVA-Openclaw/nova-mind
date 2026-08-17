@@ -193,12 +193,32 @@ def _function_identity_from_object_with_args(obj: Any) -> str | None:
     return _function_identity(name, arg_types)
 
 
-def _object_name_from_strings(parts: Iterable[Any]) -> str | None:
-    """Join a tuple/list of String nodes into a dotted object name."""
+def _object_name_from_strings(parts: Iterable[Any], kind: str | None = None) -> str | None:
+    """Join a tuple/list of String nodes into a dotted object name.
+
+    Strips a leading schema qualifier so that schema-qualified references match
+    the unqualified identities emitted by CREATE handlers (e.g. ``public.foo``
+    becomes ``foo``).  References into external/system schemas are ignored.
+
+    ``kind`` disambiguates multi-part unqualified names: column and trigger
+    identities are ``table.name`` (two parts), so a schema is only stripped when
+    there are three or more parts.
+    """
     names = [getattr(p, "sval", None) for p in parts]
     names = [n for n in names if n]
     if not names:
         return None
+    if names[0] in EXTERNAL_SCHEMAS:
+        return None
+    # Column and trigger identities are two-part (table.name) in unqualified
+    # form; strip a leading schema only when there are 3+ parts.
+    if kind in {"column", "trigger"}:
+        if len(names) >= 3:
+            names = names[1:]
+        return ".".join(names)
+    # Single-part objects (table, view, index, sequence, type): strip schema.
+    if len(names) >= 2:
+        names = names[1:]
     return ".".join(names)
 
 
@@ -526,7 +546,7 @@ def analyze_statement(sql: str) -> dict[str, Any]:
                 if identity:
                     result["defines"].add(identity)
             else:
-                name = _object_name_from_strings(obj)
+                name = _object_name_from_strings(obj, kind=kind)
                 if name:
                     result["defines"].add(_obj(kind, name))
         return result
@@ -739,7 +759,7 @@ def analyze_statement(sql: str) -> dict[str, Any]:
                 if identity:
                     result["refs"].add(identity)
             else:
-                name = _object_name_from_strings(obj)
+                name = _object_name_from_strings(obj, kind=kind)
                 if name:
                     result["refs"].add(_obj(kind, name))
         return result
@@ -757,7 +777,7 @@ def analyze_statement(sql: str) -> dict[str, Any]:
                 if identity:
                     result["refs"].add(identity)
             else:
-                name = _object_name_from_strings(obj)
+                name = _object_name_from_strings(obj, kind=kind)
                 if name:
                     result["refs"].add(_obj(kind, name))
         return result
@@ -776,11 +796,11 @@ def analyze_statement(sql: str) -> dict[str, Any]:
                     if identity:
                         result["refs"].add(identity)
                 elif obj.__class__.__name__ == "TypeName":
-                    type_name = _type_name(getattr(obj, "names", []))
+                    type_name = _object_name_from_strings(getattr(obj, "names", []), kind=kind)
                     if type_name:
                         result["refs"].add(_obj(kind, type_name))
                 else:
-                    name = _object_name_from_strings(obj)
+                    name = _object_name_from_strings(obj, kind=kind)
                     if name:
                         result["refs"].add(_obj(kind, name))
         return result
@@ -807,8 +827,12 @@ def analyze_statement(sql: str) -> dict[str, Any]:
                             cname = getattr(col, "sval", None)
                             if cname:
                                 result["refs"].add(_obj("column", f"{name}.{cname}"))
+            elif obj.__class__.__name__ == "TypeName":
+                type_name = _object_name_from_strings(getattr(obj, "names", []), kind=kind)
+                if type_name:
+                    result["refs"].add(_obj(kind, type_name))
             else:
-                name = _object_name_from_strings(obj)
+                name = _object_name_from_strings(obj, kind=kind)
                 if name:
                     result["refs"].add(_obj(kind, name))
         return result

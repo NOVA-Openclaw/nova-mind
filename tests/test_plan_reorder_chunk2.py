@@ -62,6 +62,46 @@ def test_tc03_regression_392_fixture_exists():
     assert schema.index("CREATE VIEW v_portfolio_allocation") < schema.index("CREATE TABLE positions")
 
 
+def test_tc03a_regression_605_newhart_plan_no_cycle():
+    """TC-3a: #605 newhart plan fixture reorders without false self-loop cycle."""
+    plan = load_plan(FIXTURES / "plan_605.json")
+    out = reorder_plan(plan)
+    # The full 728-step plan must be flattened into a deterministic order.
+    flat = [s["sql"] for g in out["groups"] for s in g["steps"]]
+    assert len(flat) == 728
+    validate_plan_invariants(out)
+
+    # Explicitly verify the two historically-problematic statement pairs.
+    drop_view_idx = flat.index("DROP VIEW IF EXISTS agent_bootstrap_context CASCADE;")
+    create_table_idx = flat.index(
+        "CREATE TABLE IF NOT EXISTS agent_bootstrap_context (\n"
+        "    id SERIAL,\n"
+        "    context_type text NOT NULL,\n"
+        "    file_key text NOT NULL,\n"
+        "    content text NOT NULL,\n"
+        "    description text,\n"
+        "    updated_at timestamptz DEFAULT now(),\n"
+        "    updated_by text DEFAULT CURRENT_USER,\n"
+        "    agent_name text,\n"
+        "    domain_names text[],\n"
+        "    CONSTRAINT agent_bootstrap_context_pkey PRIMARY KEY (id),\n"
+        "    CONSTRAINT agent_bootstrap_context_context_type_check CHECK (context_type IN ('UNIVERSAL'::text, 'GLOBAL'::text, 'DOMAIN'::text, 'AGENT'::text, 'SYSTEM'::text)),\n"
+        "    CONSTRAINT chk_domain_no_agent_name CHECK (context_type <> 'DOMAIN'::text OR agent_name IS NULL),\n"
+        "    CONSTRAINT chk_system_file_key CHECK (context_type <> 'SYSTEM'::text OR file_key = 'SYSTEM_PROMPT'::text),\n"
+        "    CONSTRAINT chk_universal_global_no_names CHECK ((context_type <> ALL (ARRAY['UNIVERSAL'::text, 'GLOBAL'::text])) OR agent_name IS NULL AND domain_names IS NULL)\n"
+        ");"
+    )
+    assert drop_view_idx < create_table_idx
+
+    drop_constraint_idx = flat.index(
+        "ALTER TABLE entity_facts DROP CONSTRAINT assertion_intent_not_null;"
+    )
+    add_constraint_idx = flat.index(
+        "ALTER TABLE entity_facts ADD CONSTRAINT assertion_intent_not_null CHECK (assertion_intent IS NOT NULL) NOT VALID;"
+    )
+    assert drop_constraint_idx < add_constraint_idx
+
+
 # ---------------------------------------------------------------------------
 # Group restructuring rules (Section 5)
 # ---------------------------------------------------------------------------

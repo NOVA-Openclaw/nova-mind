@@ -405,53 +405,7 @@ _install_completion_log_reconcile_cron() {
     fi
 }
 
-# Install the PostgreSQL NOTIFY listener as a systemd --user service.
-# Parameters: source_script source_service target_dir service_dir logs_dir
-_install_pg_notify_listener() {
-    local source_script="$1"
-    local source_service="$2"
-    local target_dir="$3"
-    local service_dir="$4"
-    local logs_dir="$5"
 
-    if [ ! -f "$source_script" ] || [ ! -f "$source_service" ]; then
-        echo -e "  ${WARNING} pg-notify-listener source files not found (skipping)"
-        return 1
-    fi
-
-    mkdir -p "$target_dir"
-    mkdir -p "$service_dir"
-    mkdir -p "$logs_dir"
-
-    cp "$source_script" "$target_dir/pg-notify-listener.py"
-    chmod +x "$target_dir/pg-notify-listener.py"
-    echo -e "  ${CHECK_MARK} Installed pg-notify-listener.py → $target_dir"
-
-    cp "$source_service" "$service_dir/pg-notify-listener.service"
-    echo -e "  ${CHECK_MARK} Installed pg-notify-listener.service → $service_dir"
-
-    if command -v systemctl &>/dev/null; then
-        systemctl --user daemon-reload
-        if systemctl --user is-active pg-notify-listener.service &>/dev/null; then
-            if systemctl --user restart pg-notify-listener.service; then
-                echo -e "  ${CHECK_MARK} Restarted pg-notify-listener.service"
-            else
-                echo -e "  ${WARNING} pg-notify-listener.service restart failed"
-            fi
-        else
-            if systemctl --user enable pg-notify-listener.service &>/dev/null && \
-               systemctl --user start pg-notify-listener.service; then
-                echo -e "  ${CHECK_MARK} Enabled and started pg-notify-listener.service"
-            else
-                echo -e "  ${WARNING} pg-notify-listener.service enable/start failed"
-            fi
-        fi
-    else
-        echo -e "  ${WARNING} systemctl not available — service not started"
-    fi
-}
-
-echo "  Agent DB user: $DB_USER"
 if [ "$PG_SUPERUSER" != "$DB_USER" ]; then
     echo "  Superuser:     $PG_SUPERUSER (for DDL operations)"
 fi
@@ -1891,20 +1845,6 @@ fi
 
 # --- Optional agent_chat peer integration (nova-mind#579) ---
 _agent_chat_integrate_peer
-
-# --- PostgreSQL NOTIFY listener ---
-# Local listener that reacts to postgres channels (schema_changed, gambling_changed,
-# etc.). Runs as a systemd --user service under the installing unix account so it
-# authenticates with that account's DB role. Issue: nova-mind #320 / #251.
-echo ""
-echo "PostgreSQL NOTIFY listener..."
-
-_install_pg_notify_listener \
-    "$SCRIPT_DIR/cognition/scripts/pg-notify-listener.py" \
-    "$SCRIPT_DIR/cognition/systemd/pg-notify-listener.service" \
-    "$HOME/.openclaw/workspace/scripts" \
-    "$HOME/.config/systemd/user" \
-    "$HOME/.openclaw/workspace/logs"
 
 # --- generate-delegation-context.sh ---
 echo ""

@@ -59,7 +59,6 @@ This is the actual installer. It:
   agent and then `${AGENT_CHAT_REPO:-$HOME/agent-chat}/install-plugin.sh` to build,
   sync, and configure the `agent_chat` OpenClaw plugin. If the bus is absent, the
   installer skips these steps silently and writes no `agent_chat` artifacts.
-- Deploys `pg-notify-listener.py` and its systemd user unit
 - Installs skills (agent-spawn) and bootstrap-context hook
 - Runs `npm install` for hook dependencies if `package.json` is present
 - Configures shell environment and OpenClaw config (see `memory/docs/database-config.md`)

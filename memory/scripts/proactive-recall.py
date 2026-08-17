@@ -36,7 +36,9 @@ sys.path.insert(0, os.path.expanduser("~/.openclaw/lib"))
 from pg_env import load_pg_env
 load_pg_env()
 
-EMBEDDING_MODEL = "mxbai-embed-large"
+# NOTE: unused fallback constant — the live model comes from embedding-config.json
+# (loaded via load_embedding_config()). Kept in sync with the unified standard.
+EMBEDDING_MODEL = "snowflake-arctic-embed2"
 
 # Default configuration
 DEFAULT_MAX_RESULTS = 10  # Fetch more, then filter by token budget

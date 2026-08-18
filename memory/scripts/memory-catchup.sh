@@ -150,18 +150,21 @@ add_to_cache_and_get_context() {
     fi
 
     # How many prior messages to include is driven by the same config key as
-    # the per-turn path (#611).
-    local prior_limit
-    prior_limit=$(max_prior_messages)
-    # The cache keeps room for the current message plus prior context; cap at
-    # CACHE_SIZE - 1 so the rolling window stays bounded.
-    if [ "$prior_limit" -ge "$CACHE_SIZE" ]; then
-        prior_limit=$((CACHE_SIZE - 1))
-    fi
+    # the per-turn path (#611). If the context window is disabled, skip the
+    # context fetch entirely (matches extraction-replay.sh and handler.ts).
+    local context_messages=""
+    if is_context_window_enabled; then
+        local prior_limit
+        prior_limit=$(max_prior_messages)
+        # The cache keeps room for the current message plus prior context; cap at
+        # CACHE_SIZE - 1 so the rolling window stays bounded.
+        if [ "$prior_limit" -ge "$CACHE_SIZE" ]; then
+            prior_limit=$((CACHE_SIZE - 1))
+        fi
 
-    # Get messages BEFORE target timestamp for context
-    local context_messages
-    context_messages=$(jq -c --arg ts "$target_ts" 'select(.timestamp < $ts)' < "$ALL_MESSAGES" | tail -n "$prior_limit")
+        # Get messages BEFORE target timestamp for context
+        context_messages=$(jq -c --arg ts "$target_ts" 'select(.timestamp < $ts)' < "$ALL_MESSAGES" | tail -n "$prior_limit")
+    fi
 
     # Build new cache (includes the current message at the end)
     local new_cache

@@ -86,6 +86,20 @@ To verify the per-turn path in a deployed environment:
    }
    ```
 2. Send the sequence of messages in the fixture in a real Discord/Signal channel.
-3. Inspect gateway logs for `[memory-extract] Loaded N prior message(s) as context`
-   and confirm the count is the number of prior messages.
+3. Inspect gateway logs for `[memory-extract] Loaded prior context messages`
+   (with a `count` field in the structured log payload) and confirm the count
+   matches the number of prior messages.
 4. Check the resulting `events` row for correct `description` and `environment`.
+
+## Coverage caveat
+
+The steps above are manual verification procedures. As of commit `8edc8c5`,
+none of them are wired into an automated test or CI job — the fixtures
+(`blockhenge-regression.json`, `cross-channel-privacy.json`) exist to support
+this manual replay procedure but are not loaded or asserted against by any
+`.py` test file. Automated coverage for this issue is limited to
+`test_issue_611_extract_memories.py` (27 unit tests) and
+`test_issue_611_extract_memories_integration.py` (2 real-DB integration tests)
+— 29 total. The batch/replay path (`memory-catchup.sh`, `extraction-replay.sh`)
+has zero automated test coverage; this document is its only verification path.
+See `tests/issue-611/step8-qa-validation.md` for the full coverage map.

@@ -684,7 +684,7 @@ nova-mind/memory/
 ├── plugins/                # OpenClaw Plugin SDK plugins
 │   └── turn-context/       # Consolidates old semantic-recall + agent-turn-context (#182)
 └── scripts/                # Shell and Python scripts (source)
-    ├── extract_memories.py # Memory extraction logic; entry point called directly by the memory-extract hook (replaces the old extract-memories.sh/store-memories.sh/process-input.sh shell pipeline, removed in #174 — see docs/memory-extraction-pipeline.md for a known unrelated process-input.sh bug in memory-catchup.sh)
+    ├── extract_memories.py # Memory extraction logic; entry point called directly by both the memory-extract hook and memory-catchup.sh (replaces the old extract-memories.sh/store-memories.sh/process-input.sh shell pipeline, removed in #174; memory-catchup.sh's call path to extract_memories.py was itself broken — pointed at the long-removed process-input.sh — until #611 fixed it to call extract_memories.py directly, see docs/memory-extraction-pipeline.md)
     ├── proactive-recall.py # Semantic search
     └── ...                 # Other utility scripts
 ```

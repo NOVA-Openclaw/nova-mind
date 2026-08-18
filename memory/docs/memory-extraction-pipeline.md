@@ -4,7 +4,7 @@ The memory extraction pipeline automatically transforms natural language convers
 
 > **Note:** This doc previously described a three-script shell pipeline (`extract-memories.sh` → `store-memories.sh`, driven by `process-input.sh`). That pipeline was consolidated into a single Python script, `memory/scripts/extract_memories.py`, as part of the #174 grammar-parser removal. None of `extract-memories.sh`, `store-memories.sh`, or `process-input.sh` exist in this repo's `memory/scripts/` anymore.
 >
-> **Fixed (#611):** `memory/scripts/memory-catchup.sh` now calls `extract_memories.py` directly and passes the same prior-message context as the per-turn hook path via the `EXTRACTION_CONTEXT_JSON` environment variable.
+> **Fixed (#611):** Prior to #611, `memory-catchup.sh` attempted to invoke the long-removed `process-input.sh` for message-level re-extraction — a broken call path (target script didn't exist) that silently no-opped, though it never blocked transcript ingestion. As of #611, `memory-catchup.sh` calls `extract_memories.py` **directly** for message-level extraction (same script the per-turn hook uses) and passes the same prior-message conversation context as the per-turn hook path via the `EXTRACTION_CONTEXT_JSON` environment variable, gated by the same `context_window_enabled`/`max_prior_messages` config keys. The `process-input.sh` reference is now historical; it does not describe current behavior.
 
 ## Overview
 
@@ -24,8 +24,10 @@ Incoming message → memory-extract hook → extract_memories.py → PostgreSQL
 Catch-up path (session transcript ingestion, cron-driven):
 Session JSONL → memory-catchup.sh → channel_sessions/transcripts (DB)
                       ↓
-              (also attempts message-level re-extraction via the
-               process-input.sh code path described above — currently broken)
+              Also invokes extract_memories.py directly (#611) for
+              message-level re-extraction, passing the same rolling-cache
+              conversation context as EXTRACTION_CONTEXT_JSON — this replaced
+              the pre-#611 broken process-input.sh call path.
 ```
 
 **Key Features:**
@@ -249,7 +251,7 @@ Imports `get_initial_confidence` from `confidence_helper.py` to set a starting c
 
 ### 3. `memory-catchup.sh` — Session Transcript Ingestion (Cron-Driven)
 
-**Purpose:** Scans session transcripts and ingests them into the database; also attempts a legacy per-message re-extraction path (see the known-issue note above).
+**Purpose:** Scans session transcripts and ingests them into the database; also runs a per-message re-extraction path directly against `extract_memories.py` (#611 — see the note at the top of this doc for the pre-#611 broken behavior this replaced).
 
 **Location:** `memory/scripts/memory-catchup.sh`
 
@@ -259,7 +261,7 @@ Imports `get_initial_confidence` from `confidence_helper.py` to set a starting c
 3. Maintains a rolling message cache at `~/.openclaw/memory-message-cache.json`
 4. **Ingests JSONL files into DB:** Parses session files from `~/.openclaw/agents/*/sessions/*.jsonl` and upserts into `channel_sessions` + `channel_transcripts` with provider detection, rich metadata parsing (sender names, IDs, group info), and deduplication via composite unique indexes
 5. **Deletes source files:** After successful DB commit, source JSONL files are removed. Extraction failures do NOT block transcript ingestion.
-6. Attempts to invoke `process-input.sh` for message-level extraction — **currently broken** (see known-issue note above); this does not block transcript ingestion, which is why the JSONL → DB path continues to work even though this sub-path is broken
+6. **Message-level extraction (#611):** For each new user/assistant message (max 3 per run, rate-limited), builds conversation context from the rolling cache (gated by `is_context_window_enabled()`/`max_prior_messages()`, same config keys as the per-turn path) and invokes `extract_memories.py` directly via stdin, passing `EXTRACTION_CONTEXT_JSON`. This runs in the background (`&`) unless `--log` is passed, and never blocks transcript ingestion — a missing API key or extraction failure here does not stop the JSONL → DB ingest path.
 
 **State file structure:**
 ```json
@@ -282,7 +284,7 @@ Imports `get_initial_confidence` from `confidence_helper.py` to set a starting c
 | No new extractions | State file timestamp stuck | Delete state file: `rm ~/.openclaw/memory-catchup-state.json` |
 | Missing recent messages | Extractions lag behind chat | Check cron job is running: `crontab -l \| grep memory-catchup` |
 | Duplicate processing | Same messages processed twice | State file corruption - recreate with current timestamp |
-| Script hangs | Process doesn't complete | Check for stuck Claude API calls, or the broken `process-input.sh` path noted above |
+| Script hangs | Process doesn't complete | Check for stuck LLM API calls in the message-level extraction step (backgrounded `extract_memories.py` invocations, #611) |
 
 ## Context Window System
 
@@ -324,6 +326,41 @@ callers are encouraged to pass reasonably-sized context already.
 If context assembly fails for any reason (DB error, malformed JSON, missing FK),
 extraction proceeds as a no-context single-message extraction. Context-fetch
 failure is never treated as an extraction failure (#611, C8/F1-F3).
+
+### Confidence Honesty (#611)
+
+The extraction prompt's CONFIDENCE GUIDANCE section (in `build_extraction_prompt()`,
+`extract_memories.py`) explicitly instructs the model not to anchor on `confidence: 1.0`
+as a default — the prompt's own TEMPLATE example now shows `0.85`, not `1.0`, and
+includes worked examples of both a low-confidence (ambiguous, no-context) and a
+high-confidence (directly stated) case. This is a prompt-level instruction change,
+not a deterministic rule, so it applies regardless of whether the context window
+is enabled (#611, TC-E4).
+
+As a safety net against the model still anchoring on 1.0 despite the instruction,
+`apply_confidence_honesty()` in `extract_memories.py` caps confidence **after**
+extraction, before storage:
+
+- Only acts when there is **no usable context** (`context_messages` is empty)
+  **and** the current message is short (`len(stripped) < SHORT_MESSAGE_THRESHOLD`,
+  currently **60 characters**).
+- Only caps facts that claim `confidence >= 1.0`; facts already below 1.0 are left
+  untouched (this is a ceiling, not a rescale).
+- The cap value comes from `confidence_helper.py`'s `get_initial_confidence(source_entity_id, source="inferred")`
+  — i.e., the same trust-level-based score dedup already uses for new facts, not
+  an arbitrary constant. If that helper is unavailable or returns something outside
+  `[0, 1]`, the cap falls back to `0.5`.
+- **Owner exception:** because `get_initial_confidence()` returns `1.0`
+  unconditionally for `OWNER_ENTITY_ID` (I)ruid, entity id 2), a 1.0-confidence fact
+  attributed to the owner is never capped by this safety net — the cap itself
+  would be `1.0`, so the function short-circuits (`if cap >= 1.0: return`). The
+  honesty fix therefore constrains non-owner sources; owner-attributed facts rely
+  on the prompt instruction alone.
+- This function never *raises* confidence — it only lowers over-claimed 1.0 values
+  toward a trust-appropriate ceiling. It does not implement the "with-context ≥
+  without-context" directional behavior (#611, TC-E2) — that behavior is expected
+  to emerge from the LLM's own judgment given better disambiguation, not from this
+  post-hoc cap.
 
 ### Cache Structure (catchup path only)
 
@@ -537,8 +574,8 @@ CREATE INDEX idx_events_date ON events(date);
 
 ## Next Steps
 
-1. **Fix the `memory-catchup.sh` → `process-input.sh` broken call path** (see known-issue note at the top of this doc)
-2. **Add a cron entry for `extraction-replay.sh`** (#485) — the script is deployed but not scheduled by default; see the "Setting up automatic replay" note above
+1. **Add a cron entry for `extraction-replay.sh`** (#485) — the script is deployed but not scheduled by default; see the "Setting up automatic replay" note above
+2. **Wire the batch/replay path's context-window behavior into automated tests** (#611) — as of `8edc8c5`, `memory-catchup.sh` and `extraction-replay.sh`'s context assembly (Group B, 8 test cases in `tests/issue-611/TEST-CASES-ISSUE-611.md`) has zero automated coverage; verification is manual only, per `tests/issue-611/REPLAY-PROCEDURE.md`
 3. **Set up monitoring:** Implement extraction metrics tracking, including alerting on `extraction_failures` row growth (e.g., pending count exceeding a threshold, or a rising `retry_exhausted`/`unreplayable` count)
 4. **Tune performance:** Adjust batch sizes and API limits based on usage
 5. **Extend categories:** Add task extraction, sentiment analysis

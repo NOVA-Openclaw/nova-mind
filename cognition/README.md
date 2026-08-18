@@ -194,7 +194,7 @@ Update the column in the DB and the config propagates automatically via LISTEN/N
 ## Structure
 
 ```
-nova-cognition/
+cognition/
 ├── docs/                    # Architecture documentation
 │   ├── models.md            # AI model reference and selection guide
 │   ├── delegation-context.md # Dynamic delegation context generation

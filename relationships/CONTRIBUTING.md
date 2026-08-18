@@ -13,8 +13,8 @@
 
 1. **Clone and Setup**
 ```bash
-git clone <repository-url>
-cd nova-relationships
+git clone https://github.com/NOVA-Openclaw/nova-mind.git
+cd nova-mind/relationships
 ```
 
 2. **Database Setup**

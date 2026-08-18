@@ -349,10 +349,12 @@ cd nova-ca
 ## File Structure
 
 ```
-nova-relationships/
+relationships/                        # Subsystem directory within the nova-mind monorepo
 ├── README.md                          # This file
 ├── ARCHITECTURE-entity-resolver.md    # Detailed technical docs
 ├── CONTRIBUTING.md                    # Development guidelines
+├── CHANGELOG.md                       # Change history
+├── agent-install.sh                   # Subsystem installer (entity-resolver + CA)
 ├── lib/
 │   └── entity-resolver/              # Core entity resolution library
 │       ├── index.ts                  # Main API exports

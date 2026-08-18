@@ -12,6 +12,7 @@
 #### Documentation
 - `cognition/README.md` and `cognition/docs/system-level-controls.md` — removed or re-anchored references to the in-repo listener; the `OPENCLAW_AGENT_ID=gidget` spoof explanation now points at the canonical `nova-workspace/scripts/pg-notify-listener.py` copy.
 - `tests/TEST-CASES-ISSUE-579.md` — added a forward pointer noting that both `nova_memory` and `agent_chat` listeners have relocated to `nova-workspace` per #612.
+- **Postmortem note added** (nova-mind#612 acceptance criterion) — a full writeup of the 2026-08-17 schema-sync listener breach (root cause, five-account blast radius, PR #609 revert, and the three-part fix: repo removal + nova-workspace relocation + in-script account guard) now lives in `ARCHITECTURE.md` under "Postmortem: 2026-08-17 Schema-Sync Listener Breach (nova-mind#612)", cross-referenced from `nova-workspace/docs/pg-notify-listener.md`.
 
 ### Batch: plan-dependency-ordering-597 (Issues #597, #447, #392)
 

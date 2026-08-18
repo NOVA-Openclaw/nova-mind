@@ -368,6 +368,52 @@ The installer enforces this order automatically.
 - **Privacy‑Filtered Context:** `session‑init` hook strips sensitive data before injecting context into shared sessions.
 - **1Password Integration:** Credentials and access policies stored in 1Password with periodic policy scans.
 
+### Postmortem: 2026-08-17 Schema-Sync Listener Breach (nova-mind#612)
+
+**What happened:** `cognition/scripts/pg-notify-listener.py` — a PostgreSQL
+LISTEN/NOTIFY daemon that syncs schema changes to this repo's `main` branch —
+was local `nova`-only tooling, but it was committed inside this shared repo
+and installed **unconditionally** by `agent-install.sh` on every peer that
+ran it. On 2026-08-17, a deploy (`51a5d19`) triggered installs on five
+accounts (nova, graybeard, newhart, victoria, nova-staging), each spinning
+up an independent listener instance watching its own database connection
+and racing to push schema dumps directly to `nova-mind`'s `origin/main`,
+bypassing PR/QA review entirely. This corrupted NOVA's live `nova_memory`
+database role mid-session and landed three unreviewed commits on `main`
+(reverted via PR #609).
+
+**Root cause:** two independent gaps compounded — (1) local-only tooling
+was committed in a shared, multi-account-installable repo instead of a
+nova-only tooling repo, and (2) the installer had no account gating, so
+"install everywhere" was the unconditional default rather than an opt-in.
+Neither gap alone would have caused the breach; a shared installer without
+the listener present is safe, and a nova-only-gated installer with the
+listener present is also safe.
+
+**Fix (nova-mind#612, SE run #717):**
+1. The listener, its systemd unit, and its dedicated test suite were
+   **removed entirely** from this repo (`cognition/scripts/`,
+   `cognition/systemd/`, `cognition/tests/test_pg_notify_listener_issue_*.py`,
+   `conftest.py`) along with the `_install_pg_notify_listener` call site in
+   `agent-install.sh`.
+2. `nova-workspace` (internal nova-only tooling repo, never installed on
+   peer accounts) was confirmed as the sole canonical home for the listener,
+   plus a **second** listener for `agent_chat` schema sync (the same
+   local-only-tooling-in-a-shared-repo pattern also existed in the
+   `agent-chat` repo and was fixed the same way — see that repo's
+   CHANGELOG).
+3. Both relocated listeners now carry an **in-script account guard**
+   (`getpass.getuser()` checked against `EXPECTED_USER = "nova"` before any
+   DB/git operation) as defense-in-depth, independent of installer gating —
+   see `nova-workspace/docs/pg-notify-listener.md` for the full detail.
+4. The installer was audited for other local-only tooling riding the same
+   unconditional-install pattern; none was found beyond the two listeners
+   (nova-mind's and agent-chat's) already covered by this fix.
+
+See `nova-mind` issue #612 for the full incident thread and
+`nova-workspace/docs/pg-notify-listener.md` for the current architecture of
+the relocated tooling.
+
 ### ⚠️ Privacy Gap: Entity Facts Visibility Not Enforced at Retrieval
 
 The `entity_facts` table includes `visibility` (public/trusted/private) and `privacy_scope` (entity ID allowlist) columns in the schema, and indexes exist for both. **However, these are NOT filtered at retrieval time** — no hook, resolver, or query currently enforces visibility. All facts are returned regardless of their visibility setting.

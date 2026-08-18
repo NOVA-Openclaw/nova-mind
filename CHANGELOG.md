@@ -1,5 +1,19 @@
 # Changelog
 
+### Batch: pg-notify-listener-relocation-612 (Issue #612)
+
+#### Removed
+- **`cognition/scripts/pg-notify-listener.py`**, **`cognition/systemd/pg-notify-listener.service`**, and the `_install_pg_notify_listener()` call in `agent-install.sh` (nova-mind#612) — local schema-sync tooling for `nova_memory` does not belong in the shared `nova-mind` repo. The listener, its unit file, its install wiring, and its dedicated pytest suite (`cognition/tests/test_pg_notify_listener_issue_{399,506,508}.py` plus `cognition/tests/conftest.py`) are removed; the canonical copy now lives in `NOVA-Openclaw/nova-workspace`.
+- **`lib/tests/test_pg_env.py` TC-50/TC-51** — the two tests that loaded the listener script via a hardcoded repo-relative path are retired here; repo-relative `pg_env` resolution for the relocated listener is tested in nova-workspace's suite.
+
+#### Fixed
+- **Stale `pg_env` import-path reference in `memory/docs/database-config.md`** — updated the #405 example from the removed `cognition/scripts/pg-notify-listener.py` path to `nova-workspace/scripts/pg-notify-listener.py`.
+
+#### Documentation
+- `cognition/README.md` and `cognition/docs/system-level-controls.md` — removed or re-anchored references to the in-repo listener; the `OPENCLAW_AGENT_ID=gidget` spoof explanation now points at the canonical `nova-workspace/scripts/pg-notify-listener.py` copy.
+- `tests/TEST-CASES-ISSUE-579.md` — added a forward pointer noting that both `nova_memory` and `agent_chat` listeners have relocated to `nova-workspace` per #612.
+- **Postmortem note added** (nova-mind#612 acceptance criterion) — a full writeup of the 2026-08-17 schema-sync listener breach (root cause, five-account blast radius, PR #609 revert, and the three-part fix: repo removal + nova-workspace relocation + in-script account guard) now lives in `ARCHITECTURE.md` under "Postmortem: 2026-08-17 Schema-Sync Listener Breach (nova-mind#612)", cross-referenced from `nova-workspace/docs/pg-notify-listener.md`.
+
 ### Batch: plan-dependency-ordering-597 (Issues #597, #447, #392)
 
 #### Added

@@ -322,6 +322,59 @@ class TestEnvironmentStorage(unittest.TestCase):
         env_param = next((p for p in params if isinstance(p, str) and p.startswith("x")), "")
         self.assertEqual(len(env_param), 255)
 
+    @mock.patch("extract_memories.resolve_source_entity_id", return_value=None)
+    @mock.patch("extract_memories.ensure_entity")
+    def test_event_insert_placeholder_count_matches_values(self, mock_ensure, mock_resolve):
+        """Placeholder/value symmetry for events INSERT (regression guard #611)."""
+        conn = mock.MagicMock()
+        cur = conn.cursor.return_value.__enter__.return_value
+        cur.fetchone.return_value = None
+
+        em.store_extracted(
+            data={"events": [{"description": "No env", "date": "2026-08-17"}]},
+            sender_name="Z",
+            sender_id="",
+            sender_provider="discord",
+            src_timestamp="",
+            src_channel_transcript_id="",
+            src_channel_session_id="",
+            conn=conn,
+        )
+
+        calls = [c for c in cur.execute.call_args_list if "INSERT INTO events" in str(c.args[0])]
+        self.assertEqual(len(calls), 1)
+        sql = calls[0].args[0]
+        params = calls[0].args[1]
+        placeholder_count = sql.count("%s")
+        self.assertEqual(placeholder_count, len(params))
+
+    @mock.patch("extract_memories.resolve_source_entity_id", return_value=None)
+    @mock.patch("extract_memories.ensure_entity")
+    def test_event_insert_with_environment_placeholder_count_matches_values(self, mock_ensure, mock_resolve):
+        """Placeholder/value symmetry when environment column is included."""
+        conn = mock.MagicMock()
+        cur = conn.cursor.return_value.__enter__.return_value
+        cur.fetchone.return_value = None
+
+        em.store_extracted(
+            data={"events": [{"description": "With env", "environment": "prod"}]},
+            sender_name="Z",
+            sender_id="",
+            sender_provider="discord",
+            src_timestamp="",
+            src_channel_transcript_id="",
+            src_channel_session_id="",
+            conn=conn,
+        )
+
+        calls = [c for c in cur.execute.call_args_list if "INSERT INTO events" in str(c.args[0])]
+        self.assertEqual(len(calls), 1)
+        sql = calls[0].args[0]
+        params = calls[0].args[1]
+        placeholder_count = sql.count("%s")
+        self.assertEqual(placeholder_count, len(params))
+        self.assertIn("environment", sql)
+
 
 class TestParseContextJson(unittest.TestCase):
     """Tests for EXTRACTION_CONTEXT_JSON parsing (#611, Group A/F)."""

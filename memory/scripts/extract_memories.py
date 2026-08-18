@@ -1287,13 +1287,13 @@ def store_extracted(
                     print(f"[extract_memories]   event exists: {description[:60]}", file=sys.stderr)
                     continue
 
-                # Use provided date, fallback to src_timestamp, fallback to NOW()
+                # Use provided date, fallback to src_timestamp, fallback to NOW().
+                # event_date is always passed as a value so placeholders stay symmetric.
                 event_date = date_val or src_timestamp or None
-                event_date_expr = "%s::timestamptz" if event_date else "NOW()"
 
                 cols = ["title", "description", "event_date", "source"]
                 vals_list: list[Any] = [title, description, event_date, sender_name or "auto-extracted"]
-                ph_list = ["%s", "%s", event_date_expr, "%s"]
+                ph_list = ["%s", "%s", "COALESCE(%s::timestamptz, NOW())", "%s"]
 
                 if environment:
                     cols.append("environment")

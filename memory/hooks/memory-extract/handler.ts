@@ -346,116 +346,133 @@ const handler = async (event: any) => {
     // OpenClaw may populate these in ctx when the channel plugin has already persisted
     // the message. When they are absent (real-time path before batch ingest), we do a
     // lightweight upsert here so entity_facts always has valid FK pointers.
+    //
+    // PR1 (#621): ctx ids come from the shared transcript store (e.g. nova_memory),
+    // but the extraction target is PGDATABASE. Never trust ctx ids as valid in the
+    // target DB — always run the local idempotent upsert and use the locally-resolved ids.
     let channelTranscriptId = String(ctx.channelTranscriptId ?? ctx.channel_transcript_id ?? '');
     let channelSessionId = String(ctx.channelSessionId ?? ctx.channel_session_id ?? '');
 
-    // These identifiers are needed for FK recovery if the transcript upsert returns empty
-    // because the row already exists (ON CONFLICT DO NOTHING).
+    // Track the ids actually resolved from the LOCAL target DB. If resolution fails,
+    // we null out the FK env vars so the extractor stores the fact with NULL FKs.
+    let resolvedSessionId = '';
+    let resolvedTranscriptId = '';
     let externalMessageId = '';
     let derivedMessageId = '';
 
-    if (!channelTranscriptId || channelTranscriptId === '0') {
-      try {
-        // Derive provider from chat_id format — read from metadata first
-        const chatId = String(ctx.conversationId ?? meta.conversationId ?? ctx.chatId ?? ctx.chat_id ?? '');
-        let provider = String(meta.provider ?? ctx.provider ?? ctx.channelId ?? 'openclaw');
-        if (provider === 'openclaw') {
-          // Derive provider from chat_id format when ctx.provider is not set
-          if (chatId.startsWith('channel:')) provider = 'discord';
-          else if (chatId.startsWith('group:') || chatId.startsWith('+')) provider = 'signal';
+    try {
+      // Derive provider from chat_id format — read from metadata first
+      const chatId = String(ctx.conversationId ?? meta.conversationId ?? ctx.chatId ?? ctx.chat_id ?? '');
+      let provider = String(meta.provider ?? ctx.provider ?? ctx.channelId ?? 'openclaw');
+      if (provider === 'openclaw') {
+        // Derive provider from chat_id format when ctx.provider is not set
+        if (chatId.startsWith('channel:')) provider = 'discord';
+        else if (chatId.startsWith('group:') || chatId.startsWith('+')) provider = 'signal';
+      }
+
+      const externalChatId = chatId || sessionKey || 'unknown';
+      externalMessageId = String(ctx.messageId ?? meta.messageId ?? ctx.message_id ?? '');
+      const isGroupBool = Boolean(meta.isGroup ?? ctx.isGroup ?? false);
+      const chatType = isGroupBool ? 'group' : 'direct';
+      const groupSubject = String(meta.channelName ?? ctx.channelName ?? ctx.groupSubject ?? ctx.group_subject ?? '');
+      const groupSpace = String(meta.guildId ?? ctx.guildId ?? ctx.groupSpace ?? ctx.group_space ?? '');
+      const senderTag = String(meta.senderTag ?? ctx.senderTag ?? ctx.sender_tag ?? '');
+      const senderUsername = String(meta.senderUsername ?? ctx.senderUsername ?? '');
+
+      // Only attempt upsert when psql is available and we have minimal identifying info
+      if (externalMessageId || rawBody.length > 0) {
+        // Upsert session row
+        const sessArgs = [
+          (process.env.PGDATABASE || 'nova_memory'), '-t', '-A', '-c',
+          `INSERT INTO channel_sessions (session_key, agent_id, provider, external_chat_id, chat_type` +
+          (groupSubject ? ', group_subject, title' : '') +
+          (groupSpace ? ', group_space_id' : '') +
+          `) VALUES (` +
+          `'${sessionKey.replace(/'/g, "''")}', 'main', ` +
+          `'${provider.replace(/'/g, "''")}', ` +
+          `'${externalChatId.replace(/'/g, "''")}', ` +
+          `'${chatType}'` +
+          (groupSubject ? `, '${groupSubject.replace(/'/g, "''")}', '${groupSubject.replace(/'/g, "''")}' ` : '') +
+          (groupSpace ? `, '${groupSpace.replace(/'/g, "''")}' ` : '') +
+          `) ON CONFLICT (provider, external_chat_id, COALESCE(external_thread_id, '')) DO UPDATE SET updated_at = NOW() RETURNING id;`
+        ];
+
+        const { stdout: sessOut } = await execFileAsync('psql', sessArgs)
+          .catch((err) => logPsqlError('session-upsert', err));
+        // psql -t -A may include 'INSERT 0 1' status line — extract first numeric line
+        resolvedSessionId = (sessOut.match(/^(\d+)/m) ?? [])[1] ?? '';
+        if (resolvedSessionId) {
+          channelSessionId = resolvedSessionId;
         }
 
-        const externalChatId = chatId || sessionKey || 'unknown';
-        externalMessageId = String(ctx.messageId ?? meta.messageId ?? ctx.message_id ?? '');
-        const isGroupBool = Boolean(meta.isGroup ?? ctx.isGroup ?? false);
-        const chatType = isGroupBool ? 'group' : 'direct';
-        const groupSubject = String(meta.channelName ?? ctx.channelName ?? ctx.groupSubject ?? ctx.group_subject ?? '');
-        const groupSpace = String(meta.guildId ?? ctx.guildId ?? ctx.groupSpace ?? ctx.group_space ?? '');
-        const senderTag = String(meta.senderTag ?? ctx.senderTag ?? ctx.sender_tag ?? '');
-        const senderUsername = String(meta.senderUsername ?? ctx.senderUsername ?? '');
+        // Upsert transcript row when we have a session and a message id or can derive one.
+        // PR1 (#621): use resolvedSessionId, NOT channelSessionId, to avoid using a
+        // raw/foreign ctx id as the local session FK.
+        if (resolvedSessionId) {
+          derivedMessageId = externalMessageId || `${messageTimestamp}_rt`;
+          const contentSnippet = rawBody.substring(0, 65535).replace(/'/g, "''");
+          const senderNameEsc = senderName.replace(/'/g, "''");
+          const senderIdEsc = senderId.replace(/'/g, "''");
+          const senderTagEsc = senderTag.replace(/'/g, "''");
+          const senderUsernameEsc = senderUsername.replace(/'/g, "''");
 
-        // Only attempt upsert when psql is available and we have minimal identifying info
-        if (externalMessageId || rawBody.length > 0) {
-          // Upsert session row
-          const sessArgs = [
+          const txArgs = [
             (process.env.PGDATABASE || 'nova_memory'), '-t', '-A', '-c',
-            `INSERT INTO channel_sessions (session_key, agent_id, provider, external_chat_id, chat_type` +
-            (groupSubject ? ', group_subject, title' : '') +
-            (groupSpace ? ', group_space_id' : '') +
+            `INSERT INTO channel_transcripts (session_id, external_message_id, timestamp, role, content` +
+            (senderId ? ', sender_id' : '') +
+            (senderName && senderName !== 'unknown' ? ', sender_name' : '') +
+            (senderTag ? ', sender_tag' : '') +
+            (senderUsername ? ', sender_username' : '') +
             `) VALUES (` +
-            `'${sessionKey.replace(/'/g, "''")}', 'main', ` +
-            `'${provider.replace(/'/g, "''")}', ` +
-            `'${externalChatId.replace(/'/g, "''")}', ` +
-            `'${chatType}'` +
-            (groupSubject ? `, '${groupSubject.replace(/'/g, "''")}', '${groupSubject.replace(/'/g, "''")}' ` : '') +
-            (groupSpace ? `, '${groupSpace.replace(/'/g, "''")}' ` : '') +
-            `) ON CONFLICT (provider, external_chat_id, COALESCE(external_thread_id, '')) DO UPDATE SET updated_at = NOW() RETURNING id;`
+            `${resolvedSessionId}, '${derivedMessageId.replace(/'/g, "''")}', ` +
+            `'${messageTimestamp}', 'user', '${contentSnippet}'` +
+            (senderId ? `, '${senderIdEsc}'` : '') +
+            (senderName && senderName !== 'unknown' ? `, '${senderNameEsc}'` : '') +
+            (senderTag ? `, '${senderTagEsc}'` : '') +
+            (senderUsername ? `, '${senderUsernameEsc}'` : '') +
+            `) ON CONFLICT (session_id, external_message_id) DO NOTHING RETURNING id;`
           ];
 
-          const { stdout: sessOut } = await execFileAsync('psql', sessArgs)
-            .catch((err) => logPsqlError('session-upsert', err));
+          const { stdout: txOut } = await execFileAsync('psql', txArgs)
+            .catch((err) => logPsqlError('transcript-upsert', err));
           // psql -t -A may include 'INSERT 0 1' status line — extract first numeric line
-          const resolvedSessionId = (sessOut.match(/^(\d+)/m) ?? [])[1] ?? '';
-          if (resolvedSessionId) {
-            channelSessionId = resolvedSessionId;
+          resolvedTranscriptId = (txOut.match(/^(\d+)/m) ?? [])[1] ?? '';
+          if (resolvedTranscriptId) {
+            channelTranscriptId = resolvedTranscriptId;
           }
 
-          // Upsert transcript row when we have a session and a message id or can derive one
-          if (channelSessionId) {
-            derivedMessageId = externalMessageId || `${messageTimestamp}_rt`;
-            const contentSnippet = rawBody.substring(0, 65535).replace(/'/g, "''");
-            const senderNameEsc = senderName.replace(/'/g, "''");
-            const senderIdEsc = senderId.replace(/'/g, "''");
-            const senderTagEsc = senderTag.replace(/'/g, "''");
-            const senderUsernameEsc = senderUsername.replace(/'/g, "''");
-
-            const txArgs = [
+          // C1 recovery: ON CONFLICT DO NOTHING returns no id when the row already
+          // exists. Recover the real transcript id with a follow-up SELECT before
+          // falling back to body storage.
+          if (!resolvedTranscriptId && resolvedSessionId && derivedMessageId) {
+            const lookupArgs = [
               (process.env.PGDATABASE || 'nova_memory'), '-t', '-A', '-c',
-              `INSERT INTO channel_transcripts (session_id, external_message_id, timestamp, role, content` +
-              (senderId ? ', sender_id' : '') +
-              (senderName && senderName !== 'unknown' ? ', sender_name' : '') +
-              (senderTag ? ', sender_tag' : '') +
-              (senderUsername ? ', sender_username' : '') +
-              `) VALUES (` +
-              `${channelSessionId}, '${derivedMessageId.replace(/'/g, "''")}', ` +
-              `'${messageTimestamp}', 'user', '${contentSnippet}'` +
-              (senderId ? `, '${senderIdEsc}'` : '') +
-              (senderName && senderName !== 'unknown' ? `, '${senderNameEsc}'` : '') +
-              (senderTag ? `, '${senderTagEsc}'` : '') +
-              (senderUsername ? `, '${senderUsernameEsc}'` : '') +
-              `) ON CONFLICT (session_id, external_message_id) DO NOTHING RETURNING id;`
+              `SELECT id FROM channel_transcripts WHERE session_id = ${resolvedSessionId} AND external_message_id = '${derivedMessageId.replace(/'/g, "''")}' LIMIT 1;`
             ];
-
-            const { stdout: txOut } = await execFileAsync('psql', txArgs)
-              .catch((err) => logPsqlError('transcript-upsert', err));
-            // psql -t -A may include 'INSERT 0 1' status line — extract first numeric line
-            const resolvedTranscriptId = (txOut.match(/^(\d+)/m) ?? [])[1] ?? '';
-            if (resolvedTranscriptId) {
-              channelTranscriptId = resolvedTranscriptId;
-            }
-
-            // C1 recovery: ON CONFLICT DO NOTHING returns no id when the row already
-            // exists. Recover the real transcript id with a follow-up SELECT before
-            // falling back to body storage.
-            if (!channelTranscriptId && channelSessionId && derivedMessageId) {
-              const lookupArgs = [
-                (process.env.PGDATABASE || 'nova_memory'), '-t', '-A', '-c',
-                `SELECT id FROM channel_transcripts WHERE session_id = ${channelSessionId} AND external_message_id = '${derivedMessageId.replace(/'/g, "''")}' LIMIT 1;`
-              ];
-              const { stdout: lookupOut } = await execFileAsync('psql', lookupArgs)
-                .catch((err) => logPsqlError('transcript-lookup', err));
-              const foundId = (lookupOut.match(/^(\d+)/m) ?? [])[1] ?? '';
-              if (foundId) {
-                channelTranscriptId = foundId;
-              }
+            const { stdout: lookupOut } = await execFileAsync('psql', lookupArgs)
+              .catch((err) => logPsqlError('transcript-lookup', err));
+            const foundId = (lookupOut.match(/^(\d+)/m) ?? [])[1] ?? '';
+            if (foundId) {
+              resolvedTranscriptId = foundId;
+              channelTranscriptId = foundId;
             }
           }
         }
-      } catch (err) {
-        console.warn('[memory-extract] Could not upsert channel_transcripts for FK wiring', {
-          error: (err as Error).message
-        });
       }
+    } catch (err) {
+      console.warn('[memory-extract] Could not upsert channel_transcripts for FK wiring', {
+        error: (err as Error).message
+      });
+    }
+
+    // PR1 (#621) fail-open fallback: if the local FK rows did not resolve in the
+    // target DB, do not hand off stale/raw ctx ids to the extractor. Empty env vars
+    // become NULL FK columns, which always stores the fact.
+    if (!resolvedSessionId) {
+      channelSessionId = '';
+    }
+    if (!resolvedTranscriptId) {
+      channelTranscriptId = '';
     }
 
     // Resolve the Python interpreter and timeout. Both can be overridden by

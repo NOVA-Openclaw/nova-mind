@@ -844,19 +844,21 @@ The file resides in the `memory/scripts/` directory and is automatically loaded 
 
 ### Unified Memory Maintenance
 
-The separate embedding scripts (`embed-full-database.py`, `embed-memories.py`, `embed-research.py`, `embed-library.py`) have been **removed** and replaced by a single unified script `memory/templates/memory-maintenance.py` (deployed to `~/.openclaw/scripts/memory-maintenance.py` by `agent-install.sh`). This script runs a full 9-phase pipeline:
+The separate embedding scripts (`embed-full-database.py`, `embed-memories.py`, `embed-research.py`, `embed-library.py`) have been **removed** and replaced by a single unified script `memory/templates/memory-maintenance.py` (deployed to `~/.openclaw/scripts/memory-maintenance.py` by `agent-install.sh`). This script runs a full 11-phase pipeline (updated from the original 9-phase count — `phase_dedup_lessons()` and `reembed_modified_facts()` were added since this table was first written; see `memory/README.md`'s own earlier draft vs. `main()` in `memory-maintenance.py` for the authoritative phase order):
 
 | Phase | Description |
 |-------|-------------|
 | 1. Cooldown check | 4-hour gate; `--force` to bypass |
-| 2. Embed | Replaces all old embedding scripts; memory files are chunked with the boundary-aware chunker (see [Text Chunking](#text-chunking) below) |
-| 3. Cross-key consolidation | pgvector cosine similarity ≥0.92 |
-| 4. Same-key dedup | pg_trgm similarity, 3-tier |
-| 5. Confidence decay | Exponential, durability-based rates |
-| 6. Ghost entity cleanup | Identifies and removes implausible or orphaned entities using `is_plausible_entity()` heuristics and zero-fact orphan detection. |
-| 7. Entity-level dedup | ≥80% auto-merge via `merge_entities()` |
-| 8. Clean orphaned embeddings | Remove embeddings with no source |
-| 9. Archive & purge | Remove low-confidence archived facts |
+| 2. Lessons deduplication | Runs before embed to avoid wasted embed calls on rows about to be merged; exact duplicates keep the oldest row, near-duplicates (≥0.80 similarity) go to a review report (`--skip-lesson-dedup` to skip) |
+| 3. Embed | Replaces all old embedding scripts; memory files are chunked with the boundary-aware chunker (see [Text Chunking](#text-chunking) below) |
+| 4. Cross-key consolidation | pgvector cosine similarity ≥0.92 |
+| 5. Same-key dedup | pg_trgm similarity, 3-tier |
+| 6. Confidence decay | Exponential, durability-based rates |
+| 7. Ghost entity cleanup | Identifies and removes implausible or orphaned entities using `is_plausible_entity()` heuristics and zero-fact orphan detection. |
+| 8. Entity-level dedup | ≥80% auto-merge via `merge_entities()` |
+| 9. Re-embed modified facts | Facts touched by consolidation/dedup above get stale embeddings deleted and regenerated |
+| 10. Clean orphaned embeddings | Remove embeddings with no source |
+| 11. Archive & purge | Remove low-confidence archived facts, then hard-delete archived rows older than 1 year |
 
 **Flags:** `--dry-run`, `--verbose`, `--force`, `--state-file`, `--skip-embed`, `--skip-consolidation`, `--skip-dedup`, `--skip-decay`, `--skip-ghost-cleanup`, `--skip-entity-dedup`, `--skip-lesson-dedup`, `--reindex-files`
 

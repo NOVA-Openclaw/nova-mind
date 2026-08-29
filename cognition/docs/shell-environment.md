@@ -1,12 +1,12 @@
 # Shell Environment Setup
 
-> ⚠️ **Status: broken on current OpenClaw for `exec`-tool contexts (tracked in [nova-mind#398](https://github.com/NOVA-Openclaw/nova-mind/issues/398)).**
+> ⚠️ **Status: broken on current OpenClaw for `exec`-tool contexts (tracked in [nova-mind#398](https://github.com/NOVA-Openclaw/nova-mind/issues/398), still OPEN as of this audit — re-titled to reflect the root cause: "PGPASSWORD hygiene: `~/.bash_env` unset does not cover non-interactive exec shells — DATABASE_ACCESS bootstrap record is inaccurate; BASH_ENV drop-in needed fleet-wide").**
 > OpenClaw's host-env-security hardening now strips `BASH_ENV`, `ENV`, and `CDPATH`
 > from the environment before spawning `exec` commands, and runs the shell as
 > `bash --noprofile --norc -c "command"` — so the `BASH_ENV` mechanism described below
 > no longer causes shell functions/aliases to load in the `exec` tool's non-interactive
-> shells (verified live: `type gh` and `BASH_ENV=~/.bash_env bash -c 'type gh'` both
-> resolve to the `/usr/bin/gh` binary, not a shell function, on a fully-installed host).
+> shells (re-verified live during this audit: `type gh` and `BASH_ENV=~/.bash_env bash -c 'type gh'`
+> both resolve to the `/usr/bin/gh` binary, not a shell function, on this fully-installed host).
 > The mechanism may still work for genuinely interactive shells or other non-OpenClaw
 > invocation paths where `BASH_ENV` isn't stripped. Do not rely on this setup to make
 > shell functions available inside OpenClaw `exec` calls until #398 lands a fix

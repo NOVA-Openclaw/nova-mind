@@ -10,13 +10,13 @@
 
 **🚀 From zero to your first AWL workflow in 15 minutes (once implemented)**
 
-This guide shows you how to integrate and use the Agent Workflow Language (AWL) in your nova-cognition system. AWL lets you orchestrate complex multi-agent processes using declarative YAML workflows.
+This guide shows you how to integrate and use the Agent Workflow Language (AWL) in the `cognition/` subsystem of `nova-mind`. AWL lets you orchestrate complex multi-agent processes using declarative YAML workflows.
 
 ## Prerequisites
 
 Before you start, ensure you have:
 
-- [ ] **nova-cognition** installed and running
+- [ ] **nova-mind** (with `cognition/` installed) running
 - [ ] At least **one agent** (like `newhart` or `scribe`) available for tasks
 - [ ] **Database access** (PostgreSQL with nova_memory schema)
 - [ ] **Agent chat system** configured (for notifications)
@@ -702,4 +702,4 @@ nova-workflow validate workflow.awl.yaml
 
 ---
 
-*For questions about this guide, contact the documentation team or file an issue in the nova-cognition repository.*
+*For questions about this guide, contact the documentation team or file an issue in the [nova-mind](https://github.com/NOVA-Openclaw/nova-mind) repository (`cognition/` is now a subdirectory here, not a standalone repo).*

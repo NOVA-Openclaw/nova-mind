@@ -2,6 +2,21 @@
 
 This guide walks through setting up nova-memory from scratch, including database installation, configuration, and integration with OpenClaw.
 
+> **Audit note (current as of this pass):** This doc predates the merge of the
+> standalone `nova-memory` repo into this `nova-mind` monorepo (memory subsystem
+> now lives under `memory/`, e.g. `memory/scripts/`, not a repo-root `scripts/`).
+> The "Step 4. Apply Schema" and "Installer Step Order" sections further down
+> already reflect the current monorepo layout and installer behavior and are
+> accurate. Older sections below it (cron/systemd/health-check/backup examples,
+> the `git clone .../nova-memory.git` command) still use the pre-merge standalone
+> repo path convention (`~/nova-memory`, `~/.openclaw/workspace/nova-memory`) —
+> treat those as illustrative of the pattern rather than literal current paths;
+> substitute your actual `nova-mind` checkout path (e.g. `~/nova-mind`, with
+> scripts under `memory/scripts/`) when adapting them. Corrected in this pass:
+> the `sops` table (removed; replaced by `workflows`/`agent_bootstrap_context`)
+> and the `events` table's date column (`event_date`, not `date`) in the
+> Quick Schema Reference and health-check/index examples below.
+
 ## Prerequisites
 
 ### System Requirements
@@ -212,7 +227,7 @@ Configure NOVA's memory system in `~/.openclaw/workspace/AGENTS.md`:
 - `projects` - Active work (name, status, goal, repo_url)
 - `events` - Timeline of what happened
 - `agents` - Registry of available AI agents
-- `sops` - Standard Operating Procedures
+- `workflows` / `workflow_steps` - Structured multi-step procedures (replaced the old `sops` table/concept — see ARCHITECTURE.md's "SOPs" section); also `agent_bootstrap_context` for DOMAIN/GLOBAL SOP-style context injected at session start
 
 ### Common Queries
 ```sql
@@ -336,7 +351,7 @@ psql -d agent_chat -c "SELECT send_agent_message('nova', 'Hello world', ARRAY['t
 -- Create essential indexes
 CREATE INDEX CONCURRENTLY idx_entities_name ON entities(name);
 CREATE INDEX CONCURRENTLY idx_entity_facts_entity_id ON entity_facts(entity_id);
-CREATE INDEX CONCURRENTLY idx_events_date ON events(date);
+CREATE INDEX CONCURRENTLY idx_events_date ON events(event_date);
 -- agent_chat lives in the dedicated agent_chat database (#320); run this one
 -- against `-d agent_chat`, not alongside the other indexes above.
 CREATE INDEX CONCURRENTLY idx_agent_chat_recipients ON agent_chat USING gin(recipients);
@@ -423,7 +438,7 @@ echo -n "Schema integrity: "
 # not in nova_memory. It is intentionally excluded from EXPECTED_TABLES below
 # since this health check runs against the default (nova_memory) connection.
 # To also check agent_chat, run a separate `psql -d agent_chat -c '\dt agent_chat'`.
-EXPECTED_TABLES=("entities" "entity_facts" "projects" "agents" "sops" "lessons")
+EXPECTED_TABLES=("entities" "entity_facts" "projects" "agents" "workflows" "lessons")
 MISSING_TABLES=()
 
 for table in "${EXPECTED_TABLES[@]}"; do

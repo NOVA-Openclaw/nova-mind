@@ -135,6 +135,8 @@ owns that role entirely — the LLM only sees the output, never the gate logic.
 | `gh` CLI | Open GitHub issues across NOVA-Openclaw repos |
 | PostgreSQL `blockers` / `proactive_outreach` / `entity_facts` / `agents` | Blocker outreach eligibility, cascade level, and channel resolution (Step 8) |
 | PostgreSQL `d100_roll_log` | Forced D100 staleness check (Step 11, issue #358) |
+| PostgreSQL `workflow_runs` | Live in-flight workflow run snapshot for the `running_workflow_runs` manifest field (issue #623) — queried via `_db_connect()` against the memory DB |
+| `~/.openclaw/agents/nova/sessions/sessions.json` + per-session JSONL transcripts | `top_active_channels` manifest field — topic-aware ranking of busiest user-facing channels (issue #623) |
 
 ### Output
 
@@ -145,9 +147,15 @@ Structured JSON manifest. When not idle, only the idle status fields are emitted
   "timestamp": "2026-06-11T10:00:00Z",
   "idle": false,
   "idle_minutes": 12.1,
-  "idle_threshold_minutes": 60
+  "idle_threshold_minutes": 60,
+  "running_workflow_runs": []
 }
 ```
+
+`running_workflow_runs` is present even in the non-idle manifest above — it is computed
+before the idle short-circuit in `main()` (issue #623). See
+[`running_workflow_runs`](#running_workflow_runs-manifest-field) below for the full
+contract.
 
 When idle, the full manifest is emitted:
 
@@ -157,6 +165,9 @@ When idle, the full manifest is emitted:
   "idle": true,
   "idle_minutes": 95.3,
   "idle_threshold_minutes": 60,
+  "running_workflow_runs": [
+    { "id": 782, "workflow_id": 4, "current_step": 9, "triggered_by": "coder", "started_at": "2026-08-29T10:34:55Z" }
+  ],
   "steps": {
     "1_agent_chat":    { "actionable": false, "reason": "0 unacknowledged messages" },
     "2_unanswered":    { "actionable": false, "reason": "No recent active user-facing sessions" },
@@ -172,13 +183,67 @@ When idle, the full manifest is emitted:
   },
   "actionable_steps": [3, 6],
   "actionable_count": 2,
-  "summary": "2 of 11 steps actionable"
+  "summary": "2 of 11 steps actionable",
+  "top_active_channels": {
+    "base_window_hours": 4,
+    "topic_gap_minutes": 30,
+    "max_lookback_hours": 12,
+    "ranked_by": "non_self_messages",
+    "count": 1,
+    "channels": [
+      { "channel": "discord", "channel_id": "1504054635231445112", "non_self_messages": 14,
+        "review_since": "2026-06-11T06:00:00Z", "review_span_hours": 4.0,
+        "suggested_read_limit": 25, "last_active_minutes_ago": 3.2 }
+    ]
+  }
 }
 ```
 
 Each step entry may also include a `data` field with counts, timestamps, or lists for
 additional context. Error conditions are embedded as `{ "actionable": false, "error": "..." }`
 and never abort the run — the script always exits 0.
+
+### `running_workflow_runs` Manifest Field
+
+**Issue:** [nova-mind#623](https://github.com/NOVA-Openclaw/nova-mind/issues/623)
+
+`query_running_workflow_runs()` reads `workflow_runs WHERE status = 'running'` from the
+memory DB and returns a list of dicts (`id`, `workflow_id`, `current_step`,
+`triggered_by`, `started_at`). It is invoked in `main()` **before** the idle
+short-circuit, so the key is present in both the abbreviated non-idle manifest and the
+full idle manifest — unlike every other field, which appears only when idle.
+
+**Error-passthrough contract:** on any DB failure (connection refused, query error,
+timeout), the function returns `{"error": "Failed to query running workflow runs: <exc>"}`
+verbatim — it does **not** fall back to `[]`. This distinction matters: `[]` asserts
+"queried successfully, there are zero running workflows," while an error dict asserts
+"the check itself could not be performed." A consumer (heartbeat session, another script)
+reading `[]` when the DB was actually unreachable would wrongly conclude no workflow is
+in flight and could start conflicting work. Any future refactor of this function MUST
+preserve the return-type union (`list[dict] | dict[str, str]`) and must not normalize the
+error case to an empty list.
+
+### `top_active_channels` Manifest Field
+
+**Issue:** [nova-mind#623](https://github.com/NOVA-Openclaw/nova-mind/issues/623) (design
+directive from I)ruid, 2026-08-29)
+
+Computed only in the full idle manifest, as the last field emitted by `main()`. Ranks the
+top `TOP_ACTIVE_CHANNELS_COUNT` (default 6) user-facing channels (same
+`USER_SESSION_PATTERNS`/`EXCLUDE_PATTERNS` filters as idle detection and Step 2) by count
+of non-self (`role='user'`) messages within a **topic-aware review window**:
+
+- Base look-back: `CHANNEL_REVIEW_WINDOW_H` (4h)
+- If the conversation crosses the 4h boundary without a `CHANNEL_TOPIC_GAP_MINUTES` (30min)
+  quiet gap, `_topic_aware_since()` walks the window backward to the start of that topic
+- Hard-capped at `CHANNEL_REVIEW_MAX_LOOKBACK_H` (12h) so one long-running conversation
+  cannot drag the window back indefinitely
+
+The ranking metric is deliberately non-self message volume, not NOVA's own reply count —
+the intent is to surface who is actually talking to NOVA, not NOVA's own verbosity. Each
+channel entry carries enough identity (`read_target`, `session_key`) for a heartbeat
+introspection to pull the transcript directly. On a `sessions.json` read failure, returns
+an error dict (`{"error": ..., "channels": []}`) rather than raising.
 
 ### Key Design Decisions
 
@@ -188,6 +253,17 @@ Step 11 is **forced** actionable whenever more than 12h have elapsed since the l
 recorded roll in `d100_roll_log` (or no roll is on record at all) — even if other steps
 had actionable work, per issue #358. This guarantees both that the cascade never produces
 a no-op idle session, and that D100 itself doesn't go stale for extended periods.
+
+**Step 2 tail review classifies three distinct findings, not just "unanswered."**
+`_session_tail_flags()` inspects the last 8 conversational messages of each recent
+user-facing session and can return any combination of `unanswered_user` (a human/user
+message at or near the tail with no later assistant reply, excluding intentional-silence
+texts like `NO_REPLY`/`HEARTBEAT_OK`), `error_in_tail` (traceback/exception/failure
+language not followed by a later assistant disposition), and `subagent_report` (a
+completion-style report — `"SE run #"`, `"task completed"`, `"pr ready"`, etc. — still
+sitting at the end of the tail, needing acknowledgment). A session can carry more than one
+flag simultaneously; `check_step2_unanswered_sessions()` aggregates flagged sessions into a
+`by_reason` breakdown alongside the flat `sessions`/`flagged` lists (issue #623).
 
 **Blocker outreach is centralized and cooldown-gated (Step 8).** Steps 6 and 7 only curate
 blocked items into the `blockers` registry — they never contact anyone directly. Step 8

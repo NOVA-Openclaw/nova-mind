@@ -74,6 +74,14 @@
 > - `motivation_d100` (18 columns, per the #506 note above) and `user_domains` (6 columns) are declared in `database/schema.sql` but are still missing as rows from the listing below — confirmed again during this pass, not yet added. Flagged for the next full regeneration.
 > - `asset_classes`, `price_cache_v2`, and `portfolio_snapshots` (listed below, portfolio-domain tables) and `agent_chat`/`agent_chat_processed` (moved out per #320, see the top-of-file note) remain absent from `database/schema.sql` — consistent with prior audits, no new drift.
 > - `entity_credibility` remains undeclared in `database/schema.sql` or any migration file (per the #506 note above) — still flagged for the Database/schema.sql owner, not re-flagged as a new item here.
+>
+> **Technical Writing documentation audit (2026-08-29, nova-mind#623 sync pass) — additional drift found and corrected below:**
+> - `asset_classes`, `price_cache_v2`, and `portfolio_snapshots` (all three previously listed as rows below, per the #414/#506 notes above) **no longer exist in the live `nova_memory` schema at all** — confirmed via direct `pg_class`/`pg_attribute` query against the live database. All three rows have been removed from the listing below. (The earlier notes describing them as "listed below but no longer exist in the live schema" were correct about non-existence but the rows had never actually been removed from the table — now done.)
+> - `agent_model_denylists` (8 columns: `id`, `agent_id`, `model`, `reason`, `failure_details`, `denied_at`, `denied_by`, `workflow_context`) exists live and **is** declared in `database/schema.sql` (`COMMENT ON TABLE agent_model_denylists ...` present) but was missing entirely from the listing below — added.
+> - `motivation_d100` (18 columns) and `user_domains` (6 columns) — both flagged missing from the listing in the prior (#608) note above — have now been added as rows below.
+> - `events` column count corrected 10→11 (live has an `environment` column not previously counted) and `events_archive` column count corrected 11→12 (same `environment` column) — both confirmed via live `\d` against `nova_memory`.
+> - **`entity_credibility` gap closed:** the long-flagged "undeclared in `database/schema.sql`" issue (originally raised in the #506 note above) is now resolved — `CREATE TABLE IF NOT EXISTS entity_credibility` and its `COMMENT ON TABLE` are present in the current `database/schema.sql` (added in commit `d41e05d`, "re-dump after entity_credibility/agent_model_denylists SELECT grants to nova"). No further action needed; the earlier #506/#608 notes calling this out as a gap are now historical and superseded by this line.
+> - **⚠️ Regression found, flagged for Newhart/Database-domain, NOT fixed here (documentation-only scope):** `append_run_note(p_run_id integer, p_note text)` — documented in the Functions section below as the #557 write path for `workflow_runs.notes` — **no longer exists in the live `nova_memory` database** (`SELECT proname FROM pg_proc WHERE proname = 'append_run_note'` returns zero rows) **and is absent from the current `database/schema.sql`** on this branch. Git archaeology: the function was added in `880aa46` (#557/#560) but silently disappeared from `database/schema.sql` in the very next schema-dump commit, `6b8599e schema: ALTER TABLE work_queue` — the diff shows the entire `CREATE OR REPLACE FUNCTION append_run_note` block and its `COMMENT ON FUNCTION` deleted alongside the intended `work_queue` change, with no corresponding revert PR or changelog entry explaining the removal. This looks like unintentional collateral loss from an automated `pgschema` dump (the same failure class as the SE #709 peer-local-schema-leak incidents that required commits `50c1df3`/`d4d5bee`/`c99b11c` to be reverted) rather than a deliberate deprecation. **Any agent calling `append_run_note()` today will get `function append_run_note(integer, text) does not exist`.** The Functions section entry below is left in place (not deleted) so this regression remains visible/documented rather than silently disappearing along with the function — but it no longer describes working code. Flagged for the Database/schema.sql owner (Newhart) to investigate and restore.
 
 ## Tables
 
@@ -89,9 +97,9 @@
 | agent_system_config | Agent system configuration. READ-ONLY except Newhart. | 6 |
 | agent_turn_context | - | 8 |
 | agents | Agent registry | 38 |
+| agent_model_denylists | Per-agent model denylist. Records models tried and rejected for specific agents, with failure reasoning. Consulted during weekly model reviews to avoid re-assigning broken combinations. | 8 |
 | ai_models | Available AI models. NOVA maintains this; Newhart reads for agent assignments. Credentials and endpoints stored in 1Password (see credential_ref column). | 16 |
 | artwork | Archive of NOVAs Instagram artwork. Reference for future compilation. | 28 |
-| asset_classes | Asset class definitions for financial portfolio management. Defines tradeable asset types with pricing sources and trading characteristics. | 6 |
 | blockers | Curated registry of items blocked waiting on another entity's action (issue #356). Populated by Proactive Mode workflow (id=27) Steps 6/7; outreach against this registry is centralized in Step 8. | 11 |
 | bootstrap_context_config | Configuration for bootstrap system behavior | 4 |
 | certificates | Client certificates issued by NOVA CA. Security-sensitive. Verify before modifications. | 12 |
@@ -105,7 +113,7 @@
 | comms_state | Per-platform communications tracking state (seen IDs, cursors). Replaces hermes-social-state.json. Owner: Communications domain (hermes). | 5 |
 | d100_roll_log | Roll history for motivation_d100 (issue #358), populated by a trigger on motivation_d100. Used by the Proactive Mode gate check to force a D100 roll after 12h regardless of other steps' state. `announced_at` (issue #432) tracks deterministic cron-based announcement to #proactive-mode, decoupled from the heartbeat LLM turn. | 4 |
 | entities | People, AIs, organizations. NOVA has full access. Use entity_facts for attributes. | 22 |
-| entity_credibility | Computed per-(entity, domain) source credibility (S axis of S×D×V). NEVER hand-assigned — derived from claim track record + verification events; recomputed by a daily maintenance script. Domain taxonomy reuses `entity_facts.category` vocabulary + `agent_domains` topics; `_global` is the fallback. **Not declared in `database/schema.sql` or any migration file — flagged during the #506 audit for the schema/Database domain owner to add.** | 10 |
+| entity_credibility | Computed per-(entity, domain) source credibility (S axis of S×D×V). NEVER hand-assigned — derived from claim track record + verification events. v1 algorithm: corroboration ratio with recency decay (90-day half-life). Recomputed by daily maintenance script (not agent prompt). Domain taxonomy reuses `entity_facts.category` vocabulary + `agent_domains` topics; `_global` is the fallback. Now declared in `database/schema.sql` (added in commit `d41e05d`) — the earlier "not declared" flag from the #506 audit is resolved. | 10 |
 | entity_fact_conflicts | Conflicts between entity facts requiring resolution. Part of the truth reconciliation system. | 13 |
 | entity_fact_sources | - | 11 |
 | entity_facts | Key-value facts about entities. Check current_timezone for I)ruid before time-based actions. | 21 |
@@ -114,8 +122,8 @@
 | event_entities | Links events to entities (people, orgs, AIs). Many-to-many relationship table. | 3 |
 | event_places | Links events to places/locations. Many-to-many relationship table. | 2 |
 | event_projects | Links events to projects. Many-to-many relationship table for project milestones and activities. | 2 |
-| events | Historical events, milestones, activities. Log significant occurrences. | 10 |
-| events_archive | Archived historical events. Long-term storage for events moved out of active events table. | 11 |
+| events | Historical events, milestones, activities. Log significant occurrences. | 11 |
+| events_archive | Archived historical events. Long-term storage for events moved out of active events table. | 12 |
 | extraction_failures | Dead-letter store for failed memory extractions from memory-extract hook (#485). Rows are inserted on nonzero exit, timeout, or spawn error and may be retried via extraction-replay.sh. Confirmed live in production as of the #506 audit (2026-07-20). | 16 |
 | extraction_metrics | Performance metrics for data extraction processes. Tracks accuracy and efficiency of knowledge extraction. | 6 |
 | fact_change_log | Audit trail for entity fact modifications. Tracks who changed what and when for accountability. | 7 |
@@ -140,14 +148,13 @@
 | memory_embeddings | Vector embeddings for semantic memory search. Used by proactive-recall.py. | 9 |
 | memory_embeddings_archive | Archived vector embeddings from semantic memory system. Historical embeddings for backup/analysis. | 11 |
 | memory_type_priorities | Priority weights for semantic recall by source_type. Higher = more likely to surface. NOVA can modify. | 5 |
+| motivation_d100 | D100 motivation system. Roll via roll_d100(), mark complete via complete_d100(roll). Tracking columns (times_rolled, times_completed, last_rolled, last_completed) are write-protected — only the SECURITY DEFINER functions can update them. Content columns are open for nova to maintain. DELETE revoked to prevent accidental row loss. | 18 |
 | music_analysis | Deep musical analysis (harmonic, rhythmic, lyrical, spectral). Managed by Erato. | 11 |
 | music_library | Music-specific metadata extending media_consumed. Managed by Erato. | 37 |
 | music_works | Original music compositions (AI-generated or human-composed). Complements music_library which holds collected external sources. | 42 |
 | place_properties | Properties and attributes of places. Key-value storage for place characteristics. | 5 |
 | places | Locations (houses, venues, cities). Reference I)ruid houses in USER.md. | 15 |
-| portfolio_snapshots | Historical snapshots of portfolio values and performance metrics over time. | 10 |
 | preferences | User preferences by entity_id. Check before making assumptions. | 6 |
-| price_cache_v2 | Cached price data for assets to reduce API calls. Version 2 of price caching system. | 12 |
 | proactive_outreach | Tracks outreach attempts for blocked tasks/GitHub issues/unsolved problems/D100 items, and (as the current path) blockers-table rows via the dedicated Blocker Outreach step (issue #356). Cooldown logic (24h entity-level, 72h per-blocker) queries this table. | 11 |
 | project_entities | Links projects to entities (people, orgs, AIs). Many-to-many relationship table for project participants. | 3 |
 | project_tasks | Project-specific task breakdown. Links tasks to projects for organized project management. | 8 |
@@ -173,6 +180,7 @@
 | tasks | Task tracking. NOVA can create, update status, assign. Check before starting work. | 23 |
 | tools | Tool usage notes. Override: WORKSPACE > DOMAIN > MANAGED > BUNDLED. See get_agent_tools(). | 13 |
 | unsolved_problems | Humanity's unsolved problems for NOVA to work on during idle time. Part of the Motivation System - provides meaningful default work when task queue is empty. | 18 |
+| user_domains | Per-entity domain-topic interests (`entity_id`, `domain_topic`, `priority`, `notes`) — distinct from `agent_domains`, which assigns domains to agents. No table comment set on the live column. | 6 |
 | user_insights | Human-contributed insights — observations, realizations, and wisdom shared by users. Primarily for users to save important insights. Managed by any agent on behalf of the contributing user. | 8 |
 | vehicles | Vehicle tracking and management. Cars, bikes, boats, planes owned or used. | 13 |
 | vocabulary | Custom vocabulary for speech recognition. Add names, terms, jargon as encountered. | 8 |
@@ -197,7 +205,7 @@ that this is now a complete function reference. For the full function catalog, q
 
 | Function | Security | Purpose |
 |----------|----------|---------|
-| `append_run_note(p_run_id integer, p_note text) RETURNS void` | `SECURITY DEFINER`, `search_path=public` pinned. `EXECUTE` granted to all agent roles. | Server-side UTC-timestamped append to `workflow_runs.notes` (nova-mind#557, promotes lesson 757 to enforcement). **This is the write path for run notes** — agents should call `SELECT append_run_note(run_id, 'note text');` rather than `UPDATE workflow_runs SET notes = COALESCE(notes,'')||...` directly. Stamp format: `YYYY-MM-DD HH24:MI UTC — `. Raises on `NULL` note or missing `run_id`; empty-string notes are accepted. |
+| `append_run_note(p_run_id integer, p_note text) RETURNS void` — **⚠️ NOT LIVE, see audit note above** | `SECURITY DEFINER`, `search_path=public` pinned. `EXECUTE` granted to all agent roles. (As designed — no longer true live.) | Server-side UTC-timestamped append to `workflow_runs.notes` (nova-mind#557, promotes lesson 757 to enforcement). **This function was silently dropped from `database/schema.sql` and the live database in commit `6b8599e` (2026-08-09) and does not currently exist** — confirmed via `\df append_run_note` against live `nova_memory` (zero rows) during the 2026-08-29 documentation audit. Calling it raises `function append_run_note(integer, text) does not exist`. Description below is retained as a record of the intended design pending restoration by the Database/schema.sql owner (Newhart); do not rely on it as current behavior. Originally: **This is the write path for run notes** — agents should call `SELECT append_run_note(run_id, 'note text');` rather than `UPDATE workflow_runs SET notes = COALESCE(notes,'')||...` directly. Stamp format: `YYYY-MM-DD HH24:MI UTC — `. Raises on `NULL` note or missing `run_id`; empty-string notes are accepted. |
 
 ## Quick Reference
 

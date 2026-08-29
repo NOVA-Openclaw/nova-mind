@@ -26,7 +26,7 @@ OpenClaw heartbeat (every 30m)
     → If idle < 1 hour: HEARTBEAT_OK (do nothing)
     → If idle ≥ 1 hour: Run proactive-gate-check.py, execute only actionable steps
         Step 1:  Check agent_chat for peer messages
-        Step 2:  Check sessions for unanswered messages
+        Step 2:  Check sessions for tail-review findings (unanswered / error / subagent-report)
         Step 3:  Introspection (work-gated + time-backstop)
         Step 4:  Memory maintenance (REM sleep)
         Step 5:  Relationship & entity maintenance
@@ -38,8 +38,60 @@ OpenClaw heartbeat (every 30m)
         Step 11: Random D100 task (mandatory catch-all; forced past 12h — issue #358)
 ```
 
+The manifest also carries two fields introduced by issue #623 — see
+[Manifest-Level Fields](#manifest-level-fields) below:
+
+- **`running_workflow_runs`** — the live `workflow_runs` table snapshot; present in **every**
+  manifest, idle or not
+- **`top_active_channels`** — busiest user-facing channels for introspection context;
+  present only in the full idle manifest
+
 See `motivation/ARCHITECTURE.md` for full step details, gate-check design, and the
 Blocker Outreach cascade/channel/reassignment rules.
+
+## Manifest-Level Fields
+
+Two fields sit alongside `steps` at the top level of the gate-check JSON manifest (issue
+#623). `running_workflow_runs` is computed unconditionally, before the idle short-circuit,
+so it appears in every manifest, idle or not. `top_active_channels` is computed only when
+idle, alongside the `steps` block — see each subsection below for the distinction.
+
+### `running_workflow_runs`
+
+The authoritative list of currently-running `workflow_runs` rows (`status = 'running'`),
+queried live against the memory DB. Each entry carries `id`, `workflow_id`, `current_step`,
+`triggered_by`, `started_at`.
+
+**Error-passthrough contract (subtle — do not regress):** on DB failure this key returns
+an error dict verbatim, e.g. `{"error": "Failed to query running workflow runs: ..."}` —
+**never** an empty list. An empty list (`[]`) means "queried successfully, zero runs in
+progress." An error dict means "could not determine the answer." Collapsing the error case
+to `[]` would make a DB outage indistinguishable from "nothing running," silently hiding
+an outage from anything consuming this field (e.g. a heartbeat session deciding whether to
+avoid stepping on an in-flight workflow). Do not add a `try/except: return []` shortcut
+anywhere in this path.
+
+This field is computed BEFORE the idle short-circuit in `main()`, specifically so it
+survives into the abbreviated non-idle manifest (`{"idle": false, ...}`) as well as the
+full idle manifest — a caller checking for in-flight workflow runs should not have to wait
+for an idle window to get an answer.
+
+### `top_active_channels`
+
+The busiest user-facing channels (default 6), ranked by non-self (`role='user'`) message
+volume within a topic-aware review window (base 4h, extended backward across a
+conversation that crosses the 4h boundary with no ≥30-minute quiet gap, capped at 12h
+lookback). Surfaced so a heartbeat-triggered introspection can read the busiest
+transcripts directly instead of relying solely on the daily log for channel breadth
+(I)ruid directive, 2026-08-29).
+
+Each entry includes `channel`, `channel_id`, `name`/`display_name`, `read_target` (value to
+pass as `message action=read` target), `non_self_messages` (rank metric), `review_since` /
+`review_span_hours` (the topic-aware window actually used), `suggested_read_limit`, and
+`last_active_minutes_ago`. On a `sessions.json` read failure, returns an error dict
+(`{"error": ..., "channels": []}`) rather than raising, so the field always degrades
+gracefully. Unlike `running_workflow_runs`, this field carries no idle-timing contract — it
+is populated only in the full idle manifest as one of the trailing manifest fields.
 
 ## Database Schema
 
@@ -66,6 +118,7 @@ Blocker Outreach cascade/channel/reassignment rules.
 ### Supporting Tables (owned by other subsystems)
 
 - `workflows` / `workflow_steps` — Workflow definitions (cognition subsystem)
+- `workflow_runs` — In-flight workflow execution rows (cognition subsystem); read live by `query_running_workflow_runs()` for the `running_workflow_runs` manifest field — see [Manifest-Level Fields](#manifest-level-fields)
 - `tasks` — Task backlog (memory subsystem)
 - `research_projects` / `research_tasks` / `research_findings` / `research_conclusions` — Scout's research database (memory subsystem)
 - `agent_bootstrap_context` — Bootstrap records including HEARTBEAT (cognition subsystem)

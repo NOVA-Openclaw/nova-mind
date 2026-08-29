@@ -39,9 +39,15 @@ When the human is active (not idle), only the idle status fields are emitted:
   "timestamp": "2026-06-11T10:00:00Z",
   "idle": false,
   "idle_minutes": 12.1,
-  "idle_threshold_minutes": 60
+  "idle_threshold_minutes": 60,
+  "running_workflow_runs": []
 }
 ```
+
+`running_workflow_runs` is present in both the non-idle and idle manifests — it is computed
+before the idle short-circuit (issue #623). See
+[Manifest-Level Fields](../ARCHITECTURE.md#running_workflow_runs-manifest-field) in
+`ARCHITECTURE.md` for the full error-passthrough contract.
 
 When idle, the full manifest is emitted with per-step results and the list of actionable
 step numbers:
@@ -52,6 +58,7 @@ step numbers:
   "idle": true,
   "idle_minutes": 95.3,
   "idle_threshold_minutes": 60,
+  "running_workflow_runs": [],
   "steps": {
     "1_agent_chat":  { "actionable": false, "reason": "0 unacknowledged messages" },
     "2_unanswered":  { "actionable": false, "reason": "No recent active user-facing sessions" },
@@ -67,7 +74,8 @@ step numbers:
   },
   "actionable_steps": [3, 6],
   "actionable_count": 2,
-  "summary": "2 of 11 steps actionable"
+  "summary": "2 of 11 steps actionable",
+  "top_active_channels": { "base_window_hours": 4, "topic_gap_minutes": 30, "max_lookback_hours": 12, "ranked_by": "non_self_messages", "count": 0, "channels": [] }
 }
 ```
 
@@ -77,6 +85,12 @@ mandatory when no steps 1–10 are actionable, ensuring the cascade always produ
 Step 11 is also **forced** actionable whenever more than 12h have elapsed since the last
 recorded roll in `d100_roll_log` (or no roll is on record), regardless of other steps'
 actionable state (issue #358).
+
+Step 2 (Channel Tail Review) inspects the last 8 conversational messages of each recent
+user-facing session and can flag any combination of `unanswered_user`, `error_in_tail`, and
+`subagent_report` per session; its `data` payload includes the flagged session list and a
+`by_reason` breakdown (issue #623 — see
+`motivation/ARCHITECTURE.md#key-design-decisions` for the full detector rules).
 
 Step 8 (Blocker Outreach) curates a per-entity, per-blocker eligible set from the `blockers`
 registry — entity master cooldown 24h, per-blocker cooldown 72h (both strict `>`), top 3
@@ -88,13 +102,19 @@ full cascade/channel/reassignment rules, issue #356).
 Each step entry may include a `data` field with additional context (counts, timestamps,
 lists). Error conditions appear as `{ "actionable": false, "error": "..." }`.
 
+`running_workflow_runs` and `top_active_channels` sit alongside `steps` at the top level of
+the manifest (not inside any step) — see
+`motivation/ARCHITECTURE.md#running_workflow_runs-manifest-field` and
+`motivation/ARCHITECTURE.md#top_active_channels-manifest-field` for their full contracts,
+including the `running_workflow_runs` error-passthrough rule (issue #623).
+
 ### Dependencies
 
 | Dependency | How It Is Used |
 |------------|----------------|
-| `psycopg2` | PostgreSQL queries against `nova_memory` (tasks, entities, unsolved_problems) and, separately, the dedicated `agent_chat` database (#320) via `load_pg_env(section="agent_chat")` — see `memory/docs/database-config.md`. Loaded from the nova venv at `~/.local/share/nova/venv/` — no manual activation required. |
+| `psycopg2` | PostgreSQL queries against `nova_memory` (tasks, entities, unsolved_problems, `workflow_runs` for the `running_workflow_runs` manifest field, issue #623) and, separately, the dedicated `agent_chat` database (#320) via `load_pg_env(section="agent_chat")` — see `memory/docs/database-config.md`. Loaded from the nova venv at `~/.local/share/nova/venv/` — no manual activation required. |
 | `gh` CLI | Lists open GitHub issues across NOVA-Openclaw repos (Step 7) and enumerates repos. |
-| `~/.openclaw/agents/nova/sessions/sessions.json` + per-session JSONL files | Detects unanswered user messages directly from session state (Step 2). |
+| `~/.openclaw/agents/nova/sessions/sessions.json` + per-session JSONL files | Step 2 tail-review flags (`unanswered_user`/`error_in_tail`/`subagent_report`) and the `top_active_channels` manifest field (issue #623). |
 
 All other dependencies are Python standard library (`json`, `os`, `subprocess`, `sys`,
 `time`, `datetime`).

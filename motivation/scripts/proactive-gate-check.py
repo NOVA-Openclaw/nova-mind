@@ -105,6 +105,24 @@ BLOCKERS_PER_MESSAGE = 3
 # D100 forced-roll threshold (issue #358)
 D100_FORCED_COOLDOWN_H = 12
 
+# Top active-channel context for introspection (I)ruid directive 2026-08-29):
+# surface the busiest user-facing channels so a heartbeat-triggered
+# introspection reviews their transcripts directly instead of relying solely
+# on the daily log for channel breadth.
+#
+# Ranking metric: count of NON-self messages (role='user' — the other party,
+# human OR agent) in the review window. Volume of who's-talking-to-me, not my
+# own long tool-heavy replies.
+#
+# Review window: base look-back of 4h, but the boundary must not bisect an
+# active discussion. If the 4h mark lands mid-conversation (messages on both
+# sides separated by less than the topic-gap), extend backward to the start of
+# that topic (the first message after a quiet gap), capped at a max look-back.
+TOP_ACTIVE_CHANNELS_COUNT = 6         # number of busiest channels to surface
+CHANNEL_REVIEW_WINDOW_H = 4           # base transcript look-back window (hours)
+CHANNEL_TOPIC_GAP_MINUTES = 30        # silence that marks a topic boundary
+CHANNEL_REVIEW_MAX_LOOKBACK_H = 12    # hard cap on topic-aware extension (hours)
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -174,6 +192,57 @@ def _parse_iso(ts: str) -> datetime:
 
 def _step_error(msg: str) -> dict:
     return {"actionable": False, "error": msg}
+
+
+def _iso_from_db(value: Any) -> str | None:
+    """Format a DB timestamp as ISO-8601 UTC, or None for NULL."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.strftime("%Y-%m-%dT%H:%M:%SZ")
+    # Defensive fallback for non-datetime values (e.g. text timestamps)
+    try:
+        return _parse_iso(str(value)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    except (ValueError, OverflowError):
+        return None
+
+
+def query_running_workflow_runs() -> list[dict[str, Any]] | dict[str, str]:
+    """Return the authoritative list of currently-running workflow runs.
+
+    Queries the memory DB live via _db_connect().  Success returns a list of
+    dicts with keys: id, workflow_id, current_step, triggered_by, started_at.
+    An empty running set returns [] so callers can state "no runs".
+
+    On any DB failure, returns {"error": "..."} so a missing key is never
+    interpreted as "no runs".
+    """
+    try:
+        conn = _db_connect()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        SELECT id, workflow_id, current_step, triggered_by, started_at
+                        FROM workflow_runs
+                        WHERE status = 'running'
+                        ORDER BY id
+                    """)
+                    rows = cur.fetchall()
+            return [
+                {
+                    "id": row[0],
+                    "workflow_id": row[1],
+                    "current_step": row[2],
+                    "triggered_by": row[3],
+                    "started_at": _iso_from_db(row[4]),
+                }
+                for row in rows
+            ]
+        finally:
+            conn.close()
+    except Exception as exc:
+        return {"error": f"Failed to query running workflow runs: {exc}"}
 
 
 def _load_heartbeat_state(path: str) -> tuple[dict[str, Any] | None, datetime | None]:
@@ -274,6 +343,231 @@ def check_idle() -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Top active-channel context (for introspection breadth)
+# ---------------------------------------------------------------------------
+
+def _parse_ts_ms(ts: str) -> int | None:
+    """Parse an ISO-8601 transcript timestamp ('...Z' or offset) to epoch ms."""
+    if not ts:
+        return None
+    try:
+        norm = ts.replace("Z", "+00:00")
+        dt = datetime.fromisoformat(norm)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return int(dt.timestamp() * 1000)
+    except (ValueError, OverflowError):
+        return None
+
+
+def _channel_message_events(session_file: str) -> list[tuple[int, str]]:
+    """Return ascending [(ts_ms, role)] for conversational (user/assistant) msgs.
+
+    role='user' is the other party talking to NOVA (human OR agent);
+    role='assistant' is NOVA. toolResult/system/custom entries are skipped.
+    """
+    events: list[tuple[int, str]] = []
+    if not session_file or not os.path.exists(session_file):
+        return events
+    try:
+        with open(session_file, "r") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                except (json.JSONDecodeError, ValueError):
+                    continue
+                role = (entry.get("message") or {}).get("role")
+                if role not in ("user", "assistant"):
+                    continue
+                ms = _parse_ts_ms(entry.get("timestamp"))
+                if ms is None:
+                    continue
+                events.append((ms, role))
+    except OSError:
+        return []
+    events.sort()
+    return events
+
+
+def _topic_aware_since(
+    events: list[tuple[int, str]],
+    now_ms: int,
+    base_window_ms: int,
+    gap_ms: int,
+    max_lookback_ms: int,
+) -> int:
+    """Compute the review-window start, snapped to a topic boundary.
+
+    Start at now - base_window (4h). If conversation crosses that boundary with
+    no quiet gap >= gap_ms, walk backward through earlier messages, extending
+    the start until a topic-boundary gap is found. Hard-capped at
+    now - max_lookback so a channel that talked continuously for hours can't
+    drag the window back indefinitely.
+    """
+    base_start = now_ms - base_window_ms
+    floor_ms = now_ms - max_lookback_ms
+    ts_list = [t for (t, _r) in events]
+    if not ts_list:
+        return base_start
+
+    later = [t for t in ts_list if t >= base_start]
+    earlier = sorted((t for t in ts_list if t < base_start), reverse=True)
+    # Reference point = first message at/after the base boundary (the current
+    # topic's earliest known message so far). If none, nothing crosses the
+    # boundary and the base window stands.
+    ref = min(later) if later else None
+    if ref is None:
+        return base_start
+
+    since = base_start
+    for t in earlier:
+        if ref - t <= gap_ms:
+            # Contiguous with the current topic — pull the window back to it.
+            since = t
+            ref = t
+        else:
+            # Quiet gap: topic boundary reached.
+            break
+    return max(since, floor_ms)
+
+
+def top_active_channels(
+    limit: int = TOP_ACTIVE_CHANNELS_COUNT,
+    window_hours: int = CHANNEL_REVIEW_WINDOW_H,
+) -> dict:
+    """Return the busiest user-facing channels for introspection review.
+
+    Reads sessions.json, filters to user-facing sessions (same include/exclude
+    patterns as idle detection), keeps the single most-recent session per
+    distinct channel that saw activity within `window_hours`, then RANKS by the
+    count of non-self (role='user') messages in each channel's topic-aware
+    review window — the volume of who's actually talking to NOVA, not NOVA's
+    own replies. Returns the top `limit` channels.
+
+    Each channel entry carries enough identity for a heartbeat introspection to
+    read the transcript directly:
+      channel                 — provider (discord/signal/telegram)
+      channel_id              — provider channel id (groupId / lastTo tail)
+      name                    — human channel name (#foo) when known
+      display_name            — full display label
+      read_target             — value to pass as message action=read target
+      non_self_messages       — rank metric: role='user' msgs in review window
+      review_since            — ISO start of the topic-aware review window
+      review_span_hours       — effective look-back (>=4h if a topic extended it)
+      suggested_read_limit    — approx conversational msgs to pull to cover it
+      last_active_minutes_ago — freshness
+      session_key             — originating session key
+
+    The payload always includes base_window_hours + topic_gap_minutes so the
+    consumer understands the windowing. On read failure, returns an error dict
+    (never raises) so the caller can degrade gracefully.
+    """
+    try:
+        with open(SESSIONS_JSON, "r") as fh:
+            sessions = json.load(fh)
+    except (FileNotFoundError, json.JSONDecodeError, ValueError) as exc:
+        return {
+            "error": f"Could not read sessions.json: {exc}",
+            "base_window_hours": window_hours,
+            "count": 0,
+            "channels": [],
+        }
+
+    now_ms = int(time.time() * 1000)
+    window_ms = window_hours * 3600 * 1000
+    gap_ms = CHANNEL_TOPIC_GAP_MINUTES * 60 * 1000
+    max_lookback_ms = CHANNEL_REVIEW_MAX_LOOKBACK_H * 3600 * 1000
+
+    # Keep the most-recent session per distinct channel id (activity within 4h).
+    best: dict[str, dict] = {}
+    for key, sess in sessions.items():
+        if not any(pat in key for pat in USER_SESSION_PATTERNS):
+            continue
+        if any(exc in key for exc in EXCLUDE_PATTERNS):
+            continue
+
+        ts = sess.get("lastInteractionAt")
+        try:
+            ts_int = int(ts)
+        except (ValueError, TypeError):
+            continue
+        if now_ms - ts_int > window_ms:
+            continue
+
+        provider = sess.get("channel") or sess.get("lastChannel") or "unknown"
+        last_to = sess.get("lastTo") or ""
+        # channel id: prefer groupId, else the tail of lastTo (channel:<id>)
+        channel_id = sess.get("groupId")
+        if not channel_id and ":" in last_to:
+            channel_id = last_to.split(":", 1)[1]
+        if not channel_id:
+            # Fall back to the session-key tail so distinct channels don't collapse.
+            channel_id = key.rsplit(":", 1)[-1]
+
+        dedup_key = f"{provider}:{channel_id}"
+        prior = best.get(dedup_key)
+        if prior is None or ts_int > prior["_ts"]:
+            best[dedup_key] = {
+                "_ts": ts_int,
+                "channel": provider,
+                "channel_id": str(channel_id) if channel_id else None,
+                "name": sess.get("groupChannel") or sess.get("displayName"),
+                "display_name": sess.get("displayName"),
+                "read_target": last_to or (
+                    f"channel:{channel_id}" if channel_id else None
+                ),
+                "session_key": key,
+                "session_file": sess.get("sessionFile", ""),
+            }
+
+    # For each candidate, parse its transcript to compute the topic-aware window
+    # and the non-self message count that drives ranking.
+    scored: list[dict] = []
+    for e in best.values():
+        events = _channel_message_events(e["session_file"])
+        since_ms = _topic_aware_since(
+            events, now_ms, window_ms, gap_ms, max_lookback_ms
+        )
+        non_self = sum(1 for (t, r) in events if t >= since_ms and r == "user")
+        convo_since = sum(1 for (t, _r) in events if t >= since_ms)
+        span_h = round((now_ms - since_ms) / 3600000.0, 1)
+        scored.append({
+            "channel": e["channel"],
+            "channel_id": e["channel_id"],
+            "name": e["name"],
+            "display_name": e["display_name"],
+            "read_target": e["read_target"],
+            "non_self_messages": non_self,
+            "review_since": _iso_from_db(
+                datetime.fromtimestamp(since_ms / 1000.0, tz=timezone.utc)
+            ),
+            "review_span_hours": span_h,
+            "suggested_read_limit": max(20, min(150, convo_since + 5)),
+            "last_active_minutes_ago": round((now_ms - e["_ts"]) / 60000.0, 1),
+            "session_key": e["session_key"],
+        })
+
+    # Rank by non-self message volume (desc), tiebreak by recency (desc).
+    scored.sort(
+        key=lambda c: (c["non_self_messages"], -c["last_active_minutes_ago"]),
+        reverse=True,
+    )
+    channels = scored[:limit]
+
+    return {
+        "base_window_hours": window_hours,
+        "topic_gap_minutes": CHANNEL_TOPIC_GAP_MINUTES,
+        "max_lookback_hours": CHANNEL_REVIEW_MAX_LOOKBACK_H,
+        "ranked_by": "non_self_messages",
+        "count": len(channels),
+        "channels": channels,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Gate check functions — each returns a step result dict
 # ---------------------------------------------------------------------------
 
@@ -307,20 +601,44 @@ def check_step1_agent_chat() -> dict:
         return _step_error(f"DB error: {exc}")
 
 
-def _last_conversational_role(session_file: str) -> str | None:
-    """Return the role ('user' or 'assistant') of the last conversational message in a session JSONL file.
+def _message_text(entry: dict) -> str:
+    """Extract plain text content from a session JSONL message entry."""
+    msg = entry.get("message") or {}
+    content = msg.get("content", "")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, dict):
+                # OpenClaw/Anthropic-style content blocks
+                if block.get("type") in ("text", "input_text", "output_text"):
+                    parts.append(str(block.get("text") or ""))
+                elif "text" in block:
+                    parts.append(str(block.get("text") or ""))
+                elif "content" in block and isinstance(block.get("content"), str):
+                    parts.append(block["content"])
+        return "\n".join(p for p in parts if p)
+    return str(content or "")
 
-    Skips toolResult, system, and other non-conversational entries.
-    Returns None if no conversational message is found.
+
+def _last_conversational_messages(session_file: str, limit: int = 8) -> list[dict]:
+    """Return up to `limit` recent conversational messages (user/assistant), oldest→newest.
+
+    Each item: {"role": str, "text": str}
+    Skips toolResult/system/other non-conversational entries.
     """
     if not os.path.exists(session_file):
-        return None
+        return []
     try:
         with open(session_file, "r") as fh:
             lines = fh.readlines()
     except OSError:
-        return None
-    # Walk backwards to find last user or assistant message
+        return []
+
+    found: list[dict] = []
     for line in reversed(lines):
         line = line.strip()
         if not line:
@@ -329,17 +647,181 @@ def _last_conversational_role(session_file: str) -> str | None:
             entry = json.loads(line)
         except (json.JSONDecodeError, ValueError):
             continue
-        role = entry.get("message", {}).get("role")
-        if role in ("user", "assistant"):
-            return role
-    return None
+        role = (entry.get("message") or {}).get("role")
+        if role not in ("user", "assistant"):
+            continue
+        found.append({"role": role, "text": _message_text(entry)})
+        if len(found) >= limit:
+            break
+    found.reverse()
+    return found
+
+
+def _last_conversational_role(session_file: str) -> str | None:
+    """Return the role ('user' or 'assistant') of the last conversational message."""
+    msgs = _last_conversational_messages(session_file, limit=1)
+    return msgs[-1]["role"] if msgs else None
+
+
+# Heuristic markers for channel-tail review (step 2). Kept intentionally simple —
+# the agent does full diagnosis; the gate only decides whether the step is worth running.
+_ERROR_MARKERS = (
+    "error",
+    "exception",
+    "traceback",
+    "failed",
+    "failure",
+    "enoent",
+    "eacces",
+    "econn",
+    "timeout",
+    "timed out",
+    "stack trace",
+    "unhandled",
+    "crash",
+    "segfault",
+    "rate limit",
+    "429",
+    "500 internal",
+    "502 bad gateway",
+    "503 service",
+    "permission denied",
+    "auth failed",
+    "unauthorized",
+    "forbidden",
+    "delivery failed",
+    "message failed",
+)
+_SUBAGENT_REPORT_MARKERS = (
+    "subagent",
+    "sub-agent",
+    "completion event",
+    "task complete",
+    "task completed",
+    "finished run",
+    "run complete",
+    "run completed",
+    "workflow completed",
+    "workflow failed",
+    "spawned",
+    "agent report",
+    "status report",
+    "se run #",
+    "step failed",
+    "pr ready",
+    "merged and deployed",
+)
+_INTENTIONAL_SILENCE = ("no_reply", "heartbeat_ok", "heartbeat ok")
+
+
+def _text_looks_intentional_silence(text: str) -> bool:
+    t = (text or "").strip().lower()
+    if not t:
+        return True
+    if t in _INTENTIONAL_SILENCE:
+        return True
+    # Single-token intentional silence with optional whitespace/punctuation
+    compact = "".join(ch for ch in t if ch.isalnum() or ch in ("_",))
+    compact_no_underscore = compact.replace("_", "")
+    return compact in ("noreply", "heartbeatok", "no_reply", "heartbeat_ok") or compact_no_underscore in (
+        "noreply",
+        "heartbeatok",
+    )
+
+
+def _text_looks_like_error(text: str) -> bool:
+    t = (text or "").lower()
+    if not t or len(t) < 12:
+        return False
+    # Avoid flagging ordinary assistant prose that merely mentions past errors lightly
+    hits = sum(1 for m in _ERROR_MARKERS if m in t)
+    if hits >= 2:
+        return True
+    strong = (
+        "traceback (most recent call last)",
+        "exception:",
+        "error:",
+        "failed to",
+        "delivery failed",
+        "message failed",
+        "unhandled rejection",
+    )
+    return any(s in t for s in strong)
+
+
+def _text_looks_like_subagent_report(text: str) -> bool:
+    t = (text or "").lower()
+    if not t or len(t) < 24:
+        return False
+    return any(m in t for m in _SUBAGENT_REPORT_MARKERS)
+
+
+def _session_tail_flags(session_file: str) -> list[str]:
+    """Inspect recent conversational tail; return list of flag reasons for this session.
+
+    Flags:
+      - unanswered_user
+      - error_in_tail
+      - subagent_report
+    """
+    msgs = _last_conversational_messages(session_file, limit=8)
+    if not msgs:
+        return []
+
+    flags: list[str] = []
+
+    # 1) Unanswered human/user message at end of tail (ignore pure intentional silence)
+    last = msgs[-1]
+    if last["role"] == "user" and not _text_looks_intentional_silence(last["text"]):
+        flags.append("unanswered_user")
+
+    # 2) Also catch a user message earlier in the tail that still has no later assistant reply
+    #    (e.g. user, user, system-ish user completion) — last non-silence user without assistant after.
+    last_user_idx = None
+    for i, m in enumerate(msgs):
+        if m["role"] == "user" and not _text_looks_intentional_silence(m["text"]):
+            last_user_idx = i
+    if last_user_idx is not None:
+        if not any(m["role"] == "assistant" for m in msgs[last_user_idx + 1 :]):
+            if "unanswered_user" not in flags:
+                flags.append("unanswered_user")
+
+    # 3) Errors / subagent reports in the recent tail that are not clearly followed by an
+    #    assistant disposition after the flagged message.
+    for i, m in enumerate(msgs):
+        text = m.get("text") or ""
+        if _text_looks_intentional_silence(text):
+            continue
+        has_later_assistant = any(
+            later["role"] == "assistant"
+            and not _text_looks_intentional_silence(later.get("text") or "")
+            for later in msgs[i + 1 :]
+        )
+        if has_later_assistant:
+            continue
+        if _text_looks_like_error(text):
+            if "error_in_tail" not in flags:
+                flags.append("error_in_tail")
+        if _text_looks_like_subagent_report(text):
+            # Assistant-authored status that still sits at the end may need disposition
+            # only when it looks like a report dump rather than a finished human reply.
+            if m["role"] == "user" or (
+                m["role"] == "assistant" and i == len(msgs) - 1 and len(text) > 280
+            ):
+                if "subagent_report" not in flags:
+                    flags.append("subagent_report")
+
+    return flags
 
 
 def check_step2_unanswered_sessions() -> dict:
     """
-    Step 2: Check for unanswered user messages in recent user-facing sessions.
-    Reads sessions.json and checks each session's JSONL file to see if the last
-    conversational message is from a user (i.e. unanswered).
+    Step 2: Channel tail review gate for recent user-facing sessions.
+
+    Actionable when any recent session tail has:
+      - unanswered user/human messages
+      - errors/failures without a later assistant disposition
+      - sub-agent / completion-style reports needing follow-up
     """
     ONE_DAY_MS = 86_400_000
     try:
@@ -349,7 +831,12 @@ def check_step2_unanswered_sessions() -> dict:
         return _step_error(f"Failed to read sessions.json: {exc}")
 
     now_ms = int(time.time() * 1000)
-    unanswered: list[str] = []
+    flagged: list[dict] = []
+    by_reason = {
+        "unanswered_user": [],
+        "error_in_tail": [],
+        "subagent_report": [],
+    }
 
     for key, sess in sessions_data.items():
         updated = sess.get("updatedAt", 0)
@@ -365,18 +852,38 @@ def check_step2_unanswered_sessions() -> dict:
         if not session_file:
             continue
 
-        last_role = _last_conversational_role(session_file)
-        if last_role == "user":
-            unanswered.append(key)
+        flags = _session_tail_flags(session_file)
+        if not flags:
+            continue
+        flagged.append({"session": key, "flags": flags})
+        for f in flags:
+            if f in by_reason:
+                by_reason[f].append(key)
 
-    count = len(unanswered)
+    count = len(flagged)
     if count > 0:
+        parts = []
+        if by_reason["unanswered_user"]:
+            parts.append(f"{len(by_reason['unanswered_user'])} unanswered")
+        if by_reason["error_in_tail"]:
+            parts.append(f"{len(by_reason['error_in_tail'])} error-tail")
+        if by_reason["subagent_report"]:
+            parts.append(f"{len(by_reason['subagent_report'])} subagent-report")
+        detail = ", ".join(parts) if parts else "tail findings"
         return {
             "actionable": True,
-            "reason": f"{count} session(s) with unanswered user messages",
-            "data": {"count": count, "sessions": unanswered},
+            "reason": f"{count} session(s) need channel tail review ({detail})",
+            "data": {
+                "count": count,
+                "sessions": [item["session"] for item in flagged],
+                "flagged": flagged,
+                "by_reason": by_reason,
+            },
         }
-    return {"actionable": False, "reason": "No unanswered user messages in recent sessions"}
+    return {
+        "actionable": False,
+        "reason": "No unanswered messages, error tails, or subagent reports in recent sessions",
+    }
 
 
 def check_step3_introspection() -> dict:
@@ -1257,11 +1764,16 @@ def main() -> None:
     is_idle = idle_result.get("idle", True)
     idle_minutes = idle_result.get("idle_minutes", 0.0)
 
+    # 2. Running workflow runs — computed BEFORE the idle short-circuit so the
+    #    key is present in both idle and non-idle manifests.
+    running_runs = query_running_workflow_runs()
+
     base = {
         "timestamp": timestamp,
         "idle": is_idle,
         "idle_minutes": idle_minutes,
         "idle_threshold_minutes": IDLE_THRESHOLD_MINUTES,
+        "running_workflow_runs": running_runs,
     }
 
     if idle_result.get("reason"):
@@ -1271,7 +1783,7 @@ def main() -> None:
         print(json.dumps(base, indent=2))
         return
 
-    # 2. Run all 11 gate checks
+    # 3. Run all 11 gate checks
     steps: dict[str, dict] = {}
 
     steps["1_agent_chat"] = check_step1_agent_chat()
@@ -1307,6 +1819,7 @@ def main() -> None:
         "actionable_steps": actionable_steps,
         "actionable_count": actionable_count,
         "summary": f"{actionable_count} of 11 steps actionable",
+        "top_active_channels": top_active_channels(),
     }
 
     print(json.dumps(output, indent=2))

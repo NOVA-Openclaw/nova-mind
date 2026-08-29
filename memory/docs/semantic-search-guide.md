@@ -307,15 +307,16 @@ FROM entity_facts ef
 JOIN entities e ON ef.entity_id = e.id
 WHERE ef.id = NEW.id;
 
--- Events: Include temporal context
+-- Events: Include temporal context (column names corrected to match the live
+-- `events` table: event_date/title, not date/event; there is no participants
+-- array column on events — participant linkage lives in the event_entities
+-- junction table)
 INSERT INTO memory_embeddings (source_type, source_id, content)
 SELECT
     'event',
     ev.id::text,
-    'On ' || ev.date || ': ' || ev.event || 
-    CASE WHEN ev.participants IS NOT NULL 
-         THEN ' (participants: ' || array_to_string(ev.participants, ', ') || ')'
-         ELSE '' END
+    'On ' || ev.event_date || ': ' || ev.title ||
+    COALESCE(' — ' || ev.description, '')
 FROM events ev
 WHERE ev.id = NEW.id;
 

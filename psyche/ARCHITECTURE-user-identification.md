@@ -74,13 +74,13 @@ The examples below use `fact_key`/`fact_value` for readability, but the real col
 | `telegram_id` | Telegram user ID | `123456789` | Telegram |
 | `telegram_username` | Telegram username | `johndoe` | Telegram |
 | `discord_id` | Discord user ID (snowflake) | `1234567890123456789` | Discord |
-| `slack_id_<workspace>` | Slack user ID per workspace | `U123456789` | Slack |
+| `slack_member_id` | Slack member ID (flat key, not workspace-namespaced) | `U123456789` | Slack |
 | `email` | Email address | `john@example.com` | iMessage, general |
 
 ### Fact Key Conventions
 
 - **Namespaced**: Platform-specific facts use prefixes (`signal_`, `telegram_`, etc.)
-- **Workspace-scoped**: Multi-tenant platforms append workspace identifier
+- **Not workspace-scoped in the current implementation**: the live resolver's `IDENTIFIER_TO_DB_KEY` mapping (see `relationships/ARCHITECTURE-entity-resolver.md`) stores Slack identity under a single flat `slack_member_id` key, not a per-workspace key. Workspace-scoping (appending a workspace identifier) is an earlier design idea from this document, not something implemented — same-name collisions across separate Slack workspaces are not currently disambiguated.
 - **Canonical forms**: Phone numbers in E.164, emails lowercased
 - **Immutable primaries**: Core platform IDs (like Discord snowflakes) never change
 - **Mutable secondaries**: Display names, usernames may update

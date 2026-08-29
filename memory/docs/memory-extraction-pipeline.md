@@ -493,7 +493,7 @@ CREATE INDEX idx_entity_facts_key ON entity_facts(key);
 CREATE INDEX idx_entity_facts_entity_id ON entity_facts(entity_id);
 
 -- Speed up timeline queries
-CREATE INDEX idx_events_date ON events(date);
+CREATE INDEX idx_events_date ON events(event_date);
 ```
 
 ## Next Steps

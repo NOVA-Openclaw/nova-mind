@@ -26,7 +26,8 @@ Parse the JSON output:
 {
   "idle": false,
   "idle_minutes": 12.1,
-  "idle_threshold_minutes": 60
+  "idle_threshold_minutes": 60,
+  "running_workflow_runs": []
 }
 ```
 
@@ -37,11 +38,19 @@ Parse the JSON output:
   "idle": true,
   "idle_minutes": 95.3,
   "idle_threshold_minutes": 60,
+  "running_workflow_runs": [],
   "actionable_steps": [3, 6, 11],
   "actionable_count": 3,
   "summary": "3 of 11 steps actionable"
 }
 ```
+
+> **Note:** `running_workflow_runs` is present in every manifest, idle or not (issue #623).
+> On DB failure it returns an error dict verbatim instead of `[]` — treat a non-list value
+> here as "could not check," not "nothing running." See
+> `motivation/ARCHITECTURE.md#running_workflow_runs-manifest-field` for the full contract.
+> If it shows a non-empty list, avoid starting new workflow-driving proactive work that
+> would conflict with the in-flight run(s) it lists.
 
 The `actionable_steps` array lists step numbers (1–11) corresponding to the **NOVA Proactive
 Mode** workflow (id=27). The script has already evaluated all gate conditions; do not

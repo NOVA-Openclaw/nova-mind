@@ -1,0 +1,40 @@
+# Manifest of hand-authored schema objects that the automated schema-sync
+# tooling (sync_schema_to_github() in cognition/scripts/pg-notify-listener.py)
+# must NEVER silently remove from database/schema.sql.
+#
+# Background (nova-mind#624): commit 6b8599e ("schema: ALTER TABLE
+# work_queue", 2026-08-09) was a mechanical `pgschema dump` re-dump commit
+# that clobbered append_run_note() — a hand-authored function added in
+# 880aa46 (#557/#560) — with no revert commit message and no changelog
+# entry noting the removal. The function was absent from both schema.sql
+# and the live nova_memory database until this manifest and the
+# listener-side veto it enforces were added.
+#
+# How this is enforced: sync_schema_to_github() dumps a fresh schema.sql via
+# `pgschema dump`, then checks every pattern below against the freshly
+# dumped file BEFORE `git add`/commit/push. If any manifest-listed function
+# is missing from the dump, the sync is refused for the ENTIRE dump
+# (all-or-nothing — pgschema dump emits one whole-file snapshot, so there is
+# no partial-apply path in v1), the dumped schema.sql is reverted via
+# `git checkout -- database/schema.sql` (so no clobbered file is left dirty
+# in the working tree), and an agent_chat alert is sent naming the missing
+# object(s). A dump that removes a NON-manifest object is unaffected and
+# proceeds to commit/push normally — this manifest is a targeted veto, not
+# a general anti-drop lock.
+#
+# SANCTIONED REMOVAL PATH for an entry below (per ruling on nova-mind#624):
+#   1. Land a manifest edit (remove the entry) via a human-reviewed PR —
+#      NEVER via the listener or any automated schema-sync path.
+#   2. Only AFTER that PR merges, perform the live-DB DROP separately.
+# Removing an entry here without following this order defeats the purpose
+# of the manifest.
+#
+# See https://www.pgschema.com/cli/ignore for the unrelated .pgschemaignore
+# file (governs what pgschema's plan/dump SKIPS entirely); this manifest is
+# the opposite direction — objects pgschema DOES manage but must always
+# retain — and it is a nova-mind convention, not a pgschema feature.
+
+[functions]
+patterns = [
+  "append_run_note(integer, text)",
+]

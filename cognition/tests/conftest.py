@@ -69,6 +69,25 @@ def listener_module(monkeypatch, tmp_path):
 
 
 @pytest.fixture
+def manifest_file(monkeypatch, listener_module, tmp_path):
+    """Point SCHEMA_MANIFEST_FILE at a disposable manifest and return a writer.
+
+    Usage: manifest_file("[functions]\npatterns = [\"foo(int)\"]\n") writes the
+    given TOML content and re-points the listener module at it. Calling with
+    no args (or omitting the fixture's use) leaves no manifest file on disk,
+    matching the fail-open "no manifest -> nothing to protect" contract.
+    """
+    manifest_path = tmp_path / ".schema-manifest.toml"
+    monkeypatch.setattr(pg_notify_listener, "SCHEMA_MANIFEST_FILE", str(manifest_path))
+
+    def _write(content):
+        manifest_path.write_text(content)
+        return str(manifest_path)
+
+    return _write
+
+
+@pytest.fixture
 def git_repos(tmp_path):
     """Create a bare origin and a clone with an initial commit pushed."""
     origin = tmp_path / "origin.git"

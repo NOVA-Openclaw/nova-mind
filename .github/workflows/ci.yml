@@ -31,3 +31,11 @@ jobs:
         # detection coverage in test_agent_chat_peer_detection.bats. This
         # workflow invocation is updated to match the renamed test file.
         run: bats tests/install/test_agent_chat_peer_detection.bats tests/install/test_agents_json_safety.bats tests/install/test_plan_reorder_exit_codes.bats
+
+      - name: Schema manifest backstop (#624)
+        # CI backstop behind the listener-side veto in
+        # cognition/scripts/pg-notify-listener.py: asserts every
+        # hand-authored object in database/.schema-manifest.toml (e.g.
+        # append_run_note()) is present in database/schema.sql. Static,
+        # repo-only check -- no database connection required.
+        run: python3 database/check_schema_manifest.py

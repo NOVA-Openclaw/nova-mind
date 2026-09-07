@@ -22,6 +22,11 @@ import psycopg2
 import psycopg2.extensions
 from datetime import datetime, timezone
 
+try:
+    import tomllib  # Python 3.11+
+except ModuleNotFoundError:  # pragma: no cover - unsupported runtime fallback
+    tomllib = None
+
 # Git operation lock - prevents concurrent sync_schema_to_github from colliding
 _git_lock_fd = None
 _git_lock_path = os.path.expanduser('~/.openclaw/workspace/scripts/.pg-notify-git.lock')
@@ -50,6 +55,12 @@ NOVA_MIND_DIR = os.path.join(WORKSPACE, "nova-mind")
 SCHEMA_FILE = os.path.join(NOVA_MIND_DIR, "database", "schema.sql")
 SCHEMA_REFERENCE_FILE = os.path.join(NOVA_MIND_DIR, "database", "schema-reference.md")
 RENAMES_FILE = os.path.join(NOVA_MIND_DIR, "memory", "database", "renames.json")
+
+# Manifest of hand-authored schema objects that an automated pgschema dump
+# must never silently remove (nova-mind#624 anti-clobber safeguard). See
+# database/.schema-manifest.toml for the full rationale and the sanctioned
+# removal path for an entry.
+SCHEMA_MANIFEST_FILE = os.path.join(NOVA_MIND_DIR, "database", ".schema-manifest.toml")
 
 # Clawdbot webhook config
 CLAWDBOT_WEBHOOK = "http://localhost:18789/hooks/wake"
@@ -248,6 +259,153 @@ def _send_push_alert(commit_hash, command, table_name, failure_class, stderr):
         log(f"Failed to send push alert: {alert_err}")
 
 
+def _load_schema_manifest(manifest_path=None):
+    """Parse database/.schema-manifest.toml into {object_type: [patterns]}.
+
+    Returns an empty dict if the manifest is missing, empty, or unparseable
+    (fail-open on manifest load errors is intentional: a missing manifest
+    means "nothing to protect yet", not "block every sync"). Object types
+    are TOML table names (e.g. "functions"); patterns are exact object
+    signatures as they appear in a `pgschema dump` (e.g.
+    "append_run_note(integer, text)").
+    """
+    path = manifest_path or SCHEMA_MANIFEST_FILE
+    if tomllib is None:
+        log("tomllib unavailable; skipping schema manifest check")
+        return {}
+    if not os.path.isfile(path):
+        return {}
+    try:
+        with open(path, 'rb') as f:
+            data = tomllib.load(f)
+    except Exception as e:
+        log(f"Failed to parse schema manifest {path}: {e}")
+        return {}
+    manifest = {}
+    for obj_type, section in data.items():
+        if isinstance(section, dict) and isinstance(section.get('patterns'), list):
+            manifest[obj_type] = [p for p in section['patterns'] if isinstance(p, str)]
+    return manifest
+
+
+def _find_missing_manifest_objects(schema_sql, manifest=None, manifest_path=None):
+    """Return a list of "type: pattern" strings for manifest entries absent
+    from schema_sql.
+
+    Presence check for the `functions` section is a substring search for a
+    `CREATE ... FUNCTION <name>(<args>)` header matching the manifest
+    pattern's function-name-and-arglist text (case-insensitive, whitespace
+    tolerant) -- this mirrors how pgschema itself renders function headers
+    in a dump and avoids requiring a full SQL parser for a v1 check. Other
+    manifest section types (if added later) fall back to a plain substring
+    search for the pattern text.
+    """
+    if manifest is None:
+        manifest = _load_schema_manifest(manifest_path)
+    if not manifest:
+        return []
+
+    missing = []
+    for obj_type, patterns in manifest.items():
+        for pattern in patterns:
+            if obj_type == 'functions':
+                found = _function_signature_present(schema_sql, pattern)
+            else:
+                found = pattern in schema_sql
+            if not found:
+                missing.append(f"{obj_type}: {pattern}")
+    return missing
+
+
+def _function_signature_present(schema_sql, signature):
+    """Check whether a `CREATE [OR REPLACE] FUNCTION <signature>` header is
+    present in schema_sql, tolerant of whitespace/newlines between the
+    function name and its opening paren (pgschema dumps wrap long argument
+    lists across multiple lines).
+
+    `signature` is expected in the manifest as "name(arg1_type, arg2_type)",
+    e.g. "append_run_note(integer, text)".
+    """
+    m = re.match(r'^\s*([A-Za-z_][A-Za-z0-9_]*)\s*\((.*)\)\s*$', signature)
+    if not m:
+        # Not a recognizable "name(args)" signature; fall back to raw substring.
+        return signature in schema_sql
+    func_name = m.group(1)
+    # Build a regex: CREATE [OR REPLACE] FUNCTION <name> <whitespace>* \(
+    # then require each declared arg type to appear (order-insensitive is
+    # NOT attempted here -- pgschema dump order is stable/deterministic for
+    # a given function definition, so a straightforward ordered check is
+    # sufficient and avoids false negatives from over-generalizing).
+    header_re = re.compile(
+        r'CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+' + re.escape(func_name) + r'\s*\(',
+        re.IGNORECASE,
+    )
+    return bool(header_re.search(schema_sql))
+
+
+def _send_manifest_veto_alert(missing_objects, command, table_name):
+    """Send agent_chat alert when the manifest veto refuses a schema sync.
+
+    Never propagates exceptions (same contract as _send_push_alert /
+    _send_branch_alert). Deliberately does NOT route through
+    notify_clawdbot(), which is a documented no-op (dead webhook,
+    nova-workspace#4) -- an alert sent there would be indistinguishable
+    from "no schema changes", defeating the purpose of the veto.
+    """
+    try:
+        sender = _agent_chat_env.get('PGUSER')
+        if not sender:
+            log("PGUSER not configured; cannot send manifest veto alert")
+            return
+
+        message_lines = [
+            '[schema-sync]',
+            'Schema sync REFUSED - manifest object(s) missing from pgschema dump:',
+            f'  repo: nova-mind',
+            f'  path: {NOVA_MIND_DIR}',
+            f'  trigger: {command} on {table_name}',
+            '  missing manifest object(s):',
+        ]
+        for obj in missing_objects:
+            message_lines.append(f'    - {obj}')
+        message_lines.append(
+            f'  reason: a pgschema dump would have removed the object(s) above '
+            f'from database/schema.sql. The dump was DISCARDED (git checkout -- '
+            f'database/schema.sql) and nothing was committed or pushed. This is '
+            f'almost always live-DB drift (the object was dropped/rolled back on '
+            f'nova_memory) rather than an intentional removal.'
+        )
+        message_lines.append(
+            f'  sanctioned removal path (see database/.schema-manifest.toml): '
+            f'land a manifest-edit PR first, then perform the live-DB drop -- '
+            f'never via this listener.'
+        )
+        message_lines.append(
+            f'  investigate: cd {NOVA_MIND_DIR} && psql -U nova -d nova_memory '
+            f'-c "\\df <function_name>" to confirm whether the object is missing '
+            f'live or the manifest itself is stale.'
+        )
+        message = '\n'.join(message_lines)
+
+        veto_conn = psycopg2.connect(
+            host=_agent_chat_env.get('PGHOST', 'localhost'),
+            database=_agent_chat_env['PGDATABASE'],
+            user=sender,
+            password=_agent_chat_env.get('PGPASSWORD', '')
+        )
+        veto_cur = veto_conn.cursor()
+        veto_cur.execute(
+            "SELECT send_agent_message(%s, %s, %s)",
+            (sender, message, _alert_recipients(sender))
+        )
+        veto_conn.commit()
+        veto_cur.close()
+        veto_conn.close()
+        log(f"Alerted {_alert_recipients(sender)} via agent_chat about manifest veto (missing: {missing_objects})")
+    except Exception as alert_err:
+        log(f"Failed to send manifest veto alert: {alert_err}")
+
+
 def _send_branch_alert(found_branch, command, table_name, reason, stderr=None):
     """Send agent_chat alert when branch-safety check aborts. Never propagates exceptions."""
     try:
@@ -430,6 +588,39 @@ def sync_schema_to_github(command, obj_type, obj_name):
         if result.returncode != 0:
             log(f"pgschema dump failed: {result.stderr}")
             return False, None
+
+        # 1.5. Manifest veto (nova-mind#624): refuse the ENTIRE sync if the
+        # freshly dumped schema.sql is missing any hand-authored object
+        # listed in database/.schema-manifest.toml. This runs BEFORE the
+        # git-status check / git add so a clobbering dump is discarded from
+        # the working tree rather than merely left uncommitted -- a veto
+        # that only skipped the commit would still leave schema.sql dirty
+        # on disk with the manifest object missing.
+        try:
+            with open(SCHEMA_FILE, 'r') as f:
+                dumped_sql = f.read()
+        except Exception as e:
+            log(f"Failed to read dumped schema for manifest check: {e}")
+            dumped_sql = None
+        if dumped_sql is not None:
+            missing_objects = _find_missing_manifest_objects(dumped_sql)
+            if missing_objects:
+                log(
+                    f"Manifest veto: dump would remove {missing_objects} -- "
+                    f"discarding dump and refusing sync"
+                )
+                revert = subprocess.run(
+                    ['git', '-C', NOVA_MIND_DIR, 'checkout', '--', 'database/schema.sql'],
+                    capture_output=True,
+                    text=True
+                )
+                if revert.returncode != 0:
+                    log(
+                        f"Manifest veto: failed to revert clobbered schema.sql: "
+                        f"{revert.stderr.strip()}"
+                    )
+                _send_manifest_veto_alert(missing_objects, command, table_name)
+                return False, None
 
         # 2. Check if there are actual changes
         status = subprocess.run(

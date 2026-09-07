@@ -120,11 +120,15 @@ class TestManifestLoader:
         manifest = listener_module._load_schema_manifest()
         assert manifest == {"functions": ["append_run_note(integer, text)"]}
 
-    def test_malformed_toml_returns_empty_dict_not_raise(self, listener_module, manifest_file):
-        """Malformed TOML fails open (does not block every sync) and does not raise."""
+    def test_malformed_toml_raises_schema_manifest_error(self, listener_module, manifest_file):
+        """B-3 (SE run #804 QA review): a PRESENT-but-malformed manifest must
+        fail CLOSED, not fail open. Unlike a genuinely absent manifest
+        (which fails open -- nothing to protect yet), a manifest that exists
+        but fails to parse must raise so the caller can veto the sync,
+        rather than silently disabling every entry's protection."""
         manifest_file("[functions\npatterns = not valid toml {{{")
-        manifest = listener_module._load_schema_manifest()
-        assert manifest == {}
+        with pytest.raises(listener_module.SchemaManifestError):
+            listener_module._load_schema_manifest()
 
     def test_empty_manifest_file_returns_empty_dict(self, listener_module, manifest_file):
         manifest_file("")
@@ -134,6 +138,22 @@ class TestManifestLoader:
         manifest_file('[functions]\npatterns = "not-a-list"\n')
         manifest = listener_module._load_schema_manifest()
         assert manifest == {}
+
+    def test_absent_manifest_fails_open_malformed_manifest_fails_closed(
+        self, listener_module, manifest_file
+    ):
+        """Direct contrast test for B-3: absent file -> {} (fail open);
+        present-but-broken file -> raises (fail closed). These are
+        deliberately different outcomes for different conditions.
+
+        The manifest_file fixture points SCHEMA_MANIFEST_FILE at a path with
+        no file yet -- so before calling manifest_file(...) to write
+        content, the file is genuinely absent at that same path."""
+        assert listener_module._load_schema_manifest() == {}  # absent -> fail open
+
+        manifest_file("not valid toml at all {{{")  # writes to the SAME path
+        with pytest.raises(listener_module.SchemaManifestError):
+            listener_module._load_schema_manifest()  # present-but-broken -> fail closed
 
     def test_multiple_sections_all_parsed(self, listener_module, manifest_file):
         manifest_file(
@@ -448,6 +468,103 @@ class TestEndToEndVeto:
         assert _clone_head(clone) == head_before
         message_calls = [c for c in mock_agent_chat if "send_agent_message" in c.get("query", "")]
         assert len(message_calls) == 1
+
+
+class TestFailClosedOnMalformedManifest:
+    """B-3 (SE run #804 QA review): sync_schema_to_github() must fail CLOSED
+    (refuse the sync, revert schema.sql, alert) when the manifest file
+    EXISTS but is malformed -- not silently proceed as if no manifest
+    existed. This is distinct from the LSV tests above, which cover a
+    valid manifest whose OBJECT is missing from the dump; here the manifest
+    ITSELF is broken."""
+
+    def test_malformed_manifest_refuses_sync_and_reverts(
+        self, listener_module, git_repos, mock_pgschema_dump, mock_agent_chat, manifest_file
+    ):
+        clone = Path(git_repos["clone"])
+        listener_module.NOVA_MIND_DIR = str(clone)
+        listener_module.SCHEMA_FILE = str(clone / "database" / "schema.sql")
+        manifest_file("[functions\npatterns = not valid toml {{{")
+
+        schema_file = clone / "database" / "schema.sql"
+        schema_file.write_text(APPEND_RUN_NOTE_SQL)
+        subprocess.run(["git", "-C", str(clone), "add", "database/schema.sql"], check=True)
+        subprocess.run(
+            ["git", "-C", str(clone), "commit", "-m", "seed"],
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(["git", "-C", str(clone), "push", "origin", "main"], check=True, capture_output=True)
+        head_before = _clone_head(clone)
+
+        _set_schema_content(listener_module, UNRELATED_FUNCTION_SQL)
+        ok, commit_hash = listener_module.sync_schema_to_github(
+            "ALTER", "table", "public.work_queue"
+        )
+
+        assert ok is False
+        assert commit_hash is None
+        # No new commit; schema.sql on disk reverted to committed content,
+        # not left dirty with the (also-clobbered) dump content.
+        assert _clone_head(clone) == head_before
+        assert schema_file.read_text() == APPEND_RUN_NOTE_SQL
+        status = subprocess.run(
+            ["git", "-C", str(clone), "status", "--porcelain"],
+            capture_output=True,
+            text=True,
+        )
+        assert status.stdout.strip() == ""
+
+    def test_malformed_manifest_sends_alert_mentioning_parse_error(
+        self, listener_module, git_repos, mock_pgschema_dump, mock_agent_chat, manifest_file
+    ):
+        clone = Path(git_repos["clone"])
+        listener_module.NOVA_MIND_DIR = str(clone)
+        listener_module.SCHEMA_FILE = str(clone / "database" / "schema.sql")
+        manifest_file("[functions\npatterns = not valid toml {{{")
+
+        schema_file = clone / "database" / "schema.sql"
+        schema_file.write_text(APPEND_RUN_NOTE_SQL)
+        subprocess.run(["git", "-C", str(clone), "add", "database/schema.sql"], check=True)
+        subprocess.run(
+            ["git", "-C", str(clone), "commit", "-m", "seed"],
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(["git", "-C", str(clone), "push", "origin", "main"], check=True, capture_output=True)
+
+        _set_schema_content(listener_module, UNRELATED_FUNCTION_SQL)
+        listener_module.sync_schema_to_github("ALTER", "table", "public.work_queue")
+
+        message_calls = [c for c in mock_agent_chat if "send_agent_message" in c.get("query", "")]
+        assert len(message_calls) == 1
+        _, message, _ = message_calls[0]["params"]
+        assert "REFUSED" in message
+        assert "manifest parse error" in message.lower()
+
+    def test_malformed_manifest_releases_git_lock(
+        self, listener_module, git_repos, mock_pgschema_dump, mock_agent_chat, manifest_file
+    ):
+        clone = Path(git_repos["clone"])
+        listener_module.NOVA_MIND_DIR = str(clone)
+        listener_module.SCHEMA_FILE = str(clone / "database" / "schema.sql")
+        manifest_file("not valid toml at all {{{")
+
+        schema_file = clone / "database" / "schema.sql"
+        schema_file.write_text(APPEND_RUN_NOTE_SQL)
+        subprocess.run(["git", "-C", str(clone), "add", "database/schema.sql"], check=True)
+        subprocess.run(
+            ["git", "-C", str(clone), "commit", "-m", "seed"],
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(["git", "-C", str(clone), "push", "origin", "main"], check=True, capture_output=True)
+
+        _set_schema_content(listener_module, UNRELATED_FUNCTION_SQL)
+        listener_module.sync_schema_to_github("ALTER", "table", "public.work_queue")
+
+        assert not _lock_is_held(listener_module._git_lock_path)
+        assert listener_module._git_lock_fd is None
 
 
 class TestNegativeCaseNonManifestObjectsProceed:

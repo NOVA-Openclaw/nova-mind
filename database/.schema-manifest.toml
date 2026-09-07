@@ -10,6 +10,32 @@
 # and the live nova_memory database until this manifest and the
 # listener-side veto it enforces were added.
 #
+# Incident history — mechanical schema-dump commits silently clobbering
+# hand-authored or unintended state, the recurring failure class this
+# manifest exists to close (SE run #804 QA review, NB-1):
+#   - 50c1df3 (2026-08-17): "schema: CREATE FUNCTION
+#     audit_bootstrap_universal()" — an auto-dump commit that introduced an
+#     unintended function definition, reverted same-day by 7f979dc and
+#     again by 11b00eb (the first revert did not fully land; see also the
+#     e1ede21/6b427e5 cluster below from the same incident window).
+#   - 7f979dc / 11b00eb (2026-08-17): two separate revert commits for the
+#     same audit_bootstrap_universal() auto-dump artifact above.
+#   - e1ede21 (2026-08-17): "Revert 'schema: ALTER TABLE events'" —
+#     same incident window as the audit_bootstrap_universal() reverts;
+#     another auto-dump commit reverted for unintended/incorrect content.
+#   - 6b427e5 (2026-08-17): "Revert 'schema: ALTER TABLE events_archive'"
+#     — same incident window, same pattern.
+#   - 6b8599e (2026-08-09) / #624: the append_run_note() clobber this
+#     manifest was created to prevent a repeat of.
+# All of the above are instances of the same root cause: an automated
+# `pgschema dump` re-dump commit landing without a human noticing it
+# removed or altered something it should not have. The manifest + veto
+# mechanism in this file targets the specific "removed a hand-authored
+# object" subset of that failure class; it does not by itself prevent
+# every mechanical-dump mistake (e.g. an unintended CREATE, as in
+# 50c1df3), which is why the sanctioned-removal-path discipline below and
+# human review of auto-dump commits both remain necessary.
+#
 # How this is enforced: sync_schema_to_github() dumps a fresh schema.sql via
 # `pgschema dump`, then checks every pattern below against the freshly
 # dumped file BEFORE `git add`/commit/push. If any manifest-listed function
@@ -38,3 +64,15 @@
 patterns = [
   "append_run_note(integer, text)",
 ]
+
+# Optional per-function security-property assertions (B-1, SE run #804 QA
+# review). Each key is a bare function name (matching a [functions] pattern
+# above); each value is a list of literal substrings that must appear
+# within that function's CREATE FUNCTION statement in schema.sql. This is a
+# STATIC text check (via database/check_schema_manifest.py) -- it does not
+# connect to any database. It exists because prosecdef/proconfig are live
+# catalog properties that are otherwise only verifiable by an ad hoc psql
+# query; encoding the expectation here makes it re-runnable and CI-checked
+# instead of relying on someone remembering to check by hand next time.
+[function_security]
+"append_run_note" = ["SECURITY DEFINER", "SET search_path = public"]

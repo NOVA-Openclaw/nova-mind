@@ -259,28 +259,48 @@ def _send_push_alert(commit_hash, command, table_name, failure_class, stderr):
         log(f"Failed to send push alert: {alert_err}")
 
 
+class SchemaManifestError(Exception):
+    """Raised when database/.schema-manifest.toml exists but is malformed.
+
+    Deliberately distinct from the "missing manifest" fail-open case: a
+    missing file means "nothing to protect yet" (safe to proceed), but a
+    PRESENT-but-corrupted manifest must fail CLOSED -- silently treating
+    a parse error as an empty manifest would disable every entry's
+    protection, reproducing the exact failure class #624 exists to close
+    (a hand-authored object silently vanishing with no signal). Callers
+    must treat this as a veto condition, not swallow it.
+    """
+
+
 def _load_schema_manifest(manifest_path=None):
     """Parse database/.schema-manifest.toml into {object_type: [patterns]}.
 
-    Returns an empty dict if the manifest is missing, empty, or unparseable
-    (fail-open on manifest load errors is intentional: a missing manifest
-    means "nothing to protect yet", not "block every sync"). Object types
-    are TOML table names (e.g. "functions"); patterns are exact object
-    signatures as they appear in a `pgschema dump` (e.g.
+    Returns an empty dict if the manifest file is simply ABSENT (fail-open:
+    a missing manifest means "nothing to protect yet", not "block every
+    sync" -- this is the intentional no-manifest case, see SG-7/LSV-9).
+
+    Raises SchemaManifestError if the manifest file EXISTS but fails to
+    parse as TOML (fail-closed: see SchemaManifestError docstring). This
+    does NOT propagate for a missing file, only for a present-but-broken
+    one.
+
+    Object types are TOML table names (e.g. "functions"); patterns are
+    exact object signatures as they appear in a `pgschema dump` (e.g.
     "append_run_note(integer, text)").
     """
     path = manifest_path or SCHEMA_MANIFEST_FILE
-    if tomllib is None:
-        log("tomllib unavailable; skipping schema manifest check")
-        return {}
     if not os.path.isfile(path):
         return {}
+    if tomllib is None:
+        raise SchemaManifestError(
+            f"tomllib unavailable (Python 3.11+ required) -- cannot parse "
+            f"present manifest {path}"
+        )
     try:
         with open(path, 'rb') as f:
             data = tomllib.load(f)
     except Exception as e:
-        log(f"Failed to parse schema manifest {path}: {e}")
-        return {}
+        raise SchemaManifestError(f"malformed manifest TOML at {path}: {e}") from e
     manifest = {}
     for obj_type, section in data.items():
         if isinstance(section, dict) and isinstance(section.get('patterns'), list):
@@ -292,13 +312,20 @@ def _find_missing_manifest_objects(schema_sql, manifest=None, manifest_path=None
     """Return a list of "type: pattern" strings for manifest entries absent
     from schema_sql.
 
-    Presence check for the `functions` section is a substring search for a
-    `CREATE ... FUNCTION <name>(<args>)` header matching the manifest
-    pattern's function-name-and-arglist text (case-insensitive, whitespace
+    Presence check for the `functions` section is a header-name match for a
+    `CREATE ... FUNCTION <name>(...)` line (case-insensitive, whitespace
     tolerant) -- this mirrors how pgschema itself renders function headers
-    in a dump and avoids requiring a full SQL parser for a v1 check. Other
-    manifest section types (if added later) fall back to a plain substring
-    search for the pattern text.
+    in a dump and avoids requiring a full SQL parser for a v1 check. It is a
+    NAME-ONLY presence check: it does not parse or compare the declared
+    argument types against the manifest pattern's parenthesized arg list
+    (see _function_signature_present). Other manifest section types (if
+    added later) fall back to a plain substring search for the pattern text.
+
+    When manifest is None, loads via _load_schema_manifest(manifest_path).
+    This intentionally lets SchemaManifestError propagate uncaught for a
+    present-but-malformed manifest file (fail closed) -- callers (i.e.
+    sync_schema_to_github) must treat that as a veto condition, not swallow
+    it silently.
     """
     if manifest is None:
         manifest = _load_schema_manifest(manifest_path)
@@ -318,10 +345,21 @@ def _find_missing_manifest_objects(schema_sql, manifest=None, manifest_path=None
 
 
 def _function_signature_present(schema_sql, signature):
-    """Check whether a `CREATE [OR REPLACE] FUNCTION <signature>` header is
+    """Check whether a `CREATE [OR REPLACE] FUNCTION <name>(` header is
     present in schema_sql, tolerant of whitespace/newlines between the
     function name and its opening paren (pgschema dumps wrap long argument
     lists across multiple lines).
+
+    NAME-ONLY match: this does NOT parse or compare the declared argument
+    types in `signature` against the actual dumped signature -- it only
+    confirms a `CREATE [OR REPLACE] FUNCTION <name>(` header exists for the
+    given function name, extracted from `signature` via regex. The
+    parenthesized arg-list text in `signature` (e.g. "integer, text") is
+    accepted as documentation for the manifest author but is not itself
+    checked against schema_sql. This is sufficient for the current use case
+    (detecting whether a hand-authored function was removed entirely by a
+    dump) but would NOT distinguish two overloads of the same function name
+    with different argument lists.
 
     `signature` is expected in the manifest as "name(arg1_type, arg2_type)",
     e.g. "append_run_note(integer, text)".
@@ -332,10 +370,6 @@ def _function_signature_present(schema_sql, signature):
         return signature in schema_sql
     func_name = m.group(1)
     # Build a regex: CREATE [OR REPLACE] FUNCTION <name> <whitespace>* \(
-    # then require each declared arg type to appear (order-insensitive is
-    # NOT attempted here -- pgschema dump order is stable/deterministic for
-    # a given function definition, so a straightforward ordered check is
-    # sufficient and avoids false negatives from over-generalizing).
     header_re = re.compile(
         r'CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+' + re.escape(func_name) + r'\s*\(',
         re.IGNORECASE,
@@ -596,6 +630,13 @@ def sync_schema_to_github(command, obj_type, obj_name):
         # the working tree rather than merely left uncommitted -- a veto
         # that only skipped the commit would still leave schema.sql dirty
         # on disk with the manifest object missing.
+        #
+        # A manifest file that EXISTS but fails to parse (SchemaManifestError)
+        # is treated as a veto too -- FAIL CLOSED, not fail open. Silently
+        # treating a corrupted manifest as "no manifest" would disable every
+        # entry's protection with no signal, reproducing the exact failure
+        # class #624 exists to close. Only a genuinely ABSENT manifest file
+        # is fail-open (see _load_schema_manifest / SG-7 / LSV-9).
         try:
             with open(SCHEMA_FILE, 'r') as f:
                 dumped_sql = f.read()
@@ -603,7 +644,24 @@ def sync_schema_to_github(command, obj_type, obj_name):
             log(f"Failed to read dumped schema for manifest check: {e}")
             dumped_sql = None
         if dumped_sql is not None:
-            missing_objects = _find_missing_manifest_objects(dumped_sql)
+            try:
+                missing_objects = _find_missing_manifest_objects(dumped_sql)
+            except SchemaManifestError as e:
+                log(f"Manifest veto: manifest file is malformed ({e}) -- failing closed")
+                revert = subprocess.run(
+                    ['git', '-C', NOVA_MIND_DIR, 'checkout', '--', 'database/schema.sql'],
+                    capture_output=True,
+                    text=True
+                )
+                if revert.returncode != 0:
+                    log(
+                        f"Manifest veto: failed to revert clobbered schema.sql: "
+                        f"{revert.stderr.strip()}"
+                    )
+                _send_manifest_veto_alert(
+                    [f"manifest parse error: {e}"], command, table_name
+                )
+                return False, None
             if missing_objects:
                 log(
                     f"Manifest veto: dump would remove {missing_objects} -- "

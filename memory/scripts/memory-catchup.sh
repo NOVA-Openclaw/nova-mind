@@ -38,7 +38,11 @@ max_prior_messages() {
 
 is_context_window_enabled() {
     local val
-    val=$(jq -r '.context_window_enabled // true' "$EXTRACTION_CONFIG_FILE" 2>/dev/null || echo 'true')
+    # NOTE: jq's `//` alternative operator treats JSON `false` as falsy, so
+    # `.context_window_enabled // true` silently coerces an explicit `false`
+    # back to `true` and the disable flag becomes undetectable (nova-mind#616).
+    # Use an explicit has()/else check instead of `//` so real `false` survives.
+    val=$(jq -r 'if has("context_window_enabled") then .context_window_enabled else true end' "$EXTRACTION_CONFIG_FILE" 2>/dev/null || echo 'true')
     case "$(echo "$val" | tr '[:upper:]' '[:lower:]')" in
         false|0|off|no|disabled) return 1 ;;
         *) return 0 ;;

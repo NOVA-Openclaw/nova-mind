@@ -40,9 +40,10 @@ COMPLETION_LOG_RECONCILE_CRON_STATUS="not installed"
 # shellcheck disable=SC2034
 GATEWAY_RESTART_NEEDED=0
 
-# Temp file cleanup
+# Temp file/directory cleanup
 TMPFILES=()
-cleanup_tmp() { rm -f "${TMPFILES[@]}"; }
+TMPDIRS=()
+cleanup_tmp() { rm -f "${TMPFILES[@]}"; rm -rf "${TMPDIRS[@]}"; }
 trap cleanup_tmp EXIT
 
 # ============================================
@@ -1528,20 +1529,23 @@ else
     # pgschema v1.7.2 reads .pgschemaignore from cwd, not from --ignore-file.
     pushd "$SCRIPT_DIR" >/dev/null || exit 1
 
-    PLAN_FILE=$(mktemp /tmp/pgschema-plan-XXXXXX.json)
-    TMPFILES+=("$PLAN_FILE")
-    # Make the plan OUTPUT file superuser-writable (nova-mind#664): mktemp
-    # creates this file owned by the invoking agent user, mode 600, but
-    # `pgschema plan --output-json` writes to it as $PG_SUPERUSER (via
-    # sudo -u) when PG_SUPERUSER != DB_USER -- that process cannot write a
-    # 600 file it does not own. Mirrors the schema step's existing read-side
-    # fix (SCHEMA_FILE_TMP chmod 644 below) on the write side.
-    chmod 666 "$PLAN_FILE"
+    # Use a dedicated non-sticky scratch directory for the plan/reorder/apply
+    # cycle (nova-mind#664). /tmp has the sticky bit (1777), which blocks the
+    # postgres user from renaming a temp file over a file owned by the agent
+    # user even when the target is mode 666. pgschema writes its JSON output
+    # atomically (temp sibling + rename), so the required privilege is
+    # create+rename in the directory, not write to an existing inode. A fresh
+    # mktemp -d directory has no sticky bit and, with mode 777, lets both the
+    # agent user and postgres create and rename files inside it.
+    PGSCHEMA_SCRATCH_DIR=$(mktemp -d /tmp/pgschema-scratch-XXXXXX)
+    TMPDIRS+=("$PGSCHEMA_SCRATCH_DIR")
+    chmod 777 "$PGSCHEMA_SCRATCH_DIR"
 
-    # Copy schema file to /tmp so the superuser process can read it
+    PLAN_FILE=$(mktemp "$PGSCHEMA_SCRATCH_DIR/plan-XXXXXX.json")
+
+    # Copy schema file into the scratch dir so the superuser process can read it
     # (the agent's home directory may not be traversable by the superuser unix user)
-    SCHEMA_FILE_TMP=$(mktemp /tmp/pgschema-schema-XXXXXX.sql)
-    TMPFILES+=("$SCHEMA_FILE_TMP")
+    SCHEMA_FILE_TMP=$(mktemp "$PGSCHEMA_SCRATCH_DIR/schema-XXXXXX.sql")
     cp "$SCHEMA_FILE" "$SCHEMA_FILE_TMP"
     chmod 644 "$SCHEMA_FILE_TMP"
 
@@ -1559,15 +1563,16 @@ else
         echo -e "  ${CROSS_MARK} pgschema plan failed (exit $PLAN_EXIT) — schema apply skipped"
         SCHEMA_DIFF_SKIPPED=1
     else
+        # pgschema wrote PLAN_FILE atomically as $PG_SUPERUSER, so it is now
+        # owned by postgres. Make it readable by the agent user before reorder.
+        chmod 666 "$PLAN_FILE"
+
         # Reorder the plan so dependencies are satisfied on fresh installs.
-        REORDERED_PLAN_FILE=$(mktemp /tmp/pgschema-plan-reordered-XXXXXX.json)
-        TMPFILES+=("$REORDERED_PLAN_FILE")
+        REORDERED_PLAN_FILE=$(mktemp "$PGSCHEMA_SCRATCH_DIR/reordered-XXXXXX.json")
         # chmod before mv (nova-mind#664): `mv` preserves the SOURCE file's
-        # mode, not the destination's -- the chmod 666 applied to PLAN_FILE
-        # above would otherwise be silently lost the moment REORDERED_PLAN_FILE
-        # is mv'd onto it below, leaving PLAN_FILE back at mktemp's default
-        # 600 (agent-user-owned) right before `_superuser_pgschema apply
-        # --plan "$PLAN_FILE"` needs to READ it as the superuser process.
+        # mode, not the destination's. After reorder, PLAN_FILE will be
+        # agent-owned again, so it must be world-readable for the subsequent
+        # `_superuser_pgschema apply --plan "$PLAN_FILE"` step to read it.
         chmod 666 "$REORDERED_PLAN_FILE"
         echo "  Reordering plan by dependencies..."
         REORDER_EXIT=0

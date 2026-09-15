@@ -124,14 +124,17 @@ The installer runs these steps in order:
 
 | Step | What happens |
 |------|-------------|
-| Pre-migrations | Runs `*.sql` files in `database/pre-migrations/` (repo root; data transforms before schema diff — not the unrelated root-level `pre-migrations/` directory, which is not read by the installer) |
+| **Superuser check (nova-mind#661)** | Before any DB/role work, warns (non-fatal) if the resolved `PG_SUPERUSER` role is not a real PostgreSQL superuser or does not exist yet — surfaces a genuine superuser requirement immediately instead of at a later DDL failure. |
+| Pre-migrations | Runs `*.sql` files in `database/pre-migrations/` (repo root; data transforms before schema diff — not the unrelated root-level `pre-migrations/` directory, which is not read by the installer). When `PG_SUPERUSER != DB_USER`, each file is copied to `/tmp` first so the separate superuser process can read it (nova-mind#663 — the agent's `0750` home isn't traversable by a distinct superuser unix user). Schema-mutating pre-migrations must guard against running before their target tables exist on a fresh DB (nova-mind#662, `to_regclass(...) IS NOT NULL`), since this step runs *before* the base schema apply. |
 | **Step 1.5** | Reads `memory/database/renames.json` and applies column/table renames idempotently via `ALTER TABLE … RENAME COLUMN`. Drops listed are whitelisted in the pgschema hazard filter. |
-| pgschema plan | Diffs `database/schema.sql` against live DB |
+| pgschema plan | Diffs `database/schema.sql` against live DB. Intermediate plan/reorder/apply JSON files live in a dedicated non-sticky `mktemp -d` scratch directory rather than directly in `/tmp` (nova-mind#664 — `/tmp`'s sticky bit blocks the agent user from renaming a file over one owned by a separate superuser role). |
 | **Plan reorder (nova-mind#597)** | Runs the plan JSON through `database/plan_reorder.py`, a `pglast`-based dependency reorderer that topologically sorts statements so a `GRANT`/`COMMENT`/view statement never lands before the object it depends on (fixes the fresh-install failure class behind #597, #447, #392). A malformed plan, unparseable statement, or true dependency cycle aborts the install with a statement-level diagnostic before apply is attempted. |
 | Hazard check | Blocks destructive operations (DROP TABLE, DROP COLUMN) unless whitelisted in `renames.json` |
-| pgschema apply | Applies the approved (reordered) plan |
+| pgschema apply | Applies the approved (reordered) plan. As of nova-mind#659 (phase 1), `schema.sql` no longer contains `ALTER DEFAULT PRIVILEGES FOR ROLE nova` statements, so this step no longer requires the executing role to be a superuser or a member of role `nova` on most fresh installs. |
 
 **Exit-code behavior (#597):** a failure at any of these stages — pre-migrations, renames, plan, reorder, apply, or post-apply grant reconciliation — now aborts the installer with a nonzero exit code. Previously a failed `pgschema apply` printed a warning and the installer still exited 0.
+
+> **Known non-blocking exception (nova-mind#667):** In headless/non-interactive environments with no user D-Bus session, `agent-install.sh` still exits **1** even when every step above succeeds — the pg-notify-listener systemd install step runs `systemctl --user daemon-reload` unguarded under `set -euo pipefail`, and that command hard-fails with no D-Bus session available. All DB-side work (schema apply, grant reconciliation) completes correctly before this point; only the installer's own exit code is wrong. Do not describe a headless/non-interactive first-install as exiting 0 until #667 is fixed.
 
 **When you update the schema with renames:** Add an entry to `memory/database/renames.json` so Step 1.5 can apply the rename before pgschema sees the diff. Without this, pgschema would interpret a rename as a drop + add, which would be blocked by the hazard check or lose existing data.
 

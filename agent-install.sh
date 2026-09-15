@@ -575,6 +575,44 @@ else
     exit 1
 fi
 
+# Superuser DDL capability check (#661): agent-install.sh run standalone
+# (skipping shell-install.sh's interactive prompt) leaves PG_SUPERUSER
+# unset, and load_pg_superuser_env's fallback resolves it to the agent's
+# own DB_USER (see lib/pg-env.sh). schema.sql previously contained
+# ALTER DEFAULT PRIVILEGES FOR ROLE nova statements requiring the
+# executing role to be a superuser or a member of role nova; #659 phase 1
+# strips those at dump time, which removes THAT specific requirement.
+# But other DDL in the schema/pre-migration path can still require a real
+# superuser on some hosts (e.g. CREATE EXTENSION, if the schema ever
+# declares one -- see the extensions step at line ~1370 below). Warn
+# loudly HERE -- before database creation, not buried at a DDL failure
+# many stages later -- whenever PG_SUPERUSER resolves to a role that is
+# not an actual superuser. This is a warning, not a hard abort: #659
+# phase 1 means most fresh installs now succeed even without a real
+# superuser, so failing closed here would block installs that no longer
+# need superuser privilege at all.
+if [ "$PG_SUPERUSER" = "$DB_USER" ]; then
+    SUPERUSER_CHECK_ROLE="$DB_USER"
+else
+    SUPERUSER_CHECK_ROLE="$PG_SUPERUSER"
+fi
+SUPERUSER_CHECK=$(psql -U "$DB_USER" -d postgres -tAc \
+    "SELECT CASE WHEN EXISTS(SELECT 1 FROM pg_roles WHERE rolname = '$SUPERUSER_CHECK_ROLE')
+         THEN (SELECT rolsuper FROM pg_roles WHERE rolname = '$SUPERUSER_CHECK_ROLE')
+         ELSE NULL
+     END" \
+    2>/dev/null | tr -d '[:space:]')
+if [ "$SUPERUSER_CHECK" = "f" ]; then
+    echo -e "  ${WARNING} PG_SUPERUSER=$SUPERUSER_CHECK_ROLE is not a PostgreSQL superuser"
+    echo "      DDL requiring superuser (e.g. CREATE EXTENSION) will fail if the schema requires it."
+    echo "      Export PG_SUPERUSER=postgres (or run via shell-install.sh) if installation fails later"
+    echo "      at a DDL step."
+elif [ -z "$SUPERUSER_CHECK" ]; then
+    echo -e "  ${WARNING} Could not verify PG_SUPERUSER role privileges (role '$SUPERUSER_CHECK_ROLE' may not exist yet)"
+else
+    echo -e "  ${CHECK_MARK} PG_SUPERUSER=$SUPERUSER_CHECK_ROLE is a PostgreSQL superuser"
+fi
+
 # jq
 if command -v jq &>/dev/null; then
     echo -e "  ${CHECK_MARK} jq available"

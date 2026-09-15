@@ -1531,17 +1531,16 @@ else
 
     # Use a dedicated non-sticky scratch directory for the plan/reorder/apply
     # cycle (nova-mind#664). /tmp has the sticky bit (1777), which blocks the
-    # postgres user from renaming a temp file over a file owned by the agent
-    # user even when the target is mode 666. pgschema writes its JSON output
-    # atomically (temp sibling + rename), so the required privilege is
-    # create+rename in the directory, not write to an existing inode. A fresh
-    # mktemp -d directory has no sticky bit and, with mode 777, lets both the
-    # agent user and postgres create and rename files inside it.
+    # agent user from renaming a file over a file owned by the postgres user.
+    # A fresh mktemp -d directory has no sticky bit and, with mode 777, lets
+    # both the agent user and postgres create and rename files inside it.
     PGSCHEMA_SCRATCH_DIR=$(mktemp -d /tmp/pgschema-scratch-XXXXXX)
     TMPDIRS+=("$PGSCHEMA_SCRATCH_DIR")
     chmod 777 "$PGSCHEMA_SCRATCH_DIR"
 
-    PLAN_FILE=$(mktemp "$PGSCHEMA_SCRATCH_DIR/plan-XXXXXX.json")
+    # PLAN_FILE is written by pgschema running as the superuser, so do not
+    # pre-create it; let the superuser create the inode fresh.
+    PLAN_FILE="$PGSCHEMA_SCRATCH_DIR/plan.json"
 
     # Copy schema file into the scratch dir so the superuser process can read it
     # (the agent's home directory may not be traversable by the superuser unix user)
@@ -1563,17 +1562,10 @@ else
         echo -e "  ${CROSS_MARK} pgschema plan failed (exit $PLAN_EXIT) — schema apply skipped"
         SCHEMA_DIFF_SKIPPED=1
     else
-        # pgschema wrote PLAN_FILE atomically as $PG_SUPERUSER, so it is now
-        # owned by postgres. Make it readable by the agent user before reorder.
-        chmod 666 "$PLAN_FILE"
-
-        # Reorder the plan so dependencies are satisfied on fresh installs.
-        REORDERED_PLAN_FILE=$(mktemp "$PGSCHEMA_SCRATCH_DIR/reordered-XXXXXX.json")
-        # chmod before mv (nova-mind#664): `mv` preserves the SOURCE file's
-        # mode, not the destination's. After reorder, PLAN_FILE will be
-        # agent-owned again, so it must be world-readable for the subsequent
-        # `_superuser_pgschema apply --plan "$PLAN_FILE"` step to read it.
-        chmod 666 "$REORDERED_PLAN_FILE"
+        # REORDERED_PLAN_FILE is written by plan_reorder.py (agent user) and
+        # then moved over the superuser-owned plan file, so keep it in the
+        # scratch directory with no sticky bit.
+        REORDERED_PLAN_FILE="$PGSCHEMA_SCRATCH_DIR/reordered.json"
         echo "  Reordering plan by dependencies..."
         REORDER_EXIT=0
         "$VENV_PYTHON" "$SCRIPT_DIR/database/plan_reorder.py" \

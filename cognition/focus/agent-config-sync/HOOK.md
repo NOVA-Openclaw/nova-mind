@@ -45,7 +45,8 @@ at the `agents.list` level to splice the array in.
     "model": {
       "primary": "openrouter/anthropic/claude-sonnet-4.6",
       "fallbacks": ["openrouter/openai/gpt-5.2-codex"]
-    }
+    },
+    "thinkingDefault": "medium"
   },
   {
     "id": "gem",
@@ -66,6 +67,10 @@ at the `agents.list` level to splice the array in.
   plugin — it stays in `openclaw.json` and is managed there directly.
 - `default: true` is included only when `is_default = true` for that row; the
   key is omitted otherwise.
+- `thinkingDefault` (from the `thinking` column) is included only when the DB
+  value is a valid config-schema enum value (nova-mind#660); null, empty,
+  unknown, wrong-type, mixed-case, or whitespace-padded values are omitted —
+  see `README.md` in this directory for the full field reference.
 - `subagents.allowAgents` (from `allowed_subagents`) and `heartbeat` (from the
   `heartbeat_*` columns) are also included per-entry when applicable — see
   `README.md` in this directory for the full field reference.

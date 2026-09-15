@@ -128,12 +128,23 @@ describe("TC-244-U-01: NOVA session — self as default, NOVA's subagents only",
     );
   });
 
-  it("thinking is not emitted for any entry", () => {
+  it("thinkingDefault is emitted for agents with a valid thinking value", () => {
+    const novaEntry = result.find((e) => e.id === "nova");
+    const coderEntry = result.find((e) => e.id === "coder");
+    assert.ok(novaEntry !== undefined);
+    assert.ok(coderEntry !== undefined);
+    assert.strictEqual(novaEntry.thinkingDefault, "high");
+    assert.strictEqual(coderEntry.thinkingDefault, "medium");
+  });
+
+  it("thinkingDefault is omitted for agents with thinking = null", () => {
     for (const entry of result) {
-      assert.ok(
-        !Object.prototype.hasOwnProperty.call(entry, "thinking"),
-        `Entry '${entry.id}' should not have a thinking property`,
-      );
+      if (entry.id === "gem" || entry.id === "scout") {
+        assert.ok(
+          !Object.prototype.hasOwnProperty.call(entry, "thinkingDefault"),
+          `Entry '${entry.id}' should not have a thinkingDefault property`,
+        );
+      }
     }
   });
 });
@@ -1514,5 +1525,385 @@ describe("TC-273-U-10: BVA — partial heartbeat objects (each sub-field in isol
       !Object.prototype.hasOwnProperty.call(entry.heartbeat, "target"),
       "heartbeat must not have 'target' key when null",
     );
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TC-660-U-01..18: thinking → thinkingDefault mapping (#660)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Helper to build a minimal AgentRow with a configurable thinking value.
+ */
+function makeThinkingRow(
+  name: string,
+  thinking: string | null | undefined,
+  extras?: Partial<AgentRow>,
+): AgentRow {
+  return {
+    name,
+    model: "anthropic/claude-sonnet-4",
+    fallback_models: null,
+    thinking: thinking as string | null,
+    instance_type: "subagent",
+    is_default: false,
+    allowed_subagents: null,
+    ...extras,
+  };
+}
+
+// ── TC-660-U-01: Regression guard — non-default `off` maps through ───────────
+
+describe("TC-660-U-01: Regression guard — thinking='off' maps to thinkingDefault='off'", () => {
+  const rows: AgentRow[] = [makeThinkingRow("bastion", "off")];
+  const result = buildAgentsList(rows);
+
+  it("emits thinkingDefault: 'off'", () => {
+    const entry = result.find((e) => e.id === "bastion");
+    assert.ok(entry !== undefined);
+    assert.ok(
+      Object.prototype.hasOwnProperty.call(entry, "thinkingDefault"),
+      "entry must have own thinkingDefault property",
+    );
+    assert.strictEqual(entry.thinkingDefault, "off");
+  });
+});
+
+// ── TC-660-U-02: Non-default `high` maps through ─────────────────────────────
+
+describe("TC-660-U-02: thinking='high' maps to thinkingDefault='high'", () => {
+  const rows: AgentRow[] = [makeThinkingRow("newhart", "high")];
+  const result = buildAgentsList(rows);
+
+  it("emits thinkingDefault: 'high' even when it matches a typical global default", () => {
+    const entry = result.find((e) => e.id === "newhart");
+    assert.ok(entry !== undefined);
+    assert.strictEqual(entry.thinkingDefault, "high");
+  });
+});
+
+// ── TC-660-U-03: All 7 DB-legal values map 1:1 ───────────────────────────────
+
+describe("TC-660-U-03: All 7 DB-legal thinking values map 1:1", () => {
+  const values = ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive"] as const;
+
+  for (const value of values) {
+    it(`thinking='${value}' → thinkingDefault='${value}'`, () => {
+      const rows: AgentRow[] = [makeThinkingRow(`agent-${value}`, value)];
+      const result = buildAgentsList(rows);
+      const entry = result.find((e) => e.id === `agent-${value}`);
+      assert.ok(entry !== undefined);
+      assert.strictEqual(entry.thinkingDefault, value);
+    });
+  }
+});
+
+// ── TC-660-U-04: Existing fields unaffected by the fix ───────────────────────
+
+describe("TC-660-U-04: Existing fields unaffected by thinkingDefault mapping", () => {
+  const rowWithThinking: AgentRow = {
+    name: "combo",
+    model: "anthropic/claude-opus-4",
+    fallback_models: ["openai/gpt-4o", "google/gemini-pro"],
+    thinking: "low",
+    instance_type: "subagent",
+    is_default: true,
+    allowed_subagents: ["gem", "coder"],
+    heartbeat_enabled: true,
+    heartbeat_every: "5m",
+    heartbeat_target: "discord",
+    heartbeat_to: "channel:1234",
+  };
+  const rowWithoutThinking: AgentRow = { ...rowWithThinking, thinking: null };
+
+  const resultWith = buildAgentsList([rowWithThinking]);
+  const resultWithout = buildAgentsList([rowWithoutThinking]);
+
+  it("only difference is the added thinkingDefault key", () => {
+    assert.strictEqual(resultWith.length, 1);
+    assert.strictEqual(resultWithout.length, 1);
+
+    const withEntry = resultWith[0];
+    const withoutEntry = resultWithout[0];
+
+    assert.strictEqual(withEntry.thinkingDefault, "low");
+    assert.ok(
+      !Object.prototype.hasOwnProperty.call(withoutEntry, "thinkingDefault"),
+    );
+
+    // Compare every other key
+    const { thinkingDefault: _, ...withRest } = withEntry;
+    assert.deepStrictEqual(withRest, withoutEntry);
+  });
+});
+
+// ── TC-660-U-05..06: Null / empty string → omitted ───────────────────────────
+
+describe("TC-660-U-05..06: Null and empty string thinking values are omitted", () => {
+  it("TC-660-U-05: thinking = null → key omitted", () => {
+    const rows: AgentRow[] = [makeThinkingRow("nullagent", null)];
+    const result = buildAgentsList(rows);
+    const entry = result.find((e) => e.id === "nullagent");
+    assert.ok(entry !== undefined);
+    assert.ok(
+      !Object.prototype.hasOwnProperty.call(entry, "thinkingDefault"),
+      "thinkingDefault must be absent when thinking is null",
+    );
+    assert.strictEqual(entry.thinkingDefault, undefined);
+  });
+
+  it("TC-660-U-06: thinking = '' → key omitted", () => {
+    const rows: AgentRow[] = [makeThinkingRow("emptyagent", "")];
+    const result = buildAgentsList(rows);
+    const entry = result.find((e) => e.id === "emptyagent");
+    assert.ok(entry !== undefined);
+    assert.ok(
+      !Object.prototype.hasOwnProperty.call(entry, "thinkingDefault"),
+      "thinkingDefault must be absent when thinking is empty string",
+    );
+  });
+});
+
+// ── TC-660-U-07: Schema-valid but DB-illegal values (`max`, `ultra`) pass through
+describe("TC-660-U-07: Schema-valid but DB-illegal values 'max' and 'ultra' pass through", () => {
+  it("thinking='max' → thinkingDefault='max'", () => {
+    const rows: AgentRow[] = [makeThinkingRow("maxagent", "max")];
+    const result = buildAgentsList(rows);
+    assert.strictEqual(result[0]?.thinkingDefault, "max");
+  });
+
+  it("thinking='ultra' → thinkingDefault='ultra'", () => {
+    const rows: AgentRow[] = [makeThinkingRow("ultraagent", "ultra")];
+    const result = buildAgentsList(rows);
+    assert.strictEqual(result[0]?.thinkingDefault, "ultra");
+  });
+});
+
+// ── TC-660-U-08: Genuinely unknown tier → omitted, no crash ──────────────────
+
+describe("TC-660-U-08: Unknown thinking tier is omitted without crashing", () => {
+  const rows: AgentRow[] = [
+    makeThinkingRow("good", "low"),
+    makeThinkingRow("bad", "notarealvalue"),
+    makeThinkingRow("good2", "medium"),
+  ];
+  const result = buildAgentsList(rows);
+
+  it("omits thinkingDefault for the unknown value", () => {
+    const badEntry = result.find((e) => e.id === "bad");
+    assert.ok(badEntry !== undefined);
+    assert.ok(
+      !Object.prototype.hasOwnProperty.call(badEntry, "thinkingDefault"),
+    );
+  });
+
+  it("still emits thinkingDefault for valid sibling rows", () => {
+    assert.strictEqual(result.find((e) => e.id === "good")?.thinkingDefault, "low");
+    assert.strictEqual(result.find((e) => e.id === "good2")?.thinkingDefault, "medium");
+  });
+});
+
+// ── TC-660-U-09..10: Wrong JS type → omitted, no throw ───────────────────────
+
+describe("TC-660-U-09..10: Wrong-type thinking values are omitted without throwing", () => {
+  it("TC-660-U-09: thinking is a number → omitted", () => {
+    const rows: AgentRow[] = [
+      makeThinkingRow("numagent", 5 as unknown as string),
+    ];
+    const result = buildAgentsList(rows);
+    const entry = result.find((e) => e.id === "numagent");
+    assert.ok(entry !== undefined);
+    assert.ok(
+      !Object.prototype.hasOwnProperty.call(entry, "thinkingDefault"),
+    );
+  });
+
+  it("TC-660-U-10: thinking is a boolean → omitted", () => {
+    const rows: AgentRow[] = [
+      makeThinkingRow("boolagent", true as unknown as string),
+    ];
+    const result = buildAgentsList(rows);
+    const entry = result.find((e) => e.id === "boolagent");
+    assert.ok(entry !== undefined);
+    assert.ok(
+      !Object.prototype.hasOwnProperty.call(entry, "thinkingDefault"),
+    );
+  });
+});
+
+// ── TC-660-U-11: Mixed-case values are strict-rejected ───────────────────────
+
+describe("TC-660-U-11: Mixed-case thinking values are omitted (strict membership)", () => {
+  const rows: AgentRow[] = [
+    makeThinkingRow("h1", "High"),
+    makeThinkingRow("h2", "OFF"),
+    makeThinkingRow("h3", "AdAptive"),
+  ];
+  const result = buildAgentsList(rows);
+
+  it("omits thinkingDefault for every mixed-case variant", () => {
+    for (const entry of result) {
+      assert.ok(
+        !Object.prototype.hasOwnProperty.call(entry, "thinkingDefault"),
+        `Entry '${entry.id}' must not have thinkingDefault for mixed-case input`,
+      );
+    }
+  });
+});
+
+// ── TC-660-U-12: Whitespace-padded values are strict-rejected ────────────────
+
+describe("TC-660-U-12: Whitespace-padded thinking values are omitted (strict membership)", () => {
+  const rows: AgentRow[] = [
+    makeThinkingRow("w1", " off"),
+    makeThinkingRow("w2", "high "),
+    makeThinkingRow("w3", " low "),
+  ];
+  const result = buildAgentsList(rows);
+
+  it("omits thinkingDefault for every whitespace-padded variant", () => {
+    for (const entry of result) {
+      assert.ok(
+        !Object.prototype.hasOwnProperty.call(entry, "thinkingDefault"),
+        `Entry '${entry.id}' must not have thinkingDefault for whitespace-padded input`,
+      );
+    }
+  });
+});
+
+// ── TC-660-U-13: Empty agent list ────────────────────────────────────────────
+
+describe("TC-660-U-13: Empty agent list", () => {
+  it("returns an empty array", () => {
+    const result = buildAgentsList([]);
+    assert.deepStrictEqual(result, []);
+  });
+});
+
+// ── TC-660-U-14: Single agent with thinking set ──────────────────────────────
+
+describe("TC-660-U-14: Single agent with thinking set", () => {
+  const rows: AgentRow[] = [makeThinkingRow("solo", "medium")];
+  const result = buildAgentsList(rows);
+
+  it("returns one entry with thinkingDefault matching the input", () => {
+    assert.strictEqual(result.length, 1);
+    assert.strictEqual(result[0]?.id, "solo");
+    assert.strictEqual(result[0]?.thinkingDefault, "medium");
+  });
+});
+
+// ── TC-660-U-15: Large fleet with mixed thinking values ──────────────────────
+
+describe("TC-660-U-15: Large fleet with mixed thinking values", () => {
+  const values = ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive"];
+  const rows: AgentRow[] = [];
+  for (let i = 0; i < 30; i++) {
+    rows.push(
+      makeThinkingRow(
+        `agent-${String(i).padStart(2, "0")}`,
+        i % 6 === 0 ? null : values[i % values.length],
+      ),
+    );
+  }
+  const result = buildAgentsList(rows);
+
+  it("emits thinkingDefault for exactly the 25 non-null rows", () => {
+    const withKey = result.filter((e) =>
+      Object.prototype.hasOwnProperty.call(e, "thinkingDefault"),
+    );
+    assert.strictEqual(withKey.length, 25);
+  });
+
+  it("omits thinkingDefault for exactly the 5 null rows", () => {
+    const withoutKey = result.filter(
+      (e) => !Object.prototype.hasOwnProperty.call(e, "thinkingDefault"),
+    );
+    assert.strictEqual(withoutKey.length, 5);
+  });
+
+  it("sort order is unaffected by the new field", () => {
+    const ids = result.map((e) => e.id);
+    assert.deepStrictEqual(ids, [...ids].sort((a, b) => a.localeCompare(b)));
+  });
+
+  it("spot-checks preserve correct per-row values", () => {
+    assert.strictEqual(result.find((e) => e.id === "agent-01")?.thinkingDefault, "minimal");
+    assert.strictEqual(result.find((e) => e.id === "agent-07")?.thinkingDefault, "off");
+    assert.strictEqual(result.find((e) => e.id === "agent-11")?.thinkingDefault, "high");
+  });
+});
+
+// ── TC-660-U-16: `thinking` property absent from row object ──────────────────
+
+describe("TC-660-U-16: thinking property absent from row object", () => {
+  it("omits thinkingDefault when the property is missing", () => {
+    const row = {
+      name: "legacy",
+      model: "anthropic/claude-sonnet-4",
+      fallback_models: null,
+      instance_type: "subagent",
+      is_default: false,
+      allowed_subagents: null,
+    } as unknown as AgentRow;
+    const result = buildAgentsList([row]);
+    const entry = result.find((e) => e.id === "legacy");
+    assert.ok(entry !== undefined);
+    assert.ok(
+      !Object.prototype.hasOwnProperty.call(entry, "thinkingDefault"),
+    );
+  });
+});
+
+// ── TC-660-U-17: Explicit value equal to hypothetical global default is emitted
+describe("TC-660-U-17: Explicit value equal to a hypothetical global default is still emitted", () => {
+  const rows: AgentRow[] = [makeThinkingRow("explicit-high", "high")];
+  const result = buildAgentsList(rows);
+
+  it("emits explicit thinkingDefault: 'high'", () => {
+    const entry = result.find((e) => e.id === "explicit-high");
+    assert.ok(entry !== undefined);
+    assert.ok(
+      Object.prototype.hasOwnProperty.call(entry, "thinkingDefault"),
+    );
+    assert.strictEqual(entry.thinkingDefault, "high");
+  });
+});
+
+// ── TC-660-U-18: Fleet-shape regression test ─────────────────────────────────
+
+describe("TC-660-U-18: Fleet-shape regression — issue-cited agents get expected thinkingDefault", () => {
+  const rows: AgentRow[] = [
+    makeThinkingRow("bastion", "off"),
+    makeThinkingRow("ember", "off"),
+    makeThinkingRow("flicker", "off"),
+    makeThinkingRow("flint", "off"),
+    makeThinkingRow("gallan", "off"),
+    makeThinkingRow("gidget", "off"),
+    makeThinkingRow("grain", "off"),
+    makeThinkingRow("hermes", "off"),
+    makeThinkingRow("newhart", "high"),
+    makeThinkingRow("scout", "low"),
+    makeThinkingRow("gem", "adaptive"),
+    makeThinkingRow("coder", "medium"),
+  ];
+  const result = buildAgentsList(rows);
+
+  it("every 'off'-configured agent gets thinkingDefault: 'off'", () => {
+    for (const name of ["bastion", "ember", "flicker", "flint", "gallan", "gidget", "grain", "hermes"]) {
+      const entry = result.find((e) => e.id === name);
+      assert.ok(entry !== undefined, `entry for ${name} must exist`);
+      assert.strictEqual(entry.thinkingDefault, "off", `${name} must have thinkingDefault: off`);
+    }
+  });
+
+  it("newhart gets thinkingDefault: 'high'", () => {
+    assert.strictEqual(result.find((e) => e.id === "newhart")?.thinkingDefault, "high");
+  });
+
+  it("other tiered agents keep their explicit values", () => {
+    assert.strictEqual(result.find((e) => e.id === "scout")?.thinkingDefault, "low");
+    assert.strictEqual(result.find((e) => e.id === "gem")?.thinkingDefault, "adaptive");
+    assert.strictEqual(result.find((e) => e.id === "coder")?.thinkingDefault, "medium");
   });
 });

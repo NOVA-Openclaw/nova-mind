@@ -1530,6 +1530,13 @@ else
 
     PLAN_FILE=$(mktemp /tmp/pgschema-plan-XXXXXX.json)
     TMPFILES+=("$PLAN_FILE")
+    # Make the plan OUTPUT file superuser-writable (nova-mind#664): mktemp
+    # creates this file owned by the invoking agent user, mode 600, but
+    # `pgschema plan --output-json` writes to it as $PG_SUPERUSER (via
+    # sudo -u) when PG_SUPERUSER != DB_USER -- that process cannot write a
+    # 600 file it does not own. Mirrors the schema step's existing read-side
+    # fix (SCHEMA_FILE_TMP chmod 644 below) on the write side.
+    chmod 666 "$PLAN_FILE"
 
     # Copy schema file to /tmp so the superuser process can read it
     # (the agent's home directory may not be traversable by the superuser unix user)
@@ -1555,6 +1562,13 @@ else
         # Reorder the plan so dependencies are satisfied on fresh installs.
         REORDERED_PLAN_FILE=$(mktemp /tmp/pgschema-plan-reordered-XXXXXX.json)
         TMPFILES+=("$REORDERED_PLAN_FILE")
+        # chmod before mv (nova-mind#664): `mv` preserves the SOURCE file's
+        # mode, not the destination's -- the chmod 666 applied to PLAN_FILE
+        # above would otherwise be silently lost the moment REORDERED_PLAN_FILE
+        # is mv'd onto it below, leaving PLAN_FILE back at mktemp's default
+        # 600 (agent-user-owned) right before `_superuser_pgschema apply
+        # --plan "$PLAN_FILE"` needs to READ it as the superuser process.
+        chmod 666 "$REORDERED_PLAN_FILE"
         echo "  Reordering plan by dependencies..."
         REORDER_EXIT=0
         "$VENV_PYTHON" "$SCRIPT_DIR/database/plan_reorder.py" \

@@ -580,6 +580,51 @@ def _ensure_on_main(command, table_name):
     return True
 
 
+# ALTER DEFAULT PRIVILEGES statement blocks, as pgschema v1.7.2 renders them
+# in `pgschema dump` output: a fixed 6-line shape (comment header + blank +
+# statement + blank). Matches the "Type: DEFAULT_PRIVILEGE" comment header
+# pgschema emits immediately above every ADP statement.
+#
+# nova-mind#659: schema.sql must ship table schema + functions only. ADP
+# statements hardcode `FOR ROLE nova` (the production owner role) and
+# NOVA's local subagent roster -- neither is portable to another
+# nova-mind installation, and `FOR ROLE nova` requires the executing role
+# to be a superuser or a member of role `nova` (nova-mind#661), which a
+# fresh non-`nova` agent install never is. Stripped at DUMP time so the
+# committed artifact never carries local identity in the first place.
+#
+# Phase 1 of #659: only ADP (Type: DEFAULT_PRIVILEGE) is stripped here.
+# Plain GRANT/REVOKE (Type: PRIVILEGE / COLUMN_PRIVILEGE) are left in
+# place -- the #452 post-apply reconciliation grep in agent-install.sh
+# still depends on those lines being present in schema.sql. Stripping
+# GRANT/REVOKE too requires installer-side provisioning to first cover
+# every case #452 was filed about (see #659's own sequencing note); that
+# is tracked as a follow-on, not done here.
+_ADP_BLOCK_RE = re.compile(
+    r"--\n"
+    r"-- Name: [^\n]*; Type: DEFAULT_PRIVILEGE; [^\n]*\n"
+    r"--\n"
+    r"\n"
+    r"ALTER DEFAULT PRIVILEGES [^\n]*;\n"
+    r"\n"
+)
+
+
+def _strip_default_privileges(dump_sql):
+    """Remove ALTER DEFAULT PRIVILEGES statement blocks (and their pgschema
+    dump comment headers) from a freshly dumped schema.sql body.
+
+    Returns (stripped_sql, removed_count). Collapses any resulting 3+ blank
+    lines down to a single blank line (cosmetic; matches surrounding dump
+    formatting). Idempotent -- running twice on already-stripped input
+    removes zero additional blocks.
+    """
+    stripped, n = _ADP_BLOCK_RE.subn("", dump_sql)
+    if n:
+        stripped = re.sub(r"\n{3,}", "\n\n", stripped)
+    return stripped, n
+
+
 def sync_schema_to_github(command, obj_type, obj_name):
     """Dump schema and push to GitHub. Uses file lock to serialize concurrent calls."""
     global _git_lock_fd
@@ -605,23 +650,38 @@ def sync_schema_to_github(command, obj_type, obj_name):
         if not _ensure_on_main(command, table_name):
             return False, None
 
-        # 1. Dump schema to file (pgschema produces clean SQL without pg_dump artifacts)
-        log(f"Dumping schema to {SCHEMA_FILE}...")
-        with open(SCHEMA_FILE, 'w') as schema_out:
-            result = subprocess.run(
-                ['pgschema', 'dump',
-                 '--host', '/var/run/postgresql',
-                 '--db', 'nova_memory',
-                 '--user', 'nova',
-                 '--schema', 'public'],
-                stdout=schema_out,
-                stderr=subprocess.PIPE,
-                text=True,
-                timeout=60
-            )
+        # 1. Dump schema to a buffer (pgschema produces clean SQL without
+        # pg_dump artifacts). Captured to a string rather than written
+        # straight to SCHEMA_FILE so the #659 ADP strip (step 1.1) runs on
+        # the dump BEFORE anything hits disk -- the manifest veto (step 1.5)
+        # and every downstream check must evaluate the same stripped
+        # artifact that ultimately gets committed, not the raw dump.
+        log(f"Dumping schema (in-memory) ...")
+        result = subprocess.run(
+            ['pgschema', 'dump',
+             '--host', '/var/run/postgresql',
+             '--db', 'nova_memory',
+             '--user', 'nova',
+             '--schema', 'public'],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=60
+        )
         if result.returncode != 0:
             log(f"pgschema dump failed: {result.stderr}")
             return False, None
+
+        # 1.1. Strip ALTER DEFAULT PRIVILEGES (nova-mind#659): schema.sql
+        # must not ship local agent identity (FOR ROLE nova, subagent
+        # roster). See _strip_default_privileges docstring for scope
+        # (ADP only, phase 1 -- GRANT/REVOKE stay for now, see #452).
+        dumped_sql, adp_removed = _strip_default_privileges(result.stdout)
+        if adp_removed:
+            log(f"Stripped {adp_removed} ALTER DEFAULT PRIVILEGES statement(s) from dump (#659)")
+        log(f"Writing schema to {SCHEMA_FILE}...")
+        with open(SCHEMA_FILE, 'w') as schema_out:
+            schema_out.write(dumped_sql)
 
         # 1.5. Manifest veto (nova-mind#624): refuse the ENTIRE sync if the
         # freshly dumped schema.sql is missing any hand-authored object

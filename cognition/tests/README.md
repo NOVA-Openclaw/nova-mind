@@ -7,7 +7,8 @@ Point-in-time test-design docs, fix summaries, and pytest suites for `cognition/
 - `test_pg_notify_listener_issue_399.py` — regression suite for `pg-notify-listener.py`'s direct-push/retry/backoff/alerting behavior (#399).
 - `test_pg_notify_listener_issue_506.py` — regression suite for the `_ensure_on_main()` branch-safety check (#506). Shares fixtures with the #399 suite via `conftest.py`.
 - `test_pg_notify_listener_issue_508.py` — regression suite for PGUSER-based alert sender binding and self-safe recipient resolution (#508).
-- `conftest.py` — shared fixtures/helpers extracted from the #399 suite so the #506 and #508 suites can reuse them without duplication.
+- `test_pg_notify_listener_issue_624.py` — regression suite for the schema-manifest anti-clobber veto and fail-closed manifest parsing (#624). Shares fixtures with the #399/#506/#508 suites via `conftest.py`.
+- `conftest.py` — shared fixtures/helpers extracted from the #399 suite so the #506, #508, and #624 suites can reuse them without duplication.
 - `test-issue-64.ts` / `verify-issue-64-fix.sh` — verification script and TypeScript test for the #64 fallback-directory fix.
 
 ## Historical/point-in-time artifacts (not maintained, kept for audit trail)

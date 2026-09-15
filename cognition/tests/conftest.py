@@ -111,20 +111,26 @@ def git_repos(tmp_path):
 
 @pytest.fixture
 def mock_pgschema_dump(monkeypatch, listener_module):
-    """Mock pgschema dump to write deterministic schema content."""
+    """Mock pgschema dump to return deterministic schema content via PIPE.
+
+    Since nova-mind#659, sync_schema_to_github() calls pgschema with
+    stdout=subprocess.PIPE and text=True, then writes result.stdout to disk
+    itself after stripping ALTER DEFAULT PRIVILEGES. The fixture must match
+    that contract: return a CompletedProcess whose .stdout carries the fake
+    schema payload as a string, and let production's own write path produce
+    SCHEMA_FILE.
+    """
     real_subprocess_run = subprocess.run
 
     def fake_run(*args, **kwargs):
         cmd = args[0] if args else kwargs.get("args", [])
         if len(cmd) > 0 and cmd[0] == "pgschema":
-            stdout = kwargs.get("stdout")
             new_content = getattr(
                 listener_module, "_test_schema_content", "-- schema from pgschema\n"
             )
-            if stdout is not None:
-                stdout.write(new_content)
-                stdout.flush()
-            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+            return subprocess.CompletedProcess(
+                args=cmd, returncode=0, stdout=new_content, stderr=""
+            )
         return real_subprocess_run(*args, **kwargs)
 
     monkeypatch.setattr(pg_notify_listener.subprocess, "run", fake_run)

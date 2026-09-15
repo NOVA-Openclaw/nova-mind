@@ -1414,7 +1414,16 @@ if [ -d "$PRE_MIGRATIONS_DIR" ]; then
         echo "  Running pre-migrations (${#PRE_MIGRATION_FILES[@]} files)..."
         for sql_file in "${PRE_MIGRATION_FILES[@]}"; do
             local_filename=$(basename "$sql_file")
-            if _superuser_psql "$DB_NAME" -f "$sql_file" >/dev/null 2>&1; then
+            # Copy to /tmp so the superuser process can read it (nova-mind#663):
+            # pre-migration files live under the agent's $HOME, which is mode
+            # 0750 -- a distinct superuser unix user (PG_SUPERUSER != DB_USER)
+            # cannot traverse into it. Mirrors the schema step's existing
+            # /tmp-copy + chmod 644 pattern (see SCHEMA_FILE_TMP below).
+            PRE_MIGRATION_FILE_TMP=$(mktemp /tmp/pgschema-premigration-XXXXXX.sql)
+            TMPFILES+=("$PRE_MIGRATION_FILE_TMP")
+            cp "$sql_file" "$PRE_MIGRATION_FILE_TMP"
+            chmod 644 "$PRE_MIGRATION_FILE_TMP"
+            if _superuser_psql "$DB_NAME" -f "$PRE_MIGRATION_FILE_TMP" >/dev/null 2>&1; then
                 echo -e "  ${CHECK_MARK} Pre-migration: $local_filename"
             else
                 echo -e "  ${CROSS_MARK} Pre-migration failed: $local_filename"

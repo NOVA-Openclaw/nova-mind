@@ -112,6 +112,63 @@ function loadExtractionTimeoutMs(): number {
   return DEFAULT_EXTRACTION_TIMEOUT_MS;
 }
 
+const DEFAULT_MAX_PRIOR_MESSAGES = 10;
+
+/**
+ * Read the context-window size from the deployed config file.
+ * Hot-reloaded per event, with graceful fallback to DEFAULT_MAX_PRIOR_MESSAGES
+ * for missing, malformed, negative, or non-numeric values.
+ */
+function loadMaxPriorMessages(): number {
+  try {
+    const raw = readFileSync(EXTRACTION_CONFIG_PATH, 'utf8');
+    const parsed = JSON.parse(raw);
+    const value = parsed?.max_prior_messages;
+    if (typeof value === 'number' && Number.isFinite(value) && value >= 0 && Number.isInteger(value)) {
+      return value;
+    }
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException)?.code;
+    if (code !== 'ENOENT' && code !== 'EACCES') {
+      console.warn('[memory-extract] Could not read max_prior_messages config', {
+        path: EXTRACTION_CONFIG_PATH,
+        error: (err as Error).message
+      });
+    }
+  }
+  return DEFAULT_MAX_PRIOR_MESSAGES;
+}
+
+/**
+ * Read the context-window enable flag from the deployed config file.
+ * Hot-reloaded per event. Missing/invalid values default to enabled.
+ */
+function isContextWindowEnabled(): boolean {
+  try {
+    const raw = readFileSync(EXTRACTION_CONFIG_PATH, 'utf8');
+    const parsed = JSON.parse(raw);
+    const value = parsed?.context_window_enabled;
+    if (typeof value === 'boolean') {
+      return value;
+    }
+    if (typeof value === 'string') {
+      return !['false', '0', 'off', 'no', 'disabled'].includes(value.toLowerCase());
+    }
+    if (typeof value === 'number') {
+      return value !== 0;
+    }
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException)?.code;
+    if (code !== 'ENOENT' && code !== 'EACCES') {
+      console.warn('[memory-extract] Could not read context_window_enabled config', {
+        path: EXTRACTION_CONFIG_PATH,
+        error: (err as Error).message
+      });
+    }
+  }
+  return true;
+}
+
 // Default interpreter fallback when no override or venv is available.
 const DEFAULT_PYTHON_CMD = 'python3';
 
@@ -209,6 +266,72 @@ function tailToString(tail: Buffer): string {
 function truncateSenderId(senderId: string): string {
   if (!senderId) return 'none';
   return senderId.substring(0, 8) + '...';
+}
+
+interface ContextMessage {
+  role: string;
+  content: string;
+  timestamp: string;
+  sender_name?: string;
+}
+
+/**
+ * Fetch the most recent N prior messages from the same session as the current
+ * transcript row. Returns an empty array on any failure — context assembly is
+ * best-effort and must never block extraction (issue #611, C8).
+ */
+async function loadPriorContext(args: {
+  channelSessionId: string;
+  channelTranscriptId: string;
+  maxMessages: number;
+}): Promise<ContextMessage[]> {
+  const { channelSessionId, channelTranscriptId, maxMessages } = args;
+  if (!channelSessionId || channelSessionId === '0' || maxMessages <= 0) {
+    return [];
+  }
+
+  try {
+    const sql = `
+      SELECT role, content, timestamp, sender_name
+      FROM channel_transcripts
+      WHERE session_id = ${channelSessionId}
+        AND id <> ${channelTranscriptId}
+      ORDER BY timestamp DESC
+      LIMIT ${maxMessages};
+    `;
+    const { stdout } = await execFileAsync('psql', [(process.env.PGDATABASE || 'nova_memory'), '-t', '-A', '-F\t', '-c', sql])
+      .catch((err) => logPsqlError('context-fetch', err));
+
+    if (!stdout || !stdout.trim()) {
+      return [];
+    }
+
+    const rows: ContextMessage[] = [];
+    for (const line of stdout.trim().split('\n')) {
+      const parts = line.split('\t');
+      if (parts.length < 3) continue;
+      const role = parts[0] || 'user';
+      const content = parts[1] || '';
+      const timestamp = parts[2] || '';
+      const senderName = parts[3] || '';
+      if (!content.trim()) continue;
+      rows.push({
+        role,
+        content,
+        timestamp,
+        sender_name: senderName,
+      });
+    }
+
+    // psql returned newest-first; reverse to chronological order (oldest first).
+    return rows.reverse();
+  } catch (err: any) {
+    console.warn('[memory-extract] Context fetch failed, proceeding without context', {
+      channelSessionId,
+      error: err?.message || String(err)
+    });
+    return [];
+  }
 }
 
 /**
@@ -458,6 +581,36 @@ const handler = async (event: any) => {
       }
     }
 
+    // Load prior conversation context when enabled (#611).
+    let contextMessages: ContextMessage[] = [];
+    let contextJsonForEnv = '';
+    if (isContextWindowEnabled()) {
+      const maxPrior = (() => {
+        const raw = process.env.EXTRACTION_MAX_PRIOR_MESSAGES_OVERRIDE;
+        if (!raw) return loadMaxPriorMessages();
+        const n = Number(raw);
+        return Number.isFinite(n) && n >= 0 && Number.isInteger(n) ? n : loadMaxPriorMessages();
+      })();
+
+      if (maxPrior > 0 && channelSessionId && channelSessionId !== '0') {
+        contextMessages = await loadPriorContext({
+          channelSessionId,
+          channelTranscriptId: channelTranscriptId || '0',
+          maxMessages: maxPrior,
+        });
+        if (contextMessages.length > 0) {
+          contextJsonForEnv = JSON.stringify(contextMessages);
+        }
+      }
+    }
+
+    if (contextMessages.length > 0) {
+      console.info('[memory-extract] Loaded prior context messages', {
+        count: contextMessages.length,
+        sessionId: truncateSenderId(channelSessionId)
+      });
+    }
+
     // Resolve the Python interpreter and timeout. Both can be overridden by
     // env vars for tests; in production the venv python is preferred and the
     // timeout is read fresh from the config file each event.
@@ -471,19 +624,24 @@ const handler = async (event: any) => {
       return Number.isFinite(n) && n > 0 ? n : loadExtractionTimeoutMs();
     })();
 
+    const childEnv: Record<string, string> = {
+      ...process.env,
+      SENDER_NAME: senderName,
+      SENDER_ID: senderId,
+      IS_GROUP: String(isGroup),
+      SOURCE_SESSION_ID: sessionKey,
+      SOURCE_TIMESTAMP: messageTimestamp,
+      // DB-level source pointers for entity_facts FK columns (may be empty string when not yet ingested)
+      SOURCE_CHANNEL_TRANSCRIPT_ID: channelTranscriptId,
+      SOURCE_CHANNEL_SESSION_ID: channelSessionId,
+    };
+    if (contextJsonForEnv) {
+      childEnv.EXTRACTION_CONTEXT_JSON = contextJsonForEnv;
+    }
+
     const child = spawn(pythonCmd, [scriptPath], {
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: {
-        ...process.env,
-        SENDER_NAME: senderName,
-        SENDER_ID: senderId,
-        IS_GROUP: String(isGroup),
-        SOURCE_SESSION_ID: sessionKey,
-        SOURCE_TIMESTAMP: messageTimestamp,
-        // DB-level source pointers for entity_facts FK columns (may be empty string when not yet ingested)
-        SOURCE_CHANNEL_TRANSCRIPT_ID: channelTranscriptId,
-        SOURCE_CHANNEL_SESSION_ID: channelSessionId
-      }
+      env: childEnv
     });
 
     const getStderrTail = attachTailBuffer(child.stderr, PIPE_TAIL_CAP_BYTES);

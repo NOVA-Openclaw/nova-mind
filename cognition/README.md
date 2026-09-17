@@ -135,11 +135,16 @@ The **`agent-config-sync`** extension plugin keeps OpenClaw's agent model config
 
 - **`defaults.models`** — Allow-list of all unique models (primaries + fallbacks).
 - **`list`** — Per-agent config. `model` is a plain string when there are no fallbacks, or an object with `primary`/`fallbacks` when fallbacks exist.
-- **`thinking` is never written to `agents.json`.** The `agents` table has a `thinking`
-  column, but `sync.ts` deliberately excludes it from the generated output — thinking
-  level is not a valid per-agent `agents.json` config key in OpenClaw's schema. It is set
-  at spawn time via `sessions_spawn(thinking=...)` instead; the DB column only stores the
-  preferred level for reference by spawning agents.
+- **`thinking` is mapped to `thinkingDefault` in `agents.json`** (nova-mind#660). The `agents`
+  table's `thinking` column is validated against the config schema's 9-value enum
+  (`off`/`minimal`/`low`/`medium`/`high`/`xhigh`/`adaptive`/`max`/`ultra`) in `buildAgentsList()`
+  and, when valid, emitted as `entry.thinkingDefault`. Null, empty-string, unknown, wrong-type,
+  mixed-case, or whitespace-padded values are omitted (the row degrades gracefully rather than
+  crashing or silently dropping a valid tier). This does **not** replace the per-spawn override —
+  `sessions_spawn(thinking=...)` still takes precedence at spawn time — but it does set the
+  per-agent default that OpenClaw's runtime consults (`normalizeThinkLevel`) when no spawn-time
+  override is given, so a per-agent DB tier now actually reaches the runtime instead of being
+  silently dropped.
 - Each peer gateway's `agents.json` is scoped to that gateway: the connecting peer appears as
   `default: true`, and subagents linked to that peer via `parent_agents` appear as non-default
   entries. Both the peer and its own subagents appear in their respective gateway's `agents.json`.

@@ -9,7 +9,7 @@
     "build": "tsc",
     "watch": "tsc --watch",
     "clean": "rm -rf dist",
-    "test": "npx tsx --test src/sync.test.ts"
+    "test": "npx tsx --test src/sync.test.ts src/sync.integration.test.ts"
   },
   "keywords": [
     "openclaw",

@@ -59,6 +59,16 @@ function getPool(): pg.Pool {
       idleTimeoutMillis: 30000,
       connectionTimeoutMillis: 5000,
     });
+    // Idle-client errors (e.g. a postgres restart terminating a pooled,
+    // currently-unused connection) surface as an 'error' event on the pool
+    // itself, not as a rejection on any in-flight query. Node's default
+    // behavior for an unhandled 'error' event is to throw, which would
+    // crash the whole gateway process over a transient DB bounce. Attach a
+    // listener so these are logged and swallowed instead — pg.Pool already
+    // discards the broken client and opens a new one on demand.
+    pool.on('error', (err: Error) => {
+      console.warn(`[bootstrap-context] pg pool error (non-fatal): ${err.message}`);
+    });
   }
   return pool;
 }

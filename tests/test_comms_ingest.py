@@ -13,6 +13,7 @@ Run:
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -896,3 +897,159 @@ def test_TC_474_18_hermes_writer_grants(db_name):
     finally:
         tmp_pgpass.unlink(missing_ok=True)
         os.environ.pop("PGPASSFILE", None)
+
+
+# =============================================================================
+# Area 9 — Task #717: comms_state.standingItems read-back regression
+# =============================================================================
+#
+# Root cause (verified against the live pipeline, not inferred from testimony):
+# scripts/comms/ingest.py never queried comms_state at all prior to this fix
+# (grep 'standingItems|standingRules' ingest.py returned zero matches). NOVA
+# and other writers appended closed-out dispositions into
+# comms_state.state->'standingItems', but nothing read that array back, so an
+# already-dispositioned item (e.g. a task NOVA had already filed and closed)
+# kept being re-surfaced by every downstream report cycle. These tests fail
+# without the load_standing_items / _closed_out_task_refs /
+# _artifact_ref_is_closed_out additions in ingest.py.
+
+
+def _set_standing_items(db_conn, platform: str, entries: list[str]) -> None:
+    with db_conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO comms_state (platform, state)
+            VALUES (%s, jsonb_build_object('standingItems', %s::jsonb))
+            ON CONFLICT (platform) DO UPDATE
+                SET state = comms_state.state || jsonb_build_object('standingItems', %s::jsonb)
+            """,
+            (platform, json.dumps(entries), json.dumps(entries)),
+        )
+        db_conn.commit()
+
+
+def test_TC_717_1_standing_items_read_back_verbatim(db_conn, db_config):
+    """load_standing_items surfaces comms_state.standingItems for requested platforms.
+
+    This is the core regression: prior to the fix, ingest.py had no function
+    that queried comms_state at all.
+    """
+    _set_standing_items(db_conn, "email", ["TASK #715 CLOSED 2026-09-06 by NOVA."])
+
+    standing = ingest.load_standing_items(db_conn, ["email", "x", "nostr"])
+
+    assert "email" in standing
+    assert standing["email"] == ["TASK #715 CLOSED 2026-09-06 by NOVA."]
+    # Platforms with no comms_state row / no standingItems key are simply absent.
+    assert "x" not in standing
+    assert "nostr" not in standing
+
+
+def test_TC_717_2_no_standing_items_row_is_not_an_error(db_conn, db_config):
+    """A platform with no comms_state row at all does not raise."""
+    standing = ingest.load_standing_items(db_conn, ["email"])
+    assert standing == {}
+
+
+def test_TC_717_3_closed_disposition_suppresses_re_ask(db_conn, db_config, monkeypatch):
+    """A tracked item whose artifact_ref is CLOSED in standingItems is dropped
+    from tracked_pending and surfaced instead in suppressed_pending.
+
+    This reproduces the exact task #717 symptom: DMARC/DKIM gap filed as
+    task #715, dispositioned CLOSED by NOVA in standingItems, but (before this
+    fix) re-surfaced by the next report cycle because nothing consulted
+    standingItems.
+    """
+    item = _gmail_item("msg-717", "thread-717", "alice@example.com", "Please review", "Body")
+    monkeypatch.setattr(ingest.gmail, "fetch", lambda limit: [item])
+    monkeypatch.setattr(ingest.x, "fetch", lambda limit: [])
+    monkeypatch.setattr(ingest.nostr, "fetch", lambda limit: [])
+
+    ingest.run_ingest(db_conn, platforms=["email"], limit=10)
+    row = _fetch_row(db_conn, "email", "msg-717")
+    assert row["status"] == "tracked"
+
+    # NOVA files a task and closes it out; the disposition is recorded in
+    # standingItems (this is the real-world write path per nova-mind#644).
+    with db_conn.cursor() as cur:
+        cur.execute("UPDATE comms_items SET artifact_ref = 'task#715' WHERE id = %s", (row["id"],))
+        db_conn.commit()
+    _set_standing_items(
+        db_conn,
+        "email",
+        ["DMARC/DKIM GAP — DISPOSITIONED BY NOVA 2026-09-06. TASK #715 IS FILED AND CLOSED. STOP ASKING."],
+    )
+
+    report = ingest.run_ingest(db_conn, platforms=["email"], limit=10)
+
+    assert not any(r["id"] == row["id"] for r in report["tracked_pending"])
+    assert any(r["id"] == row["id"] for r in report["suppressed_pending"])
+
+
+def test_TC_717_4_mention_without_closure_phrase_still_reported(db_conn, db_config, monkeypatch):
+    """A standingItems entry that merely MENTIONS a task number (without a
+    recognized closure phrase) must NOT suppress it — fail open, not closed.
+    """
+    item = _gmail_item("msg-717b", "thread-717b", "bob@example.com", "Please review", "Body")
+    monkeypatch.setattr(ingest.gmail, "fetch", lambda limit: [item])
+    monkeypatch.setattr(ingest.x, "fetch", lambda limit: [])
+    monkeypatch.setattr(ingest.nostr, "fetch", lambda limit: [])
+
+    ingest.run_ingest(db_conn, platforms=["email"], limit=10)
+    row = _fetch_row(db_conn, "email", "msg-717b")
+    with db_conn.cursor() as cur:
+        cur.execute("UPDATE comms_items SET artifact_ref = 'task#484' WHERE id = %s", (row["id"],))
+        db_conn.commit()
+
+    _set_standing_items(
+        db_conn,
+        "email",
+        ["RELATED: task #484 touches the same table, check for overlap before implementing."],
+    )
+
+    report = ingest.run_ingest(db_conn, platforms=["email"], limit=10)
+
+    assert any(r["id"] == row["id"] for r in report["tracked_pending"])
+    assert not any(r["id"] == row["id"] for r in report["suppressed_pending"])
+
+
+def test_TC_717_5_compose_report_surfaces_standing_items(db_conn, db_config):
+    """The composed report text includes standingItems verbatim, labeled
+    authoritative, so a downstream reader (Hermes/NOVA) sees the disposition
+    without needing a separate DB query.
+    """
+    _set_standing_items(
+        db_conn,
+        "email",
+        ["ZAPRITE #657 — DISPOSITION SET BY NOVA. NO NUDGE, NO ESCALATION."],
+    )
+    standing = ingest.load_standing_items(db_conn, ["email"])
+
+    report_text = ingest.compose_report(
+        {
+            "tracked_pending": [],
+            "suppressed_pending": [],
+            "new_items": [],
+            "injection_candidates": [],
+            "platform_errors": [],
+            "standing_items": standing,
+        }
+    )
+
+    assert "standing dispositions" in report_text
+    assert "ZAPRITE #657" in report_text
+    assert "authoritative" in report_text
+
+
+def test_TC_717_6_run_ingest_report_includes_standing_items_key(db_conn, db_config, monkeypatch):
+    """run_ingest's returned report always carries a standing_items key so
+    callers (including the cron wrapper) can rely on its presence.
+    """
+    monkeypatch.setattr(ingest.gmail, "fetch", lambda limit: [])
+    monkeypatch.setattr(ingest.x, "fetch", lambda limit: [])
+    monkeypatch.setattr(ingest.nostr, "fetch", lambda limit: [])
+
+    report = ingest.run_ingest(db_conn, platforms=["email"], limit=10)
+
+    assert "standing_items" in report
+    assert "suppressed_pending" in report

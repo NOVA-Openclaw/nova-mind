@@ -5,7 +5,6 @@
 -- Dumped from database version PostgreSQL 16.14
 -- Dumped by pgschema version 1.7.2
 
-
 --
 -- Name: assertion_intent_enum; Type: TYPE; Schema: -; Owner: -
 --
@@ -29,324 +28,6 @@ CREATE TYPE mutability_class_enum AS ENUM (
 );
 
 --
--- Name: nova:TABLES:argus; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
---
-
-ALTER DEFAULT PRIVILEGES FOR ROLE nova IN SCHEMA public GRANT SELECT ON TABLES TO argus;
-
---
--- Name: nova:TABLES:athena; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
---
-
-ALTER DEFAULT PRIVILEGES FOR ROLE nova IN SCHEMA public GRANT SELECT ON TABLES TO athena;
-
---
--- Name: nova:TABLES:coder; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
---
-
-ALTER DEFAULT PRIVILEGES FOR ROLE nova IN SCHEMA public GRANT SELECT ON TABLES TO coder;
-
---
--- Name: nova:TABLES:conductor; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
---
-
-ALTER DEFAULT PRIVILEGES FOR ROLE nova IN SCHEMA public GRANT SELECT ON TABLES TO conductor;
-
---
--- Name: nova:TABLES:erato; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
---
-
-ALTER DEFAULT PRIVILEGES FOR ROLE nova IN SCHEMA public GRANT SELECT ON TABLES TO erato;
-
---
--- Name: nova:TABLES:flint; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
---
-
-ALTER DEFAULT PRIVILEGES FOR ROLE nova IN SCHEMA public GRANT SELECT ON TABLES TO flint;
-
---
--- Name: nova:TABLES:gem; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
---
-
-ALTER DEFAULT PRIVILEGES FOR ROLE nova IN SCHEMA public GRANT SELECT ON TABLES TO gem;
-
---
--- Name: nova:TABLES:gidget; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
---
-
-ALTER DEFAULT PRIVILEGES FOR ROLE nova IN SCHEMA public GRANT SELECT ON TABLES TO gidget;
-
---
--- Name: nova:TABLES:graybeard; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
---
-
-ALTER DEFAULT PRIVILEGES FOR ROLE nova IN SCHEMA public GRANT SELECT ON TABLES TO graybeard;
-
---
--- Name: nova:TABLES:hermes; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
---
-
-ALTER DEFAULT PRIVILEGES FOR ROLE nova IN SCHEMA public GRANT SELECT ON TABLES TO hermes;
-
---
--- Name: nova:TABLES:iris; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
---
-
-ALTER DEFAULT PRIVILEGES FOR ROLE nova IN SCHEMA public GRANT SELECT ON TABLES TO iris;
-
---
--- Name: nova:TABLES:marcie; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
---
-
-ALTER DEFAULT PRIVILEGES FOR ROLE nova IN SCHEMA public GRANT SELECT ON TABLES TO marcie;
-
---
--- Name: nova:TABLES:newhart; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
---
-
-ALTER DEFAULT PRIVILEGES FOR ROLE nova IN SCHEMA public GRANT SELECT ON TABLES TO newhart;
-
---
--- Name: nova:TABLES:nova-staging; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
---
-
-ALTER DEFAULT PRIVILEGES FOR ROLE nova IN SCHEMA public GRANT SELECT ON TABLES TO "nova-staging";
-
---
--- Name: nova:TABLES:openproject_user; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
---
-
-ALTER DEFAULT PRIVILEGES FOR ROLE nova IN SCHEMA public GRANT SELECT ON TABLES TO openproject_user;
-
---
--- Name: nova:TABLES:quill; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
---
-
-ALTER DEFAULT PRIVILEGES FOR ROLE nova IN SCHEMA public GRANT SELECT ON TABLES TO quill;
-
---
--- Name: nova:TABLES:scout; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
---
-
-ALTER DEFAULT PRIVILEGES FOR ROLE nova IN SCHEMA public GRANT SELECT ON TABLES TO scout;
-
---
--- Name: nova:TABLES:scribe; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
---
-
-ALTER DEFAULT PRIVILEGES FOR ROLE nova IN SCHEMA public GRANT SELECT ON TABLES TO scribe;
-
---
--- Name: nova:TABLES:ticker; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
---
-
-ALTER DEFAULT PRIVILEGES FOR ROLE nova IN SCHEMA public GRANT SELECT ON TABLES TO ticker;
-
---
--- Name: postgres:SEQUENCES:argus; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
---
-
-ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT USAGE ON SEQUENCES TO argus;
-
---
--- Name: postgres:SEQUENCES:athena; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
---
-
-ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT USAGE ON SEQUENCES TO athena;
-
---
--- Name: postgres:SEQUENCES:coder; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
---
-
-ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT USAGE ON SEQUENCES TO coder;
-
---
--- Name: postgres:SEQUENCES:conductor; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
---
-
-ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT USAGE ON SEQUENCES TO conductor;
-
---
--- Name: postgres:SEQUENCES:erato; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
---
-
-ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT USAGE ON SEQUENCES TO erato;
-
---
--- Name: postgres:SEQUENCES:flint; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
---
-
-ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT USAGE ON SEQUENCES TO flint;
-
---
--- Name: postgres:SEQUENCES:gem; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
---
-
-ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT USAGE ON SEQUENCES TO gem;
-
---
--- Name: postgres:SEQUENCES:gidget; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
---
-
-ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT USAGE ON SEQUENCES TO gidget;
-
---
--- Name: postgres:SEQUENCES:hermes; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
---
-
-ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT USAGE ON SEQUENCES TO hermes;
-
---
--- Name: postgres:SEQUENCES:iris; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
---
-
-ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT USAGE ON SEQUENCES TO iris;
-
---
--- Name: postgres:SEQUENCES:marcie; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
---
-
-ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT USAGE ON SEQUENCES TO marcie;
-
---
--- Name: postgres:SEQUENCES:newhart; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
---
-
-ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT USAGE ON SEQUENCES TO newhart;
-
---
--- Name: postgres:SEQUENCES:nova; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
---
-
-ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT USAGE ON SEQUENCES TO nova;
-
---
--- Name: postgres:SEQUENCES:quill; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
---
-
-ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT USAGE ON SEQUENCES TO quill;
-
---
--- Name: postgres:SEQUENCES:scout; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
---
-
-ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT USAGE ON SEQUENCES TO scout;
-
---
--- Name: postgres:SEQUENCES:scribe; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
---
-
-ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT USAGE ON SEQUENCES TO scribe;
-
---
--- Name: postgres:SEQUENCES:ticker; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
---
-
-ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT USAGE ON SEQUENCES TO ticker;
-
---
--- Name: postgres:TABLES:argus; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
---
-
-ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT DELETE, INSERT, SELECT, UPDATE ON TABLES TO argus;
-
---
--- Name: postgres:TABLES:athena; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
---
-
-ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT DELETE, INSERT, SELECT, UPDATE ON TABLES TO athena;
-
---
--- Name: postgres:TABLES:coder; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
---
-
-ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT DELETE, INSERT, SELECT, UPDATE ON TABLES TO coder;
-
---
--- Name: postgres:TABLES:conductor; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
---
-
-ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT DELETE, INSERT, SELECT, UPDATE ON TABLES TO conductor;
-
---
--- Name: postgres:TABLES:erato; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
---
-
-ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT DELETE, INSERT, SELECT, UPDATE ON TABLES TO erato;
-
---
--- Name: postgres:TABLES:flint; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
---
-
-ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT DELETE, INSERT, SELECT, UPDATE ON TABLES TO flint;
-
---
--- Name: postgres:TABLES:gem; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
---
-
-ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT DELETE, INSERT, SELECT, UPDATE ON TABLES TO gem;
-
---
--- Name: postgres:TABLES:gidget; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
---
-
-ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT DELETE, INSERT, SELECT, UPDATE ON TABLES TO gidget;
-
---
--- Name: postgres:TABLES:hermes; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
---
-
-ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT DELETE, INSERT, SELECT, UPDATE ON TABLES TO hermes;
-
---
--- Name: postgres:TABLES:iris; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
---
-
-ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT DELETE, INSERT, SELECT, UPDATE ON TABLES TO iris;
-
---
--- Name: postgres:TABLES:marcie; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
---
-
-ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT DELETE, INSERT, SELECT, UPDATE ON TABLES TO marcie;
-
---
--- Name: postgres:TABLES:newhart; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
---
-
-ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT DELETE, INSERT, SELECT, UPDATE ON TABLES TO newhart;
-
---
--- Name: postgres:TABLES:nova; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
---
-
-ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT DELETE, INSERT, SELECT, UPDATE ON TABLES TO nova;
-
---
--- Name: postgres:TABLES:quill; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
---
-
-ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT DELETE, INSERT, SELECT, UPDATE ON TABLES TO quill;
-
---
--- Name: postgres:TABLES:scout; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
---
-
-ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT DELETE, INSERT, SELECT, UPDATE ON TABLES TO scout;
-
---
--- Name: postgres:TABLES:scribe; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
---
-
-ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT DELETE, INSERT, SELECT, UPDATE ON TABLES TO scribe;
-
---
--- Name: postgres:TABLES:ticker; Type: DEFAULT_PRIVILEGE; Schema: default_privileges; Owner: -
---
-
-ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT DELETE, INSERT, SELECT, UPDATE ON TABLES TO ticker;
-
---
 -- Name: agent_bootstrap_context; Type: TABLE; Schema: -; Owner: -
 --
 
@@ -367,12 +48,9 @@ CREATE TABLE IF NOT EXISTS agent_bootstrap_context (
     CONSTRAINT chk_universal_global_no_names CHECK ((context_type <> ALL (ARRAY['UNIVERSAL'::text, 'GLOBAL'::text])) OR agent_name IS NULL AND domain_names IS NULL)
 );
 
-
 COMMENT ON TABLE agent_bootstrap_context IS 'Bootstrap context entries. Agents may write to their own AGENT-scoped records (matching their db user). Newhart (Agent Design/Management domain) manages schema, cross-agent entries, and GLOBAL/UNIVERSAL-scoped records.';
 
-
 COMMENT ON COLUMN agent_bootstrap_context.context_type IS 'GLOBAL (all agents) or DOMAIN (agents in specific domain)';
-
 
 COMMENT ON COLUMN agent_bootstrap_context.file_key IS 'Identifier for context block, becomes filename in bootstrap';
 
@@ -428,7 +106,6 @@ CREATE TABLE IF NOT EXISTS agent_jobs (
     CONSTRAINT agent_jobs_root_job_id_fkey FOREIGN KEY (root_job_id) REFERENCES agent_jobs (id)
 );
 
-
 COMMENT ON TABLE agent_jobs IS 'Agent job definitions. READ-ONLY except Newhart.';
 
 --
@@ -451,24 +128,17 @@ CREATE TABLE IF NOT EXISTS agent_system_config (
     CONSTRAINT agent_system_config_pkey PRIMARY KEY (key)
 );
 
-
 COMMENT ON TABLE agent_system_config IS 'Agent system configuration. READ-ONLY except Newhart.';
-
 
 COMMENT ON COLUMN agent_system_config.key IS 'Unique configuration key identifier';
 
-
 COMMENT ON COLUMN agent_system_config.value IS 'Configuration value (stored as text, cast based on value_type)';
-
 
 COMMENT ON COLUMN agent_system_config.value_type IS 'Type hint: text, json, boolean, number';
 
-
 COMMENT ON COLUMN agent_system_config.description IS 'Human-readable description of what this config controls';
 
-
 COMMENT ON COLUMN agent_system_config.updated_at IS 'Last modification timestamp';
-
 
 COMMENT ON COLUMN agent_system_config.updated_by IS 'Agent or system that last modified this config';
 
@@ -540,51 +210,35 @@ CREATE TABLE IF NOT EXISTS agents (
     CONSTRAINT agents_thinking_check CHECK (thinking::text IN ('off'::text, 'minimal'::text, 'low'::text, 'medium'::text, 'high'::text, 'xhigh'::text, 'adaptive'::text))
 );
 
-
 COMMENT ON COLUMN agents.access_details IS 'JSON: session_key, cli_command, endpoint URL, etc.';
-
 
 COMMENT ON COLUMN agents.credential_ref IS '1Password item name or clawdbot config path for credentials';
 
-
 COMMENT ON COLUMN agents.persistent IS 'true = always running, false = instantiated on-demand';
-
 
 COMMENT ON COLUMN agents.instantiation_sop IS 'SOP name for how to instantiate this agent (for ephemeral agents)';
 
-
 COMMENT ON COLUMN agents.nickname IS 'Short friendly name for easy reference';
-
 
 COMMENT ON COLUMN agents.instance_type IS 'subagent (spawned session) or peer (separate Clawdbot instance)';
 
-
 COMMENT ON COLUMN agents.home_dir IS 'Workspace path for peer agents';
-
 
 COMMENT ON COLUMN agents.unix_user IS 'Unix username for peer agents';
 
-
 COMMENT ON COLUMN agents.collaborative IS 'TRUE = work WITH NOVA in dialogue, FALSE = work FOR NOVA on tasks';
-
 
 COMMENT ON COLUMN agents.config_reasoning IS 'Newhart-maintained notes explaining why this agent is configured as it is (model, persistent, collaborative, etc.)';
 
-
 COMMENT ON COLUMN agents.fallback_model IS 'Fallback model if primary fails (auth issues, rate limits, etc.)';
-
 
 COMMENT ON COLUMN agents.collaborate IS 'Collaboration scope: null = task-only, JSONB defines topics/areas where this agent can collaborate vs just execute. Example: {"allowed": ["architecture", "design"], "excluded": ["execution"]}';
 
-
 COMMENT ON COLUMN agents.decision_criteria IS 'Criteria for when to spawn this agent - helps NOVA route tasks';
-
 
 COMMENT ON COLUMN agents.model_rationale IS 'Model selection goals and justification: WHY this agent uses its model, what the role requires, past issues that drove changes, tradeoffs considered. Maintained by Newhart for weekly agent review.';
 
-
 COMMENT ON COLUMN agents.parent_agents IS 'For subagent rows: array of peer/primary agent names whose gateways own this subagent. A subagent may have multiple parents (e.g. scout is shared by all peers). Used by get_agent_export_rows() to scope each gateway''s agents.json. NULL/empty for peer/primary agents themselves.';
-
 
 COMMENT ON COLUMN agents.model_locked IS 'When true, weekly model reevaluation must skip this agent — do not change its primary model. Set by I)ruid directive.';
 
@@ -613,9 +267,7 @@ CREATE TABLE IF NOT EXISTS agent_aliases (
     CONSTRAINT agent_aliases_agent_id_fkey FOREIGN KEY (agent_id) REFERENCES agents (id) ON DELETE CASCADE
 );
 
-
 COMMENT ON TABLE agent_aliases IS 'Agent aliases for flexible mention matching. Supports case-insensitive routing.';
-
 
 COMMENT ON COLUMN agent_aliases.alias IS 'Alternative name/identifier for the agent (e.g., "assistant", "helper")';
 
@@ -637,12 +289,9 @@ CREATE TABLE IF NOT EXISTS agent_model_denylists (
     CONSTRAINT agent_model_denylists_agent_id_fkey FOREIGN KEY (agent_id) REFERENCES agents (id) ON DELETE CASCADE
 );
 
-
 COMMENT ON TABLE agent_model_denylists IS 'Per-agent model denylist. Records models tried and rejected for specific agents, with failure reasoning. Consulted during weekly model reviews to avoid re-assigning broken combinations.';
 
-
 COMMENT ON COLUMN agent_model_denylists.failure_details IS 'Specific symptoms observed (e.g., "echoes file content without edits", "ignores tool calls")';
-
 
 COMMENT ON COLUMN agent_model_denylists.workflow_context IS 'Which workflow/task exposed the failure, for traceability';
 
@@ -673,7 +322,6 @@ CREATE TABLE IF NOT EXISTS agent_modifications (
     CONSTRAINT agent_modifications_pkey PRIMARY KEY (id),
     CONSTRAINT fk_agent_modifications_agent FOREIGN KEY (agent_id) REFERENCES agents (id) ON DELETE CASCADE
 );
-
 
 COMMENT ON TABLE agent_modifications IS 'Agent modification history. READ-ONLY except Newhart.';
 
@@ -712,7 +360,6 @@ CREATE TABLE IF NOT EXISTS agent_spawns (
     CONSTRAINT agent_spawns_agent_id_fkey FOREIGN KEY (agent_id) REFERENCES agents (id),
     CONSTRAINT valid_status CHECK (status IN ('pending'::text, 'spawning'::text, 'running'::text, 'completed'::text, 'failed'::text, 'skipped'::text))
 );
-
 
 COMMENT ON TABLE agent_spawns IS 'Tracks all agent spawns from the general-purpose spawner daemon';
 
@@ -753,12 +400,9 @@ CREATE TABLE IF NOT EXISTS ai_models (
     CONSTRAINT models_model_id_key UNIQUE (model_id)
 );
 
-
 COMMENT ON TABLE ai_models IS 'Available AI models. NOVA maintains this; Newhart reads for agent assignments. Credentials and endpoints stored in 1Password (see credential_ref column).';
 
-
 COMMENT ON COLUMN ai_models.input_price_per_mtok IS 'Cost per million input tokens in USD. NULL = unknown, 0 = free (local models).';
-
 
 COMMENT ON COLUMN ai_models.output_price_per_mtok IS 'Cost per million output tokens in USD. NULL = unknown, 0 = free (local models).';
 
@@ -798,36 +442,25 @@ CREATE TABLE IF NOT EXISTS artwork (
     CONSTRAINT artwork_pkey PRIMARY KEY (id)
 );
 
-
 COMMENT ON TABLE artwork IS 'Archive of NOVAs Instagram artwork. Reference for future compilation.';
-
 
 COMMENT ON COLUMN artwork.image_data IS 'Raw image binary data (PNG/JPG)';
 
-
 COMMENT ON COLUMN artwork.inspiration_source IS 'News snippet or source that inspired this artwork';
-
 
 COMMENT ON COLUMN artwork.image_model IS 'Image generation model used (e.g. grok-imagine-image-pro, gpt-image-1, gemini-3-pro-image-preview)';
 
-
 COMMENT ON COLUMN artwork.collection IS 'Curated collection: resilience, cosmic_perspective, quiet_fire, breakthrough';
-
 
 COMMENT ON COLUMN artwork.shop_eligible IS 'Whether this piece is selected for the Printful shop';
 
-
 COMMENT ON COLUMN artwork.shop_priority IS 'Display ordering within shop (lower = more prominent). NULL = unranked';
-
 
 COMMENT ON COLUMN artwork.printful_product_id IS 'Printful product ID once synced';
 
-
 COMMENT ON COLUMN artwork.printful_sync_status IS 'Printful sync state: pending, uploaded, live, error';
 
-
 COMMENT ON COLUMN artwork.image_width IS 'Image width in pixels';
-
 
 COMMENT ON COLUMN artwork.image_height IS 'Image height in pixels';
 
@@ -855,7 +488,6 @@ CREATE TABLE IF NOT EXISTS bootstrap_context_config (
     CONSTRAINT bootstrap_context_config_pkey PRIMARY KEY (key)
 );
 
-
 COMMENT ON TABLE bootstrap_context_config IS 'Configuration for bootstrap system behavior';
 
 --
@@ -868,7 +500,6 @@ CREATE TABLE IF NOT EXISTS channel_activity (
     last_message_from varchar(100),
     CONSTRAINT channel_activity_pkey PRIMARY KEY (channel)
 );
-
 
 COMMENT ON TABLE channel_activity IS 'Tracks last message per channel for idle detection. Read/write: NOVA, Newhart.';
 
@@ -933,9 +564,7 @@ CREATE TABLE IF NOT EXISTS comms_checks (
     CONSTRAINT comms_checks_pkey PRIMARY KEY (id)
 );
 
-
 COMMENT ON TABLE comms_checks IS 'Individual Hermes check run results. Each row = one social/email/digest check. Replaces memory/hermes-*.md files. Owner: Communications domain (hermes).';
-
 
 COMMENT ON COLUMN comms_checks.details IS 'Structured results per platform. Example: {"x": {"mentions": [...], "dms": [...]}, "email": {"unread": 5, "handled": 3}, "nostr": {"mentions": [...]}}';
 
@@ -971,9 +600,7 @@ CREATE TABLE IF NOT EXISTS comms_digests (
     CONSTRAINT comms_digests_digest_date_key UNIQUE (digest_date)
 );
 
-
 COMMENT ON TABLE comms_digests IS 'Daily/weekly communications digests. Replaces hermes-social-digest-*.md and NOVA_Comms_Digest_*.html. Owner: Communications domain (hermes).';
-
 
 COMMENT ON COLUMN comms_digests.digest_data IS 'Structured digest for template rendering: {email_received, email_handled, email_escalated, email_notable_items[], social_mentions, social_dms, social_engagement, social_notable_items[], action_items[], patterns_notes}';
 
@@ -996,12 +623,9 @@ CREATE TABLE IF NOT EXISTS comms_state (
     CONSTRAINT comms_state_pkey PRIMARY KEY (platform)
 );
 
-
 COMMENT ON TABLE comms_state IS 'Per-platform communications tracking state (seen IDs, cursors). Replaces hermes-social-state.json. Owner: Communications domain (hermes).';
 
-
 COMMENT ON COLUMN comms_state.platform IS 'Platform identifier: x, nostr, email, facebook, instagram';
-
 
 COMMENT ON COLUMN comms_state.state IS 'Platform-specific JSONB state. For X: {accountId, lastSeenMentionId, seenMentionIds[], lastSeenDmId, seenDmIds[], dmsAvailable}. For Nostr: {pubkey, npub, seenNostrEventIds[]}. For email: {lastSeenMessageId, processedIds[]}';
 
@@ -1058,30 +682,21 @@ CREATE TABLE IF NOT EXISTS entities (
     CONSTRAINT valid_collaboration_scope CHECK (collaboration_scope IS NULL OR (collaboration_scope IN ('full'::text, 'domain-specific'::text, 'supervised'::text)))
 );
 
-
 COMMENT ON TABLE entities IS 'People, AIs, organizations. NOVA has full access. Use entity_facts for attributes.';
-
 
 COMMENT ON COLUMN entities.collaborate IS 'If true, collaborate with this entity. If false, task them. NULL = not assessed.';
 
-
 COMMENT ON COLUMN entities.collaboration_scope IS 'full | domain-specific | supervised - determines collaboration breadth';
-
 
 COMMENT ON COLUMN entities.trust_level IS 'Trust level for confidence scoring: owner, admin, user, unknown, untrusted';
 
-
 COMMENT ON COLUMN entities.introduction_context IS 'How/why we connected with this entity, relationship context';
-
 
 COMMENT ON COLUMN entities.capabilities IS 'What this entity can do - domains, skills, tools';
 
-
 COMMENT ON COLUMN entities.access_constraints IS 'Topics/data this entity should not see';
 
-
 COMMENT ON COLUMN entities.preferred_contact IS 'Preferred communication method: signal, email, slack, telegram, whatsapp, etc.';
-
 
 COMMENT ON COLUMN entities.did IS 'W3C Decentralized Identifier (DID) for this entity. Format: did:<method>:<identifier>. First populated for NOVA (did:web:renaissancemachine.ai), extensible to all entities.';
 
@@ -1123,15 +738,11 @@ CREATE TABLE IF NOT EXISTS agent_domains (
     CONSTRAINT agent_domains_source_entity_id_fkey FOREIGN KEY (source_entity_id) REFERENCES entities (id)
 );
 
-
 COMMENT ON TABLE agent_domains IS 'Agent domain assignments. READ-ONLY except Newhart.';
-
 
 COMMENT ON COLUMN agent_domains.domain_topic IS 'The topic/responsibility this agent owns';
 
-
 COMMENT ON COLUMN agent_domains.source_entity_id IS 'Entity who assigned this domain (for attribution)';
-
 
 COMMENT ON COLUMN agent_domains.vote_count IS 'Reinforcement count - incremented when domain assignment is reconfirmed';
 
@@ -1217,15 +828,11 @@ CREATE TABLE IF NOT EXISTS certificates (
     CONSTRAINT certificates_entity_id_fkey FOREIGN KEY (entity_id) REFERENCES entities (id)
 );
 
-
 COMMENT ON TABLE certificates IS 'Client certificates issued by NOVA CA. Security-sensitive. Verify before modifications.';
-
 
 COMMENT ON COLUMN certificates.fingerprint IS 'SHA256 fingerprint of the certificate';
 
-
 COMMENT ON COLUMN certificates.serial IS 'Certificate serial number';
-
 
 COMMENT ON COLUMN certificates.revoked_at IS 'If set, certificate is revoked and should be rejected';
 
@@ -1307,39 +914,27 @@ CREATE TABLE IF NOT EXISTS comms_items (
     CONSTRAINT comms_items_status_check CHECK (status IN ('inbound'::text, 'reported'::text, 'tracked'::text, 'resolved'::text, 'dismissed'::text))
 );
 
-
 COMMENT ON TABLE comms_items IS 'Unified lifecycle for asynchronous inbound communications (email, X mentions/DMs, Nostr DMs, etc.). Dedupe key is (platform, item_id). Replaces the inbound-lifecycle role of social_interactions. Owner: Communications domain (hermes).';
-
 
 COMMENT ON COLUMN comms_items.platform IS 'Platform identifier: email, x, nostr, github, ...';
 
-
 COMMENT ON COLUMN comms_items.item_id IS 'Immutable source identifier: Gmail message id, tweet id, Nostr event id, GitHub notification id, etc.';
-
 
 COMMENT ON COLUMN comms_items.thread_id IS 'Platform thread/conversation root: Gmail threadId, X conversation id, Nostr root event id.';
 
-
 COMMENT ON COLUMN comms_items.entity_id IS 'Resolved sender entity, if a matching entity_facts key/value exists. NULL is expected for uncovered identifiers (e.g., X handles until an x_handle fact key exists).';
-
 
 COMMENT ON COLUMN comms_items.status IS 'Lifecycle: inbound (fetched, not yet reported), reported (surfaced in Hermes report), tracked (actionable, artifact_ref set), resolved (handled, source archived), dismissed (no action needed).';
 
-
 COMMENT ON COLUMN comms_items.disposition IS 'Classifier output: fyi, actionable, escalation, receipt, injection_suspect. NULL until classified.';
-
 
 COMMENT ON COLUMN comms_items.summary IS 'Poller-extracted facts in the poller''s own voice; never raw relayed prose.';
 
-
 COMMENT ON COLUMN comms_items.artifact_ref IS 'Task number, issue URL, draft id, or other reference created for tracked items.';
-
 
 COMMENT ON COLUMN comms_items.first_seen_at IS 'When this (platform, item_id) was first observed; preserved across migrations.';
 
-
 COMMENT ON COLUMN comms_items.reported_at IS 'When the item was first included in a Hermes→NOVA report.';
-
 
 COMMENT ON COLUMN comms_items.resolved_at IS 'When the item reached status=resolved; triggers archive-on-resolution for email.';
 
@@ -1380,27 +975,19 @@ CREATE TABLE IF NOT EXISTS comms_responses (
     CONSTRAINT comms_responses_comms_item_id_fkey FOREIGN KEY (comms_item_id) REFERENCES comms_items (id) ON DELETE CASCADE
 );
 
-
 COMMENT ON TABLE comms_responses IS 'Approval gate for outbound responses to inbound social communications (X/Nostr mentions and DMs). Linked 1:1 to comms_items. Owner: NOVA Operations (approval), Communications domain (draft creation).';
-
 
 COMMENT ON COLUMN comms_responses.comms_item_id IS 'The inbound comms item this response belongs to.';
 
-
 COMMENT ON COLUMN comms_responses.draft_response IS 'Proposed response text, written by Hermes/NOVA.';
-
 
 COMMENT ON COLUMN comms_responses.approved_by IS 'Entity or agent that approved the response (e.g., I)ruid or NOVA).';
 
-
 COMMENT ON COLUMN comms_responses.approved_at IS 'When the response was approved.';
-
 
 COMMENT ON COLUMN comms_responses.response_id IS 'Platform-specific posted response id (tweet id, Nostr event id).';
 
-
 COMMENT ON COLUMN comms_responses.responded_at IS 'When the response was posted.';
-
 
 COMMENT ON COLUMN comms_responses.notes IS 'Internal notes on the response workflow.';
 
@@ -1425,12 +1012,9 @@ CREATE TABLE IF NOT EXISTS entity_credibility (
     CONSTRAINT entity_credibility_score_check CHECK (score >= 0.0::double precision AND score <= 1.0::double precision)
 );
 
-
 COMMENT ON TABLE entity_credibility IS 'Computed per-(entity, domain) source credibility (S axis of S×D×V). NEVER hand-assigned — derived from claim track record + verification events. v1 algorithm: corroboration ratio with recency decay (90-day half-life). Recomputed by daily maintenance script (not agent prompt). Domain taxonomy starts coarse — reuses entity_facts.category vocabulary + agent_domains topics. ''_global'' is the fallback for entities with too few domain-specific claims.';
 
-
 COMMENT ON COLUMN entity_credibility.computation_version IS 'Algorithm version that produced this score. Allows phased upgrades (v1 = simple ratio, v2 = TruthFinder-style iteration) without invalidating audit trail.';
-
 
 COMMENT ON COLUMN entity_credibility.evidence_snapshot IS 'Audit trail: inputs that fed the last computation (claim ids, corroboration events, contradiction events, recency weights). Supports debugging and algorithm upgrades.';
 
@@ -1474,7 +1058,6 @@ CREATE TABLE IF NOT EXISTS entity_fact_conflicts (
     CONSTRAINT entity_fact_conflicts_entity_id_fkey FOREIGN KEY (entity_id) REFERENCES entities (id)
 );
 
-
 COMMENT ON TABLE entity_fact_conflicts IS 'Conflicts between entity facts requiring resolution. Part of the truth reconciliation system.';
 
 --
@@ -1511,27 +1094,19 @@ CREATE TABLE IF NOT EXISTS entity_facts (
     CONSTRAINT chk_durability CHECK (durability::text IN ('permanent'::character varying, 'long_term'::character varying, 'short_term'::character varying, 'ephemeral'::character varying))
 );
 
-
 COMMENT ON TABLE entity_facts IS 'Key-value facts about entities. Check current_timezone for I)ruid before time-based actions.';
-
 
 COMMENT ON COLUMN entity_facts.visibility IS 'Privacy level: public (anyone), trusted (close relationships), private (source only)';
 
-
 COMMENT ON COLUMN entity_facts.privacy_scope IS 'Array of entity IDs explicitly allowed to see this fact (overrides visibility)';
-
 
 COMMENT ON COLUMN entity_facts.visibility_reason IS 'Reason visibility deviated from user default (audit trail)';
 
-
 COMMENT ON COLUMN entity_facts.source_channel_transcript_id IS 'FK to channel_transcripts row that triggered this fact extraction (#170)';
-
 
 COMMENT ON COLUMN entity_facts.source_channel_session_id IS 'FK to channel_sessions row (denormalised for fast session-level queries)';
 
-
 COMMENT ON COLUMN entity_facts.assertion_intent IS 'Epistemological intent of the claim. Grading machinery (S×D×V) only engages for asserted+speculative. fictional/disclaimed/hypothetical are stored with full provenance but never compete as truth claims. Determination happens at ingestion/extraction time.';
-
 
 COMMENT ON COLUMN entity_facts.mutability_class IS 'Controls query-time resolution and contradiction detection. immutable: conflicting values = genuine contradiction → credibility impact. slow_changing: conflict within short window suspicious, across years = natural drift. stateful: latest value is current; full trajectory preserved; no credibility damage from drift. When mixed classes exist for the same (entity_id, key), resolution uses the STRICTEST class (immutable > slow_changing > stateful).';
 
@@ -1638,12 +1213,9 @@ CREATE TABLE IF NOT EXISTS entity_fact_sources (
     CONSTRAINT entity_fact_sources_verification_quality_check CHECK (verification_quality >= 0.0::double precision AND verification_quality <= 1.0::double precision)
 );
 
-
 COMMENT ON COLUMN entity_fact_sources.reporting_distance IS 'Transmission hops from the subject (D axis). Self-report/autobiography = 1.0; direct observation ≈ 0.9; secondhand ≈ 0.8; further decays. Decay rate is tunable per source type (a cited biography does not decay like barroom gossip). Set at extraction time based on source relationship to subject.';
 
-
 COMMENT ON COLUMN entity_fact_sources.verification_quality IS 'Citation density, corroboration, peer review quality (V axis). NULL = not yet assessed (query-time computation treats as neutral 0.5). 0.0 = assessed and FAILED verification. Maps to research_citations.reliability scale (0–1). This distinction matters: NULL sources participate at neutral weight; 0.0 sources actively drag down.';
-
 
 COMMENT ON COLUMN entity_fact_sources.source_session_id IS 'FK to channel_sessions — identifies the originating conversation. Used for corroboration independence: two facts from the same session are one witness, not two. Required for the v1 corroboration ratio in entity_credibility recompute.';
 
@@ -1692,15 +1264,11 @@ CREATE TABLE IF NOT EXISTS entity_facts_archive (
     expires timestamptz
 );
 
-
 COMMENT ON TABLE entity_facts_archive IS 'Archived entity facts from decay/cleanup processes. Historical record of previously stored knowledge.';
-
 
 COMMENT ON COLUMN entity_facts_archive.archived_at IS 'When the fact was archived';
 
-
 COMMENT ON COLUMN entity_facts_archive.archive_reason IS 'Why the fact was archived (decay, conflict, manual)';
-
 
 COMMENT ON COLUMN entity_facts_archive.archived_by IS 'System or agent that archived the fact';
 
@@ -1722,7 +1290,6 @@ CREATE TABLE IF NOT EXISTS entity_relationships (
     CONSTRAINT entity_relationships_entity_a_fkey FOREIGN KEY (entity_a) REFERENCES entities (id) ON DELETE CASCADE,
     CONSTRAINT entity_relationships_entity_b_fkey FOREIGN KEY (entity_b) REFERENCES entities (id) ON DELETE CASCADE
 );
-
 
 COMMENT ON TABLE entity_relationships IS 'Relationships between entities (family, work, friendship, etc).';
 
@@ -1756,7 +1323,6 @@ CREATE TABLE IF NOT EXISTS events (
     CONSTRAINT events_pkey PRIMARY KEY (id)
 );
 
-
 COMMENT ON TABLE events IS 'Historical events, milestones, activities. Log significant occurrences.';
 
 --
@@ -1778,7 +1344,6 @@ CREATE TABLE IF NOT EXISTS event_entities (
     CONSTRAINT event_entities_event_id_fkey FOREIGN KEY (event_id) REFERENCES events (id) ON DELETE CASCADE
 );
 
-
 COMMENT ON TABLE event_entities IS 'Links events to entities (people, orgs, AIs). Many-to-many relationship table.';
 
 --
@@ -1799,7 +1364,6 @@ CREATE TABLE IF NOT EXISTS events_archive (
     archive_reason varchar(50),
     CONSTRAINT events_archive_pkey PRIMARY KEY (id)
 );
-
 
 COMMENT ON TABLE events_archive IS 'Archived historical events. Long-term storage for events moved out of active events table.';
 
@@ -1830,7 +1394,6 @@ CREATE TABLE IF NOT EXISTS extraction_failures (
     CONSTRAINT extraction_failures_retry_count_nonnegative CHECK (retry_count >= 0),
     CONSTRAINT extraction_failures_status_check CHECK (status::text IN ('pending'::character varying, 'resolved'::character varying, 'retry_exhausted'::character varying, 'unreplayable'::character varying))
 );
-
 
 COMMENT ON TABLE extraction_failures IS 'Dead-letter store for failed memory extractions from memory-extract hook (#485). Rows are inserted on nonzero exit, timeout, or spawn error and may be retried via extraction-replay.sh.';
 
@@ -1872,7 +1435,6 @@ CREATE TABLE IF NOT EXISTS extraction_metrics (
     CONSTRAINT extraction_metrics_pkey PRIMARY KEY (id)
 );
 
-
 COMMENT ON TABLE extraction_metrics IS 'Performance metrics for data extraction processes. Tracks accuracy and efficiency of knowledge extraction.';
 
 --
@@ -1889,7 +1451,6 @@ CREATE TABLE IF NOT EXISTS fact_change_log (
     changed_at timestamptz DEFAULT now(),
     CONSTRAINT fact_change_log_pkey PRIMARY KEY (id)
 );
-
 
 COMMENT ON TABLE fact_change_log IS 'Audit trail for entity fact modifications. Tracks who changed what and when for accountability.';
 
@@ -1909,7 +1470,6 @@ CREATE TABLE IF NOT EXISTS gambling_logs (
     CONSTRAINT gambling_logs_pkey PRIMARY KEY (id),
     CONSTRAINT gambling_logs_entity_id_fkey FOREIGN KEY (entity_id) REFERENCES entities (id) ON DELETE CASCADE
 );
-
 
 COMMENT ON TABLE gambling_logs IS 'High-level gambling session summaries. Groups multiple gambling_entries by session.';
 
@@ -1938,27 +1498,19 @@ CREATE TABLE IF NOT EXISTS gambling_entries (
     CONSTRAINT gambling_entries_log_id_fkey FOREIGN KEY (log_id) REFERENCES gambling_logs (id) ON DELETE CASCADE
 );
 
-
 COMMENT ON TABLE gambling_entries IS 'Individual gambling session records. Tracks bets, outcomes, and session details for analysis.';
-
 
 COMMENT ON COLUMN gambling_entries.log_id IS 'References gambling_logs for session grouping';
 
-
 COMMENT ON COLUMN gambling_entries.session_date IS 'Date and time of gambling session';
-
 
 COMMENT ON COLUMN gambling_entries.casino IS 'Casino or venue name';
 
-
 COMMENT ON COLUMN gambling_entries.game IS 'Game type (poker, blackjack, etc.)';
-
 
 COMMENT ON COLUMN gambling_entries.amount IS 'Win/loss amount (positive for wins, negative for losses)';
 
-
 COMMENT ON COLUMN gambling_entries.duration_minutes IS 'Session duration in minutes';
-
 
 COMMENT ON COLUMN gambling_entries.base_bet IS 'Typical bet size for the session';
 
@@ -2001,12 +1553,9 @@ CREATE TABLE IF NOT EXISTS git_issue_queue (
     CONSTRAINT coder_issue_queue_status_check CHECK (status IN ('pending_tests'::text, 'tests_approved'::text, 'implementing'::text, 'testing'::text, 'done'::text, 'failed'::text, 'paused'::text, 'blocked'::text))
 );
 
-
 COMMENT ON TABLE git_issue_queue IS 'Issue queue for git-based workflows. NOTIFY triggers dispatch work automatically.';
 
-
 COMMENT ON COLUMN git_issue_queue.status IS 'pending_tests→tests_approved→implementing→testing→done/failed';
-
 
 COMMENT ON COLUMN git_issue_queue.labels IS 'GitHub labels. Gem skips issues with paused, blocked, on-hold, wontfix labels.';
 
@@ -2039,12 +1588,9 @@ CREATE TABLE IF NOT EXISTS income_sources (
     CONSTRAINT income_sources_status_check CHECK (status IN ('active'::text, 'paused'::text, 'retired'::text))
 );
 
-
 COMMENT ON TABLE income_sources IS 'Registry of NOVA income streams — where money comes from, how to check it, and current status. Owner: NOVA.';
 
-
 COMMENT ON COLUMN income_sources.check_method IS 'Operational: how NOVA checks for new income from this source (CLI command, dashboard URL, API call)';
-
 
 COMMENT ON COLUMN income_sources.consolidated_into IS 'Self-ref FK: when a source is retired and rolled into another (e.g. Printful → WooCommerce Shop)';
 
@@ -2067,12 +1613,9 @@ CREATE TABLE IF NOT EXISTS income_transactions (
     CONSTRAINT income_transactions_source_id_fkey FOREIGN KEY (source_id) REFERENCES income_sources (id)
 );
 
-
 COMMENT ON TABLE income_transactions IS 'Individual income transactions, each linked to an income_source. Owner: NOVA.';
 
-
 COMMENT ON COLUMN income_transactions.amount_sats IS 'Amount normalized to satoshis for easy BTC aggregation';
-
 
 COMMENT ON COLUMN income_transactions.external_ref IS 'Source-specific reference: payment hash, order ID, invoice number, etc.';
 
@@ -2102,7 +1645,6 @@ CREATE TABLE IF NOT EXISTS job_messages (
     CONSTRAINT job_messages_job_id_fkey FOREIGN KEY (job_id) REFERENCES agent_jobs (id)
 );
 
-
 COMMENT ON TABLE job_messages IS 'Message log per job for conversation threading';
 
 --
@@ -2126,9 +1668,7 @@ CREATE TABLE IF NOT EXISTS lessons_archive (
     CONSTRAINT lessons_archive_pkey PRIMARY KEY (id)
 );
 
-
 COMMENT ON TABLE lessons_archive IS 'Archived lessons and insights. Historical record of previously stored learnings.';
-
 
 COMMENT ON COLUMN lessons_archive.confidence IS 'Confidence score 0-1, decays over time if not reinforced';
 
@@ -2144,7 +1684,6 @@ CREATE TABLE IF NOT EXISTS library_authors (
     CONSTRAINT library_authors_pkey PRIMARY KEY (id),
     CONSTRAINT library_authors_name_key UNIQUE (name)
 );
-
 
 COMMENT ON TABLE library_authors IS 'Library domain: normalized author records. Managed by Athena (librarian agent).';
 
@@ -2165,7 +1704,6 @@ CREATE TABLE IF NOT EXISTS library_tags (
     CONSTRAINT library_tags_pkey PRIMARY KEY (id),
     CONSTRAINT library_tags_name_key UNIQUE (name)
 );
-
 
 COMMENT ON TABLE library_tags IS 'Library domain: subject/genre/topic tags for works. Managed by Athena.';
 
@@ -2205,21 +1743,15 @@ CREATE TABLE IF NOT EXISTS library_works (
     CONSTRAINT valid_work_type CHECK (work_type IN ('paper'::text, 'book'::text, 'novel'::text, 'poem'::text, 'short_story'::text, 'essay'::text, 'article'::text, 'blog_post'::text, 'whitepaper'::text, 'report'::text, 'thesis'::text, 'dissertation'::text, 'magazine'::text, 'newsletter'::text, 'speech'::text, 'other'::text))
 );
 
-
 COMMENT ON TABLE library_works IS 'Library domain: all written works (papers, books, poems, etc). Managed by Athena (librarian agent). ALL core fields are NOT NULL — Athena must generate summary and insights during ingestion. The summary field is used for semantic embedding (200-400 words, high-density). On semantic recall hit, query this table for full details.';
-
 
 COMMENT ON COLUMN library_works.summary IS 'REQUIRED. Concise semantic summary for embedding. 200-400 words. Must capture: what the work is, who wrote it, key findings/themes, and why it matters. Athena generates this during ingestion.';
 
-
 COMMENT ON COLUMN library_works.abstract IS 'Original abstract verbatim from source. May be NULL if source has none (e.g. poems).';
-
 
 COMMENT ON COLUMN library_works.content_text IS 'Full text of the work. Optional — only store if available and not too large.';
 
-
 COMMENT ON COLUMN library_works.insights IS 'REQUIRED. Key takeaways, relevance to our work, notable connections. Athena generates this during ingestion.';
-
 
 COMMENT ON COLUMN library_works.notable_quotes IS 'Array of notable quotes from the work. Included in semantic embedding for recall. Generated during ingestion.';
 
@@ -2260,7 +1792,6 @@ CREATE TABLE IF NOT EXISTS library_work_authors (
     CONSTRAINT library_work_authors_work_id_fkey FOREIGN KEY (work_id) REFERENCES library_works (id) ON DELETE CASCADE
 );
 
-
 COMMENT ON TABLE library_work_authors IS 'Links works to their authors. author_order preserves original ordering.';
 
 --
@@ -2276,7 +1807,6 @@ CREATE TABLE IF NOT EXISTS library_work_relationships (
     CONSTRAINT library_work_relationships_to_work_id_fkey FOREIGN KEY (to_work_id) REFERENCES library_works (id) ON DELETE CASCADE
 );
 
-
 COMMENT ON TABLE library_work_relationships IS 'Tracks relationships between works (citations, sequels, responses, etc).';
 
 --
@@ -2290,7 +1820,6 @@ CREATE TABLE IF NOT EXISTS library_work_tags (
     CONSTRAINT library_work_tags_tag_id_fkey FOREIGN KEY (tag_id) REFERENCES library_tags (id) ON DELETE CASCADE,
     CONSTRAINT library_work_tags_work_id_fkey FOREIGN KEY (work_id) REFERENCES library_works (id) ON DELETE CASCADE
 );
-
 
 COMMENT ON TABLE library_work_tags IS 'Links works to subject/topic tags.';
 
@@ -2324,30 +1853,21 @@ CREATE TABLE IF NOT EXISTS media_consumed (
     CONSTRAINT media_consumed_rating_check CHECK (rating >= 1 AND rating <= 10)
 );
 
-
 COMMENT ON TABLE media_consumed IS 'Books, movies, podcasts consumed by entities. Log completions here.';
-
 
 COMMENT ON COLUMN media_consumed.summary IS 'Athena (librarian-agent) generated summary - objective, factual';
 
-
 COMMENT ON COLUMN media_consumed.metadata IS 'Flexible metadata: duration, language, format, topics, word_count, etc.';
-
 
 COMMENT ON COLUMN media_consumed.source_file IS 'Local file path if media was downloaded';
 
-
 COMMENT ON COLUMN media_consumed.status IS 'Processing status: pending, processing, completed, failed, queued';
-
 
 COMMENT ON COLUMN media_consumed.ingested_by IS 'Agent ID that processed this media';
 
-
 COMMENT ON COLUMN media_consumed.ingested_at IS 'Timestamp when media was ingested/processed';
 
-
 COMMENT ON COLUMN media_consumed.search_vector IS 'Full-text search vector (title + notes + transcript + summary)';
-
 
 COMMENT ON COLUMN media_consumed.insights IS 'NOVA personal insights - analysis, connections, opinions';
 
@@ -2369,7 +1889,6 @@ CREATE TABLE IF NOT EXISTS agent_actions (
     CONSTRAINT agent_actions_related_event_id_fkey FOREIGN KEY (related_event_id) REFERENCES events (id),
     CONSTRAINT agent_actions_related_media_id_fkey FOREIGN KEY (related_media_id) REFERENCES media_consumed (id)
 );
-
 
 COMMENT ON TABLE agent_actions IS 'Agent action definitions. READ-ONLY except Newhart.';
 
@@ -2410,15 +1929,11 @@ CREATE TABLE IF NOT EXISTS media_queue (
     CONSTRAINT media_queue_result_media_id_fkey FOREIGN KEY (result_media_id) REFERENCES media_consumed (id)
 );
 
-
 COMMENT ON TABLE media_queue IS 'Queue for media ingestion. Librarian agent processes these.';
-
 
 COMMENT ON COLUMN media_queue.priority IS '1=urgent, 5=normal, 10=low priority';
 
-
 COMMENT ON COLUMN media_queue.status IS 'pending, processing, completed, failed, duplicate';
-
 
 COMMENT ON COLUMN media_queue.result_media_id IS 'Foreign key to resulting media_consumed record';
 
@@ -2438,12 +1953,9 @@ CREATE TABLE IF NOT EXISTS media_tags (
     CONSTRAINT media_tags_media_id_fkey FOREIGN KEY (media_id) REFERENCES media_consumed (id) ON DELETE CASCADE
 );
 
-
 COMMENT ON TABLE media_tags IS 'Tags/topics for media items. Helps with recommendations and search.';
 
-
 COMMENT ON COLUMN media_tags.source IS 'auto=AI-generated, manual=user-added';
-
 
 COMMENT ON COLUMN media_tags.confidence IS 'AI confidence score for auto-generated tags';
 
@@ -2469,7 +1981,6 @@ CREATE TABLE IF NOT EXISTS memory_embeddings (
     embedding vector(1024),
     CONSTRAINT memory_embeddings_pkey PRIMARY KEY (id)
 );
-
 
 COMMENT ON TABLE memory_embeddings IS 'Vector embeddings for semantic memory search. Used by proactive-recall.py.';
 
@@ -2510,7 +2021,6 @@ CREATE TABLE IF NOT EXISTS memory_embeddings_archive (
     CONSTRAINT memory_embeddings_archive_pkey PRIMARY KEY (id)
 );
 
-
 COMMENT ON TABLE memory_embeddings_archive IS 'Archived vector embeddings from semantic memory system. Historical embeddings for backup/analysis. Migrated to vector(1024).';
 
 --
@@ -2525,7 +2035,6 @@ CREATE TABLE IF NOT EXISTS memory_type_priorities (
     updated_at timestamptz DEFAULT now(),
     CONSTRAINT memory_type_priorities_pkey PRIMARY KEY (source_type)
 );
-
 
 COMMENT ON TABLE memory_type_priorities IS 'Priority weights for semantic recall by source_type. Higher = more likely to surface. NOVA can modify.';
 
@@ -2578,7 +2087,6 @@ CREATE TABLE IF NOT EXISTS music_library (
     CONSTRAINT music_library_energy_level_check CHECK (energy_level >= 1 AND energy_level <= 10)
 );
 
-
 COMMENT ON TABLE music_library IS 'Music-specific metadata extending media_consumed. Managed by Erato.';
 
 --
@@ -2608,7 +2116,6 @@ CREATE TABLE IF NOT EXISTS music_analysis (
     CONSTRAINT music_analysis_music_id_fkey FOREIGN KEY (music_id) REFERENCES music_library (id) ON DELETE CASCADE
 );
 
-
 COMMENT ON TABLE music_analysis IS 'Deep musical analysis (harmonic, rhythmic, lyrical, spectral). Managed by Erato.';
 
 --
@@ -2636,7 +2143,6 @@ CREATE TABLE IF NOT EXISTS places (
     CONSTRAINT places_parent_place_id_fkey FOREIGN KEY (parent_place_id) REFERENCES places (id)
 );
 
-
 COMMENT ON TABLE places IS 'Locations (houses, venues, cities). Reference I)ruid houses in USER.md.';
 
 --
@@ -2657,7 +2163,6 @@ CREATE TABLE IF NOT EXISTS event_places (
     CONSTRAINT event_places_place_id_fkey FOREIGN KEY (place_id) REFERENCES places (id) ON DELETE CASCADE
 );
 
-
 COMMENT ON TABLE event_places IS 'Links events to places/locations. Many-to-many relationship table.';
 
 --
@@ -2673,7 +2178,6 @@ CREATE TABLE IF NOT EXISTS place_properties (
     CONSTRAINT place_properties_pkey PRIMARY KEY (id),
     CONSTRAINT place_properties_place_id_fkey FOREIGN KEY (place_id) REFERENCES places (id) ON DELETE CASCADE
 );
-
 
 COMMENT ON TABLE place_properties IS 'Properties and attributes of places. Key-value storage for place characteristics.';
 
@@ -2697,7 +2201,6 @@ CREATE TABLE IF NOT EXISTS preferences (
     CONSTRAINT preferences_pkey PRIMARY KEY (id),
     CONSTRAINT preferences_entity_id_fkey FOREIGN KEY (entity_id) REFERENCES entities (id) ON DELETE CASCADE
 );
-
 
 COMMENT ON TABLE preferences IS 'User preferences by entity_id. Check before making assumptions.';
 
@@ -2773,18 +2276,13 @@ CREATE TABLE IF NOT EXISTS projects (
     CONSTRAINT projects_status_check CHECK (status::text IN ('active'::character varying, 'blocked'::character varying, 'complete'::character varying, 'paused'::character varying, 'abandoned'::character varying))
 );
 
-
 COMMENT ON TABLE projects IS 'Project tracking. For repo-backed projects (locked=TRUE, repo_url set), use GitHub for management. For non-repo projects, use notes field here.';
-
 
 COMMENT ON COLUMN projects.git_config IS 'Per-project Git config: branch strategy, commit conventions, PR workflow, etc.';
 
-
 COMMENT ON COLUMN projects.repo_url IS 'GitHub repo URL. When set with locked=TRUE, this is the source of truth. Manage project via repo, not database.';
 
-
 COMMENT ON COLUMN projects.locked IS 'When TRUE, project is repo-backed. Use GitHub (repo_url) for docs/updates, not this table. Prevents accidental writes to notes field.';
-
 
 COMMENT ON COLUMN projects.skills IS 'Array of skill names (from ~/clawd/skills/) relevant to this project';
 
@@ -2806,7 +2304,6 @@ CREATE TABLE IF NOT EXISTS event_projects (
     CONSTRAINT event_projects_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects (id) ON DELETE CASCADE
 );
 
-
 COMMENT ON TABLE event_projects IS 'Links events to projects. Many-to-many relationship table for project milestones and activities.';
 
 --
@@ -2821,7 +2318,6 @@ CREATE TABLE IF NOT EXISTS project_entities (
     CONSTRAINT project_entities_entity_id_fkey FOREIGN KEY (entity_id) REFERENCES entities (id) ON DELETE CASCADE,
     CONSTRAINT project_entities_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects (id) ON DELETE CASCADE
 );
-
 
 COMMENT ON TABLE project_entities IS 'Links projects to entities (people, orgs, AIs). Many-to-many relationship table for project participants.';
 
@@ -2842,7 +2338,6 @@ CREATE TABLE IF NOT EXISTS project_tasks (
     CONSTRAINT project_tasks_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects (id) ON DELETE CASCADE,
     CONSTRAINT project_tasks_status_check CHECK (status::text IN ('pending'::character varying, 'in_progress'::character varying, 'blocked'::character varying, 'complete'::character varying))
 );
-
 
 COMMENT ON TABLE project_tasks IS 'Project-specific task breakdown. Links tasks to projects for organized project management.';
 
@@ -2869,7 +2364,6 @@ CREATE TABLE IF NOT EXISTS prompt_helper_config (
     CONSTRAINT prompt_helper_config_pkey PRIMARY KEY (id),
     CONSTRAINT prompt_helper_config_message_type_check CHECK (message_type IN ('info_request'::text, 'action'::text, 'conversation'::text, 'continuation'::text, 'command'::text))
 );
-
 
 COMMENT ON TABLE prompt_helper_config IS 'Per-message-type gating for turn-context subsystems (entity_resolver, semantic_recall, domain_identifier, turn_reminders). Rows with agent_name IS NULL are defaults; agent-specific rows override them. turn_reminders always fires regardless of config.';
 
@@ -2909,12 +2403,9 @@ CREATE TABLE IF NOT EXISTS ralph_sessions (
     CONSTRAINT ralph_sessions_session_series_id_iteration_key UNIQUE (session_series_id, iteration)
 );
 
-
 COMMENT ON TABLE ralph_sessions IS 'Tracks Ralph-style iterative agent sessions. Each iteration runs with fresh context, state persists in DB.';
 
-
 COMMENT ON COLUMN ralph_sessions.session_series_id IS 'UUID or descriptive ID linking all iterations of the same task';
-
 
 COMMENT ON COLUMN ralph_sessions.status IS 'PENDING=not started, RUNNING=in progress, CONTINUE=done but more needed, COMPLETE=finished, ERROR=failed';
 
@@ -2942,7 +2433,6 @@ CREATE TABLE IF NOT EXISTS research_projects (
     CONSTRAINT research_projects_status_check CHECK (status::text IN ('active'::character varying, 'completed'::character varying, 'archived'::character varying, 'paused'::character varying))
 );
 
-
 COMMENT ON TABLE research_projects IS 'Top-level research project containers. Write access: Research domain (scout) only.';
 
 --
@@ -2965,7 +2455,6 @@ CREATE TABLE IF NOT EXISTS research_provenance (
     CONSTRAINT research_provenance_entity_type_check CHECK (entity_type::text IN ('project'::character varying, 'task'::character varying, 'finding'::character varying, 'conclusion'::character varying))
 );
 
-
 COMMENT ON TABLE research_provenance IS 'W3C PROV-O inspired lineage tracking for research data. Write access: Research domain (scout) only.';
 
 --
@@ -2986,7 +2475,6 @@ CREATE TABLE IF NOT EXISTS research_tags (
     CONSTRAINT research_tags_tag_type_check CHECK (tag_type::text IN ('topic'::character varying, 'domain'::character varying, 'method'::character varying, 'source_type'::character varying, 'confidence'::character varying, 'status'::character varying))
 );
 
-
 COMMENT ON TABLE research_tags IS 'Hierarchical, polymorphic tag taxonomy for research entities. Write access: Research domain (scout) only.';
 
 --
@@ -3005,7 +2493,6 @@ CREATE TABLE IF NOT EXISTS research_taggings (
     CONSTRAINT research_taggings_tag_id_fkey FOREIGN KEY (tag_id) REFERENCES research_tags (id) ON DELETE CASCADE,
     CONSTRAINT research_taggings_taggable_type_check CHECK (taggable_type::text IN ('project'::character varying, 'task'::character varying, 'finding'::character varying, 'conclusion'::character varying))
 );
-
 
 COMMENT ON TABLE research_taggings IS 'Junction table linking tags to research entities. Write access: Research domain (scout) only.';
 
@@ -3034,9 +2521,7 @@ CREATE TABLE IF NOT EXISTS research_tasks (
     CONSTRAINT research_tasks_status_check CHECK (status::text IN ('pending'::character varying, 'in_progress'::character varying, 'completed'::character varying, 'failed'::character varying, 'superseded'::character varying))
 );
 
-
 COMMENT ON TABLE research_tasks IS 'Research tasks. Write-protected: only DB user scout can INSERT/UPDATE/DELETE.';
-
 
 COMMENT ON COLUMN research_tasks.priority IS 'Integer 1-10 (1=highest, 10=lowest). CHECK constraint enforces range.';
 
@@ -3069,7 +2554,6 @@ CREATE TABLE IF NOT EXISTS research_conclusions (
     CONSTRAINT research_conclusions_superseded_by_fkey FOREIGN KEY (superseded_by) REFERENCES research_conclusions (id),
     CONSTRAINT research_conclusions_task_id_fkey FOREIGN KEY (task_id) REFERENCES research_tasks (id) ON DELETE CASCADE
 );
-
 
 COMMENT ON TABLE research_conclusions IS 'Research conclusions linked to tasks via task_id. Write-protected: only DB user scout can INSERT/UPDATE/DELETE.';
 
@@ -3112,18 +2596,13 @@ CREATE TABLE IF NOT EXISTS research_findings (
     CONSTRAINT research_findings_importance_check CHECK (importance::text IN ('low'::character varying, 'normal'::character varying, 'high'::character varying, 'critical'::character varying))
 );
 
-
 COMMENT ON TABLE research_findings IS 'Research findings linked to tasks via task_id. Write-protected: only DB user scout can INSERT/UPDATE/DELETE. NO project_id column exists — join through research_tasks.project_id instead.';
-
 
 COMMENT ON COLUMN research_findings.task_id IS 'FK to research_tasks.id. There is NO project_id column on this table — link to projects via research_tasks.project_id.';
 
-
 COMMENT ON COLUMN research_findings.finding_type IS 'One of: fact, insight, conclusion, warning, recommendation, definition, example';
 
-
 COMMENT ON COLUMN research_findings.confidence IS 'Decimal 0.00-1.00';
-
 
 COMMENT ON COLUMN research_findings.importance IS 'One of: low, normal, high, critical (varchar, not integer)';
 
@@ -3152,7 +2631,6 @@ CREATE TABLE IF NOT EXISTS research_citations (
     CONSTRAINT research_citations_source_type_check CHECK (source_type::text IN ('url'::character varying, 'paper'::character varying, 'book'::character varying, 'library_work'::character varying, 'api'::character varying, 'agent'::character varying, 'database'::character varying, 'document'::character varying, 'interview'::character varying))
 );
 
-
 COMMENT ON TABLE research_citations IS 'Citations linked to findings via finding_id. Write-protected: only DB user scout can INSERT/UPDATE/DELETE.';
 
 --
@@ -3176,7 +2654,6 @@ CREATE TABLE IF NOT EXISTS self_awareness_triggers (
     updated_at timestamptz DEFAULT now() NOT NULL,
     CONSTRAINT self_awareness_triggers_pkey PRIMARY KEY (id)
 );
-
 
 COMMENT ON TABLE self_awareness_triggers IS 'Trigger patterns for the self-awareness plugin. Each row defines keyphrases that, when semantically matched in outbound messages, fire an action. Managed by NOVA.';
 
@@ -3276,21 +2753,15 @@ CREATE TABLE IF NOT EXISTS skills (
     CONSTRAINT skills_source_type_check CHECK (source_type IN ('BUNDLED'::text, 'MANAGED'::text, 'WORKSPACE'::text, 'DOMAIN'::text))
 );
 
-
 COMMENT ON TABLE skills IS 'Skill definitions. Override precedence: WORKSPACE > DOMAIN > MANAGED > BUNDLED. See get_agent_skills().';
-
 
 COMMENT ON COLUMN skills.source_type IS 'BUNDLED=shipped with OpenClaw, MANAGED=~/.openclaw/skills, DOMAIN=domain-scoped, WORKSPACE=per-agent workspace skills';
 
-
 COMMENT ON COLUMN skills.agent_name IS 'NULL=available to all agents; set for WORKSPACE-scoped or agent-specific skills';
-
 
 COMMENT ON COLUMN skills.instructions IS 'Full SKILL.md content (loaded on-demand, not injected into prompt)';
 
-
 COMMENT ON COLUMN skills.location_path IS 'Filesystem path hint for skills with scripts/resources on disk';
-
 
 COMMENT ON COLUMN skills.domain_name IS 'Required when source_type=DOMAIN. Matched via agent_domains.';
 
@@ -3328,12 +2799,9 @@ CREATE TABLE IF NOT EXISTS social_interactions (
     CONSTRAINT social_interactions_status_check CHECK (status IN ('seen'::text, 'needs_response'::text, 'drafted'::text, 'approved'::text, 'posted'::text, 'dismissed'::text))
 );
 
-
 COMMENT ON TABLE social_interactions IS 'Tracks the full lifecycle of inbound social media mentions: seen → needs_response → drafted → approved → posted (or dismissed). Enforces the approval gate for outbound social media responses. Hermes comms check writes new entries; NOVA updates status on approval and posting. Domain: NOVA Operations.';
 
-
 COMMENT ON COLUMN social_interactions.status IS 'Lifecycle: seen (just noticed), needs_response (verified no existing reply in thread), drafted (proposed response written), approved (I)ruid approved), posted (response sent), dismissed (no response needed).';
-
 
 COMMENT ON COLUMN social_interactions.kind IS 'mention = inbound mention/reply to NOVA (draft-gated response flow); engagement_candidate = original post by another user surfaced by Hermes for NOVA to evaluate and respond to autonomously (per I)ruid 2026-07-21). Candidates use statuses: seen (awaiting evaluation), posted (responded), dismissed (evaluated, no response).';
 
@@ -3387,18 +2855,13 @@ CREATE TABLE IF NOT EXISTS tools (
     CONSTRAINT tools_source_type_check CHECK (source_type IN ('BUNDLED'::text, 'MANAGED'::text, 'WORKSPACE'::text, 'DOMAIN'::text))
 );
 
-
 COMMENT ON TABLE tools IS 'Tool usage notes. Override: WORKSPACE > DOMAIN > MANAGED > BUNDLED. See get_agent_tools().';
-
 
 COMMENT ON COLUMN tools.source_type IS 'BUNDLED=shipped with OpenClaw, MANAGED=~/.openclaw/tools, DOMAIN=domain-scoped, WORKSPACE=per-agent workspace tools';
 
-
 COMMENT ON COLUMN tools.category IS 'Grouping key for assembling TOOLS.md sections';
 
-
 COMMENT ON COLUMN tools.notes IS 'Markdown guidance content — camera names, SSH hosts, preferred voices, etc.';
-
 
 COMMENT ON COLUMN tools.domain_name IS 'Required when source_type=DOMAIN. Matched via agent_domains.';
 
@@ -3434,9 +2897,7 @@ CREATE TABLE IF NOT EXISTS unsolved_problems (
     CONSTRAINT unsolved_problems_pkey PRIMARY KEY (id)
 );
 
-
 COMMENT ON TABLE unsolved_problems IS 'Humanity''s unsolved problems for NOVA to work on during idle time. Part of the Motivation System - provides meaningful default work when task queue is empty.';
-
 
 COMMENT ON COLUMN unsolved_problems.priority IS 'Integer 1-10 (1=highest). NOT a string.';
 
@@ -3491,21 +2952,15 @@ CREATE TABLE IF NOT EXISTS user_insights (
     CONSTRAINT user_insights_contributed_by_fkey FOREIGN KEY (contributed_by) REFERENCES entities (id)
 );
 
-
 COMMENT ON TABLE user_insights IS 'Human-contributed insights — observations, realizations, and wisdom shared by users. Primarily for users to save important insights. Managed by any agent on behalf of the contributing user.';
-
 
 COMMENT ON COLUMN user_insights.insight IS 'The insight itself — the core observation or realization';
 
-
 COMMENT ON COLUMN user_insights.context IS 'Surrounding context — what prompted the insight, what it relates to';
-
 
 COMMENT ON COLUMN user_insights.contributed_by IS 'Entity ID of the human who shared the insight';
 
-
 COMMENT ON COLUMN user_insights.source IS 'Where/how the insight was shared (e.g., discord, conversation, etc.)';
-
 
 COMMENT ON COLUMN user_insights.tags IS 'Categorical tags for grouping and retrieval';
 
@@ -3530,7 +2985,6 @@ CREATE TABLE IF NOT EXISTS vehicles (
     CONSTRAINT vehicles_pkey PRIMARY KEY (id),
     CONSTRAINT vehicles_owner_id_fkey FOREIGN KEY (owner_id) REFERENCES entities (id)
 );
-
 
 COMMENT ON TABLE vehicles IS 'Vehicle tracking and management. Cars, bikes, boats, planes owned or used.';
 
@@ -3557,12 +3011,9 @@ CREATE TABLE IF NOT EXISTS vocabulary (
     CONSTRAINT vocabulary_word_key UNIQUE (word)
 );
 
-
 COMMENT ON TABLE vocabulary IS 'Custom vocabulary for speech recognition. Add names, terms, jargon as encountered.';
 
-
 COMMENT ON COLUMN vocabulary.vote_count IS 'Reinforcement count - incremented each time this word is mentioned';
-
 
 COMMENT ON COLUMN vocabulary.last_confirmed IS 'Timestamp of most recent confirmation';
 
@@ -3591,9 +3042,7 @@ CREATE TABLE IF NOT EXISTS work_queue (
     CONSTRAINT work_queue_status_check CHECK (status IN ('pending'::text, 'done'::text, 'failed'::text, 'stale'::text, 'cancelled'::text))
 );
 
-
 COMMENT ON TABLE work_queue IS 'Active-work watch queue: entries for in-flight subagent sessions, PRs, long-running processes. A 5m cron sweeps pending entries, checks live status, and wakes the owner session when items complete. Add an entry whenever dispatching fire-and-forget work; the sweeper closes the loop. Designed 2026-07-25 per I)ruid to replace ad-hoc dead-man timers.';
-
 
 COMMENT ON COLUMN work_queue.completion_logged_at IS 'Watermark set when the row''s completion line was appended to the daily log. Seeded by migration 087 for pre-existing closed rows; updated by completion-log-reconcile.py.';
 
@@ -3623,21 +3072,15 @@ CREATE TABLE IF NOT EXISTS workflow_runs (
     CONSTRAINT workflow_runs_status_check CHECK (status::text IN ('running'::character varying, 'completed'::character varying, 'failed'::character varying, 'paused'::character varying, 'cancelled'::character varying))
 );
 
-
 COMMENT ON TABLE workflow_runs IS 'Tracks individual executions of workflows. Each row is one run from opening bookend to closing bookend. Updated as the orchestrator advances through steps.';
-
 
 COMMENT ON COLUMN workflow_runs.trigger_context IS 'What initiated this run: issue URL, task ID, cron schedule, or description.';
 
-
 COMMENT ON COLUMN workflow_runs.current_step IS 'The step_order currently being executed. NULL before first step or after completion.';
-
 
 COMMENT ON COLUMN workflow_runs.notes IS 'Running log of progress: step transitions, blockers, decisions made. Append-only during execution.';
 
-
 COMMENT ON COLUMN workflow_runs.channel IS 'Channel where this run was triggered and is being tracked. NOT NULL. Format: "<provider>:<channel_id>" e.g. "discord:1494763249609211905". Sentinel "unknown:pre-tracking" used for historical rows before column was added. Added 2026-05-24.';
-
 
 COMMENT ON COLUMN workflow_runs.completion_logged_at IS 'Watermark set when the row''s completion line was appended to the daily log. Seeded by migration 087 for pre-existing closed rows; updated by completion-log-reconcile.py.';
 
@@ -3725,21 +3168,16 @@ CREATE TABLE IF NOT EXISTS motivation_d100 (
     CONSTRAINT motivation_d100_roll_check CHECK (roll >= 1 AND roll <= 100)
 );
 
-
 COMMENT ON TABLE motivation_d100 IS 'D100 motivation system. Roll via roll_d100(), mark complete via complete_d100(roll). 
 Tracking columns (times_rolled, times_completed, last_rolled, last_completed) are 
 write-protected — only the SECURITY DEFINER functions can update them. 
 Content columns are open for nova to maintain. DELETE revoked to prevent accidental row loss.';
 
-
 COMMENT ON COLUMN motivation_d100.roll IS 'Die value 1-100';
-
 
 COMMENT ON COLUMN motivation_d100.workflow_id IS 'Optional link to workflows table for structured execution';
 
-
 COMMENT ON COLUMN motivation_d100.skill_name IS 'Optional SKILL.md to follow (e.g., "daily-inspiration-art")';
-
 
 COMMENT ON COLUMN motivation_d100.tool_name IS 'Optional tool to use (e.g., "bird-x", "gog")';
 
@@ -3768,15 +3206,11 @@ CREATE TABLE IF NOT EXISTS workflow_steps (
     CONSTRAINT workflow_steps_workflow_id_fkey FOREIGN KEY (workflow_id) REFERENCES workflows (id) ON DELETE CASCADE
 );
 
-
 COMMENT ON TABLE workflow_steps IS 'Ordered steps in a workflow with agent assignments and deliverable specifications';
-
 
 COMMENT ON COLUMN workflow_steps.requires_authorization IS 'If true, must get explicit human authorization before proceeding to next step';
 
-
 COMMENT ON COLUMN workflow_steps.requires_discussion IS 'If true, discuss with human before proceeding (but can continue without explicit authorization if authorization=false)';
-
 
 COMMENT ON COLUMN workflow_steps.domain IS 'Subject-matter domain for agent routing (e.g., sql/database, python/daemon)';
 
@@ -3891,6 +3325,48 @@ BEGIN
     RETURN NEW;
 END;
 $$;
+
+--
+-- Name: append_run_note(integer, text); Type: FUNCTION; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE FUNCTION append_run_note(
+    p_run_id integer,
+    p_note text
+)
+RETURNS void
+LANGUAGE plpgsql
+VOLATILE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+    v_stamped_line TEXT;
+BEGIN
+    IF p_note IS NULL THEN
+        RAISE EXCEPTION 'append_run_note: p_note cannot be NULL';
+    END IF;
+
+    v_stamped_line := to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI') || ' UTC — ' || p_note;
+
+    UPDATE workflow_runs
+    SET notes = CASE
+        WHEN notes IS NULL OR notes = '' THEN v_stamped_line
+        ELSE notes || E'\n' || v_stamped_line
+    END
+    WHERE id = p_run_id;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'append_run_note: run_id % not found', p_run_id;
+    END IF;
+END;
+$$;
+
+--
+-- Name: append_run_note(integer, text); Type: FUNCTION; Schema: -; Owner: -
+--
+
+COMMENT ON FUNCTION append_run_note(integer, text) IS 'Appends a server-side UTC timestamped note to workflow_runs.notes for the given run_id. The stamp format is ''YYYY-MM-DD HH24:MI UTC — ''. Empty-string notes are accepted and append a line ending in '' UTC — ''; only NULL notes are rejected. Raises an exception if p_note is NULL or if the run_id does not exist.';
 
 --
 -- Name: audit_bootstrap_agents(); Type: FUNCTION; Schema: -; Owner: -
@@ -6694,12 +6170,9 @@ CREATE TABLE IF NOT EXISTS journal_entries (
     CONSTRAINT journal_entries_pkey PRIMARY KEY (id)
 );
 
-
 COMMENT ON TABLE journal_entries IS 'Personal prose journal entries for agent self-reflection. Short, introspective, written multiple times daily. Embedded into memory_embeddings with source_type=journal. Triggers: heartbeat, d100, post_workflow, daily_report, conversation, incident, manual.';
 
-
 COMMENT ON COLUMN journal_entries.trigger IS 'What prompted this entry: heartbeat, d100, post_workflow, daily_report, conversation, incident, manual';
-
 
 COMMENT ON COLUMN journal_entries.mood IS 'Optional self-assessed mood/tone at time of writing';
 
@@ -6742,9 +6215,7 @@ CREATE TABLE IF NOT EXISTS lessons (
     CONSTRAINT lessons_pkey PRIMARY KEY (id)
 );
 
-
 COMMENT ON TABLE lessons IS 'Lessons and insights learned. Update when learning something worth remembering.';
-
 
 COMMENT ON COLUMN lessons.confidence IS 'Confidence score 0-1, decays over time if not reinforced';
 
@@ -6802,21 +6273,15 @@ CREATE TABLE IF NOT EXISTS music_works (
     CONSTRAINT music_works_rating_check CHECK (rating >= 1 AND rating <= 10)
 );
 
-
 COMMENT ON TABLE music_works IS 'Original music compositions (AI-generated or human-composed). Complements music_library which holds collected external sources.';
-
 
 COMMENT ON COLUMN music_works.published_platforms IS 'Publishing record: platform URLs/IDs. Example: {"wavlake": {"url": "...", "track_id": "..."}, "nostr": {"event_id": "..."}}';
 
-
 COMMENT ON COLUMN music_works.audio_data IS 'Binary audio data for produced works. Matches artwork.image_data pattern. WIP audio stays on disk.';
-
 
 COMMENT ON COLUMN music_works.audio_filename IS 'Original filename of the audio file (e.g. midnight-drive-v3.wav)';
 
-
 COMMENT ON COLUMN music_works.cover_image_data IS 'Cover art binary blob, same pattern as artwork.image_data and audio_data.';
-
 
 COMMENT ON COLUMN music_works.cover_image_filename IS 'Original filename of cover art image.';
 
@@ -6888,18 +6353,13 @@ CREATE TABLE IF NOT EXISTS tasks (
     CONSTRAINT tasks_parent_task_id_fkey FOREIGN KEY (parent_task_id) REFERENCES tasks (id) ON DELETE CASCADE
 );
 
-
 COMMENT ON TABLE tasks IS 'Task tracking. NOVA can create, update status, assign. Check before starting work.';
-
 
 COMMENT ON COLUMN tasks.priority IS 'Integer 1-10 (1=highest, 10=lowest). NOT a string enum — do not use values like ''low'', ''medium'', ''high''.';
 
-
 COMMENT ON COLUMN tasks.task_type IS 'one_off = complete once, recurring = resets after completion, fallback = low-priority repeatable when idle';
 
-
 COMMENT ON COLUMN tasks.recurrence_interval IS 'How often recurring tasks reset (e.g., 1 day, 1 week)';
-
 
 COMMENT ON COLUMN tasks.last_completed_at IS 'When task was last completed (for recurring reset logic)';
 
@@ -7610,7 +7070,6 @@ CREATE OR REPLACE VIEW v_current_stateful_facts AS
   WHERE mutability_class = 'stateful'::mutability_class_enum
   ORDER BY entity_id, key, last_confirmed_at DESC NULLS LAST;
 
-
 COMMENT ON VIEW v_current_stateful_facts IS 'Resolves stateful (preference/current-state) facts to the latest value per (entity, key). Full trajectory remains in entity_facts — this view gives the current snapshot. Supersession is query-time, not deletion.';
 
 --
@@ -7669,7 +7128,6 @@ CREATE OR REPLACE VIEW v_fact_grades AS
      LEFT JOIN entity_credibility ec_domain ON ec_domain.entity_id = efs.source_entity_id AND ec_domain.domain::text = ef.category
      LEFT JOIN entity_credibility ec_global ON ec_global.entity_id = efs.source_entity_id AND ec_global.domain::text = '_global'::text
   WHERE ef.assertion_intent = ANY (ARRAY['asserted'::assertion_intent_enum, 'speculative'::assertion_intent_enum]);
-
 
 COMMENT ON VIEW v_fact_grades IS 'Query-time S×D×V grade computation. Only includes gradable claims (asserted/speculative). S looked up from entity_credibility (domain-specific with _global fallback). D from entity_fact_sources.reporting_distance. V from entity_fact_sources.verification_quality (NULL → 0.5 neutral). Never materialized — three multiplications per row is trivially fast.';
 
@@ -7797,7 +7255,6 @@ CREATE OR REPLACE VIEW v_pending_test_failures AS
    FROM git_issue_queue
   WHERE source = 'test_failure'::text AND issue_number < 0
   ORDER BY created_at;
-
 
 COMMENT ON VIEW v_pending_test_failures IS 'Test failures that need GitHub issues created via gh CLI';
 

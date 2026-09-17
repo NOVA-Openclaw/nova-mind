@@ -69,6 +69,25 @@ def listener_module(monkeypatch, tmp_path):
 
 
 @pytest.fixture
+def manifest_file(monkeypatch, listener_module, tmp_path):
+    """Point SCHEMA_MANIFEST_FILE at a disposable manifest and return a writer.
+
+    Usage: manifest_file("[functions]\npatterns = [\"foo(int)\"]\n") writes the
+    given TOML content and re-points the listener module at it. Calling with
+    no args (or omitting the fixture's use) leaves no manifest file on disk,
+    matching the fail-open "no manifest -> nothing to protect" contract.
+    """
+    manifest_path = tmp_path / ".schema-manifest.toml"
+    monkeypatch.setattr(pg_notify_listener, "SCHEMA_MANIFEST_FILE", str(manifest_path))
+
+    def _write(content):
+        manifest_path.write_text(content)
+        return str(manifest_path)
+
+    return _write
+
+
+@pytest.fixture
 def git_repos(tmp_path):
     """Create a bare origin and a clone with an initial commit pushed."""
     origin = tmp_path / "origin.git"
@@ -92,20 +111,26 @@ def git_repos(tmp_path):
 
 @pytest.fixture
 def mock_pgschema_dump(monkeypatch, listener_module):
-    """Mock pgschema dump to write deterministic schema content."""
+    """Mock pgschema dump to return deterministic schema content via PIPE.
+
+    Since nova-mind#659, sync_schema_to_github() calls pgschema with
+    stdout=subprocess.PIPE and text=True, then writes result.stdout to disk
+    itself after stripping ALTER DEFAULT PRIVILEGES. The fixture must match
+    that contract: return a CompletedProcess whose .stdout carries the fake
+    schema payload as a string, and let production's own write path produce
+    SCHEMA_FILE.
+    """
     real_subprocess_run = subprocess.run
 
     def fake_run(*args, **kwargs):
         cmd = args[0] if args else kwargs.get("args", [])
         if len(cmd) > 0 and cmd[0] == "pgschema":
-            stdout = kwargs.get("stdout")
             new_content = getattr(
                 listener_module, "_test_schema_content", "-- schema from pgschema\n"
             )
-            if stdout is not None:
-                stdout.write(new_content)
-                stdout.flush()
-            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+            return subprocess.CompletedProcess(
+                args=cmd, returncode=0, stdout=new_content, stderr=""
+            )
         return real_subprocess_run(*args, **kwargs)
 
     monkeypatch.setattr(pg_notify_listener.subprocess, "run", fake_run)

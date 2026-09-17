@@ -22,6 +22,11 @@ import psycopg2
 import psycopg2.extensions
 from datetime import datetime, timezone
 
+try:
+    import tomllib  # Python 3.11+
+except ModuleNotFoundError:  # pragma: no cover - unsupported runtime fallback
+    tomllib = None
+
 # Git operation lock - prevents concurrent sync_schema_to_github from colliding
 _git_lock_fd = None
 _git_lock_path = os.path.expanduser('~/.openclaw/workspace/scripts/.pg-notify-git.lock')
@@ -50,6 +55,12 @@ NOVA_MIND_DIR = os.path.join(WORKSPACE, "nova-mind")
 SCHEMA_FILE = os.path.join(NOVA_MIND_DIR, "database", "schema.sql")
 SCHEMA_REFERENCE_FILE = os.path.join(NOVA_MIND_DIR, "database", "schema-reference.md")
 RENAMES_FILE = os.path.join(NOVA_MIND_DIR, "memory", "database", "renames.json")
+
+# Manifest of hand-authored schema objects that an automated pgschema dump
+# must never silently remove (nova-mind#624 anti-clobber safeguard). See
+# database/.schema-manifest.toml for the full rationale and the sanctioned
+# removal path for an entry.
+SCHEMA_MANIFEST_FILE = os.path.join(NOVA_MIND_DIR, "database", ".schema-manifest.toml")
 
 # Clawdbot webhook config
 CLAWDBOT_WEBHOOK = "http://localhost:18789/hooks/wake"
@@ -248,6 +259,187 @@ def _send_push_alert(commit_hash, command, table_name, failure_class, stderr):
         log(f"Failed to send push alert: {alert_err}")
 
 
+class SchemaManifestError(Exception):
+    """Raised when database/.schema-manifest.toml exists but is malformed.
+
+    Deliberately distinct from the "missing manifest" fail-open case: a
+    missing file means "nothing to protect yet" (safe to proceed), but a
+    PRESENT-but-corrupted manifest must fail CLOSED -- silently treating
+    a parse error as an empty manifest would disable every entry's
+    protection, reproducing the exact failure class #624 exists to close
+    (a hand-authored object silently vanishing with no signal). Callers
+    must treat this as a veto condition, not swallow it.
+    """
+
+
+def _load_schema_manifest(manifest_path=None):
+    """Parse database/.schema-manifest.toml into {object_type: [patterns]}.
+
+    Returns an empty dict if the manifest file is simply ABSENT (fail-open:
+    a missing manifest means "nothing to protect yet", not "block every
+    sync" -- this is the intentional no-manifest case, see SG-7/LSV-9).
+
+    Raises SchemaManifestError if the manifest file EXISTS but fails to
+    parse as TOML (fail-closed: see SchemaManifestError docstring). This
+    does NOT propagate for a missing file, only for a present-but-broken
+    one.
+
+    Object types are TOML table names (e.g. "functions"); patterns are
+    exact object signatures as they appear in a `pgschema dump` (e.g.
+    "append_run_note(integer, text)").
+    """
+    path = manifest_path or SCHEMA_MANIFEST_FILE
+    if not os.path.isfile(path):
+        return {}
+    if tomllib is None:
+        raise SchemaManifestError(
+            f"tomllib unavailable (Python 3.11+ required) -- cannot parse "
+            f"present manifest {path}"
+        )
+    try:
+        with open(path, 'rb') as f:
+            data = tomllib.load(f)
+    except Exception as e:
+        raise SchemaManifestError(f"malformed manifest TOML at {path}: {e}") from e
+    manifest = {}
+    for obj_type, section in data.items():
+        if isinstance(section, dict) and isinstance(section.get('patterns'), list):
+            manifest[obj_type] = [p for p in section['patterns'] if isinstance(p, str)]
+    return manifest
+
+
+def _find_missing_manifest_objects(schema_sql, manifest=None, manifest_path=None):
+    """Return a list of "type: pattern" strings for manifest entries absent
+    from schema_sql.
+
+    Presence check for the `functions` section is a header-name match for a
+    `CREATE ... FUNCTION <name>(...)` line (case-insensitive, whitespace
+    tolerant) -- this mirrors how pgschema itself renders function headers
+    in a dump and avoids requiring a full SQL parser for a v1 check. It is a
+    NAME-ONLY presence check: it does not parse or compare the declared
+    argument types against the manifest pattern's parenthesized arg list
+    (see _function_signature_present). Other manifest section types (if
+    added later) fall back to a plain substring search for the pattern text.
+
+    When manifest is None, loads via _load_schema_manifest(manifest_path).
+    This intentionally lets SchemaManifestError propagate uncaught for a
+    present-but-malformed manifest file (fail closed) -- callers (i.e.
+    sync_schema_to_github) must treat that as a veto condition, not swallow
+    it silently.
+    """
+    if manifest is None:
+        manifest = _load_schema_manifest(manifest_path)
+    if not manifest:
+        return []
+
+    missing = []
+    for obj_type, patterns in manifest.items():
+        for pattern in patterns:
+            if obj_type == 'functions':
+                found = _function_signature_present(schema_sql, pattern)
+            else:
+                found = pattern in schema_sql
+            if not found:
+                missing.append(f"{obj_type}: {pattern}")
+    return missing
+
+
+def _function_signature_present(schema_sql, signature):
+    """Check whether a `CREATE [OR REPLACE] FUNCTION <name>(` header is
+    present in schema_sql, tolerant of whitespace/newlines between the
+    function name and its opening paren (pgschema dumps wrap long argument
+    lists across multiple lines).
+
+    NAME-ONLY match: this does NOT parse or compare the declared argument
+    types in `signature` against the actual dumped signature -- it only
+    confirms a `CREATE [OR REPLACE] FUNCTION <name>(` header exists for the
+    given function name, extracted from `signature` via regex. The
+    parenthesized arg-list text in `signature` (e.g. "integer, text") is
+    accepted as documentation for the manifest author but is not itself
+    checked against schema_sql. This is sufficient for the current use case
+    (detecting whether a hand-authored function was removed entirely by a
+    dump) but would NOT distinguish two overloads of the same function name
+    with different argument lists.
+
+    `signature` is expected in the manifest as "name(arg1_type, arg2_type)",
+    e.g. "append_run_note(integer, text)".
+    """
+    m = re.match(r'^\s*([A-Za-z_][A-Za-z0-9_]*)\s*\((.*)\)\s*$', signature)
+    if not m:
+        # Not a recognizable "name(args)" signature; fall back to raw substring.
+        return signature in schema_sql
+    func_name = m.group(1)
+    # Build a regex: CREATE [OR REPLACE] FUNCTION <name> <whitespace>* \(
+    header_re = re.compile(
+        r'CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+' + re.escape(func_name) + r'\s*\(',
+        re.IGNORECASE,
+    )
+    return bool(header_re.search(schema_sql))
+
+
+def _send_manifest_veto_alert(missing_objects, command, table_name):
+    """Send agent_chat alert when the manifest veto refuses a schema sync.
+
+    Never propagates exceptions (same contract as _send_push_alert /
+    _send_branch_alert). Deliberately does NOT route through
+    notify_clawdbot(), which is a documented no-op (dead webhook,
+    nova-workspace#4) -- an alert sent there would be indistinguishable
+    from "no schema changes", defeating the purpose of the veto.
+    """
+    try:
+        sender = _agent_chat_env.get('PGUSER')
+        if not sender:
+            log("PGUSER not configured; cannot send manifest veto alert")
+            return
+
+        message_lines = [
+            '[schema-sync]',
+            'Schema sync REFUSED - manifest object(s) missing from pgschema dump:',
+            f'  repo: nova-mind',
+            f'  path: {NOVA_MIND_DIR}',
+            f'  trigger: {command} on {table_name}',
+            '  missing manifest object(s):',
+        ]
+        for obj in missing_objects:
+            message_lines.append(f'    - {obj}')
+        message_lines.append(
+            f'  reason: a pgschema dump would have removed the object(s) above '
+            f'from database/schema.sql. The dump was DISCARDED (git checkout -- '
+            f'database/schema.sql) and nothing was committed or pushed. This is '
+            f'almost always live-DB drift (the object was dropped/rolled back on '
+            f'nova_memory) rather than an intentional removal.'
+        )
+        message_lines.append(
+            f'  sanctioned removal path (see database/.schema-manifest.toml): '
+            f'land a manifest-edit PR first, then perform the live-DB drop -- '
+            f'never via this listener.'
+        )
+        message_lines.append(
+            f'  investigate: cd {NOVA_MIND_DIR} && psql -U nova -d nova_memory '
+            f'-c "\\df <function_name>" to confirm whether the object is missing '
+            f'live or the manifest itself is stale.'
+        )
+        message = '\n'.join(message_lines)
+
+        veto_conn = psycopg2.connect(
+            host=_agent_chat_env.get('PGHOST', 'localhost'),
+            database=_agent_chat_env['PGDATABASE'],
+            user=sender,
+            password=_agent_chat_env.get('PGPASSWORD', '')
+        )
+        veto_cur = veto_conn.cursor()
+        veto_cur.execute(
+            "SELECT send_agent_message(%s, %s, %s)",
+            (sender, message, _alert_recipients(sender))
+        )
+        veto_conn.commit()
+        veto_cur.close()
+        veto_conn.close()
+        log(f"Alerted {_alert_recipients(sender)} via agent_chat about manifest veto (missing: {missing_objects})")
+    except Exception as alert_err:
+        log(f"Failed to send manifest veto alert: {alert_err}")
+
+
 def _send_branch_alert(found_branch, command, table_name, reason, stderr=None):
     """Send agent_chat alert when branch-safety check aborts. Never propagates exceptions."""
     try:
@@ -388,6 +580,51 @@ def _ensure_on_main(command, table_name):
     return True
 
 
+# ALTER DEFAULT PRIVILEGES statement blocks, as pgschema v1.7.2 renders them
+# in `pgschema dump` output: a fixed 6-line shape (comment header + blank +
+# statement + blank). Matches the "Type: DEFAULT_PRIVILEGE" comment header
+# pgschema emits immediately above every ADP statement.
+#
+# nova-mind#659: schema.sql must ship table schema + functions only. ADP
+# statements hardcode `FOR ROLE nova` (the production owner role) and
+# NOVA's local subagent roster -- neither is portable to another
+# nova-mind installation, and `FOR ROLE nova` requires the executing role
+# to be a superuser or a member of role `nova` (nova-mind#661), which a
+# fresh non-`nova` agent install never is. Stripped at DUMP time so the
+# committed artifact never carries local identity in the first place.
+#
+# Phase 1 of #659: only ADP (Type: DEFAULT_PRIVILEGE) is stripped here.
+# Plain GRANT/REVOKE (Type: PRIVILEGE / COLUMN_PRIVILEGE) are left in
+# place -- the #452 post-apply reconciliation grep in agent-install.sh
+# still depends on those lines being present in schema.sql. Stripping
+# GRANT/REVOKE too requires installer-side provisioning to first cover
+# every case #452 was filed about (see #659's own sequencing note); that
+# is tracked as a follow-on, not done here.
+_ADP_BLOCK_RE = re.compile(
+    r"--\n"
+    r"-- Name: [^\n]*; Type: DEFAULT_PRIVILEGE; [^\n]*\n"
+    r"--\n"
+    r"\n"
+    r"ALTER DEFAULT PRIVILEGES [^\n]*;\n"
+    r"\n"
+)
+
+
+def _strip_default_privileges(dump_sql):
+    """Remove ALTER DEFAULT PRIVILEGES statement blocks (and their pgschema
+    dump comment headers) from a freshly dumped schema.sql body.
+
+    Returns (stripped_sql, removed_count). Collapses any resulting 3+ blank
+    lines down to a single blank line (cosmetic; matches surrounding dump
+    formatting). Idempotent -- running twice on already-stripped input
+    removes zero additional blocks.
+    """
+    stripped, n = _ADP_BLOCK_RE.subn("", dump_sql)
+    if n:
+        stripped = re.sub(r"\n{3,}", "\n\n", stripped)
+    return stripped, n
+
+
 def sync_schema_to_github(command, obj_type, obj_name):
     """Dump schema and push to GitHub. Uses file lock to serialize concurrent calls."""
     global _git_lock_fd
@@ -413,23 +650,95 @@ def sync_schema_to_github(command, obj_type, obj_name):
         if not _ensure_on_main(command, table_name):
             return False, None
 
-        # 1. Dump schema to file (pgschema produces clean SQL without pg_dump artifacts)
-        log(f"Dumping schema to {SCHEMA_FILE}...")
-        with open(SCHEMA_FILE, 'w') as schema_out:
-            result = subprocess.run(
-                ['pgschema', 'dump',
-                 '--host', '/var/run/postgresql',
-                 '--db', 'nova_memory',
-                 '--user', 'nova',
-                 '--schema', 'public'],
-                stdout=schema_out,
-                stderr=subprocess.PIPE,
-                text=True,
-                timeout=60
-            )
+        # 1. Dump schema to a buffer (pgschema produces clean SQL without
+        # pg_dump artifacts). Captured to a string rather than written
+        # straight to SCHEMA_FILE so the #659 ADP strip (step 1.1) runs on
+        # the dump BEFORE anything hits disk -- the manifest veto (step 1.5)
+        # and every downstream check must evaluate the same stripped
+        # artifact that ultimately gets committed, not the raw dump.
+        log(f"Dumping schema (in-memory) ...")
+        result = subprocess.run(
+            ['pgschema', 'dump',
+             '--host', '/var/run/postgresql',
+             '--db', 'nova_memory',
+             '--user', 'nova',
+             '--schema', 'public'],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=60
+        )
         if result.returncode != 0:
             log(f"pgschema dump failed: {result.stderr}")
             return False, None
+
+        # 1.1. Strip ALTER DEFAULT PRIVILEGES (nova-mind#659): schema.sql
+        # must not ship local agent identity (FOR ROLE nova, subagent
+        # roster). See _strip_default_privileges docstring for scope
+        # (ADP only, phase 1 -- GRANT/REVOKE stay for now, see #452).
+        dumped_sql, adp_removed = _strip_default_privileges(result.stdout)
+        if adp_removed:
+            log(f"Stripped {adp_removed} ALTER DEFAULT PRIVILEGES statement(s) from dump (#659)")
+        log(f"Writing schema to {SCHEMA_FILE}...")
+        with open(SCHEMA_FILE, 'w') as schema_out:
+            schema_out.write(dumped_sql)
+
+        # 1.5. Manifest veto (nova-mind#624): refuse the ENTIRE sync if the
+        # freshly dumped schema.sql is missing any hand-authored object
+        # listed in database/.schema-manifest.toml. This runs BEFORE the
+        # git-status check / git add so a clobbering dump is discarded from
+        # the working tree rather than merely left uncommitted -- a veto
+        # that only skipped the commit would still leave schema.sql dirty
+        # on disk with the manifest object missing.
+        #
+        # A manifest file that EXISTS but fails to parse (SchemaManifestError)
+        # is treated as a veto too -- FAIL CLOSED, not fail open. Silently
+        # treating a corrupted manifest as "no manifest" would disable every
+        # entry's protection with no signal, reproducing the exact failure
+        # class #624 exists to close. Only a genuinely ABSENT manifest file
+        # is fail-open (see _load_schema_manifest / SG-7 / LSV-9).
+        try:
+            with open(SCHEMA_FILE, 'r') as f:
+                dumped_sql = f.read()
+        except Exception as e:
+            log(f"Failed to read dumped schema for manifest check: {e}")
+            dumped_sql = None
+        if dumped_sql is not None:
+            try:
+                missing_objects = _find_missing_manifest_objects(dumped_sql)
+            except SchemaManifestError as e:
+                log(f"Manifest veto: manifest file is malformed ({e}) -- failing closed")
+                revert = subprocess.run(
+                    ['git', '-C', NOVA_MIND_DIR, 'checkout', '--', 'database/schema.sql'],
+                    capture_output=True,
+                    text=True
+                )
+                if revert.returncode != 0:
+                    log(
+                        f"Manifest veto: failed to revert clobbered schema.sql: "
+                        f"{revert.stderr.strip()}"
+                    )
+                _send_manifest_veto_alert(
+                    [f"manifest parse error: {e}"], command, table_name
+                )
+                return False, None
+            if missing_objects:
+                log(
+                    f"Manifest veto: dump would remove {missing_objects} -- "
+                    f"discarding dump and refusing sync"
+                )
+                revert = subprocess.run(
+                    ['git', '-C', NOVA_MIND_DIR, 'checkout', '--', 'database/schema.sql'],
+                    capture_output=True,
+                    text=True
+                )
+                if revert.returncode != 0:
+                    log(
+                        f"Manifest veto: failed to revert clobbered schema.sql: "
+                        f"{revert.stderr.strip()}"
+                    )
+                _send_manifest_veto_alert(missing_objects, command, table_name)
+                return False, None
 
         # 2. Check if there are actual changes
         status = subprocess.run(

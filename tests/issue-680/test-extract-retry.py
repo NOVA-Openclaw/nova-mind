@@ -7,6 +7,7 @@ requests.post and psycopg2 so no real network calls or DB connections are made.
 
 import json
 import os
+import re
 import sys
 import time
 import unittest
@@ -19,6 +20,18 @@ import requests
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 SCRIPT_DIR = os.path.join(REPO_ROOT, "memory", "scripts")
 sys.path.insert(0, SCRIPT_DIR)
+
+HANDLER_TS = os.path.join(REPO_ROOT, "memory", "hooks", "memory-extract", "handler.ts")
+
+
+def _load_handler_default_timeout_ms() -> int:
+    """Read the live DEFAULT_EXTRACTION_TIMEOUT_MS constant from handler.ts."""
+    with open(HANDLER_TS, "r", encoding="utf-8") as f:
+        src = f.read()
+    match = re.search(r"const DEFAULT_EXTRACTION_TIMEOUT_MS\s*=\s*(\d+);", src)
+    if not match:
+        raise RuntimeError("Could not find DEFAULT_EXTRACTION_TIMEOUT_MS in handler.ts")
+    return int(match.group(1))
 
 # Patch env before importing extract_memories so bootstrap loads cleanly.
 os.environ.setdefault("OPENROUTER_API_KEY", "test-key")
@@ -291,17 +304,46 @@ class TestMainExitCodes(unittest.TestCase):
             self.assertIn("OPENROUTER_API_KEY not set", stderr_capture.getvalue())
 
 
+class TestEnvOverrideParsing(unittest.TestCase):
+    @patch("extract_memories.sys.stderr", new_callable=StringIO)
+    def test_invalid_llm_timeout_override_falls_back_to_default(self, mock_stderr):
+        """TC-20: non-numeric EXTRACTION_LLM_TIMEOUT_SECONDS falls back safely."""
+        with patch.dict(os.environ, {"EXTRACTION_LLM_TIMEOUT_SECONDS": "not-a-number"}):
+            value = em._parse_positive_int_env("EXTRACTION_LLM_TIMEOUT_SECONDS", 25)
+        self.assertEqual(value, 25)
+        self.assertIn("not a valid integer", mock_stderr.getvalue())
+        self.assertIn("EXTRACTION_LLM_TIMEOUT_SECONDS='not-a-number'", mock_stderr.getvalue())
+
+    @patch("extract_memories.sys.stderr", new_callable=StringIO)
+    def test_nonpositive_llm_timeout_override_falls_back_to_default(self, mock_stderr):
+        """Non-positive EXTRACTION_LLM_TIMEOUT_SECONDS falls back safely."""
+        with patch.dict(os.environ, {"EXTRACTION_LLM_TIMEOUT_SECONDS": "-5"}):
+            value = em._parse_positive_int_env("EXTRACTION_LLM_TIMEOUT_SECONDS", 25)
+        self.assertEqual(value, 25)
+        self.assertIn("not positive", mock_stderr.getvalue())
+
+    def test_valid_llm_timeout_override_accepted(self):
+        """A valid positive integer override is accepted."""
+        with patch.dict(os.environ, {"EXTRACTION_LLM_TIMEOUT_SECONDS": "42"}):
+            value = em._parse_positive_int_env("EXTRACTION_LLM_TIMEOUT_SECONDS", 25)
+        self.assertEqual(value, 42)
+
+
 class TestBudgetArithmetic(unittest.TestCase):
     def test_default_timeout_values_fit_outer_budget(self):
-        """Verify the documented budget arithmetic still holds."""
+        """Verify the documented budget arithmetic against the real handler constant."""
         per_attempt = em.LLM_TIMEOUT_SECONDS
         attempts = em.MAX_LLM_ATTEMPTS
         backoff_total = sum(em.RETRY_BACKOFF_SECONDS)
         safety_margin = 12
-        # Matches handler.ts DEFAULT_EXTRACTION_TIMEOUT_MS / 1000.
-        outer_budget_seconds = 95
+        # Read the ACTUAL constant from handler.ts so the two files cannot drift.
+        outer_budget_seconds = _load_handler_default_timeout_ms() / 1000
         total_budget = per_attempt * attempts + backoff_total + safety_margin
-        self.assertLess(total_budget, outer_budget_seconds)
+        self.assertLess(
+            total_budget,
+            outer_budget_seconds,
+            f"retry budget {total_budget}s exceeds outer timeout {outer_budget_seconds}s",
+        )
         self.assertEqual(per_attempt, 25)
         self.assertEqual(attempts, 3)
 

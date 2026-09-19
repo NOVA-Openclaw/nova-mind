@@ -87,7 +87,33 @@ CONFIG_MAX_TOKENS = CONFIG.get("max_tokens") or 2048
 # 2s after attempt 2. Total transient-retry budget must fit inside the hook's
 # outer timeout (handler.ts DEFAULT_EXTRACTION_TIMEOUT_MS).
 EXTRACTION_ENABLE_RETRY = os.environ.get("EXTRACTION_ENABLE_RETRY", "") in ("1", "true", "yes")
-LLM_TIMEOUT_SECONDS = int(os.environ.get("EXTRACTION_LLM_TIMEOUT_SECONDS") or "25")
+
+
+def _parse_positive_int_env(var_name: str, default: int) -> int:
+    """Parse a positive-integer env var, falling back to default on bad input."""
+    raw = os.environ.get(var_name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        print(
+            f"[extract_memories] WARNING: {var_name}={raw!r} is not a valid integer; "
+            f"falling back to default {default}",
+            file=sys.stderr,
+        )
+        return default
+    if value <= 0:
+        print(
+            f"[extract_memories] WARNING: {var_name}={value} is not positive; "
+            f"falling back to default {default}",
+            file=sys.stderr,
+        )
+        return default
+    return value
+
+
+LLM_TIMEOUT_SECONDS = _parse_positive_int_env("EXTRACTION_LLM_TIMEOUT_SECONDS", 25)
 MAX_LLM_ATTEMPTS = 3
 RETRY_BACKOFF_SECONDS = [1, 2]
 

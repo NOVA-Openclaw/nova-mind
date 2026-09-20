@@ -564,61 +564,11 @@ print(mod._dsn_from_pg_env(section=None))""",
         dsn = result.stdout.strip()
         assert_true("DSN contains dbname=nova_memory", "dbname=nova_memory" in dsn)
 
-    # TC-50: domain integration — pg-notify-listener clean env
-    # Creates a fake $HOME/.openclaw/lib/pg_env.py so the test fails if the
-    # script still hardcodes the deployed path instead of resolving repo-relatively.
-    print("TC-50: pg-notify-listener resolves both sections in clean env")
-    notify_script = repo_root / "cognition" / "scripts" / "pg-notify-listener.py"
-    result = run_isolated(
-        {
-            "host": "flat-host",
-            "database": "nova_memory",
-            "agent_chat": {"database": "agent_chat"},
-        },
-        {},
-        f"""import importlib.util
-spec = importlib.util.spec_from_file_location("pg_notify_listener", {str(notify_script)!r})
-mod = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(mod)
-print(mod._pg_env.get("PGDATABASE"))
-print(mod._agent_chat_env.get("PGDATABASE"))""",
-        stale_home_lib=True,
-    )
-    if result.returncode != 0:
-        print(f"  FAIL: subprocess error: {result.stderr.strip()}")
-        FAIL += 1
-    else:
-        lines = [ln for ln in result.stdout.strip().splitlines() if ln]
-        assert_eq("_pg_env PGDATABASE", "nova_memory", lines[0] if lines else None)
-        assert_eq("_agent_chat_env PGDATABASE", "agent_chat", lines[1] if len(lines) > 1 else None)
-        assert_true("did not import stale $HOME/.openclaw/lib pg_env", "STALE_HOME_LIB_IMPORT" not in result.stdout)
-
-    # TC-51: domain integration — pg-notify-listener with gateway ENV export
-    # Same stale-home-lib sentinel as TC-50 to exercise actual import resolution.
-    print("TC-51: pg-notify-listener agent_chat ignores gateway PGDATABASE")
-    result = run_isolated(
-        {
-            "host": "flat-host",
-            "database": "nova_memory",
-            "agent_chat": {"database": "agent_chat"},
-        },
-        {"PGDATABASE": "nova_memory"},
-        f"""import importlib.util
-spec = importlib.util.spec_from_file_location("pg_notify_listener", {str(notify_script)!r})
-mod = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(mod)
-print(mod._pg_env.get("PGDATABASE"))
-print(mod._agent_chat_env.get("PGDATABASE"))""",
-        stale_home_lib=True,
-    )
-    if result.returncode != 0:
-        print(f"  FAIL: subprocess error: {result.stderr.strip()}")
-        FAIL += 1
-    else:
-        lines = [ln for ln in result.stdout.strip().splitlines() if ln]
-        assert_eq("_pg_env PGDATABASE", "nova_memory", lines[0] if lines else None)
-        assert_eq("_agent_chat_env PGDATABASE", "agent_chat", lines[1] if len(lines) > 1 else None)
-        assert_true("did not import stale $HOME/.openclaw/lib pg_env", "STALE_HOME_LIB_IMPORT" not in result.stdout)
+    # TC-50/TC-51 relocated to nova-workspace.
+    # The pg-notify-listener.py script is local nova tooling and moved to
+    # nova-workspace/scripts/pg-notify-listener.py per nova-mind#612. Its
+    # repo-relative pg_env resolution tests now live with the relocated listener
+    # test suite (tests/pg-notify-listener/test_pg_notify_listener_issue_*.py).
 
 print()
 print("═══════════════════════════════════════════")

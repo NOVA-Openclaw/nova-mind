@@ -162,7 +162,7 @@ conn = psycopg2.connect()
 > *deployed* to the home directory by `agent-install.sh` — fine for scripts
 > that only ever run post-install. Repo-internal scripts that must always run
 > against the current repo checkout (e.g. `motivation/scripts/proactive-gate-check.py`
-> and, as of #405, `cognition/scripts/pg-notify-listener.py`) instead resolve
+> and, as of #405, `nova-workspace/scripts/pg-notify-listener.py`) instead resolve
 > `lib/` relative to their own file location so they never silently pick up a
 > stale deployed copy. **#406** tracks migrating the remaining hardcoded-path
 > callers under `memory/scripts/` and `memory/templates/` to the same

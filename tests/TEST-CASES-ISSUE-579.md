@@ -6,6 +6,11 @@
 (`reports/SE643-step2-agent-chat-extraction-validation.md`), live `agent_chat` DB introspection, `agent-install.sh`,
 `tests/install/test_agent_chat_installer.bats`, `pg-notify-listener.py`.
 
+> **Post-#612 relocation note:** The `nova_memory` listener (`pg-notify-listener.py`) and the `agent_chat` listener
+> (`pg-notify-listener-chat.py`, later renamed `pg-notify-listener-agent-chat.py`) have both relocated to
+> `NOVA-Openclaw/nova-workspace` as local nova-only tooling. This document predates that move and still describes the
+> listeners as living in `nova-mind`/`agent-chat`; see nova-mind#612 and `nova-workspace` for the canonical copies.
+
 ---
 
 ## Revision Log

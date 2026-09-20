@@ -91,8 +91,9 @@ createdb "$DB_NAME"
 # Schema is applied declaratively by agent-install.sh via pgschema
 ./agent-install.sh
 
-# 3. Set your Anthropic API key
-export ANTHROPIC_API_KEY="your-key-here"
+# 3. Set your OpenRouter API key (extract_memories.py calls OpenRouter directly,
+#    not Anthropic -- see nova-mind#497)
+export OPENROUTER_API_KEY="your-key-here"
 
 # 4. Test extraction (send a real message through a channel with memory-extract
 #    enabled and check entity_facts — there is no standalone CLI test script)
@@ -639,7 +640,7 @@ FROM artwork ORDER BY created_at DESC LIMIT 5;
 
 ### extract_memories.py (current)
 
-Uses Claude API to parse natural language into structured JSON in a single pass — replaces the old extract-memories.sh + store-memories.sh + process-input.sh three-script chain. Runs via the `memory-extract` hook, driven by sender metadata passed as environment variables (`SENDER_NAME`, `SENDER_ID`, etc.) rather than a CLI argument.
+Uses an LLM (via OpenRouter, `deepseek/deepseek-v4-flash` by default — not Anthropic/Claude, see nova-mind#497) to parse natural language into structured JSON in a single pass — replaces the old extract-memories.sh + store-memories.sh + process-input.sh three-script chain. Runs via the `memory-extract` hook, driven by sender metadata passed as environment variables (`SENDER_NAME`, `SENDER_ID`, etc.) rather than a CLI argument.
 
 Output shape (current extraction template — see the script for the authoritative version):
 ```json
@@ -657,7 +658,7 @@ This was the combined extract → store entry point in the old pipeline. It no l
 
 ### Failure Recovery: extraction_failures + extraction-replay.sh (#485)
 
-If the `memory-extract` hook's `extract_memories.py` child process exits nonzero, times out (config-driven, default 90s — see `memory/docs/memory-extraction-pipeline.md`'s "Configuration file" section, nova-mind#497), fails to spawn, or returns an unrecoverable JSON parse failure (nova-mind#497), the message is no longer silently lost. The hook writes a dead-letter row to the `extraction_failures` table (message body or transcript FK, captured stderr/stdout tails, failure reason) and `memory/scripts/extraction-replay.sh` can replay pending rows later:
+If the `memory-extract` hook's `extract_memories.py` child process exits nonzero, times out (config-driven, hardcoded fallback default 95s as of nova-mind#680 — live deployed config currently 90s, see `memory/docs/memory-extraction-pipeline.md`'s "Configuration file" section), fails to spawn, exhausts its real-time transient-error retry budget (`timeout_retries_exhausted`, nova-mind#680), or returns an unrecoverable JSON parse failure (nova-mind#497), the message is no longer silently lost. The hook writes a dead-letter row to the `extraction_failures` table (message body or transcript FK, captured stderr/stdout tails, failure reason) and `memory/scripts/extraction-replay.sh` can replay pending rows later:
 
 ```bash
 ~/.openclaw/scripts/extraction-replay.sh

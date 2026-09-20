@@ -1,5 +1,25 @@
 # Changelog
 
+### Batch: extraction-retry-680 (Issue #680)
+
+SE Run #935. Real-time memory extraction previously dead-lettered on a single transient LLM failure (request timeout, dropped connection, HTTP 429, HTTP 5xx) even though the identical request frequently succeeds on immediate retry. Adds a bounded real-time retry loop to `extract_memories.py`, keeping the existing cron-driven `extraction-replay.sh` path single-shot per #553.
+
+#### Fixed
+- **Real-time extraction retry loop for transient LLM failures** (nova-mind#680) — `extract_memories.py`'s `call_llm()` retries up to 3 total attempts (1s then 2s backoff) on `requests.exceptions.Timeout`, `requests.exceptions.ConnectionError`, HTTP 429, and HTTP 5xx only; non-retryable errors (4xx other than 429, malformed URLs, JSON parse failures) still fail on the first attempt. Retry is gated behind a new `EXTRACTION_ENABLE_RETRY` env var set only by `handler.ts` on the real-time spawn path — `extraction-replay.sh` deliberately does not set it. Per-attempt LLM timeout dropped from a single 60s call to `LLM_TIMEOUT_SECONDS`=25s, overridable via `EXTRACTION_LLM_TIMEOUT_SECONDS` and guarded by a new `_parse_positive_int_env()` helper (invalid/non-positive overrides fall back to the default with a logged stderr warning instead of crashing or admitting a zero/negative timeout). A new `LLMTransientRetriesExhausted` exception maps to exit code 3 / `failure_reason='timeout_retries_exhausted'` (extraction_failures CHECK constraint extended by migration `database/pre-migrations/007-add-timeout-retries-exhausted-failure-reason.sql`). `handler.ts`'s hardcoded `DEFAULT_EXTRACTION_TIMEOUT_MS` outer-hook-timeout fallback rose from 90000ms to 95000ms to keep a 5s margin above the retry loop's worst-case 90s real-time budget (25s × 3 + 3s backoff + 12s safety margin); a follow-up commit made the Python test suite's `TestBudgetArithmetic` read `DEFAULT_EXTRACTION_TIMEOUT_MS` directly out of `handler.ts` so the two files' arithmetic cannot silently drift apart. **Known gap:** the live deployed `~/.openclaw/scripts/memory-extraction-config.json` still sets `extraction_timeout_ms: 90000`, and per the documented config-file-over-hardcoded-default precedence that value — not the new 95000ms fallback — governs the outer timeout in production today, so the intended 5s safety margin does not yet exist on the live host. QA-filed child issue nova-mind#683 (out of scope here) separately notes the budget-arithmetic test checks the hardcoded 95s constant rather than the deployed 90s config value, so it would not catch this gap on its own. Full docs: `memory/docs/memory-extraction-pipeline.md` ("Retry budget vs. outer timeout", §1c "Real-Time Extraction Retry Loop"). See `memory/CHANGELOG.md` for the matching subsystem-level entry.
+
+#### Migrations
+- `database/pre-migrations/007-add-timeout-retries-exhausted-failure-reason.sql` (#680) — Idempotent, forward-only expansion of `extraction_failures.failure_reason` CHECK constraint to add `timeout_retries_exhausted`.
+
+#### Tests
+- `tests/issue-680/test-extract-retry.py` (#680) — 19/19 PASS. Retry/backoff sequencing, transient-vs-non-transient classification, `EXTRACTION_ENABLE_RETRY` gating, `_parse_positive_int_env()` guard, and `TestBudgetArithmetic` cross-check against the live `handler.ts` constant.
+- `tests/issue-680/test-handler.js` (#680) — 15/15 PASS. Exit-code-3 → `failure_reason='timeout_retries_exhausted'` mapping and `EXTRACTION_ENABLE_RETRY` spawn-env wiring.
+
+#### Known non-blocking follow-up (filed during QA, not fixed here)
+- **#683 — `TestBudgetArithmetic` validates the hardcoded 95s constant, not the deployed 90s config value** — The test correctly proves `handler.ts` and `extract_memories.py`'s compile-time constants agree, but does not read the live `memory-extraction-config.json` that actually governs production today, so it cannot catch the current zero-margin gap described above.
+
+#### Issues Closed
+- #680 — Real-time memory extraction had no retry on transient LLM failures, dead-lettering on the first timeout/429/5xx
+
 ### Batch: pg-notify-listener-relocation-612 (Issue #612)
 
 #### Removed

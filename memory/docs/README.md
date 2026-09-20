@@ -27,7 +27,7 @@ Nova-memory is a PostgreSQL-based long-term memory system for AI assistants that
 ├─────────────────────────────────────────────────────────────┤
 │  Natural Language Input                                     │
 │       ↓                                                     │
-│  Memory Extraction Pipeline (Claude API)                   │
+│  Memory Extraction Pipeline (OpenRouter LLM)                │
 │       ↓                                                     │
 │  PostgreSQL Database (Structured Storage)                  │
 │       ↓                                                     │

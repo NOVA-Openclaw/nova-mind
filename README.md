@@ -91,7 +91,7 @@ Schema changes go through `pgschema plan` → dependency-aware reorder (`databas
 - `pgschema` — `go install github.com/pgplex/pgschema@latest`
 - `jq`
 - Ollama with snowflake-arctic-embed2 model (local, for semantic recall embeddings)
-- Anthropic API key (for memory extraction)
+- OpenRouter API key (for memory extraction — `extract_memories.py` calls OpenRouter directly via `OPENROUTER_API_KEY`, not `ANTHROPIC_API_KEY`; see nova-mind#497 and `memory/docs/memory-extraction-pipeline.md`)
 
 ### Flags
 

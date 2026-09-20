@@ -162,7 +162,7 @@ API keys go in `~/.openclaw/openclaw.json` (also created by `shell-install.sh`):
 
 ```bash
 # Or set directly in environment:
-export ANTHROPIC_API_KEY=your_anthropic_key_here
+export OPENROUTER_API_KEY=your_openrouter_key_here  # Required for memory extraction (extract_memories.py, nova-mind#497)
 export OPENAI_API_KEY=your_openai_key_here  # Required for semantic recall embeddings
 ```
 
@@ -441,9 +441,10 @@ else
     echo -e "${RED}MISSING TABLES: ${MISSING_TABLES[*]}${NC}"
 fi
 
-# API connectivity (extract_memories.py is the current script; there is no extract-memories.sh)
-echo -n "Anthropic API: "
-if [ -n "$ANTHROPIC_API_KEY" ]; then
+# API connectivity (extract_memories.py is the current script; there is no extract-memories.sh;
+# extraction calls OpenRouter directly, not Anthropic -- see nova-mind#497)
+echo -n "OpenRouter API: "
+if [ -n "$OPENROUTER_API_KEY" ]; then
     echo -e "${GREEN}OK (key present — run a real message through a channel with memory-extract enabled to verify end-to-end)${NC}"
 else
     echo -e "${RED}NO API KEY${NC}"
@@ -540,12 +541,12 @@ chmod 750 ~/.openclaw/logs
 # Use 1Password CLI for secure API key storage
 op item create \
     --category "API Credential" \
-    --title "Anthropic API - NOVA Memory" \
+    --title "OpenRouter API - NOVA Memory" \
     --vault "Development" \
-    "api_key[password]=$ANTHROPIC_API_KEY"
+    "api_key[password]=$OPENROUTER_API_KEY"
 
 # Reference from scripts instead of environment
-# export ANTHROPIC_API_KEY=$(op read "op://Development/Anthropic API - NOVA Memory/api_key")
+# export OPENROUTER_API_KEY=$(op read "op://Development/OpenRouter API - NOVA Memory/api_key")
 ```
 
 ## Troubleshooting Common Issues
@@ -586,7 +587,7 @@ psql -c "SELECT id, sender_name, failure_reason, created_at FROM extraction_fail
 grep 'Resolved extraction interpreter' ~/.openclaw/logs/*.log
 ```
 
-> **Note:** There is no standalone `process-input.sh` or `extract-memories.sh` CLI — extraction runs via the `memory-extract` hook (`memory/scripts/extract_memories.py`) as part of live message handling. Failed invocations (nonzero exit, timeout, spawn error, or JSON-parse failure — nova-mind#497) are captured as dead-letter rows in `extraction_failures` and can be replayed via `memory/scripts/extraction-replay.sh` — see the "Failure Handling" section in [memory-extraction-pipeline.md](memory-extraction-pipeline.md#1a-failure-handling-extraction_failures-dead-letter-table--replay-485).
+> **Note:** There is no standalone `process-input.sh` or `extract-memories.sh` CLI — extraction runs via the `memory-extract` hook (`memory/scripts/extract_memories.py`) as part of live message handling. Failed invocations (nonzero exit, timeout, spawn error, JSON-parse failure — nova-mind#497, or real-time retry exhaustion — nova-mind#680) are captured as dead-letter rows in `extraction_failures` and can be replayed via `memory/scripts/extraction-replay.sh` — see the "Failure Handling" section in [memory-extraction-pipeline.md](memory-extraction-pipeline.md#1a-failure-handling-extraction_failures-dead-letter-table--replay-485).
 >
 > **Interpreter resolution (nova-mind#554, #555):** Both the hook and `extraction-replay.sh` resolve the Python interpreter used to run `extract_memories.py` via `EXTRACTION_PYTHON_CMD_OVERRIDE` env var → `python_cmd` in `memory-extraction-config.json` → agent venv python (`~/.local/share/<user>/venv/bin/python3`) → bare `python3`. If gateway logs show extractions failing with `ModuleNotFoundError`, or the resolved interpreter is bare `python3` on a host where a venv exists, the resolution chain picked the wrong interpreter — grep for `Resolved extraction interpreter` (as above) to see what was actually selected, then check `python_cmd` in `memory-extraction-config.json` and confirm the venv path exists. See the "Interpreter resolution" note in [memory-extraction-pipeline.md](memory-extraction-pipeline.md#1-memory-extract-hook--extract_memoriespy--real-time-extraction) for full detail.
 

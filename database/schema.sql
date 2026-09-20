@@ -1390,7 +1390,7 @@ CREATE TABLE IF NOT EXISTS extraction_failures (
     resolved_at timestamptz,
     CONSTRAINT extraction_failures_pkey PRIMARY KEY (id),
     CONSTRAINT extraction_failures_channel_transcript_id_fkey FOREIGN KEY (channel_transcript_id) REFERENCES channel_transcripts (id) ON DELETE SET NULL,
-    CONSTRAINT extraction_failures_failure_reason_check CHECK (failure_reason IS NULL OR (failure_reason::text IN ('nonzero_exit'::character varying, 'timeout'::character varying, 'spawn_error'::character varying, 'unreplayable'::character varying, 'json_parse_failure'::character varying))),
+    CONSTRAINT extraction_failures_failure_reason_check CHECK (failure_reason IS NULL OR (failure_reason::text IN ('nonzero_exit'::character varying, 'timeout'::character varying, 'spawn_error'::character varying, 'unreplayable'::character varying, 'json_parse_failure'::character varying, 'timeout_retries_exhausted'::character varying))),
     CONSTRAINT extraction_failures_retry_count_nonnegative CHECK (retry_count >= 0),
     CONSTRAINT extraction_failures_status_check CHECK (status::text IN ('pending'::character varying, 'resolved'::character varying, 'retry_exhausted'::character varying, 'unreplayable'::character varying))
 );

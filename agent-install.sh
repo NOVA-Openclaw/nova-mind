@@ -40,9 +40,10 @@ COMPLETION_LOG_RECONCILE_CRON_STATUS="not installed"
 # shellcheck disable=SC2034
 GATEWAY_RESTART_NEEDED=0
 
-# Temp file cleanup
+# Temp file/directory cleanup
 TMPFILES=()
-cleanup_tmp() { rm -f "${TMPFILES[@]}"; }
+TMPDIRS=()
+cleanup_tmp() { rm -f "${TMPFILES[@]}"; rm -rf "${TMPDIRS[@]}"; }
 trap cleanup_tmp EXIT
 
 # ============================================
@@ -527,6 +528,44 @@ else
     echo -e "  ${CROSS_MARK} PostgreSQL service not running"
     echo "  Start: sudo systemctl start postgresql"
     exit 1
+fi
+
+# Superuser DDL capability check (#661): agent-install.sh run standalone
+# (skipping shell-install.sh's interactive prompt) leaves PG_SUPERUSER
+# unset, and load_pg_superuser_env's fallback resolves it to the agent's
+# own DB_USER (see lib/pg-env.sh). schema.sql previously contained
+# ALTER DEFAULT PRIVILEGES FOR ROLE nova statements requiring the
+# executing role to be a superuser or a member of role nova; #659 phase 1
+# strips those at dump time, which removes THAT specific requirement.
+# But other DDL in the schema/pre-migration path can still require a real
+# superuser on some hosts (e.g. CREATE EXTENSION, if the schema ever
+# declares one -- see the extensions step at line ~1370 below). Warn
+# loudly HERE -- before database creation, not buried at a DDL failure
+# many stages later -- whenever PG_SUPERUSER resolves to a role that is
+# not an actual superuser. This is a warning, not a hard abort: #659
+# phase 1 means most fresh installs now succeed even without a real
+# superuser, so failing closed here would block installs that no longer
+# need superuser privilege at all.
+if [ "$PG_SUPERUSER" = "$DB_USER" ]; then
+    SUPERUSER_CHECK_ROLE="$DB_USER"
+else
+    SUPERUSER_CHECK_ROLE="$PG_SUPERUSER"
+fi
+SUPERUSER_CHECK=$(psql -U "$DB_USER" -d postgres -tAc \
+    "SELECT CASE WHEN EXISTS(SELECT 1 FROM pg_roles WHERE rolname = '$SUPERUSER_CHECK_ROLE')
+         THEN (SELECT rolsuper FROM pg_roles WHERE rolname = '$SUPERUSER_CHECK_ROLE')
+         ELSE NULL
+     END" \
+    2>/dev/null | tr -d '[:space:]')
+if [ "$SUPERUSER_CHECK" = "f" ]; then
+    echo -e "  ${WARNING} PG_SUPERUSER=$SUPERUSER_CHECK_ROLE is not a PostgreSQL superuser"
+    echo "      DDL requiring superuser (e.g. CREATE EXTENSION) will fail if the schema requires it."
+    echo "      Export PG_SUPERUSER=postgres (or run via shell-install.sh) if installation fails later"
+    echo "      at a DDL step."
+elif [ -z "$SUPERUSER_CHECK" ]; then
+    echo -e "  ${WARNING} Could not verify PG_SUPERUSER role privileges (role '$SUPERUSER_CHECK_ROLE' may not exist yet)"
+else
+    echo -e "  ${CHECK_MARK} PG_SUPERUSER=$SUPERUSER_CHECK_ROLE is a PostgreSQL superuser"
 fi
 
 # jq
@@ -1330,7 +1369,16 @@ if [ -d "$PRE_MIGRATIONS_DIR" ]; then
         echo "  Running pre-migrations (${#PRE_MIGRATION_FILES[@]} files)..."
         for sql_file in "${PRE_MIGRATION_FILES[@]}"; do
             local_filename=$(basename "$sql_file")
-            if _superuser_psql "$DB_NAME" -f "$sql_file" >/dev/null 2>&1; then
+            # Copy to /tmp so the superuser process can read it (nova-mind#663):
+            # pre-migration files live under the agent's $HOME, which is mode
+            # 0750 -- a distinct superuser unix user (PG_SUPERUSER != DB_USER)
+            # cannot traverse into it. Mirrors the schema step's existing
+            # /tmp-copy + chmod 644 pattern (see SCHEMA_FILE_TMP below).
+            PRE_MIGRATION_FILE_TMP=$(mktemp /tmp/pgschema-premigration-XXXXXX.sql)
+            TMPFILES+=("$PRE_MIGRATION_FILE_TMP")
+            cp "$sql_file" "$PRE_MIGRATION_FILE_TMP"
+            chmod 644 "$PRE_MIGRATION_FILE_TMP"
+            if _superuser_psql "$DB_NAME" -f "$PRE_MIGRATION_FILE_TMP" >/dev/null 2>&1; then
                 echo -e "  ${CHECK_MARK} Pre-migration: $local_filename"
             else
                 echo -e "  ${CROSS_MARK} Pre-migration failed: $local_filename"
@@ -1435,13 +1483,22 @@ else
     # pgschema v1.7.2 reads .pgschemaignore from cwd, not from --ignore-file.
     pushd "$SCRIPT_DIR" >/dev/null || exit 1
 
-    PLAN_FILE=$(mktemp /tmp/pgschema-plan-XXXXXX.json)
-    TMPFILES+=("$PLAN_FILE")
+    # Use a dedicated non-sticky scratch directory for the plan/reorder/apply
+    # cycle (nova-mind#664). /tmp has the sticky bit (1777), which blocks the
+    # agent user from renaming a file over a file owned by the postgres user.
+    # A fresh mktemp -d directory has no sticky bit and, with mode 777, lets
+    # both the agent user and postgres create and rename files inside it.
+    PGSCHEMA_SCRATCH_DIR=$(mktemp -d /tmp/pgschema-scratch-XXXXXX)
+    TMPDIRS+=("$PGSCHEMA_SCRATCH_DIR")
+    chmod 777 "$PGSCHEMA_SCRATCH_DIR"
 
-    # Copy schema file to /tmp so the superuser process can read it
+    # PLAN_FILE is written by pgschema running as the superuser, so do not
+    # pre-create it; let the superuser create the inode fresh.
+    PLAN_FILE="$PGSCHEMA_SCRATCH_DIR/plan.json"
+
+    # Copy schema file into the scratch dir so the superuser process can read it
     # (the agent's home directory may not be traversable by the superuser unix user)
-    SCHEMA_FILE_TMP=$(mktemp /tmp/pgschema-schema-XXXXXX.sql)
-    TMPFILES+=("$SCHEMA_FILE_TMP")
+    SCHEMA_FILE_TMP=$(mktemp "$PGSCHEMA_SCRATCH_DIR/schema-XXXXXX.sql")
     cp "$SCHEMA_FILE" "$SCHEMA_FILE_TMP"
     chmod 644 "$SCHEMA_FILE_TMP"
 
@@ -1459,9 +1516,10 @@ else
         echo -e "  ${CROSS_MARK} pgschema plan failed (exit $PLAN_EXIT) — schema apply skipped"
         SCHEMA_DIFF_SKIPPED=1
     else
-        # Reorder the plan so dependencies are satisfied on fresh installs.
-        REORDERED_PLAN_FILE=$(mktemp /tmp/pgschema-plan-reordered-XXXXXX.json)
-        TMPFILES+=("$REORDERED_PLAN_FILE")
+        # REORDERED_PLAN_FILE is written by plan_reorder.py (agent user) and
+        # then moved over the superuser-owned plan file, so keep it in the
+        # scratch directory with no sticky bit.
+        REORDERED_PLAN_FILE="$PGSCHEMA_SCRATCH_DIR/reordered.json"
         echo "  Reordering plan by dependencies..."
         REORDER_EXIT=0
         "$VENV_PYTHON" "$SCRIPT_DIR/database/plan_reorder.py" \

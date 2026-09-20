@@ -220,6 +220,18 @@ hooks & scripts
   └─ source ~/.openclaw/lib/pg-env.sh (or import equivalent) → PG* vars set → use psql/psycopg2/pg natively
 ```
 
+## Superuser Credentials for DDL (PG_SUPERUSER)
+
+Some install-time DDL operations (creating databases/roles, running `pgschema plan/apply`, applying pre-migrations) need a PostgreSQL superuser or a role with sufficient privileges. These credentials are resolved **session-only** by `lib/pg-env.sh`'s `load_pg_superuser_env()` and are **not** written to `~/.openclaw/postgres.json`:
+
+| Variable | Resolution | Default |
+|----------|------------|---------|
+| `PG_SUPERUSER` | `PG_SUPERUSER` → `PGUSER` → current OS user | current OS user |
+| `PG_SUPERUSER_PASSWORD` | `PG_SUPERUSER_PASSWORD` → `PGPASSWORD` | empty (peer auth) |
+| `PG_SUPERUSER_HOST` | `PG_SUPERUSER_HOST` | `/var/run/postgresql` |
+
+`shell-install.sh` interactively prompts for a superuser when it detects it is running as a non-superuser OS user. In unattended/standalone `agent-install.sh` runs (no `shell-install.sh` prompt), `PG_SUPERUSER` falls back to the agent's own `DB_USER`, which is usually **not** a real PostgreSQL superuser. As of nova-mind#661, `agent-install.sh` warns non-fatally when the resolved `PG_SUPERUSER` is not `rolsuper`, so the installer fails early and loudly rather than mid-DDL. Most fresh installs no longer require a real superuser (nova-mind#659), but `CREATE EXTENSION` and similar operations may still need one — this warning surfaces that residual case.
+
 ## Error Handling
 
 - **Malformed JSON** — warned on stderr, config file ignored, falls through to defaults

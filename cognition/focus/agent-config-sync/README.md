@@ -74,6 +74,7 @@ On startup, the plugin performs an **initial sync** for both `agents.json` and a
 | `id` | `agents.name` | Always present |
 | `default` | `agents.is_default` | `true` only when `is_default = true`; key **omitted** otherwise |
 | `model` | `agents.model` + `agents.fallback_models` | String when no fallbacks; object `{ primary, fallbacks }` when fallbacks present |
+| `thinkingDefault` | `agents.thinking` | Included only when `thinking` is a non-empty string matching the config schema's 9-value enum (`off`/`minimal`/`low`/`medium`/`high`/`xhigh`/`adaptive`/`max`/`ultra`, nova-mind#660). `NULL`, empty string, unknown tiers, wrong JS type, mixed case, and whitespace-padded values are all silently omitted — the row degrades gracefully rather than crashing or emitting a bad value. |
 | `subagents.allowAgents` | `agents.allowed_subagents` | Included when non-empty, sorted alphabetically |
 | `heartbeat` | `agents.heartbeat_enabled`, `heartbeat_every`, `heartbeat_target`, `heartbeat_to` | Object `{ every, target, to }` (non-NULL fields only) when `heartbeat_enabled = true`. **Key is omitted entirely** when `heartbeat_enabled` is `false` or `NULL` (fixed in #273 — OpenClaw's schema requires an object or no key at all, never a boolean `false`). |
 
@@ -117,6 +118,9 @@ The function (defined in nova-mind/database/schema.sql, owned by newhart) uses `
 to scope results: it returns the connecting peer's own row (as `is_default = TRUE`) plus every
 subagent where `session_user = ANY(parent_agents)` (as `is_default = FALSE`). This ensures
 each peer gateway receives only its own agent set.
+
+The `thinking` column returned here is what `buildAgentsList()` validates and maps to
+`thinkingDefault` (nova-mind#660) — see the Entry fields table above.
 
 ---
 

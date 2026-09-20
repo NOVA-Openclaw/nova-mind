@@ -693,6 +693,17 @@ Pre-migration scripts run in filename order, **before** `pgschema plan` executes
 > scripts from SE Run #27 (portfolio schema cleanup) that are **not** picked up by the
 > installer and must be run by hand in the order documented there. New pre-migration
 > scripts for schema changes always belong in `database/pre-migrations/`.
+>
+> **Guard schema-mutating pre-migrations against a fresh, empty DB (nova-mind#662).**
+> `database/pre-migrations/` scripts run *before* the base schema apply, so on a genuinely
+> fresh first-install DB the tables they reference may not exist yet. A pre-migration that
+> mutates an existing table (e.g. backfilling a column, normalizing values) must wrap its
+> body in a `to_regclass('public.<table>') IS NOT NULL` existence check so it no-ops cleanly
+> on first install instead of failing with `relation does not exist` — see
+> `005-backfill-d100-roll-log-announced-at.sql` and `006-lowercase-irc-username-values.sql`
+> for the pattern. When `PG_SUPERUSER != DB_USER`, each pre-migration file is also copied to
+> a `mktemp`'d `/tmp` path before being handed to the superuser process (nova-mind#663) —
+> the agent's `0750` home directory is not traversable by a distinct superuser unix user.
 
 ```sql
 -- Example pre-migration: rename a column manually, then schema.sql reflects the new name
@@ -713,6 +724,8 @@ pgschema dump \
 The raw `pgschema dump` output contains pure DDL — no `OWNER TO`, `GRANT/REVOKE`, `\connect`, or `SET ROLE` directives — which keeps a freshly-generated dump clean and portable across user setups.
 
 **In practice, `database/schema.sql` also contains hand-maintained `GRANT`/`REVOKE` statements** for column- and table-level privileges (e.g., the `motivation_d100`/`d100_roll_log` grants added by issue #444) that are added directly to the file, not produced by `pgschema dump`. **`pgschema plan`/`pgschema apply` silently ignore these privilege statements** — they diff and apply only structural DDL. This means a fresh install running only `pgschema apply` would lose any hand-added grants. To close that gap, `agent-install.sh` runs a **post-apply grant reconciliation step** (issue #452): after a successful `pgschema apply`, it extracts every `GRANT`/`REVOKE` line from the staged `schema.sql` and re-applies them directly via the superuser connection. If you add a `GRANT`/`REVOKE` statement to `schema.sql`, it will take effect on install via this reconciliation step, not via `pgschema` itself.
+
+> **`ALTER DEFAULT PRIVILEGES` is stripped at dump time (nova-mind#659, phase 1).** `pgschema dump` used to emit `ALTER DEFAULT PRIVILEGES FOR ROLE nova ...` statements hardcoding the production owner role (`nova`) and NOVA's subagent roster as grantees — not portable to another install, and `FOR ROLE nova` requires the executing role to be a superuser or a member of role `nova`, a condition a fresh non-`nova` agent install never satisfies. `cognition/scripts/pg-notify-listener.py`'s `sync_schema_to_github()` now strips `ALTER DEFAULT PRIVILEGES` (`Type: DEFAULT_PRIVILEGE`) blocks from the in-memory dump buffer before writing `schema.sql`, running before the #624 manifest veto so the veto evaluates the same artifact that gets committed. Plain `GRANT`/`REVOKE` statements (the ones the reconciliation step above depends on) are **not** stripped — only the role-scoped default-privilege statements are removed. This is why most fresh installs no longer need a real PostgreSQL superuser at all; see `agent-install.sh`'s early `PG_SUPERUSER` superuser check (nova-mind#661) for the remaining cases (e.g. `CREATE EXTENSION`) where superuser privilege can still be required.
 
 ### Ignoring Objects
 

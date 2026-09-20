@@ -42,6 +42,7 @@ type AgentListEntry = {
   id: string;
   default?: true;
   model: string | { primary: string; fallbacks: string[] };
+  thinkingDefault?: string;
   subagents?: { allowAgents: string[] };
   heartbeat?: HeartbeatConfig;
 };
@@ -73,7 +74,8 @@ const HEARTBEAT_QUERY = `
  * - Peer agents are already excluded by the SQL query
  * - `default: true` included ONLY when is_default = true (key omitted otherwise)
  * - Empty or NULL fallback_models → string model form (not object)
- * - thinking column excluded from output (set at spawn time, not in agent definitions)
+ * - DB `thinking` column mapped to `thinkingDefault` when it is a valid
+ *   schema enum value; key omitted when null, empty, or unknown
  * - subagents.allowAgents included when allowed_subagents is non-empty, sorted
  * - Output sorted by agent name (id)
  */
@@ -97,9 +99,29 @@ export function buildAgentsList(rows: AgentRow[]): AgentListEntry[] {
       entry.default = true;
     }
 
-    // Note: 'thinking' is not a valid per-agent config key in OpenClaw's schema.
-    // Thinking level is set at spawn time via sessions_spawn(thinking=...), not in agent definitions.
-    // The DB 'thinking' column stores the preferred level for reference, but it's not written to agents.json.
+    // #660 — Map DB `thinking` → `thinkingDefault` when it is a valid schema enum value.
+    // The config schema (zod-schema.agent-runtime.ts) accepts 9 values; the DB CHECK only enforces 7.
+    // We validate against the schema contract (the consumer boundary), not the DB CHECK.
+    // Null, empty, unknown, wrong-type, mixed-case, or whitespace-padded values are omitted.
+    const VALID_THINKING_DEFAULTS = new Set([
+      "off",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "adaptive",
+      "max",
+      "ultra",
+    ]);
+
+    if (
+      typeof row.thinking === "string" &&
+      row.thinking.length > 0 &&
+      VALID_THINKING_DEFAULTS.has(row.thinking)
+    ) {
+      entry.thinkingDefault = row.thinking;
+    }
 
     // Include subagents.allowAgents if set (sorted for stable output)
     if (Array.isArray(row.allowed_subagents) && row.allowed_subagents.length > 0) {

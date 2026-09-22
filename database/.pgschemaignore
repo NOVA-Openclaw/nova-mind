@@ -1,12 +1,15 @@
 # Objects to exclude from pgschema management
 # See https://www.pgschema.com/cli/ignore
 #
+# NOTE (nova-mind#498): the installer is now additive-by-construction. It
+# strips every DROP operation from the pgschema plan before applying, so
+# unknown/local tables are preserved automatically without relying on this
+# ignore list. This file remains as a secondary/legacy guard to reduce plan
+# noise and protect objects that should never be managed declaratively.
+#
 # schema.sql is a dump of nova_memory. Peer agents (victoria, newhart,
 # graybeard) carry agent-local tables in their own <agent>_memory databases
-# that nova_memory does not have. Without these ignore patterns, the
-# installer's declarative diff plans DROPs for every table it doesn't know
-# about (2026-08-11: plan attempted to drop Victoria's entire live trading
-# stack on victoria_memory).
+# that nova_memory does not have.
 #
 # Victoria's trading stack (automated-strategies):
 # portfolios, trades, positions, cash_ledger, strategies, instruments, etc.

@@ -635,7 +635,7 @@ FROM artwork ORDER BY created_at DESC LIMIT 5;
 
 ## Extraction Scripts
 
-> **Note:** `extract-memories.sh`, `store-memories.sh`, and `process-input.sh` (documented below in their original form) were consolidated into a single Python script as part of the #174 grammar-parser removal. See `memory/docs/memory-extraction-pipeline.md` for the current pipeline and a known bug where `memory-catchup.sh` still calls the now-removed `process-input.sh`.
+> **Note:** `extract-memories.sh`, `store-memories.sh`, and `process-input.sh` (documented below in their original form) were consolidated into a single Python script as part of the #174 grammar-parser removal. `memory-catchup.sh` previously still called the now-removed `process-input.sh` (a broken no-op call path); as of #611 it calls `extract_memories.py` directly instead, matching the per-turn hook. See `memory/docs/memory-extraction-pipeline.md` for the current pipeline.
 
 ### extract_memories.py (current)
 
@@ -653,7 +653,7 @@ Output shape (current extraction template — see the script for the authoritati
 
 ### process-input.sh (removed)
 
-This was the combined extract → store entry point in the old pipeline. It no longer exists — `extract_memories.py` is invoked directly by the `memory-extract` hook instead of via a CLI wrapper.
+This was the combined extract → store entry point in the old pipeline. It no longer exists — `extract_memories.py` is invoked directly by both the `memory-extract` hook and, as of #611, `memory-catchup.sh` (which previously had a broken call path pointed at this now-removed script).
 
 ### Failure Recovery: extraction_failures + extraction-replay.sh (#485)
 
@@ -1048,6 +1048,8 @@ As of nova-mind#397, daily memory logs (`memory/YYYY-MM-DD.md`) are no longer pu
 
 ## Context Window (2026-02-07)
 
+> **Note:** This section describes `memory-catchup.sh`'s own 20-message rolling cache (`~/.openclaw/memory-message-cache.json`), a `memory-catchup.sh`-only mechanism that predates #611. As of #611, BOTH the per-turn hook and `memory-catchup.sh` also share a separate, config-driven context window (`max_prior_messages`/`context_window_enabled` in `memory-extraction-config.json`, default 10 messages) used specifically to build the `EXTRACTION_CONTEXT_JSON` payload passed to `extract_memories.py`. In `memory-catchup.sh`, the #611 window is drawn FROM this same 20-message rolling cache (capped at `min(max_prior_messages, CACHE_SIZE - 1)`), so the two mechanisms are related but not identical: this cache is the data source, the #611 config keys control how much of it is used as extraction context. See `memory/docs/memory-extraction-pipeline.md`'s "Context Window System" section for the #611-era behavior.
+
 The extraction pipeline now maintains a **20-message rolling context window** for improved reference resolution.
 
 ### How It Works
@@ -1082,5 +1084,5 @@ Yes, keep the aesthetic
 ### Scripts Updated
 
 - `memory-catchup.sh` - Now processes both roles, builds context cache
-- `extract-memories.sh` - Updated prompt for conversation format
-- `store-memories.sh` - Added duplicate checking functions
+
+> **Historical note:** This subsection originally also listed `extract-memories.sh` ("Updated prompt for conversation format") and `store-memories.sh` ("Added duplicate checking functions") as scripts updated for this 2026-02-07 feature. Both scripts were removed in the #174 grammar-parser removal and do not exist in this repo; their functionality now lives in `extract_memories.py`. Retained here as a historical record of what changed at the time, not as a pointer to current files.

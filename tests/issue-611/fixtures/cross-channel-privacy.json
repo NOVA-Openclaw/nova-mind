@@ -1,0 +1,49 @@
+{
+  "description": "Cross-channel context isolation fixture (TC-611-B3/B4/F7).",
+  "issue": "nova-mind#611",
+  "tcs": ["TC-611-B3", "TC-611-B4", "TC-611-F7"],
+  "sessions": [
+    {
+      "session_key": "discord:channel:public-channel",
+      "provider": "discord",
+      "external_chat_id": "channel:public-channel",
+      "external_thread_id": "",
+      "chat_type": "group",
+      "messages": [
+        {
+          "role": "user",
+          "sender_name": "I)ruid",
+          "timestamp": "2026-08-17T21:00:00Z",
+          "content": "Working on the public bot stuff in here."
+        },
+        {
+          "role": "user",
+          "sender_name": "I)ruid",
+          "timestamp": "2026-08-17T21:01:00Z",
+          "content": "Can someone pass the blockhenge host info?"
+        }
+      ],
+      "target_message_index": 1
+    },
+    {
+      "session_key": "discord:dm:private-thread",
+      "provider": "discord",
+      "external_chat_id": "channel:dm-with-druid",
+      "external_thread_id": "thread:secret-planning",
+      "chat_type": "direct",
+      "messages": [
+        {
+          "role": "user",
+          "sender_name": "I)ruid",
+          "timestamp": "2026-08-17T21:00:30Z",
+          "content": "The private password is hunter2 and the secret key is in ~/.ssh/id_ed25519."
+        }
+      ]
+    }
+  ],
+  "assertions": {
+    "context_for_target": "discord:channel:public-channel",
+    "must_include": ["Working on the public bot stuff", "blockhenge host info"],
+    "must_not_include": ["hunter2", "secret key", "id_ed25519"]
+  }
+}

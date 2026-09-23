@@ -1332,7 +1332,6 @@ if [ ! -f "$SCHEMA_FILE" ]; then
 fi
 
 SCHEMA_DIFF_SKIPPED=0
-SCHEMA_DIFF_HAZARD=0
 
 echo ""
 echo "Schema management (pgschema)..."
@@ -1536,95 +1535,75 @@ else
         fi
 
         if [ "$DO_APPLY" -eq 1 ]; then
-        # Build list of intentional drop column paths from renames.json (table.column format)
-        INTENTIONAL_DROPS=()
-        if [ -f "$RENAMES_FILE" ]; then
-            while IFS= read -r drop_path; do
-                INTENTIONAL_DROPS+=("$drop_path")
-            done < <(jq -r '.renames[] | select(.drop? != null) | .table + "." + .drop' "$RENAMES_FILE" 2>/dev/null)
-        fi
-
-        # Build jq filter to exclude intentional drops from hazard count
-        INTENTIONAL_JQ_FILTER='false'
-        for drop_path in "${INTENTIONAL_DROPS[@]}"; do
-            INTENTIONAL_JQ_FILTER="${INTENTIONAL_JQ_FILTER} or (.path == \"${drop_path}\")"
-        done
-
-        HAZARD_COUNT=$(jq --argjson filter_expr 'null' \
-            "[(.groups // [])[] | .steps[] | select(.type != \"privilege\") | select(.operation == \"drop\") | select(.type | test(\"^table\"))] | length" \
-            "$PLAN_FILE" 2>/dev/null || echo "0")
-
-        # Re-count excluding intentional drops
-        if [ ${#INTENTIONAL_DROPS[@]} -gt 0 ]; then
-            # Build a JSON array of intentional drop paths for jq filtering
-            INTENTIONAL_JSON=$(printf '%s\n' "${INTENTIONAL_DROPS[@]}" | jq -R . | jq -s .)
-            HAZARD_COUNT=$(jq --argjson whitelist "$INTENTIONAL_JSON" \
-                '[(.groups // [])[] | .steps[] | select(.type != "privilege") | select(.operation == "drop") | select(.type | test("^table")) | select(.path as $p | $whitelist | index($p) == null)] | length' \
-                "$PLAN_FILE" 2>/dev/null || echo "0")
-        fi
-
-        TOTAL_STEPS=$(jq '[(.groups // [])[] | .steps[] | select(.type != "privilege")] | length' "$PLAN_FILE" 2>/dev/null || echo "0")
-
-        if [ "$HAZARD_COUNT" -gt 0 ] 2>/dev/null; then
-            echo -e "  ${WARNING} Destructive changes detected — schema apply SKIPPED"
-            echo "      $HAZARD_COUNT destructive operation(s) (DROP on table/column):"
-            if [ ${#INTENTIONAL_DROPS[@]} -gt 0 ]; then
-                INTENTIONAL_JSON=$(printf '%s\n' "${INTENTIONAL_DROPS[@]}" | jq -R . | jq -s .)
-                jq -r --argjson whitelist "$INTENTIONAL_JSON" \
-                    '(.groups // [])[] | .steps[] | select(.type != "privilege") | select(.operation == "drop") | select(.type | test("^table")) | select(.path as $p | $whitelist | index($p) == null) | "      • " + .path' \
-                    "$PLAN_FILE" 2>/dev/null || true
-            else
-                jq -r '(.groups // [])[] | .steps[] | select(.type != "privilege") | select(.operation == "drop") | select(.type | test("^table")) | "      • " + .path' "$PLAN_FILE" 2>/dev/null || true
-            fi
-            echo "      To apply manually: $PGSCHEMA_BIN apply ${PGSCHEMA_CONN_ARGS[*]} --schema public --plan $PLAN_FILE --auto-approve"
-            SCHEMA_DIFF_HAZARD=1
-        elif [ "$TOTAL_STEPS" -eq 0 ] 2>/dev/null; then
-            echo -e "  ${CHECK_MARK} Schema is up to date — no changes needed"
-        else
-            echo "  Applying $TOTAL_STEPS schema change(s)..."
-            APPLY_EXIT=0
-            _superuser_pgschema apply \
-                "${PGSCHEMA_CONN_ARGS[@]}" \
-                --schema public \
+            # Strip all destructive (DROP) operations from the plan.
+            # Additive-by-construction: unknown/local tables live untouched;
+            # only CREATE/ALTER ADD/etc. steps are applied (#498).
+            FILTERED_PLAN_FILE="$PGSCHEMA_SCRATCH_DIR/filtered.json"
+            echo "  Stripping destructive operations from plan..."
+            STRIP_EXIT=0
+            DESTRUCTIVE_COUNT=$("$VENV_PYTHON" "$SCRIPT_DIR/database/strip_destructive.py" \
                 --plan "$PLAN_FILE" \
-                --auto-approve \
-                --no-color 2>&1 || APPLY_EXIT=$?
+                --output "$FILTERED_PLAN_FILE" 2>&1) || STRIP_EXIT=$?
 
-            if [ $APPLY_EXIT -eq 0 ]; then
-                echo -e "  ${CHECK_MARK} Schema applied successfully"
-                TABLE_COUNT=$(psql -U "$DB_USER" -d "$DB_NAME" -tAc "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE'" | tr -d '[:space:]')
-                echo "      Total tables in database: $TABLE_COUNT"
-
-                # Reassign ownership of all objects to the agent user
-                if [ "$PG_SUPERUSER" != "$DB_USER" ]; then
-                    echo "  Reassigning ownership to '$DB_USER'..."
-                    if _superuser_psql "$DB_NAME" -c "REASSIGN OWNED BY \"$PG_SUPERUSER\" TO \"$DB_USER\";" >/dev/null 2>&1; then
-                        echo -e "  ${CHECK_MARK} Ownership reassigned to '$DB_USER'"
-                    else
-                        echo -e "  ${WARNING} Could not reassign ownership (objects may be owned by $PG_SUPERUSER)"
-                    fi
+            if [ $STRIP_EXIT -ne 0 ]; then
+                echo -e "  ${CROSS_MARK} Failed to strip destructive operations from plan"
+                SCHEMA_DIFF_SKIPPED=1
+            else
+                mv "$FILTERED_PLAN_FILE" "$PLAN_FILE"
+                if [ "${DESTRUCTIVE_COUNT:-0}" -gt 0 ] 2>/dev/null; then
+                    echo -e "  ${INFO} Stripped $DESTRUCTIVE_COUNT destructive operation(s) (DROP skipped; #498)"
                 fi
 
-                # Post-schema grant reconciliation (#452): pgschema deliberately
-                # ignores privilege steps, so explicit GRANT/REVOKE lines in
-                # schema.sql must be applied separately to survive fresh installs.
-                echo "  Reconciling explicit schema grants..."
-                GRANT_COUNT=$(grep -cE '^[[:space:]]*(GRANT|REVOKE)[[:space:]]+' "$SCHEMA_FILE_TMP" 2>/dev/null || echo 0)
-                if [ "$GRANT_COUNT" -gt 0 ] 2>/dev/null; then
-                    if grep -E '^[[:space:]]*(GRANT|REVOKE)[[:space:]]+' "$SCHEMA_FILE_TMP" | _superuser_psql "$DB_NAME" -v ON_ERROR_STOP=1 -f - >/dev/null 2>&1; then
-                        echo -e "  ${CHECK_MARK} Applied $GRANT_COUNT explicit grant/revoke statement(s)"
+                TOTAL_STEPS=$(jq '[(.groups // [])[] | .steps[] | select(.type != "privilege")] | length' "$PLAN_FILE" 2>/dev/null || echo "0")
+
+                if [ "$TOTAL_STEPS" -eq 0 ] 2>/dev/null; then
+                    echo -e "  ${CHECK_MARK} Schema is up to date — no changes needed"
+                else
+                    echo "  Applying $TOTAL_STEPS schema change(s)..."
+                    APPLY_EXIT=0
+                    _superuser_pgschema apply \
+                        "${PGSCHEMA_CONN_ARGS[@]}" \
+                        --schema public \
+                        --plan "$PLAN_FILE" \
+                        --auto-approve \
+                        --no-color 2>&1 || APPLY_EXIT=$?
+
+                    if [ $APPLY_EXIT -eq 0 ]; then
+                        echo -e "  ${CHECK_MARK} Schema applied successfully"
+                        TABLE_COUNT=$(psql -U "$DB_USER" -d "$DB_NAME" -tAc "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE'" | tr -d '[:space:]')
+                        echo "      Total tables in database: $TABLE_COUNT"
+
+                        # Reassign ownership of all objects to the agent user
+                        if [ "$PG_SUPERUSER" != "$DB_USER" ]; then
+                            echo "  Reassigning ownership to '$DB_USER'..."
+                            if _superuser_psql "$DB_NAME" -c "REASSIGN OWNED BY \"$PG_SUPERUSER\" TO \"$DB_USER\";" >/dev/null 2>&1; then
+                                echo -e "  ${CHECK_MARK} Ownership reassigned to '$DB_USER'"
+                            else
+                                echo -e "  ${WARNING} Could not reassign ownership (objects may be owned by $PG_SUPERUSER)"
+                            fi
+                        fi
+
+                        # Post-schema grant reconciliation (#452): pgschema deliberately
+                        # ignores privilege steps, so explicit GRANT/REVOKE lines in
+                        # schema.sql must be applied separately to survive fresh installs.
+                        echo "  Reconciling explicit schema grants..."
+                        GRANT_COUNT=$(grep -cE '^[[:space:]]*(GRANT|REVOKE)[[:space:]]+' "$SCHEMA_FILE_TMP" 2>/dev/null || echo 0)
+                        if [ "$GRANT_COUNT" -gt 0 ] 2>/dev/null; then
+                            if grep -E '^[[:space:]]*(GRANT|REVOKE)[[:space:]]+' "$SCHEMA_FILE_TMP" | _superuser_psql "$DB_NAME" -v ON_ERROR_STOP=1 -f - >/dev/null 2>&1; then
+                                echo -e "  ${CHECK_MARK} Applied $GRANT_COUNT explicit grant/revoke statement(s)"
+                            else
+                                echo -e "  ${CROSS_MARK} Grant reconciliation failed"
+                                SCHEMA_DIFF_SKIPPED=1
+                            fi
+                        else
+                            echo -e "  ${INFO} No explicit grant/revoke statements found"
+                        fi
                     else
-                        echo -e "  ${CROSS_MARK} Grant reconciliation failed"
+                        echo -e "  ${CROSS_MARK} Schema apply failed (exit $APPLY_EXIT)"
                         SCHEMA_DIFF_SKIPPED=1
                     fi
-                else
-                    echo -e "  ${INFO} No explicit grant/revoke statements found"
                 fi
-            else
-                echo -e "  ${CROSS_MARK} Schema apply failed (exit $APPLY_EXIT)"
-                SCHEMA_DIFF_SKIPPED=1
             fi
-        fi
         fi
     fi
 
@@ -1632,8 +1611,8 @@ else
     rm -f "$PLAN_FILE"
 fi
 
-# --- Schema apply exit-code gate (#597) ---
-if [ "$SCHEMA_DIFF_SKIPPED" -eq 1 ] && [ "$SCHEMA_DIFF_HAZARD" -eq 0 ]; then
+# --- Schema apply exit-code gate (#597 / #498) ---
+if [ "$SCHEMA_DIFF_SKIPPED" -eq 1 ]; then
     echo ""
     echo -e "  ${CROSS_MARK} Schema apply stage failed — installation aborting"
     exit 1

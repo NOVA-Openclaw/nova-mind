@@ -14,9 +14,9 @@ There are two related but distinct paths into nova-memory:
 Real-time path (per-message):
 Incoming message → memory-extract hook → extract_memories.py → PostgreSQL
                                               ↓
-                                        Claude API extraction
+                                        OpenRouter LLM extraction (deepseek/deepseek-v4-flash by default)
                                         (LLM judges durability/category/confidence per fact)
-                                              ↓ (nonzero exit / timeout / spawn error)
+                                              ↓ (nonzero exit / timeout / spawn error / retries exhausted)
                                         extraction_failures dead-letter row (#485)
                                               ↓
                                         extraction-replay.sh (manual or cron) → retry
@@ -70,7 +70,7 @@ Both the hook (`handler.ts`) and `extract_memories.py` read `~/.openclaw/scripts
 | `model` | `extract_memories.py` (`DEFAULT_MODEL`) | `deepseek/deepseek-v4-flash` | Overridden per-call by the `MEMORY_EXTRACTION_MODEL` env var if set |
 | `api_url` | `extract_memories.py` (`OPENROUTER_API_URL`) | `https://openrouter.ai/api/v1/chat/completions` | |
 | `max_tokens` | `extract_memories.py` (`CONFIG_MAX_TOKENS`) | `2048` | |
-| `extraction_timeout_ms` | `handler.ts` (`loadExtractionTimeoutMs()`) | `90000` (90s) | See precedence and rationale below |
+| `extraction_timeout_ms` | `handler.ts` (`loadExtractionTimeoutMs()`) | `95000` (95s) as of nova-mind#680 | See precedence and rationale below. **The live deployed config file currently still sets `90000` (90s)** — the hardcoded fallback default only applies when the config key is absent/malformed, so it is not the value governing production today. See the budget-arithmetic note below. |
 | `python_cmd` | `handler.ts` (`resolvePythonCmd()`) / `extraction-replay.sh` (`resolve_python_cmd()`) | none — resolution falls through to venv detection when absent | Optional. See "Interpreter resolution" below |
 
 Example (current deployed shape):
@@ -84,7 +84,7 @@ Example (current deployed shape):
 }
 ```
 
-**Timeout precedence (highest to lowest):** `EXTRACTION_TIMEOUT_MS_OVERRIDE` env var (test-only escape hatch) → `extraction_timeout_ms` in the config file → hardcoded `DEFAULT_EXTRACTION_TIMEOUT_MS` (90000ms). A non-numeric or `<= 0` value at any layer is treated as absent and falls through to the next layer.
+**Timeout precedence (highest to lowest):** `EXTRACTION_TIMEOUT_MS_OVERRIDE` env var (test-only escape hatch) → `extraction_timeout_ms` in the config file → hardcoded `DEFAULT_EXTRACTION_TIMEOUT_MS` (`95000`ms as of nova-mind#680, previously `90000`). A non-numeric or `<= 0` value at any layer is treated as absent and falls through to the next layer. **Precedence matters for the current deployment:** `~/.openclaw/scripts/memory-extraction-config.json` on the live host sets `"extraction_timeout_ms": 90000`, so the config-file value — not the newly-raised hardcoded default — is the one actually governing the outer timeout in production. See "Retry budget vs. outer timeout" below for why this distinction matters.
 
 **Hot-reload:** `handler.ts`'s `loadExtractionTimeoutMs()` does a fresh `readFileSync` + `JSON.parse` on **every** hook invocation — there is no caching. Editing `memory-extraction-config.json` takes effect on the very next incoming message; no gateway or hook restart is required.
 
@@ -99,13 +99,20 @@ Example (current deployed shape):
 
 The replay script derives the venv path with `$(id -un)` rather than `$USER` — `$USER` is unset in cron environments, which previously collapsed the venv path to a malformed `//venv/bin/python3` and silently fell through to bare `python3` under cron (nova-mind#555), reintroducing the system-python failure class the interpreter-resolution work was meant to close. `$(id -un)` is syscall-backed and cron-safe, matching `os.userInfo().username` already used on the `handler.ts` side.
 
-**Why 90s, not 30s:** The inner HTTP request in `extract_memories.py`'s `call_llm()` uses a hardcoded `requests.post(..., timeout=60)` (60-second `requests` timeout). The outer hook timeout must exceed this so that a slow LLM call fails cleanly inside the Python process (raising a normal `RuntimeError` that exits 1) rather than being killed mid-request by the hook's `SIGTERM` — which would discard the in-flight HTTP call's own error context. 90s gives a 30s buffer above the 60s inner ceiling. This was raised from an original fixed 30s constant (#485) after nova-mind#497 found deepseek-v4-flash's p95 extraction latency regularly exceeded 30s, producing a ~15% first-attempt timeout rate (all resolved on replay, confirming the constant was too tight rather than indicating a real hang).
+**Retry budget vs. outer timeout (nova-mind#680):** As of #680, `extract_memories.py`'s `call_llm()` no longer makes a single 60s HTTP call — it retries transient failures (see "Real-Time Extraction Retry Loop" below) with a per-attempt timeout of `LLM_TIMEOUT_SECONDS` (default 25s, overridable via `EXTRACTION_LLM_TIMEOUT_SECONDS`) and up to `MAX_LLM_ATTEMPTS` = 3 total attempts. The outer hook timeout must exceed the child's **worst-case total real-time retry duration**, not just one inner request, or the hook's `SIGTERM` can kill the child mid-retry and destroy clean dead-letter context.
+
+Worst-case retry budget arithmetic (from `handler.ts`'s in-code comment): `25s × 3 attempts + (1s + 2s) backoff + 12s safety margin = 90s`. `handler.ts`'s hardcoded `DEFAULT_EXTRACTION_TIMEOUT_MS` was raised from 90000ms to **95000ms** (95s) to keep a 5s margin above that 90s worst case.
+
+**This margin does not currently exist in production.** The deployed `memory-extraction-config.json` still sets `extraction_timeout_ms: 90000` (90s), and per the precedence rule above, the config-file value wins over the hardcoded default. That means the live outer timeout (90s) is currently **exactly equal to**, not comfortably above, the 90s worst-case retry budget — a razor-thin (effectively zero) margin, not the intended 5s buffer. A retry sequence that hits every backoff and every per-attempt timeout at its absolute worst case risks the same SIGTERM-mid-retry race #680 was written to close. Tracked as a known gap in child issue nova-mind#683 (whose test coverage checks the hardcoded 95s constant, not the deployed 90s config value, so it does not catch this). Raising the live config's `extraction_timeout_ms` to 95000+ (or the tighter per-attempt values below) closes the gap; this doc does not assert a safety margin that isn't actually deployed.
+
+Pre-#680 history: the outer timeout was originally raised from a fixed 30s constant (#485) to 90s under nova-mind#497, sized against a single 60s inner `requests` call (60s + 30s buffer), after #497 found deepseek-v4-flash's p95 extraction latency regularly exceeded 30s. #680 replaced that single-call model with the retry loop described above, which is why the arithmetic changed from "60s inner call + buffer" to "retry-budget + margin."
 
 **Troubleshooting:**
 
 | Problem | Symptoms | Solution |
 |---------|----------|----------|
-| API timeouts | Extraction hangs or times out | Check `OPENROUTER_API_KEY` and network connectivity; also confirm `extraction_timeout_ms` in `memory-extraction-config.json` (default 90000ms) isn't set too low for the current model's latency |
+| API timeouts | Extraction hangs or times out | Check `OPENROUTER_API_KEY` and network connectivity; also confirm `extraction_timeout_ms` in `memory-extraction-config.json` (currently deployed at 90000ms; hardcoded fallback default is 95000ms as of #680) isn't set too low for the current model's latency and retry budget — see "Retry budget vs. outer timeout" above |
+| Extraction dead-letters with `failure_reason='timeout_retries_exhausted'` (exit code 3) | All 3 LLM attempts failed with Timeout/ConnectionError/HTTP 429/HTTP 5xx | Transient network/provider issue — check OpenRouter status and `OPENROUTER_API_KEY` validity; the row is replayable via `extraction-replay.sh` like any other dead-letter (nova-mind#680) |
 | No extraction happening | No new `entity_facts`/`events` rows despite active chat | Verify the `memory-extract` hook is enabled: `openclaw hooks list` |
 | Missing context | Poor reference resolution ("that", "yes", "do it" not extracted) | Check the rolling context window the hook passes in (see hook config) |
 | Rate limiting | HTTP 429 errors | Add/adjust delay handling in the hook or extraction call |
@@ -118,9 +125,9 @@ The replay script derives the venv path with `$(id -un)` rather than `$USER` —
 **What changed:**
 
 - **Stderr/stdout capture.** The hook now attaches a tail-buffer reader (`attachTailBuffer()`) to the child's `stderr`/`stdout` streams, retaining only the **last 16384 bytes** (`PIPE_TAIL_CAP_BYTES`) of each. This also prevents the latent hang risk noted in #447 — an unread pipe stalls a child writing more than the OS pipe buffer (~64KB), and continuously draining the stream (even while discarding old bytes) keeps the child unblocked.
-- **Child-process timeout.** Extraction has a per-event timeout, default **90 seconds** (`DEFAULT_EXTRACTION_TIMEOUT_MS`), config-driven and hot-reloadable as of nova-mind#497 — see the "Configuration file" subsection above for the full precedence rules and rationale. On timeout, the hook sends `SIGTERM`, then `SIGKILL` after a **5-second grace period** (`KILL_GRACE_MS`) if the child hasn't exited. (Originally a fixed 30-second constant under #485; raised and made configurable under #497 after the fixed value produced a ~15% first-attempt timeout rate against slower LLM models.)
-- **`extraction_failures` dead-letter table** (migration `085_extraction_failures.sql`, taxonomy extended by migration `086_extraction_failures_json_parse_failure.sql` — see below). On nonzero exit, timeout, spawn error, or JSON-parse failure, the hook inserts a row capturing the message body (or a `channel_transcript_id` FK when available), sender/session metadata, the captured stderr/stdout tails, exit code, and a `failure_reason`.
-- **Failure-reason taxonomy** (`failure_reason` CHECK constraint): `nonzero_exit`, `timeout`, `spawn_error`, `unreplayable`, `json_parse_failure` (nova-mind#497 — see "JSON Repair and Parse-Failure Handling" below; `unreplayable` is set only by the replay script, never by the hook).
+- **Child-process timeout.** Extraction has a per-event timeout, default **95 seconds** as of nova-mind#680 (`DEFAULT_EXTRACTION_TIMEOUT_MS`, but see "Retry budget vs. outer timeout" above — the live deployed config currently overrides this to 90s), config-driven and hot-reloadable as of nova-mind#497 — see the "Configuration file" subsection above for the full precedence rules and rationale. On timeout, the hook sends `SIGTERM`, then `SIGKILL` after a **5-second grace period** (`KILL_GRACE_MS`) if the child hasn't exited. (Originally a fixed 30-second constant under #485; raised to 90s and made configurable under #497 after the fixed value produced a ~15% first-attempt timeout rate against slower LLM models; raised again to 95s under #680 to keep pace with the new real-time retry loop's worst-case budget.)
+- **`extraction_failures` dead-letter table** (migration `085_extraction_failures.sql`, taxonomy extended by migration `086_extraction_failures_json_parse_failure.sql` and `007-add-timeout-retries-exhausted-failure-reason.sql` — see below). On nonzero exit, timeout, spawn error, JSON-parse failure, or retry-exhaustion, the hook inserts a row capturing the message body (or a `channel_transcript_id` FK when available), sender/session metadata, the captured stderr/stdout tails, exit code, and a `failure_reason`.
+- **Failure-reason taxonomy** (`failure_reason` CHECK constraint): `nonzero_exit`, `timeout`, `spawn_error`, `unreplayable`, `json_parse_failure` (nova-mind#497 — see "JSON Repair and Parse-Failure Handling" below), `timeout_retries_exhausted` (nova-mind#680 — see "Real-Time Extraction Retry Loop" below; `unreplayable` is set only by the replay script, never by the hook).
 - **Logged `psql` catches.** The two `channel_sessions`/`channel_transcripts` upsert calls that previously swallowed errors via `.catch(() => ({stdout: ''}))` now log the error message (via `logPsqlError()`) before returning the same empty-stdout fallback — behavior is unchanged, but failures are no longer silent.
 - **Replay script** (`memory/scripts/extraction-replay.sh`, installed to `~/.openclaw/scripts/` by the standard scripts-copy step in `agent-install.sh` — no special-cased install logic was needed since it's just another `.sh` file in `memory/scripts/`). See below for details.
 
@@ -133,8 +140,8 @@ The replay script derives the venv path with `$(id -un)` rather than `$USER` —
 | `session_key`, `sender_name`, `sender_id` | TEXT | Attribution metadata |
 | `content` | TEXT | Raw message body **fallback**, capped at 65535 chars — only populated when no transcript FK is available; when the FK is intact, this column is left NULL to avoid duplicating the body |
 | `stderr_tail`, `stdout_tail` | TEXT | Captured pipe tails (up to 16384 bytes each, last-N-bytes semantics) |
-| `exit_code` | INTEGER | NULL for `timeout`/`spawn_error` (no exit code available); `2` for `json_parse_failure` rows |
-| `failure_reason` | VARCHAR(50) | CHECK: `nonzero_exit`, `timeout`, `spawn_error`, `unreplayable`, `json_parse_failure` (migration `086_extraction_failures_json_parse_failure.sql`, nova-mind#497) |
+| `exit_code` | INTEGER | NULL for `timeout`/`spawn_error` (no exit code available); `2` for `json_parse_failure` rows; `3` for `timeout_retries_exhausted` rows (nova-mind#680) |
+| `failure_reason` | VARCHAR(50) | CHECK: `nonzero_exit`, `timeout`, `spawn_error`, `unreplayable`, `json_parse_failure` (migration `086_extraction_failures_json_parse_failure.sql`, nova-mind#497), `timeout_retries_exhausted` (`database/pre-migrations/007-add-timeout-retries-exhausted-failure-reason.sql`, nova-mind#680) |
 | `retry_count` | INTEGER | Default 0, CHECK `>= 0`, incremented by the replay script on each failed retry |
 | `status` | VARCHAR(20) | CHECK: `pending`, `resolved`, `retry_exhausted`, `unreplayable` — see state machine below |
 | `created_at`, `updated_at`, `last_attempt_at`, `resolved_at` | TIMESTAMPTZ | Standard lifecycle timestamps |
@@ -176,8 +183,32 @@ Named indexes: `idx_extraction_failures_status` (eligibility filter), `idx_extra
 | `0` | Success (including empty/no-op extraction) | — (no dead-letter row) |
 | `1` | Generic error (HTTP failure, DB connection failure, missing `OPENROUTER_API_KEY`, unhandled exception) | `nonzero_exit` |
 | `2` | `JsonParseFailure` — LLM response could not be parsed to a supported JSON shape even after one repair attempt | `json_parse_failure` |
+| `3` | `LLMTransientRetriesExhausted` — all real-time retry attempts failed on transient errors (nova-mind#680) | `timeout_retries_exhausted` |
 
-In `handler.ts`'s `child.on('close', ...)` handler, timeout detection takes precedence over exit-code inspection: if the child was killed for exceeding the timeout, `failure_reason` is always `'timeout'` regardless of the exit code the killed process happened to report. Exit code `2` only maps to `json_parse_failure` when the child exited on its own (no timeout).
+In `handler.ts`'s `child.on('close', ...)` handler, timeout detection takes precedence over exit-code inspection: if the child was killed for exceeding the outer timeout, `failure_reason` is always `'timeout'` regardless of the exit code the killed process happened to report. Exit codes `2` and `3` only map to their respective `failure_reason` values when the child exited on its own (no outer timeout kill).
+
+### 1c. Real-Time Extraction Retry Loop (nova-mind#680)
+
+**Problem this solves:** Before #680, a single transient failure — a request timeout, dropped connection, HTTP 429 rate-limit, or HTTP 5xx from the LLM provider — dead-lettered the whole extraction on the first attempt (`nonzero_exit`), even though the same request frequently succeeds on an immediate retry. The extraction-replay path (`extraction-replay.sh`) already existed for this, but it runs on a cron cadence (not automatically scheduled by default — see below) rather than in the same real-time window as the original message.
+
+**What changed:**
+
+- **Retry gated by `EXTRACTION_ENABLE_RETRY` env var.** `call_llm()` in `extract_memories.py` only retries when `EXTRACTION_ENABLE_RETRY` is `1`/`true`/`yes`. `handler.ts` sets this env var when spawning the real-time extraction child. **`extraction-replay.sh` deliberately does NOT set it**, so the replay path stays single-shot per attempt as required by #553 (replay's own retry ceiling, `EXTRACTION_REPLAY_MAX_RETRIES`, governs retries across replay runs instead).
+- **Up to 3 total attempts** (`MAX_LLM_ATTEMPTS`): the initial call plus 2 retries. Backoff between attempts is short and fixed: **1 second** after attempt 1, **2 seconds** after attempt 2 (`RETRY_BACKOFF_SECONDS = [1, 2]`).
+- **What is retried:** `requests.exceptions.Timeout`, `requests.exceptions.ConnectionError`, HTTP `429`, and HTTP `5xx` responses only (`_is_transient_http_error()`). All other `requests.exceptions.RequestException` subtypes and non-429/5xx HTTP error codes (e.g. 400, 401, 403) are **not** retried — they raise immediately as before.
+- **Per-attempt LLM timeout lowered to `LLM_TIMEOUT_SECONDS` = 25 seconds** (was a single 60-second `requests.post(..., timeout=60)` call pre-#680), overridable via the `EXTRACTION_LLM_TIMEOUT_SECONDS` env var. The env value is parsed by `_parse_positive_int_env()`, which falls back to the default of 25 (with a logged stderr warning) on a non-integer or non-positive value — a malformed override can never crash the script or silently produce a zero/negative timeout.
+- **`LLMTransientRetriesExhausted` exception.** When every attempt fails on a retryable error, `call_llm()` raises this dedicated exception (distinct from the generic `RuntimeError` used for non-retryable failures), which `main()` maps to **exit code 3** and, in turn, `handler.ts` maps to `failure_reason='timeout_retries_exhausted'` (new CHECK-constraint value, migration `database/pre-migrations/007-add-timeout-retries-exhausted-failure-reason.sql`). Retry-exhausted rows are dead-lettered the same as any other failure and are replayable via `extraction-replay.sh`.
+- **Outer hook timeout raised to keep pace with the new worst-case retry duration.** See "Retry budget vs. outer timeout" in the Configuration file section above for the full arithmetic and a **known gap**: the live deployed config's `extraction_timeout_ms` (90s) has not been raised to match, and currently equals rather than exceeds the worst-case 90s retry budget.
+
+**Retry log lines** (stderr, useful for grepping gateway/hook logs):
+
+```
+[extract_memories] LLM attempt 1/3 failed: timeout; retrying in 1s
+[extract_memories] LLM attempt 2/3 failed: http-429; retrying in 2s
+[extract_memories] LLM attempt 3/3 failed: conn; retries exhausted
+```
+
+**Not retried — examples:** a 401 (bad API key), a 400 (malformed request body), or a non-JSON 200 response all raise immediately without consuming retry attempts, since retrying a request that will deterministically fail again wastes the retry budget and delays the dead-letter signal that something needs fixing (e.g. a rotated/invalid API key).
 
 **Dependency:** `json_repair` is a new runtime dependency of `extract_memories.py` (imported as `json_repair`, installed via the `json_repair` PyPI package — no `PACKAGE_MODULE_MAP` entry needed since the import name matches the package name). Added to `REQUIRED_PACKAGES` in the repo-root `agent-install.sh`'s Python venv setup.
 
@@ -280,7 +311,7 @@ Imports `get_initial_confidence` from `confidence_helper.py` to set a starting c
 | No new extractions | State file timestamp stuck | Delete state file: `rm ~/.openclaw/memory-catchup-state.json` |
 | Missing recent messages | Extractions lag behind chat | Check cron job is running: `crontab -l \| grep memory-catchup` |
 | Duplicate processing | Same messages processed twice | State file corruption - recreate with current timestamp |
-| Script hangs | Process doesn't complete | Check for stuck Claude API calls, or the broken `process-input.sh` path noted above |
+| Script hangs | Process doesn't complete | Check for stuck OpenRouter API calls, or the broken `process-input.sh` path noted above |
 
 ## Context Window System
 
@@ -311,8 +342,8 @@ Real-time extraction context resolution happens per-message via the hook's own c
 # 1. PostgreSQL with the nova-mind database, schema applied via pgschema
 #    (see memory/INSTALLATION.md for the full installer-based flow)
 
-# 2. Anthropic API key
-export ANTHROPIC_API_KEY="your-key-here"
+# 2. OpenRouter API key (extraction calls OpenRouter directly, not Anthropic -- see #497)
+export OPENROUTER_API_KEY="your-key-here"
 
 # 3. Required tools
 sudo apt install postgresql-client jq curl
@@ -401,17 +432,17 @@ tail -50 ~/.openclaw/logs/memory-catchup.log
 ```
 
 **Solutions:**
-1. **Missing API key:** Ensure `ANTHROPIC_API_KEY` is exported in the relevant environment (hook process or cron environment)
+1. **Missing API key:** Ensure `OPENROUTER_API_KEY` is exported in the relevant environment (hook process or cron environment) — `extract_memories.py` calls OpenRouter directly, not Anthropic/Claude (nova-mind#497)
 2. **Script permissions:** `chmod +x memory/scripts/*.sh memory/scripts/*.py`
 3. **Path issues:** Use absolute paths in crontab
 4. **PostgreSQL down:** `sudo systemctl start postgresql`
 5. **Hook not enabled:** `openclaw hooks enable memory-extract`
 
-### Issue: Extraction Fails Silently (Historical — Fixed by #485)
+### Issue: Extraction Fails Silently (Historical — Fixed by #485, retry loop added #680)
 
 **Symptoms (pre-#485):** No new `entity_facts`/`events` rows for a specific message, no error visible anywhere, and the original message body is unrecoverable since it only existed transiently at hook invocation time.
 
-**Fixed by #485 (timeout further tuned by #497):** The hook now captures stderr/stdout tails, enforces a config-driven timeout (default 90s, hot-reloadable — see "Configuration file" above), and writes a dead-letter row to `extraction_failures` on any failure (nonzero exit, timeout, spawn error, or JSON-parse failure) — the message body (or its transcript FK) is preserved and can be replayed via `extraction-replay.sh`. See "Failure Handling" above for the full mechanism.
+**Fixed by #485 (timeout further tuned by #497; real-time retry loop added by #680):** The hook now captures stderr/stdout tails, enforces a config-driven timeout (hardcoded default 95s as of #680, hot-reloadable — see "Configuration file" above), and writes a dead-letter row to `extraction_failures` on any failure (nonzero exit, timeout, spawn error, JSON-parse failure, or retry exhaustion) — the message body (or its transcript FK) is preserved and can be replayed via `extraction-replay.sh`. `extract_memories.py` also now retries transient LLM failures (timeout, connection error, HTTP 429/5xx) up to 3 times in real time before dead-lettering — see "Real-Time Extraction Retry Loop" above for the full mechanism.
 
 **Diagnosis:**
 ```sql

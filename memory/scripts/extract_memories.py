@@ -21,6 +21,7 @@ import json
 import os
 import re
 import sys
+import time
 from typing import Any, Optional
 
 import psycopg2
@@ -53,6 +54,14 @@ class JsonParseFailure(RuntimeError):
     """
 
 
+class LLMTransientRetriesExhausted(RuntimeError):
+    """Raised when all retry attempts failed due to transient LLM errors.
+
+    This maps to exit code 3 so the hook can record a distinct
+    failure_reason='timeout_retries_exhausted'.
+    """
+
+
 def load_config_file(config_path: str) -> dict:
     """Load extraction config from JSON file. Returns empty dict on any error."""
     try:
@@ -71,6 +80,42 @@ CONFIG = load_config_file(CONFIG_PATH)
 DEFAULT_MODEL = CONFIG.get("model") or "deepseek/deepseek-v4-flash"
 OPENROUTER_API_URL = CONFIG.get("api_url") or "https://openrouter.ai/api/v1/chat/completions"
 CONFIG_MAX_TOKENS = CONFIG.get("max_tokens") or 2048
+
+# Real-time extraction retry policy (#680). The retry loop is gated by an env
+# flag so the replay path (#553) stays single-shot. Max 3 attempts total
+# (initial + 2 retries). Backoff is short exponential: 1s after attempt 1,
+# 2s after attempt 2. Total transient-retry budget must fit inside the hook's
+# outer timeout (handler.ts DEFAULT_EXTRACTION_TIMEOUT_MS).
+EXTRACTION_ENABLE_RETRY = os.environ.get("EXTRACTION_ENABLE_RETRY", "") in ("1", "true", "yes")
+
+
+def _parse_positive_int_env(var_name: str, default: int) -> int:
+    """Parse a positive-integer env var, falling back to default on bad input."""
+    raw = os.environ.get(var_name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        print(
+            f"[extract_memories] WARNING: {var_name}={raw!r} is not a valid integer; "
+            f"falling back to default {default}",
+            file=sys.stderr,
+        )
+        return default
+    if value <= 0:
+        print(
+            f"[extract_memories] WARNING: {var_name}={value} is not positive; "
+            f"falling back to default {default}",
+            file=sys.stderr,
+        )
+        return default
+    return value
+
+
+LLM_TIMEOUT_SECONDS = _parse_positive_int_env("EXTRACTION_LLM_TIMEOUT_SECONDS", 25)
+MAX_LLM_ATTEMPTS = 3
+RETRY_BACKOFF_SECONDS = [1, 2]
 
 # ── DB helpers ────────────────────────────────────────────────────────────────
 
@@ -858,35 +903,109 @@ def _repair_json(content: str) -> Optional[str]:
 
 # ── LLM call ──────────────────────────────────────────────────────────────────
 
-def call_llm(prompt: str, api_key: str, model: str) -> dict:
-    """
-    Call OpenRouter API and return parsed JSON dict.
+def _is_transient_http_error(resp: requests.Response) -> bool:
+    """Return True for HTTP status codes that may self-heal on retry."""
+    return resp.status_code == 429 or resp.status_code >= 500
 
-    Raises on HTTP errors or JSON parse failures.
-    """
+
+def _llm_request_once(prompt: str, api_key: str, model: str) -> requests.Response:
+    """Single HTTP POST to the LLM endpoint. Raises on network errors."""
     payload = {
         "model": model,
         "max_tokens": CONFIG_MAX_TOKENS,
         "messages": [{"role": "user", "content": prompt}],
     }
-    try:
-        resp = requests.post(
-            OPENROUTER_API_URL,
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            json=payload,
-            timeout=60,
-        )
-    except requests.exceptions.RequestException as e:
-        raise RuntimeError(f"LLM API call failed: {e}") from e
+    return requests.post(
+        OPENROUTER_API_URL,
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        json=payload,
+        timeout=LLM_TIMEOUT_SECONDS,
+    )
 
-    if resp.status_code != 200:
+
+def call_llm(prompt: str, api_key: str, model: str) -> dict:
+    """
+    Call OpenRouter API and return parsed JSON dict.
+
+    Retries up to MAX_LLM_ATTEMPTS on transient network errors (Timeout,
+    ConnectionError, HTTP 429, HTTP 5xx) when EXTRACTION_ENABLE_RETRY is set.
+    Non-transient HTTP 4xx and JSON parse failures are not retried.
+
+    Raises on HTTP errors or JSON parse failures.
+    """
+    last_error: Optional[Exception] = None
+    max_attempts = MAX_LLM_ATTEMPTS if EXTRACTION_ENABLE_RETRY else 1
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            resp = _llm_request_once(prompt, api_key, model)
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+            last_error = e
+            # These network-level errors are transient and safe to retry.
+            reason = "timeout" if isinstance(e, requests.exceptions.Timeout) else "conn"
+            if attempt < max_attempts:
+                backoff = RETRY_BACKOFF_SECONDS[attempt - 1]
+                print(
+                    f"[extract_memories] LLM attempt {attempt}/{max_attempts} failed: {reason}; "
+                    f"retrying in {backoff}s",
+                    file=sys.stderr,
+                )
+                time.sleep(backoff)
+                continue
+            print(
+                f"[extract_memories] LLM attempt {attempt}/{max_attempts} failed: {reason}; "
+                "retries exhausted",
+                file=sys.stderr,
+            )
+            raise LLMTransientRetriesExhausted(
+                f"LLM API call failed after {attempt} attempts: {e}"
+            ) from e
+        except requests.exceptions.RequestException as e:
+            # Other request errors (e.g. invalid URL) are not retried.
+            raise RuntimeError(f"LLM API call failed: {e}") from e
+
+        if resp.status_code == 200:
+            return _parse_llm_response(resp)
+
+        if _is_transient_http_error(resp):
+            last_error = RuntimeError(
+                f"LLM API call failed: HTTP {resp.status_code}: {resp.text[:200]}"
+            )
+            reason = f"http-{resp.status_code}"
+            if attempt < max_attempts:
+                backoff = RETRY_BACKOFF_SECONDS[attempt - 1]
+                print(
+                    f"[extract_memories] LLM attempt {attempt}/{max_attempts} failed: {reason}; "
+                    f"retrying in {backoff}s",
+                    file=sys.stderr,
+                )
+                time.sleep(backoff)
+                continue
+            print(
+                f"[extract_memories] LLM attempt {attempt}/{max_attempts} failed: {reason}; "
+                "retries exhausted",
+                file=sys.stderr,
+            )
+            raise LLMTransientRetriesExhausted(
+                f"LLM API call failed after {attempt} attempts: {last_error}"
+            )
+
+        # Non-retryable HTTP error (4xx except 429).
         raise RuntimeError(
             f"LLM API call failed: HTTP {resp.status_code}: {resp.text[:200]}"
         )
 
+    # Should never be reached; defensive fallback.
+    raise LLMTransientRetriesExhausted(
+        f"LLM API call failed after {max_attempts} attempts: {last_error}"
+    )
+
+
+def _parse_llm_response(resp: requests.Response) -> dict:
+    """Parse a successful LLM HTTP response into the extraction dict."""
     try:
         resp_json = resp.json()
     except ValueError as e:
@@ -1303,6 +1422,11 @@ def main() -> int:
         # Exit code 2 is reserved for JSON parse/repair failures so the hook can
         # dead-letter them with failure_reason='json_parse_failure'.
         return 2
+    except LLMTransientRetriesExhausted as e:
+        print(f"[extract_memories] ERROR: {e}", file=sys.stderr)
+        # Exit code 3 is reserved for transient-retry exhaustion so the hook can
+        # dead-letter them with failure_reason='timeout_retries_exhausted'.
+        return 3
     except RuntimeError as e:
         print(f"[extract_memories] ERROR: {e}", file=sys.stderr)
         return 1

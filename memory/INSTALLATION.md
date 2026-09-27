@@ -33,9 +33,9 @@ Before installing the nova-mind memory subsystem, ensure you have the following:
 
 ### Recommended
 
-- **ANTHROPIC_API_KEY** - Claude API key for memory extraction
-  - Used by the memory-extract hook to analyze messages
-  - Get your API key from: [https://console.anthropic.com/](https://console.anthropic.com/)
+- **OPENROUTER_API_KEY** - OpenRouter API key for memory extraction
+  - Used by the memory-extract hook's `extract_memories.py` to analyze messages (calls OpenRouter directly, model `deepseek/deepseek-v4-flash` by default — not Anthropic/Claude, since nova-mind#497)
+  - Get your API key from: [https://openrouter.ai/](https://openrouter.ai/)
 
 - **OPENAI_API_KEY** - OpenAI API key (optional, for other features like image generation)
   - The installer will prompt you for this if not set in your environment
@@ -339,7 +339,7 @@ Checking prerequisites...
   ✅ PostgreSQL installed (16.11)
   ✅ psql command available
   ✅ PostgreSQL service running
-  ⚠️  ANTHROPIC_API_KEY not set (extraction will fail)
+  ⚠️  OPENROUTER_API_KEY not set (extraction will fail)
   ✅ pgvector extension available
 
 Database setup...
@@ -357,8 +357,8 @@ Hooks installation...
 Scripts setup...
   ✅ Made 13 scripts executable
   ✅ Python3 available
-  ⚠️  Missing Python dependencies: anthropic openai
-      Install: pip3 install anthropic openai
+  ⚠️  Missing Python dependencies: openai json_repair
+      Install: pip3 install openai json_repair
 
 Verification...
   ✅ Database connection OK
@@ -379,7 +379,7 @@ Verification...
 The installer and hooks use these environment variables:
 
 ### Required for Operation
-- `ANTHROPIC_API_KEY` - For memory extraction (Claude API)
+- `OPENROUTER_API_KEY` - For memory extraction (`extract_memories.py` calls OpenRouter directly, model `deepseek/deepseek-v4-flash` by default — not Anthropic/Claude, since nova-mind#497)
 - **Embeddings**: Uses local Ollama with `snowflake-arctic-embed2` model (no API key required)
 
 ### Optional Configuration

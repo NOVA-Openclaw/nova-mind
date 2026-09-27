@@ -73,12 +73,21 @@ function logActivity(isUserMessage: boolean) {
 const KILL_GRACE_MS = 5000;
 const PIPE_TAIL_CAP_BYTES = 16384;
 
-// Default outer hook timeout. Set to 90s (not 60s) because the Python child's
-// inner requests timeout is 60s (extract_memories.py:841). An outer timeout <=
-// 60s risks SIGTERM'ing the child mid-HTTP-call, destroying clean dead-letter
-// context. The 30s buffer lets a normal inner-timeout-induced RuntimeError
-// unwind and exit cleanly before the hook ever needs to kill the process.
-const DEFAULT_EXTRACTION_TIMEOUT_MS = 90000;
+// Default outer hook timeout. Must be larger than the Python child's total
+// real-time retry budget so the setTimeout->SIGTERM->SIGKILL guard does not
+// kill the process mid-retry (#680).
+//
+// Budget arithmetic (all values overridable via env):
+//   per-attempt LLM timeout  = 25s  (EXTRACTION_LLM_TIMEOUT_SECONDS)
+//   max attempts             = 3    (initial + 2 retries)
+//   backoff between attempts = 1s + 2s = 3s
+//   safety margin            = 12s
+//   total retry budget       = 25*3 + 3 + 12 = 90s
+//   outer timeout            = 95s  (DEFAULT_EXTRACTION_TIMEOUT_MS)
+//
+// The 5s kill grace (KILL_GRACE_MS) is additional headroom, not part of the
+// retry budget, so the child can exit cleanly on its own after retries exhaust.
+const DEFAULT_EXTRACTION_TIMEOUT_MS = 95000;
 
 const EXTRACTION_CONFIG_PATH =
   process.env.EXTRACTION_CONFIG_PATH_OVERRIDE ||
@@ -480,6 +489,10 @@ const handler = async (event: any) => {
         IS_GROUP: String(isGroup),
         SOURCE_SESSION_ID: sessionKey,
         SOURCE_TIMESTAMP: messageTimestamp,
+        // Enable the real-time retry loop inside extract_memories.py (#680).
+        // The replay path (extraction-replay.sh) deliberately does NOT set this
+        // so it stays single-shot as required by #553.
+        EXTRACTION_ENABLE_RETRY: '1',
         // DB-level source pointers for entity_facts FK columns (may be empty string when not yet ingested)
         SOURCE_CHANNEL_TRANSCRIPT_ID: channelTranscriptId,
         SOURCE_CHANNEL_SESSION_ID: channelSessionId
@@ -556,6 +569,16 @@ const handler = async (event: any) => {
           stderrTail: tailToString(getStderrTail())
         });
         await recordFailure('json_parse_failure', code);
+      } else if (code === 3) {
+        console.error('[memory-extract] Extraction failed', {
+          sender: senderName,
+          senderId: truncateSenderId(senderId),
+          exitCode: code,
+          signal,
+          failureReason: 'timeout_retries_exhausted',
+          stderrTail: tailToString(getStderrTail())
+        });
+        await recordFailure('timeout_retries_exhausted', code);
       } else if (code !== 0) {
         console.error('[memory-extract] Extraction failed', {
           sender: senderName,

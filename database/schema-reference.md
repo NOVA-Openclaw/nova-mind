@@ -116,7 +116,7 @@
 | event_projects | Links events to projects. Many-to-many relationship table for project milestones and activities. | 2 |
 | events | Historical events, milestones, activities. Log significant occurrences. | 10 |
 | events_archive | Archived historical events. Long-term storage for events moved out of active events table. | 11 |
-| extraction_failures | Dead-letter store for failed memory extractions from memory-extract hook (#485). Rows are inserted on nonzero exit, timeout, or spawn error and may be retried via extraction-replay.sh. Confirmed live in production as of the #506 audit (2026-07-20). | 16 |
+| extraction_failures | Dead-letter store for failed memory extractions from memory-extract hook (#485). Rows are inserted on nonzero exit, timeout, spawn error, JSON-parse failure (#497), or real-time retry exhaustion (#680) and may be retried via extraction-replay.sh. Confirmed live in production as of the #506 audit (2026-07-20). `failure_reason` CHECK constraint values: `nonzero_exit`, `timeout`, `spawn_error`, `unreplayable`, `json_parse_failure`, `timeout_retries_exhausted` (nova-mind#680 — see `memory/docs/memory-extraction-pipeline.md`). | 16 |
 | extraction_metrics | Performance metrics for data extraction processes. Tracks accuracy and efficiency of knowledge extraction. | 6 |
 | fact_change_log | Audit trail for entity fact modifications. Tracks who changed what and when for accountability. | 7 |
 | gambling_entries | Individual gambling session records. Tracks bets, outcomes, and session details for analysis. | 10 |

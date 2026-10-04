@@ -230,9 +230,53 @@ export function fillMissingEnv(
 // is caught by the handler test. `secretsPath` is parameterized for tests.
 export function buildChildEnv(
   base: NodeJS.ProcessEnv,
-  secretsPath?: string
+  secretsPath?: string,
+  postgresJsonPath?: string
 ): NodeJS.ProcessEnv {
-  return fillMissingEnv(base, loadSecretsEnv(secretsPath));
+  const env = fillMissingEnv(base, loadSecretsEnv(secretsPath));
+  // Pin the resolved database into the child env so extract_memories.py's libpq
+  // connection uses the SAME database as the handler's psql (root fix for #621
+  // split-brain). Throws if unresolvable -> caught by the handler's outer try/catch,
+  // which skips the extraction rather than crashing the hook.
+  env.PGDATABASE = resolveMemoryDb(env, postgresJsonPath);
+  return env;
+}
+
+// Resolve the database for extraction writes. Each peer owns <agent>_memory
+// (GLOBAL/DATABASE_ACCESS), so there is NO safe shipped default: the old hardcoded
+// 'nova_memory' fallback silently wrote every non-nova peer's extraction into the
+// wrong database, producing the entity_facts -> channel_sessions FK mismatch.
+// Require PGDATABASE; refuse to guess. `env` is a parameter for testability.
+export function resolveMemoryDb(
+  env: NodeJS.ProcessEnv = process.env,
+  postgresJsonPath: string = join(os.homedir(), '.openclaw', 'postgres.json')
+): string {
+  // Match pg-env.sh resolution order: PGDATABASE env -> postgres.json .database -> throw.
+  // There is no safe hardcoded per-peer default (each peer owns <agent>_memory), but
+  // postgres.json is the per-host source of truth (newhart_memory here, nova_memory on
+  // nova, etc.), so this resolves correctly on every peer with no unit change, and honors
+  // PGDATABASE when set. Used by BOTH the handler's psql calls and (via buildChildEnv) the
+  // python child's libpq connection, so the two can never split-brain onto different DBs
+  // (the root cause of #621).
+  const fromEnv = env.PGDATABASE;
+  if (fromEnv) return fromEnv;
+  try {
+    const parsed = JSON.parse(readFileSync(postgresJsonPath, 'utf8'));
+    const fromFile = parsed?.database;
+    if (fromFile && typeof fromFile === 'string') return fromFile;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException)?.code;
+    if (code !== 'ENOENT' && code !== 'EACCES') {
+      console.warn('[memory-extract] Could not read postgres.json for DB resolution', {
+        path: postgresJsonPath,
+        error: (err as Error).message
+      });
+    }
+  }
+  throw new Error(
+    '[memory-extract] No database resolved: PGDATABASE unset and no .database in ' +
+    postgresJsonPath + '. Set PGDATABASE or populate postgres.json (#621).'
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -344,7 +388,7 @@ async function insertExtractionFailure(args: {
   `;
 
   try {
-    await execFileAsync('psql', [(process.env.PGDATABASE || 'nova_memory'), '-t', '-A', '-c', sql]);
+    await execFileAsync('psql', [resolveMemoryDb(), '-t', '-A', '-c', sql]);
   } catch (err) {
     console.error('[memory-extract] Failed to insert extraction_failure', {
       error: (err as Error).message,
@@ -450,7 +494,7 @@ const handler = async (event: any) => {
         if (externalMessageId || rawBody.length > 0) {
           // Upsert session row
           const sessArgs = [
-            (process.env.PGDATABASE || 'nova_memory'), '-t', '-A', '-c',
+            resolveMemoryDb(), '-t', '-A', '-c',
             `INSERT INTO channel_sessions (session_key, agent_id, provider, external_chat_id, chat_type` +
             (groupSubject ? ', group_subject, title' : '') +
             (groupSpace ? ', group_space_id' : '') +
@@ -482,7 +526,7 @@ const handler = async (event: any) => {
             const senderUsernameEsc = senderUsername.replace(/'/g, "''");
 
             const txArgs = [
-              (process.env.PGDATABASE || 'nova_memory'), '-t', '-A', '-c',
+              resolveMemoryDb(), '-t', '-A', '-c',
               `INSERT INTO channel_transcripts (session_id, external_message_id, timestamp, role, content` +
               (senderId ? ', sender_id' : '') +
               (senderName && senderName !== 'unknown' ? ', sender_name' : '') +
@@ -511,7 +555,7 @@ const handler = async (event: any) => {
             // falling back to body storage.
             if (!channelTranscriptId && channelSessionId && derivedMessageId) {
               const lookupArgs = [
-                (process.env.PGDATABASE || 'nova_memory'), '-t', '-A', '-c',
+                resolveMemoryDb(), '-t', '-A', '-c',
                 `SELECT id FROM channel_transcripts WHERE session_id = ${channelSessionId} AND external_message_id = '${derivedMessageId.replace(/'/g, "''")}' LIMIT 1;`
               ];
               const { stdout: lookupOut } = await execFileAsync('psql', lookupArgs)

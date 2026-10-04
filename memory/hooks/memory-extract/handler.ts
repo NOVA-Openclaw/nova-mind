@@ -164,6 +164,78 @@ function resolvePythonCmd(): string {
 }
 
 // ---------------------------------------------------------------------------
+// Provider-key restore (zero-env hardening workaround — nova-mind#701)
+// ---------------------------------------------------------------------------
+//
+// Provider API keys (OPENROUTER_API_KEY, etc.) live in the gateway's systemd
+// EnvironmentFile (~/.openclaw/secrets.env) and are present in the gateway's
+// LAUNCH env, but OpenClaw scrubs them from the LIVE process.env after loading
+// them into its SecretRef store (zero-env hardening, cf. nova-mind#408). A child
+// spawned with { ...process.env } therefore does NOT inherit provider keys, so
+// extract_memories.py exits 1 with 'OPENROUTER_API_KEY not set'. env-loader.sh
+// does NOT help: it only reads openclaw.json .env.vars, which carries no provider
+// keys. Re-read secrets.env directly at spawn time and fill any key the scrubbed
+// env is missing (fill-only: never override an explicitly-set var).
+export const SECRETS_ENV_PATH =
+  process.env.OPENCLAW_SECRETS_ENV_OVERRIDE ||
+  join(os.homedir(), '.openclaw', 'secrets.env');
+
+export function loadSecretsEnv(secretsPath: string = SECRETS_ENV_PATH): Record<string, string> {
+  const result: Record<string, string> = {};
+  let raw: string;
+  try {
+    raw = readFileSync(secretsPath, 'utf8');
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException)?.code;
+    if (code !== 'ENOENT' && code !== 'EACCES') {
+      console.warn('[memory-extract] Could not read secrets.env for child provider keys', {
+        path: secretsPath,
+        error: (err as Error).message
+      });
+    }
+    return result;
+  }
+  for (const line of raw.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const eq = trimmed.indexOf('=');
+    if (eq <= 0) continue;
+    const key = trimmed.slice(0, eq).trim();
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) continue;
+    let val = trimmed.slice(eq + 1).trim();
+    if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+      val = val.slice(1, -1);
+    }
+    result[key] = val;
+  }
+  return result;
+}
+
+// Fill-only merge: copy keys from `source` into `target` only when target lacks a
+// non-empty value. Never overrides an explicitly-set env var. Returns target.
+export function fillMissingEnv(
+  target: NodeJS.ProcessEnv,
+  source: Record<string, string>
+): NodeJS.ProcessEnv {
+  for (const [k, v] of Object.entries(source)) {
+    if (!target[k]) target[k] = v;
+  }
+  return target;
+}
+
+// Build the environment for the spawned extraction child: start from `base`
+// (typically process.env plus SOURCE_*/SENDER_* vars) and fill in any provider
+// key scrubbed from it, read from secrets.env. This is the single seam the hook
+// uses to assemble the child env, so a regression that drops the secrets restore
+// is caught by the handler test. `secretsPath` is parameterized for tests.
+export function buildChildEnv(
+  base: NodeJS.ProcessEnv,
+  secretsPath?: string
+): NodeJS.ProcessEnv {
+  return fillMissingEnv(base, loadSecretsEnv(secretsPath));
+}
+
+// ---------------------------------------------------------------------------
 // Issue #485 helpers
 // ---------------------------------------------------------------------------
 
@@ -471,19 +543,24 @@ const handler = async (event: any) => {
       return Number.isFinite(n) && n > 0 ? n : loadExtractionTimeoutMs();
     })();
 
+    // Build the child env, restoring any provider key scrubbed from process.env
+    // (nova-mind#701) via the shared buildChildEnv seam. Fill-only: never override
+    // a var already set in process.env.
+    const childEnv: NodeJS.ProcessEnv = buildChildEnv({
+      ...process.env,
+      SENDER_NAME: senderName,
+      SENDER_ID: senderId,
+      IS_GROUP: String(isGroup),
+      SOURCE_SESSION_ID: sessionKey,
+      SOURCE_TIMESTAMP: messageTimestamp,
+      // DB-level source pointers for entity_facts FK columns (may be empty string when not yet ingested)
+      SOURCE_CHANNEL_TRANSCRIPT_ID: channelTranscriptId,
+      SOURCE_CHANNEL_SESSION_ID: channelSessionId
+    });
+
     const child = spawn(pythonCmd, [scriptPath], {
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: {
-        ...process.env,
-        SENDER_NAME: senderName,
-        SENDER_ID: senderId,
-        IS_GROUP: String(isGroup),
-        SOURCE_SESSION_ID: sessionKey,
-        SOURCE_TIMESTAMP: messageTimestamp,
-        // DB-level source pointers for entity_facts FK columns (may be empty string when not yet ingested)
-        SOURCE_CHANNEL_TRANSCRIPT_ID: channelTranscriptId,
-        SOURCE_CHANNEL_SESSION_ID: channelSessionId
-      }
+      env: childEnv
     });
 
     const getStderrTail = attachTailBuffer(child.stderr, PIPE_TAIL_CAP_BYTES);

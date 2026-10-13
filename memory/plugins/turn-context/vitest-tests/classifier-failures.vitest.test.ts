@@ -8,6 +8,15 @@ import { classifyMessage } from "../src/classifier.ts";
  * The four failure classes (model_not_found, timeout, connection_refused,
  * parse_error) must each emit a distinct, greppable reason token while still
  * returning a safe default classification.
+ *
+ * Fixture-value derivations:
+ * - "perhaps tomorrow" is intentionally ambiguous: no question mark, no
+ *   interrogative, no action verb, not a greeting/acknowledgment/command, so
+ *   classifyByRules returns null and the Ollama fallback runs.
+ * - 404/200 are the HTTP status codes exercised by TC-697-001/003/004.
+ * - reason tokens model_not_found/timeout/connection_refused/parse_error are
+ *   the exact values required by TC-697-001..004 and TC-361-004.
+ * - The 2000ms timeout value comes from classifier.ts OLLAMA_TIMEOUT_MS.
  */
 
 describe("classifyMessage failure reasons (#697 / #361)", () => {
@@ -58,7 +67,6 @@ describe("classifyMessage failure reasons (#697 / #361)", () => {
   }
 
   // Ambiguous content that fails rule-based classification and triggers Ollama fallback.
-  // "perhaps tomorrow" has no question mark, no action verb, no greeting, and is >5 chars.
   const ambiguousContent = "perhaps tomorrow";
 
   it("TC-697-001: model not installed (404) logs reason=model_not_found and defaults to conversation", async () => {

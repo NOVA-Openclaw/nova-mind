@@ -9,6 +9,12 @@ import { join } from "path";
  *
  * These exercise the jq filter used in agent-install.sh to enable the
  * turn-context plugin, verifying idempotency and preservation of existing keys.
+ *
+ * Fixture-value derivations:
+ * - "/home/nova/.openclaw/plugins/turn-context" is the target install path
+ *   assigned to PLUGIN_PATH in agent-install.sh's turn-context block.
+ * - allowConversationAccess is the boolean permission required by #709.
+ * - "turn-prepend" is a real placement value a user might already have set.
  */
 
 function runJqFilter(input: object): object {

@@ -7,6 +7,15 @@ import { resolveSenderInfoFromCtx, type ResolvedIdentity } from "../src/index.ts
  * Covers the local, fixture-driven cases from tests/TEST-CASES-ISSUE-712.md.
  * Staging-only cases (TC-INT-001) and cases requiring a live entity resolver
  * are deferred to step 7.
+ *
+ * Fixture-value derivations:
+ * - channel values "discord"/"telegram" are canonical providers used by
+ *   extractIdentifiers() (entity-resolver.ts switch statement).
+ * - chatId 123456789 is the numeric-typed example from TC-712-007.
+ * - senderId 330189773371080716 is the numeric Discord snowflake example from
+ *   TC-712-008 and the known Discord id from TC-712-003.
+ * - currentUserMessage / prompt are the documented fields of
+ *   PluginHookBeforePromptBuildEvent in the OpenClaw 2026.9.6 host contract.
  */
 
 function makeApi(): any {
@@ -40,7 +49,12 @@ describe("resolveSenderInfoFromCtx (#712)", () => {
   it("TC-712-007: chatId as number logs a type warning and is not used as a key", () => {
     const result = resolveFor(
       { currentUserMessage: "hello" },
-      { channel: "telegram", senderId: "12345", chatId: 123456789 as any }
+      {
+        channel: "telegram",
+        senderId: "12345",
+        // Numeric chatId is the wrong-type fixture required by TC-712-007.
+        chatId: 123456789 as any,
+      }
     );
 
     expect(result.warnings).toEqual(
@@ -48,7 +62,7 @@ describe("resolveSenderInfoFromCtx (#712)", () => {
         expect.stringMatching(/chatId has wrong type.*number/),
       ])
     );
-    // The wrong-typed value must not leak into senderInfo.
+
     expect(result.senderInfo.senderId).toBe("12345");
     expect(result.content).toBe("hello");
   });
@@ -56,7 +70,11 @@ describe("resolveSenderInfoFromCtx (#712)", () => {
   it("TC-712-008: senderId as number logs a type warning and degrades gracefully", () => {
     const result = resolveFor(
       { currentUserMessage: "hello" },
-      { channel: "discord", senderId: 330189773371080716 as any }
+      {
+        channel: "discord",
+        // Numeric Discord snowflake is the wrong-type fixture required by TC-712-008.
+        senderId: 330189773371080716 as any,
+      }
     );
 
     expect(result.warnings).toEqual(
@@ -109,6 +127,8 @@ describe("resolveSenderInfoFromCtx (#712)", () => {
 
   it("TC-712-012: empty messages array but currentUserMessage populated uses currentUserMessage", () => {
     const result = resolveFor(
+      // event.messages is the historical-session array; currentUserMessage is
+      // the current turn's text per the 2026.9.6 host contract.
       { currentUserMessage: "hello world", messages: [] },
       { channel: "discord", senderId: "123" }
     );
@@ -118,6 +138,7 @@ describe("resolveSenderInfoFromCtx (#712)", () => {
 
   it("TC-712-013: currentUserMessage omitted falls back to prompt", () => {
     const result = resolveFor(
+      // prompt is the legacy fallback documented for older hosts.
       { prompt: "legacy prompt text" },
       { channel: "discord", senderId: "123" }
     );

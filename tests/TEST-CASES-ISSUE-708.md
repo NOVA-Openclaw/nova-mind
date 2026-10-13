@@ -9,6 +9,45 @@
 
 ---
 
+## Revision Log
+
+**Rev 1 (2026-10-13, step 4 — I)ruid's answers to Chunk B open questions, 18:04 UTC):**
+- **#708:** No backfill confirmed — fix forward only. **TC-708-009 dropped** (was a deferred placeholder, never a
+  real test; see Open Question #1 resolution). **New identification-only requirement**: a read-only query listing
+  every `channel_transcripts` row attached to a session it doesn't belong to — but this run's acceptance is
+  IDENTIFICATION ONLY, not removal (removal is explicitly not approved yet). Added TC-708-010 (identification query)
+  and TC-708-011 (removal — written but marked blocked/not-in-this-run's-acceptance pending approval). Investigated
+  live, read-only, what "misattached" actually means for session 15 (`agent:nova:agent_chat`, 18,632 of the
+  provider's 29,287 rows) and Discord (105 sessions, 12,836 rows): **finding is "right chat, not split by
+  thread/session" for agent_chat, not cross-chat contamination** — see new §1b.
+- **#710:** `publish-active-sessions.py` located — lives in `NOVA-Openclaw/nova-workspace` (pinned `da56b303`,
+  `scripts/publish-active-sessions.py`), root crontab (`*/2 * * * *`), writes `nova-active-sessions.jsonl` to
+  `/opt/agents/shared-diagnostics/` for a memory-pressure "ratchet experiment" — confirmed read-only w.r.t. the
+  gateway, confirmed it does NOT import anything into `nova_memory`. TC-710-004 rewritten as a confirmation case
+  (not a fix case); TC-710-008/009 added for script+cron removal and the "nothing else reads the jsonl" negative
+  test, grepped across both pinned repos.
+- **#706:** TC-706-003 **rewritten** per the corrected model — every memory type gets source attribution via its
+  OWN anchor (conversation → `channel_transcripts`, agent_chat → its agent_chat message, vocabulary/library/
+  research/lessons/events → their own source record), not only conversation-derived memories. New test matrix: one
+  case per `memory_embeddings.source_type`, each asserting the anchor resolves to a real row, plus one end-to-end
+  "follow the anchor" case from a semantic-search hit through to the original source.
+- **#703:** BOTH `handler.ts` (4 call sites) AND `extract_memories.py`'s connection setup are confirmed in scope.
+  Traced the Python caller: `get_db_connection()` (`extract_memories.py:77-79`) wraps a bare `psycopg2.connect()`
+  with NO explicit `dbname` — it resolves PG* env vars exactly as `psql` does; called at `extract_memories.py:1242`.
+  **New finding, upgrades the whole section's risk model**: `~/.openclaw/postgres.json` (the shared config
+  `pg-env.sh` reads) has a **top-level `"database": "nova_memory"`** default. This means an agent whose own
+  environment doesn't explicitly override `PGDATABASE` does NOT get an empty/unset value that trips `handler.ts`'s
+  `|| 'nova_memory'` literal — it gets a real, valid-looking `PGDATABASE=nova_memory` from the SHARED config,
+  which is indistinguishable at the code level from "this really is nova's own DB." **The fix cannot just remove
+  the hardcoded literals — it must validate the resolved `PGDATABASE` against the peer identity derived from
+  `session_key`, and fail loudly on a mismatch, not merely on "unset."** New TC-703-010 added for this exact case.
+  (Per workspace security norms, the config file's credential fields are not reproduced here — only the
+  `"database"` key's value is cited.)
+- Victoria's write-path tracing and grant hardening confirmed **out of Chunk B's pass/fail bar**
+  (nova-workspace#252) — TC-703-006 downgraded from "forensic test" framing to an explicit out-of-scope note.
+- Open questions #1, #2, #4, #5 from Rev 0 resolved by this review; #3 resolved by the TC-706-003 rewrite. See §7.
+---
+
 ## 0. Pinned source artifacts
 
 - **nova-mind:** same clone, `~/repos/se1231-nova-mind`, branch `fix/se1231-openclaw-2026.9-regressions`, base
@@ -74,6 +113,45 @@ pinning discipline, do not silently pick a side):**
 
 ---
 
+## 1b. Empirical investigation: "misattached" = right-chat-not-split, not cross-chat contamination (step-4 follow-up)
+
+Per I)ruid's instruction, checked live (read-only) what "misattached" actually means before writing an
+identification test, since the unique index is `(provider, external_chat_id, COALESCE(external_thread_id,''))` —
+rows could be in the right chat and only missing a thread/session split, which is a very different (and much less
+alarming) finding than cross-chat contamination.
+
+**Provider-level row/session distribution** (`GROUP BY provider`): `agent_chat` 8 sessions / 29,287 rows (avg
+~3,661 rows/session) · `discord` 105 sessions / 12,836 rows (avg ~122 rows/session) · `irc` 2/294 · `slack` 5/270 ·
+`webchat` 23/106 · `signal` 4/38 · `openclaw` 7/4 · `telegram` 1/0.
+
+**Session 15 (`agent:nova:agent_chat`, `external_chat_id='agent_chat:nova'`, `external_thread_id` NULL):** 18,632
+rows, spanning **2026-05-12 through 2026-10-13 — over 5 months** in one row, with **17 distinct `sender_id` values**
+(graybeard 13,969 · newhart 3,201 · victoria 1,350 · nova-staging 29 · main 16 · athena 13 · gem 12 · hermes 11 ·
+zztest_a 10 · schema-sync 8 · agent_chat 3 · gidget 3 · quill 2 · coder 2 · scout 1).
+
+**Finding: this is "right chat, not split by thread/session," not cross-chat contamination.** `external_chat_id`
+already correctly partitions `agent_chat` traffic by OWNING peer — there are exactly 8 `agent_chat` sessions for
+8 distinct peers (`nova`, `newhart`, `graybeard`, `victoria`, `athena`, `nova-staging`, `main`,
+`newhart-only-sub`), matching the peer count in #703's own extraction_failures breakdown. The 17 senders inside
+session 15 are not evidence of contamination — `agent_chat` is a shared message bus, and graybeard/newhart/
+victoria writing TO nova is exactly what nova's own agent_chat inbox is supposed to contain. The actual gap is
+granularity: because `external_thread_id` is never populated (confirmed §1: 0/155), FIVE MONTHS of nova's entire
+agent_chat history collapses into one `channel_sessions` row instead of being split per conversational
+thread/exchange. **Discord's gap is structurally narrower**: `external_chat_id` already = one row per physical
+Discord channel (105 distinct channel ids → 105 sessions, each with a reasonable row count — the largest single
+channel session has 1,106 rows, nowhere near a 5-month/17-sender collapse), so Discord's only exposure is
+forum-style channels with sub-threads that would need `external_thread_id` to split further within an
+already-correctly-scoped channel.
+
+**Limitation, stated plainly for the identification test's design (TC-708-010):** `raw_metadata` is NULL on every
+row (§1), so there is no ground-truth thread/conversation id stored anywhere in `nova_memory` to cross-validate
+against. The identification query below can prove "this session spans an implausibly long time window / implausibly
+many distinct senders for a single thread" (a strong proxy for "needs splitting"), but it CANNOT prove with
+certainty that zero rows are in the genuinely wrong `channel_sessions` row — that would require an external
+ground truth (e.g., the agent_chat source table's own message ids/timestamps cross-referenced, or the OpenClaw
+SQLite backup mentioned in #706's comment). This caveat is itself part of the acceptance criteria: the
+identification query's own output/report must state this limitation, not present its proxy signal as a proven
+contamination count.
 ## 2. Adversarial/config-seam coverage index
 
 | Requirement | Satisfied by |
@@ -86,7 +164,7 @@ pinning discipline, do not silently pick a side):**
 
 ---
 
-## 3. #708 — `channel_sessions` upsert: `external_thread_id`, `last_message_at`, uniqueness (9 cases: TC-708-001…009)
+## 3. #708 — `channel_sessions` upsert: `external_thread_id`, `last_message_at`, uniqueness, misattachment identification (11 cases: TC-708-001…011; TC-708-011 blocked/not in this run's acceptance — see Revision Log)
 
 **Host-contract citation (REQUIRED — "cite which fields"):** `message_received`'s event type,
 `PluginHookMessageReceivedEvent` (production fork `6ced19b`, `src/plugins/hook-message.types.ts:165-182`),
@@ -178,17 +256,48 @@ messages, not whichever `UPDATE` happened to commit last if that is earlier in m
 (i.e., if timestamps are used rather than `NOW()`, the update should be monotonic — assert the actual chosen
 semantics from TC-708-002).
 
-### TC-708-009 — Backfill (CONDITIONAL — see Open Question #1; do not implement until scope is confirmed)
-**Priority:** Blocked/Deferred.
-**Note:** Per §1's empirical finding, a backfill sourced from `nova_memory.channel_transcripts.raw_metadata` has
-no data to operate on (0/42,818 populated). If the orchestrator confirms the backfill is instead meant to run
-against the external OpenClaw SQLite backup (#706's "10-11 SQLite backup"), this test case needs a full rewrite
-with that artifact pinned explicitly (source-artifact pinning rule) before any test design proceeds. Placeholder
-only — not counted as a real test case in the Chunk B total.
+### TC-708-010 — Read-only IDENTIFICATION query: list every `channel_transcripts` row attached to a session it doesn't belong to
+**Priority:** P1 (Critical) — direct acceptance test for this run (IDENTIFICATION ONLY; confirmed by step-4 review,
+removal is explicitly NOT approved in this run).
+**Preconditions:** None beyond read access to `nova_memory`. Must run against live/staging data, never write.
+**Steps:**
+1. For every `channel_sessions` row, compute: row count, distinct `sender_id` count, and timestamp span
+   (`max(timestamp) - min(timestamp)`) across its `channel_transcripts`.
+2. Flag sessions whose span/sender-count profile is implausible for a single conversational thread — e.g. span
+   exceeding some threshold (start conservative: >24h, informed by §1b's 5-month/17-sender session 15 finding) AND/OR
+   sender count exceeding what a 1:1 or small-group conversation would plausibly have for that `chat_type`.
+3. Output a report per flagged session: `session_id`, `provider`, `external_chat_id`, row count, sender count,
+   span, and an explicit **"right-chat-not-split" vs. "possible cross-chat" classification label** — the query
+   must not claim certainty about cross-chat contamination (per §1b's stated limitation: no ground-truth thread id
+   exists to verify against).
+**Expected:**
+- The query is read-only — zero writes, zero deletes, verified by re-running row counts before/after unchanged.
+- Session 15 (and the other 7 `agent_chat` sessions) appear in the flagged report, correctly labeled
+  "right-chat-not-split" per §1b's reasoning (same `external_chat_id` as the peer's correct chat; multiple
+  legitimate senders expected for a shared bus).
+- The report's methodology and limitation statement are both present in its own output — a report that silently
+  asserts certainty it cannot have (e.g. "N contaminated rows found") FAILS this test even if the row-flagging
+  logic itself is otherwise correct.
+- No `channel_transcripts`/`channel_sessions` row is modified, moved, or deleted by this test or by the query
+  itself.
+
+### TC-708-011 — Removal of flagged rows (WRITTEN, NOT IN THIS RUN'S ACCEPTANCE — blocked pending explicit approval)
+**Priority:** Blocked/Deferred — written now per the dispatch brief's ask for "a separate case for removing those
+rows if I)ruid approves removal later," but explicitly excluded from this run's pass/fail bar.
+**Preconditions:** TC-708-010's identification query has run and produced a flagged-session report; an explicit,
+separate approval to perform removal/re-splitting has been given (not present as of this test design).
+**Steps (future, once approved):** For an approved flagged session, re-split its `channel_transcripts` rows into
+new `channel_sessions` rows along whatever boundary is approved (e.g. per-sender-pair, per-time-gap-exceeding-N),
+preserving `channel_transcripts.id` (per the original #708 issue comment's own constraint, so
+`entity_facts.source_channel_transcript_id` links stay valid) and updating only `session_id` on the moved rows.
+**Expected (future):** Dry-run mode available and required before any real run; a backup/rollback path exists;
+re-split transcripts keep their original `id`; `entity_facts` FK links are verified unbroken afterward.
+**Status for this run:** NOT executed, NOT required to pass. Flagged here only so the identification query's
+output format (TC-708-010) is designed to feed this step cleanly whenever it is approved.
 
 ---
 
-## 4. #710 — Retire JSONL ingest/`rm`, fix/retire other `sessions/*.jsonl` readers (7 cases: TC-710-001…007)
+## 4. #710 — Retire JSONL ingest/`rm`, confirm/retire `publish-active-sessions.py` (9 cases: TC-710-001…009)
 
 ### TC-710-001 — `memory-catchup.sh`'s JSONL-ingest block is completely absent after the fix (not just disabled/no-op)
 **Priority:** P1 (Critical) — direct acceptance test.
@@ -218,14 +327,42 @@ classes — the current bug is specifically a delete, `rm -f`, line 443 of the p
 **Expected:** Zero hits. This is the direct regression guard for the exact defect #710 is fixing — a future
 contributor must not be able to reintroduce a JSONL-cleanup habit even in a rewritten/refactored form.
 
-### TC-710-004 — `publish-active-sessions.py` is located, then either fixed (no longer reads `sessions/*.jsonl`) or retired (deleted + any scheduler reference removed)
-**Priority:** P1 (Critical) — direct acceptance test; **BLOCKED pending artifact location** (see Open Question #2
-below — this file was not found anywhere under the pinned nova-mind clone during this design pass; it may live in a
-peer repo such as `nova-workspace`, matching the pattern already seen for the agent_chat listener relocation in
-`tests/TEST-CASES-ISSUE-579.md`).
-**Steps (once located):** Inspect its session-discovery logic.
-**Expected:** It reads active-session state from `nova_memory.channel_sessions` (or another sanctioned nova_memory
-source), never from `~/.openclaw/agents/*/sessions/*.jsonl` directly.
+### TC-710-004 — `publish-active-sessions.py` confirmed located and confirmed NOT an ingest path (resolved per step-4 review — RETIRE the whole misconception, not the script)
+**Priority:** P1 (Critical) — direct acceptance test; **located**: `NOVA-Openclaw/nova-workspace`
+(pinned `da56b303`), `scripts/publish-active-sessions.py`, scheduled via root crontab `*/2 * * * *`.
+**Source confirms (read in full, lines 1-60):** it is read-only w.r.t. the gateway (reads
+`~/.openclaw/agents/nova/sessions/sessions.json` and `/proc` only — "Never signals, never touches the gateway
+process"), and writes `/opt/agents/shared-diagnostics/nova-active-sessions.jsonl` for graybeard's
+gateway-mem-watch sampler ("ratchet experiment" memory-pressure denominator). **It does NOT import anything into
+`nova_memory` and was never part of the memory-extract ingest path** — per-turn ingestion via `memory-extract/
+handler.ts` is confirmed (per step-4 review) as the ONLY ingest path. **No SQLite→nova_memory importer design is
+in scope anywhere in this file** — this corrects a possible misreading of the original #710 dispatch brief's "fix
+or retire" framing: there is nothing to FIX here (it was never broken in the sense #710 cares about), only to
+confirm it stays out of nova_memory's ingest path.
+**Steps:** Confirm the script's read target (`sessions.json`) and write target (`nova-active-sessions.jsonl`)
+match the above; confirm no `psql`/`psycopg2`/DB-connection code exists anywhere in the script.
+**Expected:** Zero DB-connection code in the script; it remains purely a diagnostics-snapshot tool, independent of
+the #708/#703/#706 ingest-path fixes in this file.
+
+### TC-710-008 — `publish-active-sessions.py` and its crontab line are actually removed (if retirement is the chosen outcome) or explicitly kept with a documented reason
+**Priority:** P1 (Critical) — direct acceptance test matching the dispatch brief's literal ask ("the script and its
+cron line are removed").
+**Preconditions:** Fixed `nova-workspace` branch/deploy.
+**Steps:** `crontab -l` no longer contains the `publish-active-sessions.py` line; `scripts/publish-active-
+sessions.py` is absent from the repo (or, if kept for the ratchet experiment's own purposes, an explicit decision
+record exists stating why it's out of #710's removal scope — confirm with the orchestrator which outcome is
+intended, since the dispatch brief says "removed" but the script's own purpose (diagnostics for a live, separate
+memory-pressure investigation) is unrelated to the nova_memory ingest concern #710 is actually about).
+
+### TC-710-009 — Negative test: nothing else reads `nova-active-sessions.jsonl`
+**Priority:** P1 (Critical) — REQUIRED negative test, grepped across BOTH pinned repos per the dispatch brief.
+**Steps:** `grep -rln "nova-active-sessions"` across the pinned `nova-mind` clone (`12ecc0b`+Chunk A/B commits) AND
+the pinned `nova-workspace` clone (`da56b303`). **Result at design time: the only hit in either repo is the
+producer script itself** (`nova-workspace/scripts/publish-active-sessions.py`) — zero consumers found in either
+pinned checkout.
+**Expected:** This remains true after whatever #710 changes land — if a consumer is ever added, it must read from
+`nova_memory` directly, never from this diagnostics-only jsonl file, and this test must be updated to assert that
+new consumer also behaves correctly rather than silently passing because grep still finds nothing.
 
 ### TC-710-005 — "The rest" of the `sessions/*.jsonl` readers — full inventory before any fix is accepted
 **Priority:** P1 (Critical) — the dispatch brief explicitly says "the rest," implying more than the two named
@@ -255,7 +392,7 @@ removal) are reviewed for the same staleness and flagged if still hardcoded to `
 
 ---
 
-## 5. #706 — Anchor memory sources only to `nova_memory` sessions/transcripts (6 cases: TC-706-001…006)
+## 5. #706 — Every memory type gets its own resolvable source anchor (7 cases: TC-706-001, 002, 003, 003b, 004, 005, 006 — TC-706-003 rewritten per step-4 review, TC-706-003b added)
 
 ### TC-706-001 — Inventory (COMPLETE — see §1): current anchor mechanism is already FK-shaped, not ad hoc
 **Priority:** Informational / baseline. No action needed beyond what §1 already established: `entity_facts` has
@@ -274,14 +411,42 @@ free-text column elsewhere that encodes an OpenClaw-SQLite-origin pointer instea
 (`.openclaw/agents`, `.sqlite`) smuggled in as string content rather than a structured FK.
 **Expected:** Zero such smuggled anchors.
 
-### TC-706-003 — `memory_embeddings` for non-`entity_fact` source types (e.g. `event`, `lesson`, `research`) also resolve to a `nova_memory`-anchored chain, or are explicitly out of scope with a documented reason
-**Priority:** P2 (High) — §1's inventory only sampled `entity_fact`; other types (`event` 3,767 rows, `lesson`
-2,334 rows, etc.) need the same anchor-chain check before #706 can claim "anchored only to nova_memory
-sessions/transcripts" as a system-wide property rather than an `entity_fact`-only one.
-**Steps:** For each distinct `source_type`, sample `source_id` and trace it to its owning table; confirm that
-table in turn either IS `channel_sessions`/`channel_transcripts` or has its own FK chain back to them, OR is
-explicitly documented as anchor-exempt (e.g. `vocabulary`/`library` entries may have no conversational anchor by
-design — confirm with the orchestrator which `source_type`s are expected to have no transcript anchor at all).
+### TC-706-003 — EVERY `memory_embeddings.source_type` has a resolvable anchor to its own real source record (REWRITTEN per step-4 review — corrected model: all memories get attribution, not only conversation-derived ones)
+**Priority:** P1 (Critical) — corrected scope, direct acceptance test, one sub-case per `source_type`.
+**Corrected model (per I)ruid, step 4):** the per-turn flow is semantic search → pointers to `entity_facts`/chunks
+injected into the prompt → if the model needs more, it follows the chunk's anchor to its ORIGINAL source. Every
+memory type anchors to its OWN kind of source record, not uniformly to `channel_transcripts`:
+- `entity_fact` → `entity_facts.id` → (`source_channel_transcript_id` / `source_channel_session_id`) → `channel_transcripts`/`channel_sessions`
+- `agent_chat` → its own agent_chat message (the shared `agent_chat` database's message table, NOT `channel_transcripts` — these are two distinct storage systems per #706's own decision comment, which explicitly tracks their duplication as out-of-scope-for-now via nova-openclaw#225)
+- every remaining type (`research`, `memory_file`, `research_finding`, `vocabulary`, `event`, `lesson`,
+  `workflow_run`, `entity`, `research_task`, `research_conclusion`, `task`, `journal_entry`, `library`,
+  `artwork`, `comms_digest`, `motivation_d100`, `music_work`, `blog_post`) → its own dedicated source table/record
+  (e.g. `events`, `lessons`, `research_findings` or equivalent — confirm each table name in implementation review)
+**Steps:** For EACH distinct `source_type` observed live (§1's 20 types), sample at least one `source_id`, and:
+1. Confirm a real, resolvable row exists in that type's owning table for the sampled `source_id` (not a dangling
+   reference — this is the per-type positive resolution test).
+2. Confirm the owning table/row, in turn, carries (or can itself trace to) its own provenance — e.g. an `event`
+   row should know when/how it was observed, a `lesson` row should know what generated it — even when that
+   provenance is NOT a `channel_transcripts`/`channel_sessions` row (e.g. a `lesson` derived from a workflow run's
+   own metadata, not a conversation turn).
+**Expected:** All 20 live `source_type`s resolve to a real row in their respective owning table via
+`(source_type, source_id)`; zero dangling/unresolvable anchors found; no `source_type` is left undocumented as
+"unknown where this points."
+
+### TC-706-003b — End-to-end "follow the anchor" path: a semantic-search hit resolves all the way back to its original source record
+**Priority:** P1 (Critical) — REQUIRED by step-4 review ("Include the follow-the-anchor path end to end"); this is
+the behavioral test that TC-706-003 is a prerequisite for, not a substitute for.
+**Preconditions:** At least one real, content-bearing `memory_embeddings` row for each of: `entity_fact`,
+`agent_chat`, and one "own dedicated source table" type (e.g. `event` or `lesson`).
+**Steps:** For each of the 3 preconditioned rows: (1) run the actual semantic-search path (the same query the
+turn-context plugin's recall subsystem uses, per Chunk A's `semantic-recall.ts`) and confirm it returns a pointer/
+chunk referencing this embedding; (2) follow that pointer programmatically (not by manual SQL join) all the way to
+the original source content (e.g. the actual conversation text for `entity_fact`/`agent_chat`, or the actual
+event/lesson text for the dedicated-table case).
+**Expected:** For all 3 types, the full chain resolves end to end with no manual intervention and no broken link;
+the content retrieved at the end of the chain is the SAME real content the embedding was originally generated
+from (byte-for-byte or semantically identical, not just "a row exists") — this is the config→runtime-seam-style
+check that proves the anchor is actually USED by production code, not merely present as an unused FK.
 
 ### TC-706-004 — Migration of existing anchors preserves every currently-valid FK (config→runtime seam: run against real sampled data, not a hand-built fixture)
 **Priority:** P1 (Critical) — REQUIRED config→runtime seam case.
@@ -309,15 +474,30 @@ which is independent of whether the duplication itself persists.
 
 ---
 
-## 6. #703 — memory-extract handler fails loudly on unresolved `<peer>_memory`, no fallback, stranded-row replay (9 cases: TC-703-001…009)
+## 6. #703 — memory-extract handler fails loudly on unresolved `<peer>_memory`, no fallback, stranded-row replay (9 cases: TC-703-001…005, 007…010; TC-703-006 confirmed out of scope — see note)
 
-**Note on current-code baseline:** the pinned `handler.ts` (read in full, §0) always targets
-`process.env.PGDATABASE || 'nova_memory'` (lines 275, 381, 413, 442 — four separate call sites, all with the same
-`|| 'nova_memory'` fallback) for every `psql` invocation it makes directly. **This literal fallback-to-nova_memory
-pattern, repeated at all four `execFileAsync('psql', ...)` call sites in `handler.ts`, is itself the "#621/#487"
-defect #703 is closing** — distinct from (and in addition to) whatever peer-resolution logic lives in
-`extract_memories.py`'s own DB connection setup (not fully traced in this pass — see Open Question #3). Any fix
-must address all four `handler.ts` call sites, not just the main extraction script's connection logic.
+**Note on current-code baseline — BOTH code paths confirmed in scope (step-4 review):**
+- `handler.ts` (read in full, §0) always targets `process.env.PGDATABASE || 'nova_memory'` (lines 275, 381, 413,
+  442 — four separate call sites, all with the identical literal fallback) for every `psql` invocation it makes
+  directly.
+- `extract_memories.py`'s connection builder is now traced: `get_db_connection()`
+  (`memory/scripts/extract_memories.py:77-79`) is a one-line wrapper — `return psycopg2.connect()` with **no
+  explicit `dbname` argument at all**, meaning it resolves purely from `PG*` environment variables exactly like a
+  bare `psql` invocation would; called once, at `extract_memories.py:1242` (`conn = get_db_connection()`), with
+  the resulting `conn` threaded into `store_extracted(..., conn=conn)` (line ~1295) and `_store_fact`'s nested
+  calls (line ~1044).
+- **Critical upgrade to the whole section's threat model:** `~/.openclaw/postgres.json` — the shared config file
+  `pg-env.sh`'s `load_pg_env()` reads — carries a top-level `"database": "nova_memory"` key (credential fields in
+  that file are NOT reproduced here per workspace secret-handling norms — only the `"database"` key's value is
+  cited). **This means an agent process whose own environment doesn't explicitly override `PGDATABASE` does not
+  get an empty/unset value** that would trip a simple "is it set" check — it gets a real, syntactically-valid
+  `PGDATABASE=nova_memory` sourced from shared config, indistinguishable at the code level from "this genuinely is
+  nova's own database." **Both `handler.ts`'s literal `|| 'nova_memory'` AND this shared-config default must be
+  closed for #703 to actually hold** — removing only the JS-side literal leaves the Python path (and any other
+  `psql`-invoking code) still silently inheriting `nova_memory` from `postgres.json` for any peer whose own
+  environment doesn't positively override it. The fix must validate the RESOLVED `PGDATABASE` against the peer
+  identity derived from `session_key` (e.g. the `agent:<peer>:` prefix) and fail loudly on a mismatch — "is
+  `PGDATABASE` unset" is not a sufficient check (see new TC-703-010).
 
 **Peer-identification mechanism (from live data, read-only):** `extraction_failures.session_key` values observed
 follow the pattern `agent:<peer>:...` (e.g. `agent:newhart:agent_chat`, `agent:victoria:discord:channel:...`),
@@ -374,17 +554,11 @@ snapshot.
 `victoria_memory`; cross-contamination (a `newhart` row appearing in `victoria_memory` or vice versa) is checked
 explicitly, not just "did newhart's rows arrive somewhere."
 
-### TC-703-006 — Victoria's 424 stranded rows despite no DML grant — traced, not just replayed
-**Priority:** P2 (High) — #703's own comment flags this as unexplained ("candidates are another role's credentials
-or a SECURITY DEFINER path. Needs tracing.") and explicitly still-open in the Decisions comment ("3. Still open:
-trace how Victoria's 424 rows got written despite having no grant."). This is a **forensic test, not a fix
-acceptance test** — design it to CAPTURE evidence (which role/function actually executed the writes, via
-`pg_stat_statements`/audit log if available, or by tracing `extraction_failures`/`entity_facts` row metadata for
-a session/connection fingerprint) rather than to assert a specific resolution, since the mechanism is still
-unknown at design time.
-**Note:** grant changes themselves are explicitly Graybeard's to execute per #703's Decision #2 — this suite only
-needs a test that the eventual grant model is as specified (TC-703-010, if added once Graybeard's grant change
-lands — flagged as Open Question #4, likely belongs to a later step once grants are actually changed).
+### TC-703-006 — Victoria's write-path tracing and grant hardening: CONFIRMED OUT OF SCOPE for Chunk B (step-4 review)
+**Priority:** N/A — explicitly out of this suite's pass/fail bar per step-4 review: "Victoria's write path and grant
+hardening: out of Chunk B's pass/fail bar (nova-workspace#252)." Retained here only as a scope-boundary marker so a
+future reader doesn't assume its absence is an oversight. No test case is written for it in this file; it belongs
+to nova-workspace#252, a separate issue/suite.
 
 ### TC-703-007 — Adversarial: `PGDATABASE` unset entirely
 **Priority:** P1 (Critical) — REQUIRED adversarial case per dispatch brief; also a direct regression test against
@@ -420,30 +594,45 @@ rejected?); (b) `session_key` with a peer segment that doesn't match any known p
 other without validation; (b) and (c) both fail loudly with a reason identifying parse failure (distinct from
 "peer resolved but DB unreachable," TC-703-008) — none of the three silently falls back to `nova_memory`.
 
+### TC-703-010 — Adversarial: `PGDATABASE` resolves to the SHARED DEFAULT `nova_memory` from `postgres.json`, not unset, for a non-nova peer's session
+**Priority:** P1 (Critical) — REQUIRED per step-4 review; the single most realistic failure mode, distinct from
+TC-703-007's "fully unset" case. Directly targets the `postgres.json` shared-default finding above.
+**Preconditions:** A peer-prefixed `session_key` (e.g. `agent:newhart:...`) running in an environment where
+`PGDATABASE` was never explicitly overridden for this peer, so it resolves (via `pg-env.sh`/`postgres.json`'s
+shared `"database": "nova_memory"` default) to the literal string `"nova_memory"` — a real, valid, connectable
+database, NOT empty/unset.
+**Steps:** Trigger the handler (both the `handler.ts` direct `psql` calls and the `extract_memories.py`
+`get_db_connection()` path) for this session.
+**Expected:** The fix derives an EXPECTED database name from the `session_key`'s peer prefix (e.g.
+`newhart_memory`) and compares it against the resolved `PGDATABASE` value BEFORE writing anything; a mismatch
+(resolved `nova_memory` vs. expected `newhart_memory`) is treated identically to TC-703-007's "unset" case — a
+loud, distinct-reason failure, zero writes to `nova_memory`. This test MUST fail against the pinned ref's current
+behavior (today, a resolved `PGDATABASE=nova_memory` for a non-nova peer is completely indistinguishable from the
+correct case and writes proceed silently) and is the acceptance test that actually closes #703, as opposed to
+TC-703-007/008 which only catch the narrower unset/nonexistent-database cases.
+
 ---
 
 ## 7. Open questions for the orchestrator / Project Leadership review
 
-1. **#708 backfill scope contradiction (§1, REQUIRED resolution before TC-708-009 can be written for real):**
-   #715's step-2 comment and this run's dispatch both say #708 is fix-forward-only because `raw_metadata` is empty
-   on every live row — confirmed empirically (0/42,818). #708's own issue comment instead describes a backfill
-   using `raw_metadata` thread/chat ids, which has no data to operate on today. Is the backfill (if any) actually
-   meant to run against the external OpenClaw SQLite backup mentioned in #706's comment (a different artifact,
-   needing its own pinning), or is #708's comment simply stale/superseded by the step-2 design decision? This
-   changes whether TC-708-009 is real work or drops out of Chunk B entirely.
-2. **`publish-active-sessions.py` location (TC-710-004):** not found anywhere in the pinned nova-mind clone. Likely
-   relocated to a peer repo (`nova-workspace`?) per the same pattern already documented in
-   `tests/TEST-CASES-ISSUE-579.md`'s agent_chat-listener relocation note. Needs a pinned artifact location before
-   TC-710-004/005 can be finalized.
-3. **#706's scope for non-`entity_fact` `memory_embeddings` source types (TC-706-003):** confirming whether
-   `vocabulary`/`library`/`agent_chat`-typed embeddings are expected to have a `nova_memory` conversational
-   anchor at all, or are intentionally anchor-exempt by design.
-4. **#703's Victoria-write-path tracing (TC-703-006)** and the **grant-hardening step** are explicitly still-open/
-   deferred to Graybeard per the issue's own Decisions comment. Confirming these stay out of Chunk B's pass/fail
-   bar (this suite only tests the handler's fail-loud/no-fallback/replay behavior, not the grant model itself).
-5. **`handler.ts`'s 4 separate `|| 'nova_memory'` call sites (§6 note)** vs. whatever peer-resolution logic exists
-   in `extract_memories.py`'s own connection setup, which was not fully traced in this pass (the Python script's
-   DB-connection construction wasn't located within the time budget for this design pass — `store_extracted`'s
-   `conn` parameter is passed in from a caller not yet traced). Confirming both code paths are in scope for the
-   same PR, since a fix to only `handler.ts`'s `psql` calls would leave the Python extraction path's own
-   connection logic unaudited.
+> Rev 0's open questions #1 (#708 backfill scope), #2 (`publish-active-sessions.py` location), #4 (Victoria/grant
+> scope), and #5 (Python conn-builder citation) were all resolved by the step-4 PL review on 2026-10-13 (I)ruid,
+> 18:04 UTC). #3 (#706 non-`entity_fact` anchor scope) is resolved by the TC-706-003/003b rewrite. See Revision Log.
+
+Remaining open items after this revision:
+
+1. **TC-708-008 (now TC-710-008 numbering note):** confirming whether `publish-active-sessions.py` and its cron
+   line should actually be REMOVED per the dispatch brief's literal wording, given it's confirmed unrelated to the
+   nova_memory ingest concern #710 is about — or whether it should be left running for the separate, still-active
+   memory-pressure ratchet experiment it serves. This is a disposition question, not a technical open question.
+2. **TC-708-010's threshold values** (span >24h, sender-count heuristic) are a starting proposal, not a tuned
+   production rule — confirming the exact thresholds (or confirming "starting conservative" is acceptable for this
+   identification-only run) before the query is implemented.
+3. **TC-706-003's exact owning-table names** for each non-`entity_fact`/`agent_chat` source type (`events`,
+   `lessons`, `research_findings`, etc.) were inferred from `source_type` naming conventions, not verified
+   table-by-table in this pass (time-boxed) — implementation review should confirm each actual table name before
+   TC-706-003's per-type sub-cases are finalized.
+4. **TC-703-010's exact session_key→expected-database-name derivation** (e.g. whether it's a literal
+   `f"{peer}_memory"` string template, and where that peer segment is parsed from — confirmed pattern:
+   `agent:<peer>:...`) should be confirmed against whatever the actual fix implements, since this test's
+   "expected" value depends on that exact mapping.

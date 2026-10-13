@@ -74,56 +74,60 @@ CONFIG_MAX_TOKENS = CONFIG.get("max_tokens") or 2048
 
 # ── DB helpers ────────────────────────────────────────────────────────────────
 
-def _expected_memory_database(session_key: str) -> str:
-    """Map an agent session key to its owning memory database."""
+def _load_database_from_postgres_config() -> str | None:
+    """Read database name from the running user's ~/.openclaw/postgres.json."""
+    config_path = os.environ.get(
+        'OPENCLAW_POSTGRES_CONFIG_OVERRIDE',
+        os.path.expanduser('~/.openclaw/postgres.json')
+    )
+    try:
+        with open(config_path, 'r') as f:
+            parsed = json.load(f)
+        db = parsed.get('database')
+        if isinstance(db, str) and db.strip():
+            return db.strip()
+    except FileNotFoundError:
+        pass
+    except (OSError, json.JSONDecodeError) as e:
+        print(f"[extract_memories] Could not read postgres.json: {e}", file=sys.stderr)
+    return None
+
+
+def _parse_agent_from_session_key(session_key: str) -> str | None:
     import re
     match = re.match(r'^agent:([^:]+):', session_key or '')
-    if not match:
-        raise RuntimeError(
-            f"[extract_memories] Cannot derive agent from session_key={session_key!r}; "
-            "refusing to connect"
-        )
-    agent = match.group(1)
-    # Nova and its subagent Athena share nova_memory; each peer has its own DB.
-    agent_dbs = {
-        'nova': 'nova_memory',
-        'athena': 'nova_memory',
-        'graybeard': 'graybeard_memory',
-        'newhart': 'newhart_memory',
-        'victoria': 'victoria_memory',
-    }
-    db = agent_dbs.get(agent)
-    if not db:
-        raise RuntimeError(
-            f"[extract_memories] Unknown agent '{agent}' from session_key={session_key!r}; "
-            "refusing to connect"
-        )
-    return db
+    return match.group(1) if match else None
 
 
 def get_db_connection():
     """Return a psycopg2 connection using PG* env vars.
 
-    Issue #703: fail loudly if PGDATABASE is missing or points at the wrong
-    agent's memory database. Never fall back to nova_memory.
+    Issue #703: resolve the target memory database from the running gateway's
+    own environment/config, never from a hardcoded default. Resolution order:
+      1. PGDATABASE environment variable
+      2. The `database` field of ~/.openclaw/postgres.json
+    The resolved name must end with `_memory`. An optional cross-peer guard
+    rejects sessions whose agent prefix does not match a non-nova DB owner.
     """
     pg_database = os.environ.get('PGDATABASE')
-    if not pg_database:
+    db_name = pg_database.strip() if pg_database and pg_database.strip() else _load_database_from_postgres_config()
+
+    if not db_name:
         raise RuntimeError(
-            "[extract_memories] PGDATABASE is not set; refusing to fall back to nova_memory"
+            "[extract_memories] Could not resolve memory database: PGDATABASE unset and "
+            "~/.openclaw/postgres.json missing or has no usable database field"
         )
-    if not pg_database.endswith('_memory'):
+    if not db_name.endswith('_memory'):
         raise RuntimeError(
-            f"[extract_memories] PGDATABASE={pg_database!r} does not look like a memory database; "
-            "refusing to connect"
+            f"[extract_memories] Resolved database '{db_name}' does not look like a memory database"
         )
 
-    session_key = os.environ.get('SOURCE_SESSION_ID', '')
-    expected_db = _expected_memory_database(session_key)
-    if pg_database != expected_db:
+    owner = db_name[:-len('_memory')]
+    agent = _parse_agent_from_session_key(os.environ.get('SOURCE_SESSION_ID', ''))
+    if agent and owner != 'nova' and owner != agent:
         raise RuntimeError(
-            f"[extract_memories] PGDATABASE mismatch: expected {expected_db!r} for session "
-            f"{session_key!r}, but PGDATABASE={pg_database!r}"
+            f"[extract_memories] Cross-peer guard: session agent '{agent}' does not match "
+            f"DB owner '{owner}' (database={db_name})"
         )
 
     return psycopg2.connect()

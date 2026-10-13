@@ -1,7 +1,9 @@
-"""Tests for extract_memories.py #703 DB resolution (no nova_memory fallback)."""
+"""Tests for extract_memories.py #703 DB resolution (no hardcoded fallback)."""
 
+import json
 import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -19,20 +21,31 @@ class TestGetDbConnectionResolution(unittest.TestCase):
 
     def setUp(self):
         self._orig_pgdatabase = os.environ.get("PGDATABASE")
-        self._orig_session_id = os.environ.get("SOURCE_SESSION_ID")
-        # Ensure a clean starting state.
+        self._orig_override = os.environ.get("OPENCLAW_POSTGRES_CONFIG_OVERRIDE")
+        self._tmp_dir = tempfile.TemporaryDirectory()
+        # Ensure a clean starting state. Point away from the real config so tests
+        # are hermetic even when ~/.openclaw/postgres.json exists.
         os.environ.pop("PGDATABASE", None)
-        os.environ.pop("SOURCE_SESSION_ID", None)
+        os.environ["OPENCLAW_POSTGRES_CONFIG_OVERRIDE"] = os.path.join(
+            self._tmp_dir.name, "nonexistent-postgres.json"
+        )
 
     def tearDown(self):
         self._restore("PGDATABASE", self._orig_pgdatabase)
-        self._restore("SOURCE_SESSION_ID", self._orig_session_id)
+        self._restore("OPENCLAW_POSTGRES_CONFIG_OVERRIDE", self._orig_override)
+        self._tmp_dir.cleanup()
 
     def _restore(self, key, value):
         if value is None:
             os.environ.pop(key, None)
         else:
             os.environ[key] = value
+
+    def _config_path(self, database):
+        path = os.path.join(self._tmp_dir.name, "postgres.json")
+        with open(path, "w") as f:
+            json.dump({"database": database}, f)
+        return path
 
     def _import_fresh(self):
         """Re-import the module so it picks up the current os.environ."""
@@ -41,25 +54,11 @@ class TestGetDbConnectionResolution(unittest.TestCase):
         import extract_memories
         return extract_memories
 
-    def test_pgdatabase_unset_fails_loudly(self):
-        """TC-703-007: unset PGDATABASE must raise a clear error."""
-        os.environ["SOURCE_SESSION_ID"] = "agent:newhart:agent_chat"
-        mod = self._import_fresh()
-        with self.assertRaisesRegex(RuntimeError, "PGDATABASE is not set"):
-            mod.get_db_connection()
-
-    def test_pgdatabase_nonexistent_peer_memory_mismatch(self):
-        """TC-703-008: wrong DB name is rejected without fallback."""
-        os.environ["PGDATABASE"] = "nonexistent_peer_memory_db"
-        os.environ["SOURCE_SESSION_ID"] = "agent:newhart:agent_chat"
-        mod = self._import_fresh()
-        with self.assertRaisesRegex(RuntimeError, "does not look like a memory database"):
-            mod.get_db_connection()
-
-    def test_peer_match_uses_pgdatabase(self):
-        """TC-703-002: matching peer DB resolves successfully."""
-        os.environ["PGDATABASE"] = "newhart_memory"
-        os.environ["SOURCE_SESSION_ID"] = "agent:newhart:agent_chat"
+    def test_pgdatabase_unset_uses_postgres_config(self):
+        """Production reality: PGDATABASE absent, DB comes from postgres.json."""
+        config_path = self._config_path("nova_memory")
+        os.environ["OPENCLAW_POSTGRES_CONFIG_OVERRIDE"] = config_path
+        os.environ["SOURCE_SESSION_ID"] = "agent:nova:discord:channel:123"
         mod = self._import_fresh()
         with patch("psycopg2.connect") as mock_connect:
             mock_connect.return_value = "mock_conn"
@@ -67,39 +66,63 @@ class TestGetDbConnectionResolution(unittest.TestCase):
         self.assertEqual(conn, "mock_conn")
         mock_connect.assert_called_once()
 
-    def test_session_key_env_mismatch_fails(self):
-        """TC-703-009a: session_key says nova but env says newhart -> fail."""
-        os.environ["PGDATABASE"] = "newhart_memory"
+    def test_missing_config_and_env_fails_loudly(self):
+        """No env and no postgres.json -> clear error."""
         os.environ["SOURCE_SESSION_ID"] = "agent:nova:agent_chat"
         mod = self._import_fresh()
-        with self.assertRaisesRegex(RuntimeError, "PGDATABASE mismatch"):
+        with self.assertRaisesRegex(RuntimeError, "Could not resolve memory database"):
             mod.get_db_connection()
 
-    def test_unknown_peer_fails(self):
-        """TC-703-009b: unknown agent segment fails loudly."""
-        os.environ["PGDATABASE"] = "totallymadeuppeer_memory"
-        os.environ["SOURCE_SESSION_ID"] = "agent:totallymadeuppeer:x"
-        mod = self._import_fresh()
-        with self.assertRaisesRegex(RuntimeError, "Unknown agent"):
-            mod.get_db_connection()
-
-    def test_missing_agent_prefix_fails(self):
-        """TC-703-009c: session_key without agent: prefix fails."""
-        os.environ["PGDATABASE"] = "nova_memory"
-        os.environ["SOURCE_SESSION_ID"] = "discord:channel:123"
-        mod = self._import_fresh()
-        with self.assertRaisesRegex(RuntimeError, "Cannot derive agent"):
-            mod.get_db_connection()
-
-    def test_athena_maps_to_nova_memory(self):
-        """athena is a NOVA subagent and resolves to nova_memory."""
-        os.environ["PGDATABASE"] = "nova_memory"
-        os.environ["SOURCE_SESSION_ID"] = "agent:athena:agent_chat"
+    def test_pgdatabase_overrides_postgres_config(self):
+        """Env wins over config file."""
+        config_path = self._config_path("nova_memory")
+        os.environ["OPENCLAW_POSTGRES_CONFIG_OVERRIDE"] = config_path
+        os.environ["PGDATABASE"] = "newhart_memory"
+        os.environ["SOURCE_SESSION_ID"] = "agent:newhart:agent_chat"
         mod = self._import_fresh()
         with patch("psycopg2.connect") as mock_connect:
             mock_connect.return_value = "mock_conn"
             conn = mod.get_db_connection()
         self.assertEqual(conn, "mock_conn")
+
+    def test_subagent_lex_uses_nova_memory(self):
+        """No hardcoded roster: lex resolves to nova_memory like any subagent."""
+        config_path = self._config_path("nova_memory")
+        os.environ["OPENCLAW_POSTGRES_CONFIG_OVERRIDE"] = config_path
+        os.environ["SOURCE_SESSION_ID"] = "agent:lex:agent_chat"
+        mod = self._import_fresh()
+        with patch("psycopg2.connect") as mock_connect:
+            mock_connect.return_value = "mock_conn"
+            conn = mod.get_db_connection()
+        self.assertEqual(conn, "mock_conn")
+
+    def test_arbitrary_new_subagent_against_nova_memory(self):
+        """A brand-new agent name still works as long as DB is nova_memory."""
+        config_path = self._config_path("nova_memory")
+        os.environ["OPENCLAW_POSTGRES_CONFIG_OVERRIDE"] = config_path
+        os.environ["SOURCE_SESSION_ID"] = "agent:futurebot:agent_chat"
+        mod = self._import_fresh()
+        with patch("psycopg2.connect") as mock_connect:
+            mock_connect.return_value = "mock_conn"
+            conn = mod.get_db_connection()
+        self.assertEqual(conn, "mock_conn")
+
+    def test_cross_peer_guard(self):
+        """A newhart-prefixed session must not write to graybeard's DB."""
+        os.environ["PGDATABASE"] = "graybeard_memory"
+        os.environ["SOURCE_SESSION_ID"] = "agent:newhart:agent_chat"
+        mod = self._import_fresh()
+        with self.assertRaisesRegex(RuntimeError, "Cross-peer guard"):
+            mod.get_db_connection()
+
+    def test_non_memory_db_name_rejected(self):
+        """Resolved DB must end with _memory."""
+        config_path = self._config_path("not_a_memory_db")
+        os.environ["OPENCLAW_POSTGRES_CONFIG_OVERRIDE"] = config_path
+        os.environ["SOURCE_SESSION_ID"] = "agent:nova:agent_chat"
+        mod = self._import_fresh()
+        with self.assertRaisesRegex(RuntimeError, "does not look like a memory database"):
+            mod.get_db_connection()
 
 
 if __name__ == "__main__":

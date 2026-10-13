@@ -220,17 +220,32 @@ function truncateSenderId(senderId: string): string {
 // ---------------------------------------------------------------------------
 
 /**
- * Known agent → memory-database mapping.
- * nova + athena share nova_memory (athena is a NOVA subagent); each peer has
- * its own <peer>_memory database. Unknown agents are rejected.
+ * Read the database name from the running gateway's own postgres.json.
+ * Returns null when the file is missing, unreadable, malformed, or has no
+ * usable `database` field. Never hardcodes a default DB name.
  */
-const AGENT_MEMORY_DATABASES: Readonly<Record<string, string>> = {
-  nova: 'nova_memory',
-  athena: 'nova_memory', // NOVA subagent
-  graybeard: 'graybeard_memory',
-  newhart: 'newhart_memory',
-  victoria: 'victoria_memory',
-};
+function loadDatabaseFromPostgresConfig(): string | null {
+  const configPath =
+    process.env.OPENCLAW_POSTGRES_CONFIG_OVERRIDE ||
+    join(os.homedir(), '.openclaw', 'postgres.json');
+  try {
+    const raw = readFileSync(configPath, 'utf8');
+    const parsed = JSON.parse(raw);
+    const db = parsed?.database;
+    if (typeof db === 'string' && db.trim().length > 0) {
+      return db.trim();
+    }
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException)?.code;
+    if (code !== 'ENOENT' && code !== 'EACCES') {
+      console.warn('[memory-extract] Could not read postgres.json', {
+        path: configPath,
+        error: (err as Error).message,
+      });
+    }
+  }
+  return null;
+}
 
 function parseAgentFromSessionKey(sessionKey: string): string | null {
   if (!sessionKey) return null;
@@ -241,50 +256,46 @@ function parseAgentFromSessionKey(sessionKey: string): string | null {
 /**
  * Resolve the memory database name for the current event.
  *
- * Rules:
- *   - PGDATABASE must be set; the old `|| 'nova_memory'` fallback is gone.
- *   - PGDATABASE must end with `_memory`.
- *   - The agent prefix in `sessionKey` must be known.
- *   - If the agent is a peer/subagent, PGDATABASE must equal the mapped DB.
+ * Resolution order (first match wins):
+ *   1. PGDATABASE environment variable
+ *   2. The `database` field of the running user's ~/.openclaw/postgres.json
  *
- * Any violation throws a clear error so the caller can fail loudly instead of
- * silently contaminating nova_memory.
+ * The resolved name must be non-empty and end with `_memory`. If neither
+ * source yields a valid name, fail loudly.
+ *
+ * Optional cross-peer guard: if the DB owner (the part before `_memory`) is
+ * not `nova`, the session_key's agent prefix must match that owner. This
+ * prevents a peer's inbound traffic from being written to another peer's DB
+ * while still allowing NOVA and all her subagents to share nova_memory.
  */
 export function resolveMemoryDatabase(sessionKey: string): string {
   const pgDatabase = process.env.PGDATABASE;
-  if (!pgDatabase) {
+  const dbName = pgDatabase && pgDatabase.trim().length > 0
+    ? pgDatabase.trim()
+    : loadDatabaseFromPostgresConfig();
+
+  if (!dbName) {
     throw new Error(
-      '[memory-extract] PGDATABASE is not set; refusing to fall back to nova_memory'
+      '[memory-extract] Could not resolve memory database: PGDATABASE unset and ' +
+      '~/.openclaw/postgres.json missing or has no usable database field'
     );
   }
-  if (!pgDatabase.endsWith('_memory')) {
+  if (!dbName.endsWith('_memory')) {
     throw new Error(
-      `[memory-extract] PGDATABASE=${pgDatabase} does not look like a memory database; refusing to connect`
+      `[memory-extract] Resolved database '${dbName}' does not look like a memory database`
     );
   }
 
+  const owner = dbName.replace(/_memory$/, '');
   const agent = parseAgentFromSessionKey(sessionKey);
-  if (!agent) {
+  if (agent && owner !== 'nova' && owner !== agent) {
     throw new Error(
-      `[memory-extract] Cannot derive agent from session_key=${sessionKey}; refusing to connect`
+      `[memory-extract] Cross-peer guard: session agent '${agent}' does not match ` +
+      `DB owner '${owner}' (database=${dbName})`
     );
   }
 
-  const expectedDb = AGENT_MEMORY_DATABASES[agent];
-  if (!expectedDb) {
-    throw new Error(
-      `[memory-extract] Unknown agent '${agent}' from session_key=${sessionKey}; refusing to connect`
-    );
-  }
-
-  if (pgDatabase !== expectedDb) {
-    throw new Error(
-      `[memory-extract] PGDATABASE mismatch: expected ${expectedDb} for agent '${agent}' ` +
-      `(session_key=${sessionKey}), but PGDATABASE=${pgDatabase}`
-    );
-  }
-
-  return pgDatabase;
+  return dbName;
 }
 
 function logPsqlError(site: string, err: any): { stdout: string } {
@@ -561,6 +572,10 @@ const handler = async (event: any) => {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: {
         ...process.env,
+        // Issue #703: pass the explicitly-resolved memory DB to the child so
+        // handler and Python pipeline agree even when the gateway's launch env
+        // does not set PGDATABASE.
+        PGDATABASE: memoryDatabase,
         SENDER_NAME: senderName,
         SENDER_ID: senderId,
         IS_GROUP: String(isGroup),

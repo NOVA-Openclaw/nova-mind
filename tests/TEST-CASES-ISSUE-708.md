@@ -46,6 +46,22 @@
 - Victoria's write-path tracing and grant hardening confirmed **out of Chunk B's pass/fail bar**
   (nova-workspace#252) — TC-703-006 downgraded from "forensic test" framing to an explicit out-of-scope note.
 - Open questions #1, #2, #4, #5 from Rev 0 resolved by this review; #3 resolved by the TC-706-003 rewrite. See §7.
+**Rev 2 (2026-10-13 19:30 — I)ruid's corrections to Rev 1):**
+- **TC-703-010 DROPPED.** `~/.openclaw/postgres.json` is nova's own file; peers run under their own unix users
+  with their own `postgres.json` pointing at their own DBs. The leak path is purely `handler.ts`'s
+  `|| 'nova_memory'` literal fallback — nothing else. §6's intro note corrected.
+- **§1b's "agent_chat already correctly partitions by peer" conclusion was WRONG and is corrected.** Re-verified
+  live: sessions 155 (`graybeard`, 4,579 rows), 10871 (`newhart`, 5,377 rows), and 52442 (`victoria`, 629 rows) —
+  **10,585 rows total** — are each peer's OWN inbound agent_chat transcript, written into `nova_memory` (the wrong
+  database) via the #703 fallback, not nova's own correct data. Sessions 9216/8478/9426 (32 rows: nova-staging/
+  main/newhart-only-sub) are also wrong-place but have no owning peer DB to migrate to. Session 15 (nova, correct)
+  and 57900 (athena, correct) remain genuinely correct, modulo junk test-sender rows mixed into session 15.
+- **New backup→migrate→remove pipeline added**, per I)ruid's rule (never delete correct-chat data; wrong-place
+  peer rows get backed up, verified, idempotently copied to the owning peer's `<peer>_memory`, then removed only
+  after both pass; non-peer/test junk gets backed up and removed, never migrated). TC-708-010 through TC-708-015
+  replace the prior TC-708-010/011 identification/removal-placeholder pair. Case count: 11 → 15 for #708; 9 → 8 for
+  #703 (TC-703-010 removed).
+
 ---
 
 ## 0. Pinned source artifacts
@@ -113,45 +129,48 @@ pinning discipline, do not silently pick a side):**
 
 ---
 
-## 1b. Empirical investigation: "misattached" = right-chat-not-split, not cross-chat contamination (step-4 follow-up)
+## 1b. Empirical investigation: CORRECTED per step-4 review (2026-10-13 19:30) — this IS cross-database contamination for peer rows
 
-Per I)ruid's instruction, checked live (read-only) what "misattached" actually means before writing an
-identification test, since the unique index is `(provider, external_chat_id, COALESCE(external_thread_id,''))` —
-rows could be in the right chat and only missing a thread/session split, which is a very different (and much less
-alarming) finding than cross-chat contamination.
+**Correction notice:** this section's Rev-1 conclusion ("agent_chat already correctly partitions by peer... not
+cross-chat contamination") was **WRONG** and is corrected here per I)ruid's step-4 review. The error: "correctly
+partitions by peer" conflated "each peer has its own `channel_sessions` row" with "each peer's row is in the right
+DATABASE" — it is not. `nova_memory` is NOVA's own database; peer agents (graybeard, newhart, victoria) each run
+under their own unix user with their own `postgres.json` pointing at their own `<peer>_memory` database. NOVA has
+exactly 3 peer agents. A `channel_sessions` row with `external_chat_id='agent_chat:<peer>'` sitting inside
+`nova_memory` for one of those 3 peers is NOT nova's data living in nova's inbox — **it is that peer's own
+inbound agent_chat transcript, written into the wrong database**, because that peer's gateway ran the shared
+memory-extract hook and hit #703's `|| 'nova_memory'` fallback.
 
-**Provider-level row/session distribution** (`GROUP BY provider`): `agent_chat` 8 sessions / 29,287 rows (avg
-~3,661 rows/session) · `discord` 105 sessions / 12,836 rows (avg ~122 rows/session) · `irc` 2/294 · `slack` 5/270 ·
-`webchat` 23/106 · `signal` 4/38 · `openclaw` 7/4 · `telegram` 1/0.
+**Corrected, re-verified live counts** (`provider='agent_chat'`, all 8 sessions, re-queried and matching I)ruid's
+own figures exactly):
 
-**Session 15 (`agent:nova:agent_chat`, `external_chat_id='agent_chat:nova'`, `external_thread_id` NULL):** 18,632
-rows, spanning **2026-05-12 through 2026-10-13 — over 5 months** in one row, with **17 distinct `sender_id` values**
-(graybeard 13,969 · newhart 3,201 · victoria 1,350 · nova-staging 29 · main 16 · athena 13 · gem 12 · hermes 11 ·
-zztest_a 10 · schema-sync 8 · agent_chat 3 · gidget 3 · quill 2 · coder 2 · scout 1).
+| session_id | session_key | rows | disposition |
+|---|---|---|---|
+| 15 | `agent:nova:agent_chat` | 18,632 | **CORRECT** — nova's own inbox (contains legitimate traffic from graybeard/newhart/victoria/others addressed TO nova — see TC-708-013 for the junk-sender carve-out inside this otherwise-correct session) |
+| 155 | `agent:graybeard:agent_chat` | 4,579 | **WRONG DATABASE** — graybeard's own inbound transcript (senders: nova 4,006 · newhart 289 · victoria 262); belongs in `graybeard_memory` |
+| 10871 | `agent:newhart:agent_chat` | 5,377 | **WRONG DATABASE** — newhart's own inbound transcript (senders: nova 2,652 · graybeard 2,474 · victoria 233); belongs in `newhart_memory` |
+| 52442 | `agent:victoria:agent_chat` | 629 | **WRONG DATABASE** — victoria's own inbound transcript; belongs in `victoria_memory` |
+| 9216 | `agent:nova-staging:agent_chat` | 24 | **WRONG PLACE, NOT A MIGRATION TARGET** — staging writing into production; no real "nova-staging_memory" peer DB to migrate to (staging is a deployment of nova herself, not a third party) |
+| 8478 | `agent:main:agent_chat` | 7 | **WRONG PLACE, NOT A MIGRATION TARGET** — test/legacy identity, no owning peer DB |
+| 9426 | `agent:newhart-only-sub:agent_chat` | 1 | **WRONG PLACE, NOT A MIGRATION TARGET** — test/legacy identity, no owning peer DB |
+| 57900 | `agent:athena:agent_chat` | 38 | **CORRECT** — athena is NOVA's own subagent, so her agent_chat traffic correctly belongs in `nova_memory` |
 
-**Finding: this is "right chat, not split by thread/session," not cross-chat contamination.** `external_chat_id`
-already correctly partitions `agent_chat` traffic by OWNING peer — there are exactly 8 `agent_chat` sessions for
-8 distinct peers (`nova`, `newhart`, `graybeard`, `victoria`, `athena`, `nova-staging`, `main`,
-`newhart-only-sub`), matching the peer count in #703's own extraction_failures breakdown. The 17 senders inside
-session 15 are not evidence of contamination — `agent_chat` is a shared message bus, and graybeard/newhart/
-victoria writing TO nova is exactly what nova's own agent_chat inbox is supposed to contain. The actual gap is
-granularity: because `external_thread_id` is never populated (confirmed §1: 0/155), FIVE MONTHS of nova's entire
-agent_chat history collapses into one `channel_sessions` row instead of being split per conversational
-thread/exchange. **Discord's gap is structurally narrower**: `external_chat_id` already = one row per physical
-Discord channel (105 distinct channel ids → 105 sessions, each with a reasonable row count — the largest single
-channel session has 1,106 rows, nowhere near a 5-month/17-sender collapse), so Discord's only exposure is
-forum-style channels with sub-threads that would need `external_thread_id` to split further within an
-already-correctly-scoped channel.
+**Total rows confirmed in the WRONG database for the 3 real peers: 4,579 + 5,377 + 629 = 10,585** (matches I)ruid's
+figure exactly). Plus 32 rows in three non-peer "wrong place" sessions (staging/main/newhart-only-sub) that have
+no legitimate owning peer database to migrate to — these are backup-and-remove-only, never migration targets. Plus
+an unknown number of test-sender rows (`zztest_a`, `schema-sync`, and similar) living INSIDE the otherwise-correct
+session 15 — these are junk mixed into real data, not a whole-session misplacement, and also fall under
+backup-and-remove-only (not migration, since they aren't real peer traffic at all).
 
-**Limitation, stated plainly for the identification test's design (TC-708-010):** `raw_metadata` is NULL on every
-row (§1), so there is no ground-truth thread/conversation id stored anywhere in `nova_memory` to cross-validate
-against. The identification query below can prove "this session spans an implausibly long time window / implausibly
-many distinct senders for a single thread" (a strong proxy for "needs splitting"), but it CANNOT prove with
-certainty that zero rows are in the genuinely wrong `channel_sessions` row — that would require an external
-ground truth (e.g., the agent_chat source table's own message ids/timestamps cross-referenced, or the OpenClaw
-SQLite backup mentioned in #706's comment). This caveat is itself part of the acceptance criteria: the
-identification query's own output/report must state this limitation, not present its proxy signal as a proven
-contamination count.
+**I)ruid's rule governing all remediation test design below: NEVER delete anything that is in the correct chat.**
+For peer rows (graybeard/newhart/victoria, 10,585 rows): **backup (verified) → idempotent copy into the owning
+peer's `<peer>_memory` (the same split/replay pattern as #703's `extraction_failures` idempotent replay) →
+remove from `nova_memory` only after BOTH the backup and the migration are independently verified.** For
+non-peer wrong-place rows and in-session test/junk senders (32 + session-15 junk): **backup → remove; do NOT
+migrate** (there is no legitimate destination database for synthetic/staging/legacy test identities).
+
+---
+
 ## 2. Adversarial/config-seam coverage index
 
 | Requirement | Satisfied by |
@@ -164,7 +183,7 @@ contamination count.
 
 ---
 
-## 3. #708 — `channel_sessions` upsert: `external_thread_id`, `last_message_at`, uniqueness, misattachment identification (11 cases: TC-708-001…011; TC-708-011 blocked/not in this run's acceptance — see Revision Log)
+## 3. #708 — `channel_sessions` upsert: `external_thread_id`, `last_message_at`, uniqueness, misattachment identification+backup+migration+removal (15 cases: TC-708-001…015; see Revision Log Rev 2 for the backup→migrate→remove pipeline added 2026-10-13 19:30)
 
 **Host-contract citation (REQUIRED — "cite which fields"):** `message_received`'s event type,
 `PluginHookMessageReceivedEvent` (production fork `6ced19b`, `src/plugins/hook-message.types.ts:165-182`),
@@ -256,44 +275,76 @@ messages, not whichever `UPDATE` happened to commit last if that is earlier in m
 (i.e., if timestamps are used rather than `NOW()`, the update should be monotonic — assert the actual chosen
 semantics from TC-708-002).
 
-### TC-708-010 — Read-only IDENTIFICATION query: list every `channel_transcripts` row attached to a session it doesn't belong to
-**Priority:** P1 (Critical) — direct acceptance test for this run (IDENTIFICATION ONLY; confirmed by step-4 review,
-removal is explicitly NOT approved in this run).
-**Preconditions:** None beyond read access to `nova_memory`. Must run against live/staging data, never write.
-**Steps:**
-1. For every `channel_sessions` row, compute: row count, distinct `sender_id` count, and timestamp span
-   (`max(timestamp) - min(timestamp)`) across its `channel_transcripts`.
-2. Flag sessions whose span/sender-count profile is implausible for a single conversational thread — e.g. span
-   exceeding some threshold (start conservative: >24h, informed by §1b's 5-month/17-sender session 15 finding) AND/OR
-   sender count exceeding what a 1:1 or small-group conversation would plausibly have for that `chat_type`.
-3. Output a report per flagged session: `session_id`, `provider`, `external_chat_id`, row count, sender count,
-   span, and an explicit **"right-chat-not-split" vs. "possible cross-chat" classification label** — the query
-   must not claim certainty about cross-chat contamination (per §1b's stated limitation: no ground-truth thread id
-   exists to verify against).
-**Expected:**
-- The query is read-only — zero writes, zero deletes, verified by re-running row counts before/after unchanged.
-- Session 15 (and the other 7 `agent_chat` sessions) appear in the flagged report, correctly labeled
-  "right-chat-not-split" per §1b's reasoning (same `external_chat_id` as the peer's correct chat; multiple
-  legitimate senders expected for a shared bus).
-- The report's methodology and limitation statement are both present in its own output — a report that silently
-  asserts certainty it cannot have (e.g. "N contaminated rows found") FAILS this test even if the row-flagging
-  logic itself is otherwise correct.
-- No `channel_transcripts`/`channel_sessions` row is modified, moved, or deleted by this test or by the query
-  itself.
+### TC-708-010 — IDENTIFICATION: exact row/sender counts per wrong-place session (read-only, re-verifies I)ruid's figures)
+**Priority:** P1 (Critical) — direct acceptance test, REQUIRED first step before any backup/migration/removal.
+**Steps:** Run the §1b query (grouped by `cs.id`/`session_key`/`external_chat_id`, joined row counts, plus a
+per-sender breakdown for each flagged session) against live `nova_memory`.
+**Expected:** Reproduces exactly: session 155 (graybeard) 4,579 rows; session 10871 (newhart) 5,377 rows; session
+52442 (victoria) 629 rows (10,585 total peer rows); session 9216 (nova-staging) 24; session 8478 (main) 7; session
+9426 (newhart-only-sub) 1 (32 total non-peer wrong-place rows); plus an enumerated count of non-real-agent senders
+(`zztest_a`, `schema-sync`, and similar) inside the otherwise-correct session 15. Session 15's REAL traffic and
+session 57900 (athena) are both explicitly confirmed NOT flagged (negative check folded into the same query).
 
-### TC-708-011 — Removal of flagged rows (WRITTEN, NOT IN THIS RUN'S ACCEPTANCE — blocked pending explicit approval)
-**Priority:** Blocked/Deferred — written now per the dispatch brief's ask for "a separate case for removing those
-rows if I)ruid approves removal later," but explicitly excluded from this run's pass/fail bar.
-**Preconditions:** TC-708-010's identification query has run and produced a flagged-session report; an explicit,
-separate approval to perform removal/re-splitting has been given (not present as of this test design).
-**Steps (future, once approved):** For an approved flagged session, re-split its `channel_transcripts` rows into
-new `channel_sessions` rows along whatever boundary is approved (e.g. per-sender-pair, per-time-gap-exceeding-N),
-preserving `channel_transcripts.id` (per the original #708 issue comment's own constraint, so
-`entity_facts.source_channel_transcript_id` links stay valid) and updating only `session_id` on the moved rows.
-**Expected (future):** Dry-run mode available and required before any real run; a backup/rollback path exists;
-re-split transcripts keep their original `id`; `entity_facts` FK links are verified unbroken afterward.
-**Status for this run:** NOT executed, NOT required to pass. Flagged here only so the identification query's
-output format (TC-708-010) is designed to feed this step cleanly whenever it is approved.
+### TC-708-011 — Verifiable BACKUP of every wrong-place row (row counts + checksums), before any copy/removal
+**Priority:** P1 (Critical) — REQUIRED by I)ruid's rule ("backed up first (verified backup)").
+**Preconditions:** TC-708-010's identification set.
+**Steps:** Back up (e.g. `COPY ... TO`, or an equivalent snapshot table) every row in sessions 155/10871/52442/
+9216/8478/9426 plus the enumerated junk senders inside session 15. Compute a content checksum (e.g. per-row hash of
+the transcript content + timestamp + sender, and an aggregate hash of the whole backup set) alongside a row count.
+**Expected:** Backup row count exactly matches TC-708-010's identification count for each session; a re-hash of the
+backup against a fresh re-read of the source rows matches bit-for-bit (proves the backup is a faithful, verifiable
+copy, not just "a file got written"). This artifact is a hard precondition gate for TC-708-013 (removal) below.
+
+### TC-708-012 — Idempotent MIGRATION of peer rows into the owning peer's own `<peer>_memory` database
+**Priority:** P1 (Critical) — direct acceptance test for the 10,585 peer rows ONLY (sessions 155/10871/52442);
+explicitly does NOT apply to the 32 non-peer wrong-place rows or the in-session junk senders (no migration target
+for those — see TC-708-014). Mirrors Chunk B §6's #703 split/replay pattern (`extraction_failures` idempotent
+replay) applied to `channel_sessions`/`channel_transcripts`.
+**Preconditions:** TC-708-011's verified backup exists for the 3 peer sessions.
+**Steps:** Copy session 155's rows into `graybeard_memory`, session 10871's into `newhart_memory`, session
+52442's into `victoria_memory` — preserving original row content, timestamps, and (per #708's own constraint from
+the original issue comment) `channel_transcripts.id` where the destination schema allows it, so any existing
+cross-references survive. Run the migration TWICE.
+**Expected:** After the first run, each peer DB has exactly the migrated row count, content-identical to the
+backup (checksum match). After the SECOND run (idempotency check), row counts in each peer DB are UNCHANGED — no
+duplicate rows, no unique-constraint violations — mirroring Chunk B's existing TC-703-004 idempotency pattern.
+
+### TC-708-013 — REMOVAL from `nova_memory` gated on BOTH backup (TC-708-011) and migration (TC-708-012) passing — for peer rows only
+**Priority:** P1 (Critical) — direct acceptance test for the ordering/gating rule itself, not just the removal
+action. Applies to the 3 peer sessions (155/10871/52442).
+**Preconditions:** TC-708-011 (backup) AND TC-708-012 (migration) have BOTH independently verified as passing for
+these 3 sessions.
+**Steps:** Attempt removal (a) with only a backup verified but no migration verification — MUST be refused/blocked;
+(b) with only a migration verified but no backup verification — MUST be refused/blocked; (c) with both verified —
+proceeds.
+**Expected:** Removal only proceeds in case (c). Cases (a) and (b) are explicit negative tests for the gating logic
+itself — a tool that lets removal proceed with only one of the two prerequisites satisfied fails this test even if
+the eventual row deletion is otherwise correct, since that's exactly the "deleted before it was safe to" failure
+mode the whole backup→migrate→remove ordering exists to prevent.
+
+### TC-708-014 — Non-peer wrong-place rows and in-session junk senders: BACKUP + REMOVE ONLY, never migrated
+**Priority:** P1 (Critical) — REQUIRED distinct path from TC-708-012/013, per I)ruid's explicit instruction ("Test/
+staging junk rows: back them up and remove them; don't migrate them.").
+**Preconditions:** TC-708-011's backup covers sessions 9216 (nova-staging, 24 rows), 8478 (main, 7), 9426
+(newhart-only-sub, 1), and the enumerated junk senders inside session 15.
+**Steps:** After backup verification (same checksum standard as TC-708-011), remove these rows from `nova_memory`
+WITHOUT any migration step.
+**Expected:** These 32 rows (plus the session-15 junk-sender rows) are gone from `nova_memory` post-removal, exist
+only in the verified backup, and are NOT present in any peer's `<peer>_memory` database (explicit negative check —
+confirms the "don't migrate test/staging junk" instruction wasn't accidentally satisfied by a migration tool that
+doesn't distinguish real peer rows from junk).
+
+### TC-708-015 — NEGATIVE TEST: correct-chat rows (session 15's real traffic, session 57900/athena) are left completely untouched
+**Priority:** P1 (Critical) — REQUIRED by I)ruid's rule ("NEVER delete anything that's in the correct chat"); this
+is the single most important safety test in this file's #708 section, since a bug here would destroy nova's own
+real, correct agent_chat history.
+**Preconditions:** The full backup/migrate/remove pipeline (TC-708-011 through TC-708-014) has run against the
+flagged wrong-place sessions.
+**Steps:** Before/after row-count AND content-checksum comparison for session 15's non-junk rows and all of
+session 57900 (athena).
+**Expected:** Byte-for-byte identical before and after — zero rows modified, moved, or deleted; zero rows added.
+Any difference, even a single row, FAILS this test regardless of what else passed.
+
 
 ---
 
@@ -474,7 +525,7 @@ which is independent of whether the duplication itself persists.
 
 ---
 
-## 6. #703 — memory-extract handler fails loudly on unresolved `<peer>_memory`, no fallback, stranded-row replay (9 cases: TC-703-001…005, 007…010; TC-703-006 confirmed out of scope — see note)
+## 6. #703 — memory-extract handler fails loudly on unresolved `<peer>_memory`, no fallback, stranded-row replay (8 cases: TC-703-001…005, 007…009; TC-703-006 confirmed out of scope, TC-703-010 dropped per step-4 review — see Revision Log)
 
 **Note on current-code baseline — BOTH code paths confirmed in scope (step-4 review):**
 - `handler.ts` (read in full, §0) always targets `process.env.PGDATABASE || 'nova_memory'` (lines 275, 381, 413,
@@ -486,18 +537,14 @@ which is independent of whether the duplication itself persists.
   bare `psql` invocation would; called once, at `extract_memories.py:1242` (`conn = get_db_connection()`), with
   the resulting `conn` threaded into `store_extracted(..., conn=conn)` (line ~1295) and `_store_fact`'s nested
   calls (line ~1044).
-- **Critical upgrade to the whole section's threat model:** `~/.openclaw/postgres.json` — the shared config file
-  `pg-env.sh`'s `load_pg_env()` reads — carries a top-level `"database": "nova_memory"` key (credential fields in
-  that file are NOT reproduced here per workspace secret-handling norms — only the `"database"` key's value is
-  cited). **This means an agent process whose own environment doesn't explicitly override `PGDATABASE` does not
-  get an empty/unset value** that would trip a simple "is it set" check — it gets a real, syntactically-valid
-  `PGDATABASE=nova_memory` sourced from shared config, indistinguishable at the code level from "this genuinely is
-  nova's own database." **Both `handler.ts`'s literal `|| 'nova_memory'` AND this shared-config default must be
-  closed for #703 to actually hold** — removing only the JS-side literal leaves the Python path (and any other
-  `psql`-invoking code) still silently inheriting `nova_memory` from `postgres.json` for any peer whose own
-  environment doesn't positively override it. The fix must validate the RESOLVED `PGDATABASE` against the peer
-  identity derived from `session_key` (e.g. the `agent:<peer>:` prefix) and fail loudly on a mismatch — "is
-  `PGDATABASE` unset" is not a sufficient check (see new TC-703-010).
+- **Correction (step-4 review, 2026-10-13 19:30): `~/.openclaw/postgres.json` is NOVA's own file, not a shared
+  leak source.** Rev-1's theory — that a shared `"database": "nova_memory"` default in this file could silently
+  misconfigure OTHER peers — was wrong. Peer agents (graybeard, newhart, victoria) run under their OWN unix users,
+  each with their OWN `postgres.json` pointing at their OWN `<peer>_memory` database. **The leak path is purely
+  `handler.ts`'s literal `process.env.PGDATABASE || 'nova_memory'` fallback (4 call sites) and/or an equivalent
+  gap in `extract_memories.py`'s env resolution — nothing else.** TC-703-010 (the "shared-default" adversarial
+  case) is DROPPED — it was testing a mechanism that doesn't exist. TC-703-007/008/009 (unset / nonexistent-DB /
+  spoofed-prefix) remain the correct adversarial coverage for #703's actual fallback defect.
 
 **Peer-identification mechanism (from live data, read-only):** `extraction_failures.session_key` values observed
 follow the pattern `agent:<peer>:...` (e.g. `agent:newhart:agent_chat`, `agent:victoria:discord:channel:...`),
@@ -594,45 +641,26 @@ rejected?); (b) `session_key` with a peer segment that doesn't match any known p
 other without validation; (b) and (c) both fail loudly with a reason identifying parse failure (distinct from
 "peer resolved but DB unreachable," TC-703-008) — none of the three silently falls back to `nova_memory`.
 
-### TC-703-010 — Adversarial: `PGDATABASE` resolves to the SHARED DEFAULT `nova_memory` from `postgres.json`, not unset, for a non-nova peer's session
-**Priority:** P1 (Critical) — REQUIRED per step-4 review; the single most realistic failure mode, distinct from
-TC-703-007's "fully unset" case. Directly targets the `postgres.json` shared-default finding above.
-**Preconditions:** A peer-prefixed `session_key` (e.g. `agent:newhart:...`) running in an environment where
-`PGDATABASE` was never explicitly overridden for this peer, so it resolves (via `pg-env.sh`/`postgres.json`'s
-shared `"database": "nova_memory"` default) to the literal string `"nova_memory"` — a real, valid, connectable
-database, NOT empty/unset.
-**Steps:** Trigger the handler (both the `handler.ts` direct `psql` calls and the `extract_memories.py`
-`get_db_connection()` path) for this session.
-**Expected:** The fix derives an EXPECTED database name from the `session_key`'s peer prefix (e.g.
-`newhart_memory`) and compares it against the resolved `PGDATABASE` value BEFORE writing anything; a mismatch
-(resolved `nova_memory` vs. expected `newhart_memory`) is treated identically to TC-703-007's "unset" case — a
-loud, distinct-reason failure, zero writes to `nova_memory`. This test MUST fail against the pinned ref's current
-behavior (today, a resolved `PGDATABASE=nova_memory` for a non-nova peer is completely indistinguishable from the
-correct case and writes proceed silently) and is the acceptance test that actually closes #703, as opposed to
-TC-703-007/008 which only catch the narrower unset/nonexistent-database cases.
 
 ---
 
 ## 7. Open questions for the orchestrator / Project Leadership review
 
-> Rev 0's open questions #1 (#708 backfill scope), #2 (`publish-active-sessions.py` location), #4 (Victoria/grant
-> scope), and #5 (Python conn-builder citation) were all resolved by the step-4 PL review on 2026-10-13 (I)ruid,
-> 18:04 UTC). #3 (#706 non-`entity_fact` anchor scope) is resolved by the TC-706-003/003b rewrite. See Revision Log.
+> Rev 2 resolves: the TC-703-010/postgres.json question (dropped, was based on a wrong model) and the §1b
+> wrong-chat-vs-not-split question (corrected — it IS cross-database contamination for the 3 real peers). Rev 0/1's
+> other resolved items remain resolved (see Revision Log).
 
-Remaining open items after this revision:
+Remaining open items after Rev 2:
 
-1. **TC-708-008 (now TC-710-008 numbering note):** confirming whether `publish-active-sessions.py` and its cron
-   line should actually be REMOVED per the dispatch brief's literal wording, given it's confirmed unrelated to the
-   nova_memory ingest concern #710 is about — or whether it should be left running for the separate, still-active
-   memory-pressure ratchet experiment it serves. This is a disposition question, not a technical open question.
-2. **TC-708-010's threshold values** (span >24h, sender-count heuristic) are a starting proposal, not a tuned
-   production rule — confirming the exact thresholds (or confirming "starting conservative" is acceptable for this
-   identification-only run) before the query is implemented.
-3. **TC-706-003's exact owning-table names** for each non-`entity_fact`/`agent_chat` source type (`events`,
-   `lessons`, `research_findings`, etc.) were inferred from `source_type` naming conventions, not verified
-   table-by-table in this pass (time-boxed) — implementation review should confirm each actual table name before
-   TC-706-003's per-type sub-cases are finalized.
-4. **TC-703-010's exact session_key→expected-database-name derivation** (e.g. whether it's a literal
-   `f"{peer}_memory"` string template, and where that peer segment is parsed from — confirmed pattern:
-   `agent:<peer>:...`) should be confirmed against whatever the actual fix implements, since this test's
-   "expected" value depends on that exact mapping.
+1. **TC-708-012's exact migration mechanics** (whether `channel_transcripts.id` can be preserved across a
+   cross-database copy, or whether destination peer DBs need a remapped id with a cross-reference table) should be
+   confirmed against each peer's actual `channel_transcripts` schema before implementation — assumed compatible
+   here but not independently verified peer-DB-schema-by-peer-DB-schema in this design pass.
+2. **TC-708-014's "don't migrate test/staging junk" disposition for `nova-staging` specifically** — confirming
+   whether nova-staging's 24 rows should be backed up and removed with no further action, or whether staging has
+   its own separate "staging_memory"-equivalent database they should go to instead (dispatch said "don't migrate,"
+   but staging is a deployment of nova herself, not a third party, which is a slightly different case than main/
+   newhart-only-sub's clearly-synthetic test identities).
+3. **TC-706-003's exact owning-table names**, **TC-703-010's removal has no further open item** (resolved).
+4. **TC-710-008's disposition question** (remove `publish-active-sessions.py`/cron vs. keep for the unrelated
+   ratchet experiment) remains open, carried over from Rev 1.

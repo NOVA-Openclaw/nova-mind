@@ -62,6 +62,19 @@
   replace the prior TC-708-010/011 identification/removal-placeholder pair. Case count: 11 → 15 for #708; 9 → 8 for
   #703 (TC-703-010 removed).
 
+**Rev 3 (2026-10-13 20:34 — I)ruid's correction: NOVA must not write into peer databases):**
+- **TC-708-012 REWRITTEN from "idempotent copy into `<peer>_memory`" to EXPORT-for-peer-import.** NOVA never
+  connects to a peer's database. Instead, for each peer, NOVA exports their flagged rows to a documented,
+  importable file (CSV/JSONL) plus a checksummed manifest (row count + per-row + aggregate checksums). The peer
+  imports it into their own DB themselves, de-duplicating on `(session_key, external_message_id)`.
+- Added TC-708-012b (export completeness matches identification counts), TC-708-012c (manifest checksums verify),
+  TC-708-012d (peer-side import is idempotent, skips existing rows).
+- **TC-708-013 REWRITTEN: removal is gated on backup + EXPORT verified, explicitly NOT on the peer's import.** If a
+  peer never imports, `nova_memory`'s cleanup still proceeds on schedule — the verified export/manifest is the
+  durable record, not the peer's eventual consumption of it.
+- §1b's remediation-rule statement corrected to match (no "idempotent copy into `<peer>_memory`" language remains).
+- Case count: #708 15 → 18 (TC-708-012b/012c/012d added).
+
 ---
 
 ## 0. Pinned source artifacts
@@ -163,11 +176,13 @@ session 15 — these are junk mixed into real data, not a whole-session misplace
 backup-and-remove-only (not migration, since they aren't real peer traffic at all).
 
 **I)ruid's rule governing all remediation test design below: NEVER delete anything that is in the correct chat.**
-For peer rows (graybeard/newhart/victoria, 10,585 rows): **backup (verified) → idempotent copy into the owning
-peer's `<peer>_memory` (the same split/replay pattern as #703's `extraction_failures` idempotent replay) →
-remove from `nova_memory` only after BOTH the backup and the migration are independently verified.** For
-non-peer wrong-place rows and in-session test/junk senders (32 + session-15 junk): **backup → remove; do NOT
-migrate** (there is no legitimate destination database for synthetic/staging/legacy test identities).
+**Corrected 2026-10-13 20:34: NOVA must NOT write into peer databases.** For peer rows (graybeard/newhart/
+victoria, 10,585 rows): **backup (verified) → NOVA EXPORTS to a per-peer, documented, importable file (CSV/JSONL +
+checksummed manifest) → remove from `nova_memory` once the backup AND the export are independently verified (NOT
+once the peer has imported — import is the peer's own responsibility, on their own timeline, de-duplicating on
+`session_key`+`external_message_id`).** For non-peer wrong-place rows and in-session test/junk senders (32 +
+session-15 junk): **backup → remove; do NOT export or migrate** (there is no legitimate destination for synthetic/
+staging/legacy test identities).
 
 ---
 
@@ -183,7 +198,7 @@ migrate** (there is no legitimate destination database for synthetic/staging/leg
 
 ---
 
-## 3. #708 — `channel_sessions` upsert: `external_thread_id`, `last_message_at`, uniqueness, misattachment identification+backup+migration+removal (15 cases: TC-708-001…015; see Revision Log Rev 2 for the backup→migrate→remove pipeline added 2026-10-13 19:30)
+## 3. #708 — `channel_sessions` upsert: `external_thread_id`, `last_message_at`, uniqueness, misattachment identification+backup+EXPORT+removal (18 cases: TC-708-001…015 incl. 012b/012c/012d; TC-708-012/013 rewritten export-not-migration per Revision Log Rev 3)
 
 **Host-contract citation (REQUIRED — "cite which fields"):** `message_received`'s event type,
 `PluginHookMessageReceivedEvent` (production fork `6ced19b`, `src/plugins/hook-message.types.ts:165-182`),
@@ -295,32 +310,75 @@ the transcript content + timestamp + sender, and an aggregate hash of the whole 
 backup against a fresh re-read of the source rows matches bit-for-bit (proves the backup is a faithful, verifiable
 copy, not just "a file got written"). This artifact is a hard precondition gate for TC-708-013 (removal) below.
 
-### TC-708-012 — Idempotent MIGRATION of peer rows into the owning peer's own `<peer>_memory` database
+### TC-708-012 — EXPORT peer rows to a per-peer, documented, importable format (NOVA does NOT write into peer databases)
 **Priority:** P1 (Critical) — direct acceptance test for the 10,585 peer rows ONLY (sessions 155/10871/52442);
-explicitly does NOT apply to the 32 non-peer wrong-place rows or the in-session junk senders (no migration target
-for those — see TC-708-014). Mirrors Chunk B §6's #703 split/replay pattern (`extraction_failures` idempotent
-replay) applied to `channel_sessions`/`channel_transcripts`.
+**REWRITTEN per step-4 correction (2026-10-13 20:34): "NOVA must NOT write into peer databases."** NOVA's role is
+EXPORT only; each peer is responsible for importing into their OWN `<peer>_memory` themselves. This replaces the
+prior "idempotent copy into `<peer>_memory`" design, which had NOVA writing cross-database — not permitted.
 **Preconditions:** TC-708-011's verified backup exists for the 3 peer sessions.
-**Steps:** Copy session 155's rows into `graybeard_memory`, session 10871's into `newhart_memory`, session
-52442's into `victoria_memory` — preserving original row content, timestamps, and (per #708's own constraint from
-the original issue comment) `channel_transcripts.id` where the destination schema allows it, so any existing
-cross-references survive. Run the migration TWICE.
-**Expected:** After the first run, each peer DB has exactly the migrated row count, content-identical to the
-backup (checksum match). After the SECOND run (idempotency check), row counts in each peer DB are UNCHANGED — no
-duplicate rows, no unique-constraint violations — mirroring Chunk B's existing TC-703-004 idempotency pattern.
+**Steps:** For each peer (graybeard, newhart, victoria), export that peer's `channel_sessions` +
+`channel_transcripts` rows from `nova_memory` into a per-peer file in a documented, importable format (e.g. a
+`COPY`-compatible CSV, or JSONL — one row of `channel_transcripts` per line plus its parent `channel_sessions`
+context), alongside a manifest recording: row count, a per-row content checksum, and an aggregate checksum of the
+whole export. Produce one export+manifest pair per peer (3 total).
+**Expected:**
+- Each peer's export file contains EXACTLY that peer's flagged rows (session 155→graybeard's export, 10871→
+  newhart's, 52442→victoria's) — no cross-peer leakage between the three export files.
+- The format is genuinely importable without bespoke tooling on the peer's side (a plain `COPY ... FROM` for CSV,
+  or a simple line-delimited JSON parse for JSONL) — not a nova-mind-specific binary/proprietary format.
+- NOVA's own process/credentials never open a connection to `graybeard_memory`/`newhart_memory`/
+  `victoria_memory` at any point in this step — confirmed by an explicit negative check (no `PGDATABASE` override
+  to a peer DB name anywhere in the export code path).
 
-### TC-708-013 — REMOVAL from `nova_memory` gated on BOTH backup (TC-708-011) and migration (TC-708-012) passing — for peer rows only
-**Priority:** P1 (Critical) — direct acceptance test for the ordering/gating rule itself, not just the removal
-action. Applies to the 3 peer sessions (155/10871/52442).
-**Preconditions:** TC-708-011 (backup) AND TC-708-012 (migration) have BOTH independently verified as passing for
-these 3 sessions.
-**Steps:** Attempt removal (a) with only a backup verified but no migration verification — MUST be refused/blocked;
-(b) with only a migration verified but no backup verification — MUST be refused/blocked; (c) with both verified —
-proceeds.
-**Expected:** Removal only proceeds in case (c). Cases (a) and (b) are explicit negative tests for the gating logic
-itself — a tool that lets removal proceed with only one of the two prerequisites satisfied fails this test even if
-the eventual row deletion is otherwise correct, since that's exactly the "deleted before it was safe to" failure
-mode the whole backup→migrate→remove ordering exists to prevent.
+### TC-708-012b — Export completeness: exported row count and content match the identification set exactly
+**Priority:** P1 (Critical) — REQUIRED acceptance test, per step-4: "the export is complete and matches the
+identification counts."
+**Steps:** Compare each peer's export file's row count against TC-708-010's identification counts (graybeard
+4,579; newhart 5,377; victoria 629).
+**Expected:** Exact match, per peer. Additionally, re-read the SOURCE rows from `nova_memory` (not yet removed at
+this point) and confirm content (session_key, external_message_id, timestamp, sender, content) matches the
+exported rows field-for-field — not just a matching row count, which alone wouldn't catch a bug that exports the
+right NUMBER of rows with the wrong CONTENT.
+
+### TC-708-012c — Manifest checksums verify
+**Priority:** P1 (Critical) — REQUIRED acceptance test, per step-4: "the manifest checksums verify."
+**Preconditions:** TC-708-012's exports and manifests exist.
+**Steps:** Recompute the per-row and aggregate checksums from the exported FILE content (not from the original DB
+rows — this test is specifically about the manifest accurately describing the file as written to disk) and
+compare against the manifest's recorded values.
+**Expected:** Exact match for all 3 peers' exports — proves the manifest is a faithful, verifiable description of
+what was actually written, catching any corruption/truncation introduced between generation and disk.
+
+### TC-708-012d — Peer-side IMPORT is idempotent and skips rows that already exist (keyed on `session_key` + `external_message_id`)
+**Priority:** P1 (Critical) — REQUIRED acceptance test, per step-4: "the import is idempotent and skips rows that
+already exist." This test specifies the PEER'S side of the contract (the import NOVA's export feeds into), since
+it's part of the overall acceptance criteria even though the import itself runs under the peer's own
+credentials/process, not NOVA's.
+**Preconditions:** A target `<peer>_memory`-shaped database, pre-seeded with SOME of the rows from the export
+(simulating a peer that already independently captured part of this traffic via its own correctly-configured
+ingest, post-#703-fix).
+**Steps:** Run the import against this pre-seeded target using `(session_key, external_message_id)` as the
+de-duplication key. Run the import TWICE.
+**Expected:** First run: only the NEW rows (not already present, keyed on `session_key`+`external_message_id`) are
+inserted; pre-existing rows are left untouched (not overwritten, not duplicated). Second run (idempotency check):
+row count is UNCHANGED — nothing double-inserted.
+
+### TC-708-013 — REMOVAL from `nova_memory` gated ONLY on the EXPORT being verified — does NOT wait for the peer's import
+**Priority:** P1 (Critical) — direct acceptance test for the ordering/gating rule itself, REWRITTEN per step-4:
+"removal from nova_memory happens only after the export is verified (it doesn't wait for the peer's import)."
+This REPLACES the prior "gated on both backup AND migration" framing — "migration" (NOVA writing to the peer DB)
+no longer exists as a NOVA-side step; the gate is now backup + EXPORT-verified, explicitly NOT peer-import-verified.
+Applies to the 3 peer sessions (155/10871/52442).
+**Preconditions:** TC-708-011 (backup) AND TC-708-012b/012c (export completeness + manifest checksums) have BOTH
+independently verified as passing for these 3 sessions. TC-708-012d (peer import) is explicitly NOT a precondition.
+**Steps:** Attempt removal (a) with only a backup verified but export/manifest NOT verified — MUST be refused/
+blocked; (b) with backup AND export/manifest verified, but BEFORE any peer has confirmed importing — MUST be
+ALLOWED to proceed (this is the key behavior change: removal is not held hostage to a peer's own import timeline);
+(c) with backup and export verified — proceeds.
+**Expected:** Removal proceeds in cases (b) and (c) — the peer's import status is irrelevant to NOVA's own
+removal gate. Case (a) remains a hard block. This also means: if a peer NEVER imports (e.g. loses interest, or the
+file is simply never consumed), NOVA's `nova_memory` still gets cleaned up on schedule — the export+manifest,
+once independently verified, is the durable record of the data, not the peer's eventual action on it.
 
 ### TC-708-014 — Non-peer wrong-place rows and in-session junk senders: BACKUP + REMOVE ONLY, never migrated
 **Priority:** P1 (Critical) — REQUIRED distinct path from TC-708-012/013, per I)ruid's explicit instruction ("Test/

@@ -23,9 +23,8 @@
  *   - appendSystemContext:  per-turn reminders only
  *     (AFTER base system prompt, for proximity to user message)
  *
- * Registers two hooks:
- *   - `message_received`    (observation, fire-and-forget) — caches sender info
- *   - `before_prompt_build` (awaited, returns result)       — injects context
+ * Registers one hook:
+ *   - `before_prompt_build` (awaited, returns result) — injects context
  *
  * Issue: nova-mind #182, #150, #140, #168
  * Closes: nova-openclaw #40, nova-openclaw #41
@@ -39,45 +38,109 @@ import { classifyMessage, type ClassifierResult, type MessageType } from "./clas
 import { identifyDomain, formatDomainContext, type DomainResult } from "./domain-identifier.ts";
 import { getPool } from "./shared/pg-pool.ts";
 
-// ── Sender info cache (message_received → before_prompt_build) ───────────────
+// ── Sender identity from host context (#712) ─────────────────────────────────
 
-interface SenderCache {
-  senderId: string;
-  senderName: string;
-  provider: string;
-  senderE164?: string;
-  accountId?: string;
-  host?: string;
+interface ChannelContextSender {
+  id?: string;
+  name?: string;
+  displayName?: string;
+}
+interface ChannelContextChat {
+  id?: string;
+}
+
+interface ChannelContextShape {
+  sender?: ChannelContextSender;
+  chat?: ChannelContextChat;
+}
+
+export interface ResolvedIdentity {
+  senderInfo: SenderInfo;
   content: string;
-  timestamp: number;
+  warnings: string[];
 }
 
-const CACHE_MAX_SIZE = 1000;
-const CACHE_STALE_MS = 30 * 60 * 1000; // 30 minutes
-
-const senderCache = new Map<string, SenderCache>();
-
-function evictStaleCacheEntries(): void {
-  const now = Date.now();
-  for (const [key, entry] of senderCache.entries()) {
-    if (now - entry.timestamp > CACHE_STALE_MS) {
-      senderCache.delete(key);
-    }
+function normalizeStringField(value: unknown, fieldName: string): { value?: string; warning?: string } {
+  if (value === undefined || value === null) {
+    return {};
   }
+  if (typeof value !== "string") {
+    return { warning: `${fieldName} has wrong type (expected string, got ${typeof value})` };
+  }
+  if (value === "") {
+    return { warning: `${fieldName} is empty` };
+  }
+  return { value };
 }
 
-function evictOldestIfFull(): void {
-  if (senderCache.size < CACHE_MAX_SIZE) return;
+/**
+ * Resolve sender identity and current-turn content directly from the host
+ * context provided to before_prompt_build. The old message_received cache is
+ * removed (#712); ctx carries senderId/channel/chatId on OpenClaw 2026.9.x.
+ *
+ * Defensive: every malformed/absent field produces a warning and degrades
+ * gracefully; the function never throws and never returns silently.
+ */
+export function resolveSenderInfoFromCtx(
+  event: PluginEvent,
+  ctx: PluginContext,
+  api: PluginApi
+): ResolvedIdentity {
+  const warnings: string[] = [];
 
-  let oldestKey: string | null = null;
-  let oldestTime = Infinity;
-  for (const [key, entry] of senderCache.entries()) {
-    if (entry.timestamp < oldestTime) {
-      oldestTime = entry.timestamp;
-      oldestKey = key;
-    }
+  const senderIdResult = normalizeStringField(ctx.senderId, "senderId");
+  if (senderIdResult.warning) warnings.push(senderIdResult.warning);
+
+  const chatIdResult = normalizeStringField(ctx.chatId, "chatId");
+  if (chatIdResult.warning) warnings.push(chatIdResult.warning);
+
+  const channelResult = normalizeStringField(ctx.channel, "channel");
+  if (channelResult.warning) warnings.push(channelResult.warning);
+
+  // Explicitly warn about a missing senderId when the turn is otherwise
+  // channel-originated, so operators see why entity resolution is skipped.
+  if (!senderIdResult.value && (chatIdResult.value || channelResult.value || ctx.messageProvider)) {
+    warnings.push("senderId is missing");
   }
-  if (oldestKey) senderCache.delete(oldestKey);
+
+  // Provider: prefer the explicit channel field, fall back to messageProvider.
+  const provider = channelResult.value ?? ctx.messageProvider;
+
+  // Sender name from channelContext (rich) or event metadata.
+  const channelCtx = ctx.channelContext as ChannelContextShape | undefined;
+  let senderName: string | undefined =
+    channelCtx?.sender?.name ?? channelCtx?.sender?.displayName;
+  if (typeof event.senderName === "string" && event.senderName) {
+    senderName = senderName ?? event.senderName;
+  }
+
+  // Content for classification/recall: currentUserMessage first, then prompt.
+  let content = "";
+  if (typeof event.currentUserMessage === "string") {
+    content = event.currentUserMessage;
+  } else if (typeof event.prompt === "string") {
+    content = event.prompt;
+  }
+
+  // If we have no identity sources at all, warn once (e.g. cron/heartbeat).
+  if (!senderIdResult.value && !chatIdResult.value && !provider) {
+    warnings.push("No channel identity available (senderId, channel, chatId all absent)");
+  }
+
+  return {
+    senderInfo: {
+      senderId: senderIdResult.value,
+      senderName,
+      provider,
+      senderE164: (event.metadata as any)?.senderE164,
+      accountId: ctx.accountId,
+      host:
+        (event.metadata as any)?.host ?? (event.metadata as any)?.senderHost,
+      config: (api as any).config ?? undefined,
+    },
+    content,
+    warnings,
+  };
 }
 
 // ── Prompt Helper Config cache ────────────────────────────────────────────────
@@ -174,79 +237,10 @@ function isGroupSession(sessionKey: string | undefined): boolean {
 export default function register(api: PluginApi): void {
   const placement = resolvePlacement(api.pluginConfig as Record<string, unknown> | undefined);
   console.info(
-    `[turn-context] Plugin registered — hooks: message_received, before_prompt_build, placement=${placement}`
+    `[turn-context] Plugin registered — hooks: before_prompt_build, placement=${placement}`
   );
 
-  // ── Hook 1: message_received (observation, fire-and-forget) ──────────────
-  //
-  // Caches sender info for use in before_prompt_build.
-  // No return value; errors are swallowed (must not block message flow).
-
-  api.on("message_received", async (event: PluginEvent, ctx: PluginContext) => {
-    try {
-      const sessionKey = ctx.sessionKey;
-      if (!sessionKey) return;
-
-      // ── Extract all fields synchronously ──────────────────────────────
-      const senderId: string | undefined =
-        event.senderId ??
-        (event.metadata as any)?.senderId;
-
-      const senderName: string | undefined =
-        event.senderName ??
-        (event.metadata as any)?.senderName;
-
-      const provider: string | undefined =
-        ctx.messageProvider ??
-        (event.metadata as any)?.provider;
-
-      const senderE164: string | undefined =
-        (event.metadata as any)?.senderE164;
-
-      const accountId: string | undefined =
-        ctx.accountId ??
-        (event.metadata as any)?.accountId;
-
-      // IRC (and potentially other channel adapters) may attach the server host
-      // to event.metadata so we can derive a per-network identity. If it is not
-      // present, extractIdentifiers will fall back to resolving the host from
-      // OpenClaw config using accountId.
-      const host: string | undefined =
-        (event.metadata as any)?.host ??
-        (event.metadata as any)?.senderHost;
-
-      const content: string | undefined =
-        event.content ??
-        (event as any).context?.content;
-
-      // CRITICAL: Cache write MUST happen before any await or async work.
-      // message_received is fire-and-forget — before_prompt_build may fire
-      // before this handler's Promise settles.
-      // See: nova-mind #182 Step 2 race condition analysis
-      senderCache.set(sessionKey, {
-        senderId: senderId ?? "",
-        senderName: senderName ?? "",
-        provider: provider ?? "",
-        senderE164,
-        accountId,
-        host,
-        content: content ?? "",
-        timestamp: Date.now(),
-      });
-
-      // Eviction runs AFTER cache write — safe to defer
-      evictOldestIfFull();
-      evictStaleCacheEntries();
-    } catch (err) {
-      // Observation-mode hook: swallow all errors
-      console.error(
-        "[turn-context] message_received cache error:",
-        err instanceof Error ? err.message : String(err)
-      );
-    }
-  });
-
-  // ── Hook 2: before_prompt_build (awaited, returns context segments) ────────
+  // ── Hook: before_prompt_build (awaited, returns context segments) ──────────
   //
   // Classifier-first dispatch:
   //   1. Classify message type (rule-based, ~0ms; Ollama fallback, <2s)
@@ -278,32 +272,18 @@ export default function register(api: PluginApi): void {
         `[turn-context] before_prompt_build START agent=${agentId} session=${sessionKey ?? "none"}`
       );
 
-      // Retrieve cached sender info (may be undefined for first message or
-      // if message_received fired from a different process).
-      // Check staleness: entries older than CACHE_STALE_MS are treated as expired on read.
-      const raw = sessionKey ? senderCache.get(sessionKey) : undefined;
-      const cached =
-        raw && Date.now() - raw.timestamp < CACHE_STALE_MS ? raw : undefined;
+      const { senderInfo, content, warnings } = resolveSenderInfoFromCtx(event, ctx, api);
+      for (const warning of warnings) {
+        console.warn(`[turn-context] Identity warning: ${warning}`);
+      }
 
       console.info(
-        `[turn-context] Sender cache ${
-          cached
-            ? `HIT sender=${cached.senderName} content=${cached.content.length}chars`
-            : "MISS (no cached sender info)"
-        }`
+        `[turn-context] Identity resolved senderId=${senderInfo.senderId ?? "none"} ` +
+        `provider=${senderInfo.provider ?? "none"} chatId=${ctx.chatId ?? "none"} ` +
+        `content=${content.length}chars`
       );
 
       const isGroup = isGroupSession(sessionKey);
-
-      const senderInfo: SenderInfo = {
-        senderId: cached?.senderId,
-        senderName: cached?.senderName,
-        provider: cached?.provider,
-        senderE164: cached?.senderE164,
-        accountId: cached?.accountId,
-        host: cached?.host,
-        config: (api as any).config ?? undefined,
-      };
 
       // ── Step 1: Classify message type ──────────────────────────────────────
       // Rule-based classification handles ~60-70% of cases without LLM overhead.
@@ -313,12 +293,12 @@ export default function register(api: PluginApi): void {
 
       const classifyStart = Date.now();
       let classification: ClassifierResult = { type: "info_request", method: "default" };
-      if (cached?.content) {
+      if (content) {
         try {
-          classification = await classifyMessage(cached.content);
+          classification = await classifyMessage(content);
         } catch (err) {
           console.warn(
-            "[turn-context] Classifier error (defaulting to info_request for safe full recall):",
+            "[turn-context] Classifier error (defaulting to conversation for safe recall):",
             err instanceof Error ? err.message : String(err)
           );
         }
@@ -419,10 +399,10 @@ export default function register(api: PluginApi): void {
 
       // Build recall input: pass classifier domain hints, resolved entityId, + visibility info
       const recallInput: RecallInput = {
-        content: cached?.content ?? "",
-        senderId: cached?.senderId ?? "",
-        senderName: cached?.senderName ?? "",
-        provider: cached?.provider ?? "",
+        content,
+        senderId: senderInfo.senderId ?? "",
+        senderName: senderInfo.senderName ?? "",
+        provider: senderInfo.provider ?? "",
         conversationId: sessionKey ?? "",
         isGroup,
         channelName: "",
@@ -463,8 +443,8 @@ export default function register(api: PluginApi): void {
           }),
 
           // 2. Domain identifier — gated by helperConfig
-          helperConfig.domain_identifier && cached?.content
-            ? identifyDomain(cached.content, classification.domainHints).catch((err) => {
+          helperConfig.domain_identifier && content
+            ? identifyDomain(content, classification.domainHints).catch((err) => {
                 console.error(
                   "[turn-context] Domain identification error:",
                   err instanceof Error ? err.message : String(err)
@@ -476,7 +456,7 @@ export default function register(api: PluginApi): void {
           // 3. Semantic recall — gated by helperConfig
           // Uses classifier domain hints and resolved entityId for domain-scoped
           // and visibility-gated recall (#150, #075)
-          helperConfig.semantic_recall && cached?.content
+          helperConfig.semantic_recall && content
             ? runSemanticRecall(recallInput).catch((err) => {
                 console.error(
                   "[turn-context] Semantic recall error:",
@@ -508,7 +488,7 @@ export default function register(api: PluginApi): void {
         ` domain=${helperConfig.domain_identifier ? domainIdentifierResult.status : "skipped"}` +
         `${domainOk ? `(${(domainIdentifierResult as PromiseFulfilledResult<DomainResult>).value!.domains.length}matches)` : ""}` +
         ` recall=${helperConfig.semantic_recall ? recallResult.status : "skipped"}` +
-        `${recallOk ? `(${(recallResult as PromiseFulfilledResult<string>).value!.length}chars)` : cached?.content ? "(no results)" : "(skipped, no content)"}`
+        `${recallOk ? `(${(recallResult as PromiseFulfilledResult<string>).value!.length}chars)` : content ? "(no results)" : "(skipped, no content)"}`
       );
 
       // ── Build prependSystemContext: entity + domain + recall ──────────────
@@ -649,15 +629,27 @@ interface PluginEvent {
   senderName?: string;
   content?: string;
   metadata?: Record<string, unknown>;
+  /** Current request before projection (OpenClaw 2026.9.x). */
+  currentUserMessage?: string;
+  /** Legacy prompt field when currentUserMessage is omitted. */
+  prompt?: string;
   [key: string]: unknown;
 }
 
 interface PluginContext {
   sessionKey?: string;
   agentId?: string;
+  /** Channel/plugin id for channel-originated runs, e.g. `discord`. */
+  channel?: string;
+  /** Conversation target id for channel-originated runs. */
+  chatId?: string;
+  /** Sender identity for channel-originated runs when available. */
+  senderId?: string;
   messageProvider?: string;
   accountId?: string;
   config?: Record<string, unknown>;
+  /** Channel-owned sender/chat details. */
+  channelContext?: ChannelContextShape;
   [key: string]: unknown;
 }
 

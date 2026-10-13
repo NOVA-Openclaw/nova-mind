@@ -146,6 +146,7 @@ describe("classifyMessage failure reasons (#697 / #361)", () => {
       res.end(JSON.stringify({ error: "model not found" }));
     });
     process.env.OLLAMA_BASE_URL = `http://127.0.0.1:${port}`;
+    delete process.env.OLLAMA_TIMEOUT_MS;
     let captured = await captureWarning(() => classifyMessage(ambiguousContent));
     reasons.push(captured.warnings.find((w) => w.includes("reason="))!);
     await new Promise<void>((resolve) => server!.close(() => resolve()));
@@ -157,6 +158,7 @@ describe("classifyMessage failure reasons (#697 / #361)", () => {
       res.end("garbage");
     });
     process.env.OLLAMA_BASE_URL = `http://127.0.0.1:${port}`;
+    delete process.env.OLLAMA_TIMEOUT_MS;
     captured = await captureWarning(() => classifyMessage(ambiguousContent));
     reasons.push(captured.warnings.find((w) => w.includes("reason="))!);
     await new Promise<void>((resolve) => server!.close(() => resolve()));
@@ -170,8 +172,20 @@ describe("classifyMessage failure reasons (#697 / #361)", () => {
     }));
     await new Promise<void>((resolve) => probe.close(() => resolve()));
     process.env.OLLAMA_BASE_URL = `http://127.0.0.1:${port}`;
+    delete process.env.OLLAMA_TIMEOUT_MS;
     captured = await captureWarning(() => classifyMessage(ambiguousContent));
     reasons.push(captured.warnings.find((w) => w.includes("reason="))!);
+
+    // hang -> timeout (use a short timeout so the four-reason probe stays fast)
+    port = await startServer(() => {
+      // Never respond.
+    });
+    process.env.OLLAMA_BASE_URL = `http://127.0.0.1:${port}`;
+    process.env.OLLAMA_TIMEOUT_MS = "50";
+    captured = await captureWarning(() => classifyMessage(ambiguousContent));
+    reasons.push(captured.warnings.find((w) => w.includes("reason="))!);
+    await new Promise<void>((resolve) => server!.close(() => resolve()));
+    server = undefined;
 
     const distinctReasons = new Set(
       reasons.map((r) => {
@@ -179,10 +193,11 @@ describe("classifyMessage failure reasons (#697 / #361)", () => {
         return match ? match[1] : "";
       })
     );
-    expect(distinctReasons.size).toBe(3);
+    expect(distinctReasons.size).toBe(4);
     expect(distinctReasons).toContain("model_not_found");
     expect(distinctReasons).toContain("parse_error");
     expect(distinctReasons).toContain("connection_refused");
+    expect(distinctReasons).toContain("timeout");
   }, 10000);
 
   it("TC-697-005: invalid type enum value falls back to conversation with method=ollama", async () => {

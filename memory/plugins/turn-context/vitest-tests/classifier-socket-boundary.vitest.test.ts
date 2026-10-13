@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as http from "http";
 import type { Socket } from "net";
-import { classifyMessage } from "../src/classifier.ts";
+import { classifyMessage, getOllamaTimeoutMs } from "../src/classifier.ts";
 
 /**
  * Tests for #361 warm-path latency and socket cleanup, plus #697 boundary
@@ -15,6 +15,33 @@ import { classifyMessage } from "../src/classifier.ts";
  *   40-second socket-leak probe; production remains at 2000ms.
  * - N=20 consecutive timeouts is the minimum count required by TC-361-003.
  */
+
+describe("getOllamaTimeoutMs fallback", () => {
+  let originalTimeout: string | undefined;
+
+  beforeEach(() => {
+    originalTimeout = process.env.OLLAMA_TIMEOUT_MS;
+  });
+
+  afterEach(() => {
+    if (originalTimeout === undefined) {
+      delete process.env.OLLAMA_TIMEOUT_MS;
+    } else {
+      process.env.OLLAMA_TIMEOUT_MS = originalTimeout;
+    }
+  });
+
+  it.each([
+    { value: "", expected: 2000, label: "empty string" },
+    { value: "not-a-number", expected: 2000, label: "NaN" },
+    { value: "0", expected: 2000, label: "zero" },
+    { value: "-100", expected: 2000, label: "negative" },
+    { value: "50", expected: 50, label: "valid positive" },
+  ])("returns $expected for $label", ({ value, expected }) => {
+    process.env.OLLAMA_TIMEOUT_MS = value;
+    expect(getOllamaTimeoutMs()).toBe(expected);
+  });
+});
 
 describe("classifier warm path and socket cleanup (#361)", () => {
   let originalBaseUrl: string | undefined;

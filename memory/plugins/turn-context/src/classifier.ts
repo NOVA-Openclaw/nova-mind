@@ -37,7 +37,7 @@ function getOllamaClassifyModel(): string {
   return process.env.OLLAMA_CLASSIFY_MODEL || "phi4-mini:latest";
 }
 
-function getOllamaTimeoutMs(): number {
+export function getOllamaTimeoutMs(): number {
   const parsed = parseInt(process.env.OLLAMA_TIMEOUT_MS || "2000", 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 2000;
 }

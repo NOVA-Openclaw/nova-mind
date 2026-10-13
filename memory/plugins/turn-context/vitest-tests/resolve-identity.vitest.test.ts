@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
+import * as fs from "fs";
+import * as os from "os";
+import { join } from "path";
 import { resolveSenderInfoFromCtx, type ResolvedIdentity } from "../src/index.ts";
+import { resolveEntityContext, setEntityResolverPathForTest } from "../src/entity-resolver.ts";
 
 /**
  * Unit tests for #712 sender identity resolution from before_prompt_build ctx.
@@ -13,7 +17,8 @@ import { resolveSenderInfoFromCtx, type ResolvedIdentity } from "../src/index.ts
  *   extractIdentifiers() (entity-resolver.ts switch statement).
  * - chatId 123456789 is the numeric-typed example from TC-712-007.
  * - senderId 330189773371080716 is the numeric Discord snowflake example from
- *   TC-712-008 and the known Discord id from TC-712-003.
+ *   TC-712-008 and the known Discord id from TC-712-003 (mapped to entity_id 2
+ *   by the mocked entity-resolver library below).
  * - currentUserMessage / prompt are the documented fields of
  *   PluginHookBeforePromptBuildEvent in the OpenClaw 2026.9.6 host contract.
  */
@@ -28,6 +33,47 @@ function resolveFor(
 ): ResolvedIdentity {
   return resolveSenderInfoFromCtx(event as any, ctx as any, makeApi());
 }
+
+/**
+ * Write a mock entity-resolver module to disk and point the test seam at it.
+ * Returns the fixture path and a restore function.
+ */
+function writeFixture(source: string): { path: string; restore: () => void } {
+  const tmpDir = fs.mkdtempSync(join(os.tmpdir(), "turn-context-712-003-"));
+  const fixturePath = join(tmpDir, "mock-entity-resolver.ts");
+  fs.writeFileSync(fixturePath, source);
+  const restorePath = setEntityResolverPathForTest(fixturePath);
+  return {
+    path: fixturePath,
+    restore: () => {
+      restorePath();
+      try {
+        fs.unlinkSync(fixturePath);
+        fs.rmdirSync(tmpDir);
+      } catch {}
+    },
+  };
+}
+
+const discordIdentifierFixture = `
+export const resolveEntityByIdentifiers = async (identifiers) => {
+  if (identifiers.discordId === "330189773371080716") {
+    return {
+      ok: true,
+      entity: {
+        id: 2,
+        name: "I)ruid",
+        fullName: "I)ruid",
+        type: "person",
+      },
+    };
+  }
+  return { ok: true, entity: null };
+};
+export const getCachedEntity = () => null;
+export const setCachedEntity = () => {};
+export const getEntityProfile = async () => ({ facts: {}, stats: { factCount: 0, lastMessage: null } });
+`;
 
 describe("resolveSenderInfoFromCtx (#712)", () => {
   it("TC-712-006: senderId undefined warns but returns identity and content", () => {
@@ -86,6 +132,36 @@ describe("resolveSenderInfoFromCtx (#712)", () => {
     expect(result.content).toBe("hello");
   });
 
+  it("TC-712-003: Discord sender_id 330189773371080716 resolves to entity_id 2", async () => {
+    const { restore } = writeFixture(discordIdentifierFixture);
+    try {
+      const result = await resolveEntityContext("session-712-003", {
+        senderId: "330189773371080716",
+        provider: "discord",
+      });
+
+      expect(result.entityId).toBe(2);
+      expect(result.text).toContain("I)ruid");
+    } finally {
+      restore();
+    }
+  });
+
+  it("TC-712-003 inverse: same numeric string on a non-Discord provider does not resolve to entity 2", async () => {
+    const { restore } = writeFixture(discordIdentifierFixture);
+    try {
+      const result = await resolveEntityContext("session-712-003-inv", {
+        senderId: "330189773371080716",
+        provider: "telegram",
+      });
+
+      expect(result.entityId).toBeNull();
+      expect(result.text).toBeNull();
+    } finally {
+      restore();
+    }
+  });
+
   it("TC-712-009: empty-string chatId is treated as absent with a warning", () => {
     const result = resolveFor(
       { currentUserMessage: "hello" },
@@ -117,6 +193,7 @@ describe("resolveSenderInfoFromCtx (#712)", () => {
       { ctx: { chatId: "", channel: "discord" }, label: "empty chatId" },
       { ctx: {}, label: "all absent" },
     ];
+
 
     for (const { ctx, label } of malformedCases) {
       const result = resolveFor({ currentUserMessage: "x" }, ctx);

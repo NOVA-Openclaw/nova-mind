@@ -1987,7 +1987,12 @@ if [ -d "$TURN_CONTEXT_SOURCE" ]; then
         PLUGIN_PATH="$TURN_CONTEXT_TARGET"
         jq --arg path "$PLUGIN_PATH" '
             .plugins.load.paths = ((.plugins.load.paths // []) + [$path] | unique)
-            | .plugins.entries."turn-context" = {"enabled": true}
+            | .plugins.entries."turn-context" = (.plugins.entries."turn-context" // {}) * {
+                "enabled": true,
+                "hooks": {
+                  "allowConversationAccess": true
+                }
+              }
         ' "$OPENCLAW_CONFIG" >"$OPENCLAW_CONFIG.tmp" && \
             mv "$OPENCLAW_CONFIG.tmp" "$OPENCLAW_CONFIG" && \
             echo -e "  ${CHECK_MARK} Plugin enabled in OpenClaw config" || \

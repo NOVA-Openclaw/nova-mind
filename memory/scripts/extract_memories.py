@@ -74,6 +74,12 @@ CONFIG_MAX_TOKENS = CONFIG.get("max_tokens") or 2048
 
 # ── DB helpers ────────────────────────────────────────────────────────────────
 
+# Cache of peer-agent -> owns-a-database lookups. Populated lazily by
+# _agent_has_memory_database(); False can mean "does not exist" or "lookup
+# failed" — either way the guard allows the write (defense-in-depth only).
+_PEER_DB_CACHE: dict[str, bool] = {}
+
+
 def _load_database_from_postgres_config() -> str | None:
     """Read database name from the running user's ~/.openclaw/postgres.json."""
     config_path = os.environ.get(
@@ -99,6 +105,33 @@ def _parse_agent_from_session_key(session_key: str) -> str | None:
     return match.group(1) if match else None
 
 
+def _agent_has_memory_database(agent: str, conn) -> bool:
+    """Return True if a database named `<agent>_memory` exists on this server.
+
+    The result is cached per process. If the catalog lookup itself fails (e.g.
+    insufficient privileges), log a warning and return False so the guard
+    degrades safely; DB resolution remains the primary access control.
+    """
+    if agent in _PEER_DB_CACHE:
+        return _PEER_DB_CACHE[agent]
+
+    candidate = f"{agent}_memory"
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1 FROM pg_database WHERE datname = %s", (candidate,))
+            exists = cur.fetchone() is not None
+    except Exception as e:
+        print(
+            f"[extract_memories] WARNING: Could not verify peer database ownership "
+            f"for '{agent}': {e}",
+            file=sys.stderr,
+        )
+        exists = False
+
+    _PEER_DB_CACHE[agent] = exists
+    return exists
+
+
 def get_db_connection():
     """Return a psycopg2 connection using PG* env vars.
 
@@ -107,7 +140,7 @@ def get_db_connection():
       1. PGDATABASE environment variable
       2. The `database` field of ~/.openclaw/postgres.json
     The resolved name must end with `_memory`. An optional cross-peer guard
-    rejects sessions whose agent prefix does not match a non-nova DB owner.
+    rejects sessions whose agent prefix belongs to a different DB-owning peer.
     """
     pg_database = os.environ.get('PGDATABASE')
     db_name = pg_database.strip() if pg_database and pg_database.strip() else _load_database_from_postgres_config()
@@ -124,13 +157,18 @@ def get_db_connection():
 
     owner = db_name[:-len('_memory')]
     agent = _parse_agent_from_session_key(os.environ.get('SOURCE_SESSION_ID', ''))
-    if agent and owner != 'nova' and owner != agent:
+    conn = psycopg2.connect(dbname=db_name)
+
+    # Cross-peer guard: refuse only when the session agent is itself a DB-owning
+    # peer (i.e. <agent>_memory exists) AND that peer is not the DB owner.
+    if agent and owner != agent and _agent_has_memory_database(agent, conn):
+        conn.close()
         raise RuntimeError(
             f"[extract_memories] Cross-peer guard: session agent '{agent}' does not match "
             f"DB owner '{owner}' (database={db_name})"
         )
 
-    return psycopg2.connect()
+    return conn
 
 
 def lookup_default_visibility(sender_id: str, sender_provider: str, conn) -> str:

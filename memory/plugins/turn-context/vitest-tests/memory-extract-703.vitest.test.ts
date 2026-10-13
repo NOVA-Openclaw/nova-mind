@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, writeFileSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import handler, { resolveMemoryDatabase } from "../../../hooks/memory-extract/handler.ts";
+import handler, { resolveMemoryDatabase, peerDbCache } from "../../../hooks/memory-extract/handler.ts";
 
 /**
  * Unit tests for #703: memory-extract handler must resolve the current
@@ -17,6 +17,8 @@ import handler, { resolveMemoryDatabase } from "../../../hooks/memory-extract/ha
  *   <peer>_memory pattern.
  * - "graybeard_memory" is used for the cross-peer guard: a newhart-prefixed
  *   session must not write into graybeard's DB.
+ * - "bastion" is a synthetic peer subagent; bastion_memory does not exist, so
+ *   a bastion-prefixed session on victoria_memory is allowed.
  * - Mocked psql stdout "42" / "99" are arbitrary synthetic ids.
  */
 
@@ -40,6 +42,43 @@ function cleanupPostgresConfig(path: string): void {
   } catch {}
 }
 
+/**
+ * Configure the mocked execFile so psql calls return sensible results:
+ * - SELECT 1 FROM pg_database WHERE datname = '<agent>_memory' returns "1\n"
+ *   when agent is in existsFor, otherwise "".
+ * - INSERT INTO channel_sessions returns "42\n".
+ * - INSERT INTO channel_transcripts returns "99\n".
+ * - Everything else returns "".
+ *
+ * Callbacks receive (error, stdout, stderr) as strings; this matches both the
+ * module-level promisified wrapper and the direct Promise wrapper used by the
+ * peer-DB guard.
+ */
+function mockPsql(existsFor: Set<string> = new Set()): void {
+  vi.mocked(execFile).mockImplementation((_cmd: any, args: any, cb: any) => {
+    if (!Array.isArray(args)) {
+      cb(null, "", "");
+      return {} as any;
+    }
+    const sql = args.find((a: any) => typeof a === "string" && a.includes("SELECT 1 FROM pg_database"));
+    if (sql) {
+      const match = sql.match(/datname = '([^']+)'/);
+      const dbName = match ? match[1] : "";
+      const owner = dbName.replace(/_memory$/, "");
+      cb(null, existsFor.has(owner) ? "1\n" : "", "");
+      return {} as any;
+    }
+    if (args.includes("INSERT INTO channel_sessions")) {
+      cb(null, "42\n", "");
+    } else if (args.includes("INSERT INTO channel_transcripts")) {
+      cb(null, "99\n", "");
+    } else {
+      cb(null, "", "");
+    }
+    return {} as any;
+  });
+}
+
 describe("resolveMemoryDatabase (#703)", () => {
   let originalPgDatabase: string | undefined;
   let originalOverride: string | undefined;
@@ -50,6 +89,8 @@ describe("resolveMemoryDatabase (#703)", () => {
     delete process.env.PGDATABASE;
     // Point away from the real ~/.openclaw/postgres.json so tests are hermetic.
     process.env.OPENCLAW_POSTGRES_CONFIG_OVERRIDE = join(tmpdir(), "memory-extract-703-missing-postgres.json");
+    vi.mocked(execFile).mockReset();
+    peerDbCache.clear();
   });
 
   afterEach(() => {
@@ -59,38 +100,38 @@ describe("resolveMemoryDatabase (#703)", () => {
     else process.env.OPENCLAW_POSTGRES_CONFIG_OVERRIDE = originalOverride;
   });
 
-  it("resolves from OPENCLAW_POSTGRES_CONFIG_OVERRIDE when PGDATABASE is unset", () => {
+  it("resolves from OPENCLAW_POSTGRES_CONFIG_OVERRIDE when PGDATABASE is unset", async () => {
     const configPath = makePostgresConfig("nova_memory");
     process.env.OPENCLAW_POSTGRES_CONFIG_OVERRIDE = configPath;
     try {
-      expect(resolveMemoryDatabase("agent:nova:discord:channel:123")).toBe("nova_memory");
+      await expect(resolveMemoryDatabase("agent:nova:discord:channel:123")).resolves.toBe("nova_memory");
     } finally {
       cleanupPostgresConfig(configPath);
     }
   });
 
-  it("PGDATABASE overrides postgres.json", () => {
+  it("PGDATABASE overrides postgres.json", async () => {
     const configPath = makePostgresConfig("nova_memory");
     process.env.OPENCLAW_POSTGRES_CONFIG_OVERRIDE = configPath;
     process.env.PGDATABASE = "newhart_memory";
     try {
-      expect(resolveMemoryDatabase("agent:newhart:agent_chat")).toBe("newhart_memory");
+      await expect(resolveMemoryDatabase("agent:newhart:agent_chat")).resolves.toBe("newhart_memory");
     } finally {
       cleanupPostgresConfig(configPath);
     }
   });
 
-  it("fails loudly when neither PGDATABASE nor postgres.json provides a DB", () => {
-    expect(() => resolveMemoryDatabase("agent:nova:discord:channel:123")).toThrow(
+  it("fails loudly when neither PGDATABASE nor postgres.json provides a DB", async () => {
+    await expect(resolveMemoryDatabase("agent:nova:discord:channel:123")).rejects.toThrow(
       /Could not resolve memory database/
     );
   });
 
-  it("fails loudly when resolved DB name does not end with _memory", () => {
+  it("fails loudly when resolved DB name does not end with _memory", async () => {
     const configPath = makePostgresConfig("not_a_memory_db");
     process.env.OPENCLAW_POSTGRES_CONFIG_OVERRIDE = configPath;
     try {
-      expect(() => resolveMemoryDatabase("agent:nova:discord:channel:123")).toThrow(
+      await expect(resolveMemoryDatabase("agent:nova:discord:channel:123")).rejects.toThrow(
         /does not look like a memory database/
       );
     } finally {
@@ -98,30 +139,59 @@ describe("resolveMemoryDatabase (#703)", () => {
     }
   });
 
-  it("allows NOVA subagent 'lex' against nova_memory", () => {
+  it("allows NOVA subagent 'lex' against nova_memory", async () => {
     const configPath = makePostgresConfig("nova_memory");
     process.env.OPENCLAW_POSTGRES_CONFIG_OVERRIDE = configPath;
+    mockPsql();
     try {
-      expect(resolveMemoryDatabase("agent:lex:agent_chat")).toBe("nova_memory");
+      await expect(resolveMemoryDatabase("agent:lex:agent_chat")).resolves.toBe("nova_memory");
     } finally {
       cleanupPostgresConfig(configPath);
     }
   });
 
-  it("allows an arbitrary new subagent name against nova_memory", () => {
+  it("allows an arbitrary new subagent name against nova_memory", async () => {
     const configPath = makePostgresConfig("nova_memory");
     process.env.OPENCLAW_POSTGRES_CONFIG_OVERRIDE = configPath;
+    mockPsql();
     try {
-      expect(resolveMemoryDatabase("agent:futurebot:agent_chat")).toBe("nova_memory");
+      await expect(resolveMemoryDatabase("agent:futurebot:agent_chat")).resolves.toBe("nova_memory");
     } finally {
       cleanupPostgresConfig(configPath);
     }
   });
 
-  it("cross-peer guard rejects newhart session against graybeard_memory", () => {
+  it("allows a peer's subagent 'bastion' on victoria_memory when bastion_memory does not exist", async () => {
+    process.env.PGDATABASE = "victoria_memory";
+    mockPsql(new Set(["victoria"]));
+    await expect(resolveMemoryDatabase("agent:bastion:agent_chat")).resolves.toBe("victoria_memory");
+  });
+
+  it("cross-peer guard rejects newhart session against graybeard_memory when graybeard_memory exists", async () => {
     process.env.PGDATABASE = "graybeard_memory";
-    expect(() => resolveMemoryDatabase("agent:newhart:agent_chat")).toThrow(
+    mockPsql(new Set(["graybeard", "newhart"]));
+    await expect(resolveMemoryDatabase("agent:newhart:agent_chat")).rejects.toThrow(
       /Cross-peer guard/
+    );
+  });
+
+  it("cross-peer guard rejects graybeard session against newhart_memory when graybeard_memory exists", async () => {
+    process.env.PGDATABASE = "newhart_memory";
+    mockPsql(new Set(["graybeard", "newhart"]));
+    await expect(resolveMemoryDatabase("agent:graybeard:agent_chat")).rejects.toThrow(
+      /Cross-peer guard/
+    );
+  });
+
+  it("no sessionKey resolves from env and skips the cross-peer guard", async () => {
+    process.env.PGDATABASE = "nova_memory";
+    mockPsql();
+    await expect(resolveMemoryDatabase("")).resolves.toBe("nova_memory");
+  });
+
+  it("no sessionKey throws when the database cannot be resolved", async () => {
+    await expect(resolveMemoryDatabase("")).rejects.toThrow(
+      /Could not resolve memory database/
     );
   });
 });
@@ -145,6 +215,7 @@ describe("memory-extract handler DB resolution (#703 integration)", () => {
     };
     vi.mocked(spawn).mockReset();
     vi.mocked(execFile).mockReset();
+    peerDbCache.clear();
   });
 
   afterEach(() => {
@@ -168,19 +239,6 @@ describe("memory-extract handler DB resolution (#703 integration)", () => {
     };
   }
 
-  function mockPsqlForHappyPath(): void {
-    vi.mocked(execFile).mockImplementation((_cmd: any, args: any, cb: any) => {
-      if (Array.isArray(args) && args.includes("INSERT INTO channel_sessions")) {
-        cb(null, "42\n", "");
-      } else if (Array.isArray(args) && args.includes("INSERT INTO channel_transcripts")) {
-        cb(null, "99\n", "");
-      } else {
-        cb(null, "", "");
-      }
-      return {} as any;
-    });
-  }
-
   it("TC-703-007: no PGDATABASE and no postgres.json fails loudly", async () => {
     await handler(makeEvent());
 
@@ -192,7 +250,7 @@ describe("memory-extract handler DB resolution (#703 integration)", () => {
 
   it("TC-703-002: resolvable peer DB passes resolution and uses it for psql", async () => {
     process.env.PGDATABASE = "newhart_memory";
-    mockPsqlForHappyPath();
+    mockPsql(new Set(["newhart"]));
 
     await handler(makeEvent({ sessionKey: "agent:newhart:agent_chat" }));
 
@@ -208,19 +266,24 @@ describe("memory-extract handler DB resolution (#703 integration)", () => {
 
   it("TC-703-009a: session_key/env mismatch triggers cross-peer guard", async () => {
     process.env.PGDATABASE = "graybeard_memory";
+    mockPsql(new Set(["graybeard", "newhart"]));
 
     await handler(makeEvent({ sessionKey: "agent:newhart:agent_chat" }));
 
     expect(errors.some((e) => e.includes("Database resolution failed"))).toBe(true);
     expect(errors.some((e) => e.includes("Cross-peer guard"))).toBe(true);
-    expect(vi.mocked(execFile)).not.toHaveBeenCalled();
+    // The guard itself performs one catalog lookup; no data writes or Python
+    // extraction should be attempted.
+    const psqlCalls = vi.mocked(execFile).mock.calls.filter((c) => c[0] === "psql");
+    expect(psqlCalls.length).toBe(1);
+    expect((psqlCalls[0][1] as string[]).join(" ")).toContain("pg_database");
     expect(vi.mocked(spawn)).not.toHaveBeenCalled();
   });
 
   it("TC-703-009c: session_key missing agent prefix still resolves to a valid DB", async () => {
     const configPath = makePostgresConfig("nova_memory");
     process.env.OPENCLAW_POSTGRES_CONFIG_OVERRIDE = configPath;
-    mockPsqlForHappyPath();
+    mockPsql();
 
     try {
       await handler(makeEvent({ sessionKey: "discord:channel:123" }));
@@ -238,7 +301,7 @@ describe("memory-extract handler DB resolution (#703 integration)", () => {
   it("passes resolved PGDATABASE to the Python child explicitly", async () => {
     const configPath = makePostgresConfig("newhart_memory");
     process.env.OPENCLAW_POSTGRES_CONFIG_OVERRIDE = configPath;
-    mockPsqlForHappyPath();
+    mockPsql();
 
     try {
       await handler(makeEvent({ sessionKey: "agent:newhart:agent_chat" }));

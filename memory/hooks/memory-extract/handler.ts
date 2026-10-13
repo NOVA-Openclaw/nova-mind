@@ -253,6 +253,66 @@ function parseAgentFromSessionKey(sessionKey: string): string | null {
   return match ? match[1] : null;
 }
 
+// Process-level cache for peer-agent -> owns-a-database lookups.
+// Exported so tests can clear it between cases when running with isolate:false.
+export const peerDbCache: Map<string, boolean> = new Map();
+
+/**
+ * Return true when a database named `<agent>_memory` exists on the resolved
+ * server. The result is cached per process. If the catalog lookup itself fails
+ * (e.g. psql unavailable or insufficient privileges), log a warning and
+ * return false so the guard degrades safely; DB resolution remains the real
+ * access control.
+ */
+async function agentHasMemoryDatabase(agent: string, resolvedDb: string): Promise<boolean> {
+  if (peerDbCache.has(agent)) {
+    return peerDbCache.get(agent)!;
+  }
+
+  const candidate = `${agent}_memory`;
+  let exists = false;
+  try {
+    // Use execFile directly (not the module-level promisified wrapper) and
+    // normalize the callback shape so tests and production both work: vitest's
+    // mock may call back with either a plain stdout string or a { stdout,
+    // stderr } object, while production gives (err, stdout, stderr).
+    const stdout = await new Promise<string>((resolve, reject) => {
+      execFile(
+        'psql',
+        [
+          resolvedDb,
+          '-t',
+          '-A',
+          '-c',
+          `SELECT 1 FROM pg_database WHERE datname = '${candidate.replace(/'/g, "''")}'`,
+        ],
+        (err, out1, out2) => {
+          if (err) {
+            reject(err);
+          } else if (typeof out1 === 'string') {
+            resolve(out1);
+          } else if (out1 && typeof (out1 as any).stdout === 'string') {
+            resolve((out1 as any).stdout);
+          } else {
+            resolve(typeof out2 === 'string' ? out2 : '');
+          }
+        }
+      );
+    });
+    exists = /^1$/m.test(stdout.trim());
+  } catch (err) {
+    console.warn('[memory-extract] Could not verify peer database ownership', {
+      agent,
+      database: resolvedDb,
+      error: (err as Error).message,
+    });
+    exists = false;
+  }
+
+  peerDbCache.set(agent, exists);
+  return exists;
+}
+
 /**
  * Resolve the memory database name for the current event.
  *
@@ -263,12 +323,12 @@ function parseAgentFromSessionKey(sessionKey: string): string | null {
  * The resolved name must be non-empty and end with `_memory`. If neither
  * source yields a valid name, fail loudly.
  *
- * Optional cross-peer guard: if the DB owner (the part before `_memory`) is
- * not `nova`, the session_key's agent prefix must match that owner. This
- * prevents a peer's inbound traffic from being written to another peer's DB
- * while still allowing NOVA and all her subagents to share nova_memory.
+ * Cross-peer guard: refuse only when the session agent is itself a DB-owning
+ * peer (i.e. `<agent>_memory` exists on the server) AND that peer is not the
+ * resolved DB owner. This prevents one peer's traffic from being written to
+ * another peer's DB while still allowing arbitrary subagents of any owner.
  */
-export function resolveMemoryDatabase(sessionKey: string): string {
+export async function resolveMemoryDatabase(sessionKey: string): Promise<string> {
   const pgDatabase = process.env.PGDATABASE;
   const dbName = pgDatabase && pgDatabase.trim().length > 0
     ? pgDatabase.trim()
@@ -288,7 +348,7 @@ export function resolveMemoryDatabase(sessionKey: string): string {
 
   const owner = dbName.replace(/_memory$/, '');
   const agent = parseAgentFromSessionKey(sessionKey);
-  if (agent && owner !== 'nova' && owner !== agent) {
+  if (agent && owner !== agent && (await agentHasMemoryDatabase(agent, dbName))) {
     throw new Error(
       `[memory-extract] Cross-peer guard: session agent '${agent}' does not match ` +
       `DB owner '${owner}' (database=${dbName})`
@@ -354,8 +414,22 @@ async function insertExtractionFailure(args: {
     );
   `;
 
+  let memoryDatabase: string;
   try {
-    await execFileAsync('psql', [args.sessionKey ? resolveMemoryDatabase(args.sessionKey) : (process.env.PGDATABASE || ''), '-t', '-A', '-c', sql]);
+    // Issue #703: resolve the same way regardless of whether sessionKey is
+    // present. An absent sessionKey simply skips the cross-peer guard.
+    memoryDatabase = await resolveMemoryDatabase(args.sessionKey || '');
+  } catch (err) {
+    console.error('[memory-extract] Failed to resolve DB for extraction_failure insertion', {
+      sessionKey: args.sessionKey,
+      error: (err as Error).message,
+      failureReason: args.failureReason,
+    });
+    return;
+  }
+
+  try {
+    await execFileAsync('psql', [memoryDatabase, '-t', '-A', '-c', sql]);
   } catch (err) {
     console.error('[memory-extract] Failed to insert extraction_failure', {
       error: (err as Error).message,
@@ -428,7 +502,7 @@ const handler = async (event: any) => {
     // fall back to nova_memory. If resolution fails, log loudly and stop.
     let memoryDatabase: string;
     try {
-      memoryDatabase = resolveMemoryDatabase(sessionKey);
+      memoryDatabase = await resolveMemoryDatabase(sessionKey);
     } catch (dbErr) {
       console.error('[memory-extract] Database resolution failed', {
         sessionKey,

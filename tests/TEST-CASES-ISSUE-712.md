@@ -7,6 +7,27 @@ heartbeat/motivation, config sync) are designed separately later in this run.
 
 ---
 
+## Revision Log
+
+**Rev 1 (2026-10-13, step 4 — PL review incorporated, I)ruid, 08:57 UTC):**
+- **Recommendation 1 accepted:** TC-709-002 (overwrite-vs-merge defect) confirmed in scope for this PR — same jq
+  block as the `allowConversationAccess` fix. No longer an open question.
+- **Recommendation 2 accepted:** #697/#361 classifier failure classes (model-404, timeout, connection-refused,
+  parse/garbage) must log distinct, machine-identifiable reasons — not one generic message varying only by the
+  wrapped `Error.message`. TC-697-001, TC-697-002, TC-697-003, TC-361-001, and TC-361-004 tightened to assert
+  distinct reason strings/codes, not just "should differ somehow."
+- **Recommendation 3 accepted:** TC-712-014 (speculative `(channel, chatId)`-keyed fallback cache) **removed**. §1's
+  host-contract finding is conclusive: `before_prompt_build`'s `ctx` already carries `senderId`/`channel`/`chatId`
+  and the event already carries message text via `currentUserMessage`/`prompt` — #712 removes the cross-hook cache
+  completely, with no fallback cache of any kind. TC-712-006 through TC-712-011 (missing/malformed-field handling —
+  warn, don't crash, never a silent return) are unaffected and remain required.
+- **Recommendation 4 accepted:** staging is available and gets wiped/reinstalled per workflow 34 at step 7.
+  TC-709-008 and TC-INT-001 remain staging-run tests, unchanged.
+- **Case count after this revision: 34** (35 minus the removed TC-712-014).
+- Open questions #1, #3, and #4 from Rev 0 are resolved by this review and removed below; open question #2 (now
+  renumbered #1) is resolved by Recommendation 2 and removed; remaining open items are renumbered.
+---
+
 ## 0. Pinned source artifacts (do not use live/hot-fixed checkouts)
 
 - **nova-mind:** fresh clone `~/repos/se1231-nova-mind`, branch `fix/se1231-openclaw-2026.9-regressions`,
@@ -72,7 +93,7 @@ cache-miss behavior retained as an explicit regression baseline (TC-712-001/002)
 
 ---
 
-## 3. #712 — Sender resolution with no cross-hook cache (14 test cases: TC-712-001 … TC-712-014, plus 2 concurrency cases 015–016)
+## 3. #712 — Sender resolution with no cross-hook cache (13 test cases: TC-712-001 … TC-712-011, 712-012/013 event-shape, plus 2 concurrency cases 015–016; TC-712-014 removed per step-4 PL review — see Revision Log)
 
 ### TC-712-001 — Regression baseline: current cache-miss reproduces on the pinned ref
 **Priority:** P1 (Critical) — characterizes the bug being fixed; must FAIL (cache miss) on unpatched 12ecc0b and PASS (no miss / no cache dependency) once #712 lands.
@@ -152,11 +173,6 @@ cache-miss behavior retained as an explicit regression baseline (TC-712-001/002)
 **Steps:** Invoke with `currentUserMessage` omitted, `prompt` populated.
 **Expected:** Falls back to `event.prompt` for recall/classification content rather than treating the turn as content-less.
 
-### TC-712-014 — Defensive fallback path when `ctx` identity fields are absent on a channel-originated run
-**Priority:** P2 (High) — covers the brief's "(channel, chatId)-keyed fallback" contingency even though §1 shows it's not structurally required for the common case.
-**Preconditions:** Simulate a host/harness variant where `ctx.senderId` is absent but `ctx.channel`/`ctx.chatId` ARE present (e.g., a hypothetical older or divergent harness).
-**Steps:** Invoke the hook.
-**Expected:** If a fallback cache is implemented, it is keyed by `(channel, chatId)` tuple — never by `sessionKey` alone (the exact defect class #712 is fixing) and never by `chatId` alone (collides across channels with numeric chat IDs, e.g. Telegram vs. a hypothetical future channel reusing the same numeric space).
 
 ### TC-712-015 — Concurrency: two interleaved sessions from different senders never cross-attribute identity
 **Priority:** P1 (Critical) — REQUIRED by dispatch brief.
@@ -178,20 +194,20 @@ cache-miss behavior retained as an explicit regression baseline (TC-712-001/002)
 **Priority:** P1 (Critical) — direct repro of #697: `OLLAMA_CLASSIFY_MODEL` defaults to `phi4-mini:latest` (`classifier.ts:33-34`), which is not installed; every call 404s.
 **Preconditions:** Ollama reachable, but the configured model does not exist.
 **Steps:** Send a message ambiguous enough to require the Ollama fallback (fails `classifyByRules`, `classifier.ts:88-140`).
-**Expected:** `callOllamaClassify` rejects (its `res.on('end')` handler attempts `JSON.parse` on an Ollama error-shaped body and/or Ollama returns a non-200 that still resolves `res`, so the 404 body is parsed as `ollamaResp.response`). The catch in `classifyMessage` (`classifier.ts:262-267`) logs `"[turn-context] Classifier Ollama fallback failed:"` with a message that distinguishes a 404/model-not-found condition from a timeout — **today it does not**: both collapse into the same generic warning text. This test should FAIL today and is the acceptance test for #697's "log loudly, distinctly" fix.
+**Expected:** `callOllamaClassify` rejects (its `res.on('end')` handler attempts `JSON.parse` on an Ollama error-shaped body and/or Ollama returns a non-200 that still resolves `res`, so the 404 body is parsed as `ollamaResp.response`). The catch in `classifyMessage` (`classifier.ts:262-267`) logs a reason distinguishable from EVERY other classifier failure class (timeout, connection-refused, parse/garbage) — per step-4 PL review, `"[turn-context] Classifier Ollama fallback failed:"` is not sufficient on its own; the fix must emit a stable, greppable reason token (e.g. `reason=model_not_found`) distinct from `reason=timeout`/`reason=connection_refused`/`reason=parse_error`, not merely a differing inner `Error.message` string. **Today it does not**: all four classes share the same generic prefix with only the wrapped message varying. This test must FAIL against the pinned 12ecc0b ref and is the acceptance test for #697's "log loudly, distinctly" fix.
 **Must also assert:** the turn still gets `before_prompt_build` output (classification degrades to `type=conversation method=default`, `classifier.ts:267`, NOT a hook failure) — context injection for entity/recall must not depend on classifier success.
 
 ### TC-697-002 — Ollama unreachable (connection refused) → distinct logged reason, turn still injected
 **Priority:** P1 (Critical)
 **Preconditions:** `OLLAMA_BASE_URL` points at a closed port / Ollama process stopped.
 **Steps:** Send an ambiguous message.
-**Expected:** `req.on('error')` fires (`classifier.ts:225-228`), rejects with a connection-refused `Error`; `classifyMessage`'s catch logs it; classification defaults to `conversation/default`; entity resolution and semantic recall still run and inject normally (they do not depend on `classification.type` except for domain hints and `prompt_helper_config` gating, which falls back safely — `index.ts:337-349`).
+**Expected:** `req.on('error')` fires (`classifier.ts:225-228`), rejects with a connection-refused `Error` (Node `ECONNREFUSED`); `classifyMessage`'s catch logs a reason token distinguishable from TC-697-001's `model_not_found` and TC-361-001's `timeout` (e.g. `reason=connection_refused`) — per step-4 PL review, this must be assertable programmatically (parse the log line for the reason token), not eyeballed; classification defaults to `conversation/default`; entity resolution and semantic recall still run and inject normally (they do not depend on `classification.type` except for domain hints and `prompt_helper_config` gating, which falls back safely — `index.ts:337-349`).
 
 ### TC-697-003 — Ollama returns 200 with a non-JSON body ("garbage") → parse-error path, distinctly logged, safe default
 **Priority:** P1 (Critical) — adversarial malformed-response case, not covered by #697/#361's own repro notes.
 **Preconditions:** Mock/stub Ollama to return `200` with body `not json at all`.
 **Steps:** Send an ambiguous message.
-**Expected:** `JSON.parse(data)` throws inside the `res.on('end')` handler (`classifier.ts:200`); caught and rejected as `"Ollama classify parse error: ..."` (`classifier.ts:219-221`) — a THIRD distinct failure mode from 404/timeout/connection-refused. Verify the top-level `classifyMessage` warning text actually differs for this case (today it won't — all three funnel into the same `"[turn-context] Classifier Ollama fallback failed:"` prefix with only the inner `Error.message` varying, which is not "logged loudly" per #697's own recommended fix #3).
+**Expected:** `JSON.parse(data)` throws inside the `res.on('end')` handler (`classifier.ts:200`); caught and rejected as `"Ollama classify parse error: ..."` (`classifier.ts:219-221`) — a FOURTH distinct failure mode alongside 404/timeout/connection-refused (per step-4 PL review, all four classes are now a required distinctness set, not three). Assert the top-level `classifyMessage` log carries a reason token (e.g. `reason=parse_error`) distinct from the other three — today it won't: all four funnel into the same `"[turn-context] Classifier Ollama fallback failed:"` prefix with only the inner `Error.message` varying, which is not "logged loudly, distinctly" per the accepted fix.
 
 ### TC-697-004 — Ollama returns valid JSON wrapper but `response` field contains a non-JSON or wrong-shaped string
 **Priority:** P2 (High) — nested-garbage case: outer Ollama envelope is valid, inner model output is not.
@@ -215,7 +231,7 @@ cache-miss behavior retained as an explicit regression baseline (TC-712-001/002)
 **Priority:** P1 (Critical) — direct repro of #361.
 **Preconditions:** Classifier model not kept warm in Ollama (`keep_alive` not pinned); triggers cold load.
 **Steps:** Send an ambiguous message; measure `before_prompt_build` total duration.
-**Expected:** `setTimeout` fires at `OLLAMA_TIMEOUT_MS=2000` (`classifier.ts:35,174-177`), `req.destroy()` is called, rejects with `"Ollama classify timeout after 2000ms"`; `classifyMessage`'s catch logs it and returns `conversation/default`; total hook latency reflects the ~2.3s tax (matches #361's own gateway.log evidence: `elapsed=2317ms`, `DONE in 2390ms`). This test's PASS criterion for the fix is that the tax is either eliminated (e.g., a fast `/api/ps` precheck per #361's option 3) or explicitly bounded and reported — not that the symptom disappears unverified.
+**Expected:** `setTimeout` fires at `OLLAMA_TIMEOUT_MS=2000` (`classifier.ts:35,174-177`), `req.destroy()` is called, rejects with `"Ollama classify timeout after 2000ms"`; `classifyMessage`'s catch logs a `reason=timeout` token (per step-4 PL review, distinct from `model_not_found`/`connection_refused`/`parse_error` — assert this programmatically, same as TC-697-001/002/003) and returns `conversation/default`; total hook latency reflects the ~2.3s tax (matches #361's own gateway.log evidence: `elapsed=2317ms`, `DONE in 2390ms`). This test's PASS criterion for the fix is that the tax is either eliminated (e.g., a fast `/api/ps` precheck per #361's option 3) or explicitly bounded and reported — not that the symptom disappears unverified.
 
 ### TC-361-002 — Precheck/skip-when-cold path (if implemented) does not itself add latency on the happy path (warm model)
 **Priority:** P2 (High) — guards against trading one latency bug for another.
@@ -228,11 +244,11 @@ cache-miss behavior retained as an explicit regression baseline (TC-712-001/002)
 **Steps:** Trigger N consecutive timeouts (N≥20) in one process lifetime; inspect open socket/file-descriptor count.
 **Expected:** No monotonic growth in open sockets attributable to the classifier path.
 
-### TC-361-004 — Timeout and 404/model-missing (#697) are distinguishable in logs within the same session
-**Priority:** P1 (Critical) — cross-issue integration: #697 and #361 are two DIFFERENT root causes (model missing vs. model not warm) that currently produce the SAME generic log line. Both must become distinguishable, or the "logged reason" requirement (dispatch brief) is not actually met.
-**Preconditions:** Run TC-697-001's repro and TC-361-001's repro in the same test session.
-**Steps:** Diff the two logged warning strings.
-**Expected:** The two warnings differ in a way an operator can act on without reading source (e.g., "model not found" vs. "timed out — model may be cold"), not just in the generic Node error message that happens to differ by failure type.
+### TC-361-004 — All four classifier failure classes are distinguishable in logs within the same session (expanded per step-4 PL review)
+**Priority:** P1 (Critical) — cross-issue integration: #697 and #361 surface at least FOUR distinct root causes (model missing / 404, cold-load timeout, Ollama unreachable / connection refused, and malformed/garbage model response) that currently produce the SAME generic log line. Per step-4 PL review (Recommendation 2), all four must become programmatically distinguishable, not just #697 vs #361.
+**Preconditions:** Run TC-697-001 (model_not_found), TC-361-001 (timeout), TC-697-002 (connection_refused), and TC-697-003 (parse_error) repros in the same test session.
+**Steps:** Collect all four logged failure lines. Parse each for its reason token/classification (not the free-text `Error.message`).
+**Expected:** All four reason tokens are pairwise distinct and each is stable/greppable (e.g. `reason=model_not_found` / `reason=timeout` / `reason=connection_refused` / `reason=parse_error`) — an operator or an alerting rule can distinguish all four without reading source or doing string-diff on free-text Node error messages. This test must FAIL against the pinned 12ecc0b ref (today all four share the identical `"[turn-context] Classifier Ollama fallback failed:"` prefix with no structured reason field) and is the combined acceptance test for #697 + #361's "log loudly, with a distinct reason" fix.
 
 ---
 
@@ -314,17 +330,6 @@ block.
 
 ## 7. Open questions for the orchestrator / Project Leadership review
 
-1. **#709's second defect (plain-overwrite vs. merge, TC-709-002) was not mentioned in the issue or its fix options.**
-   Confirming it's in scope for the same PR as the `allowConversationAccess` fix (both live in the same jq block),
-   rather than requiring a separate issue.
-2. **#697 and #361 are currently indistinguishable in logs (TC-361-004).** The dispatch brief asks for "a logged
-   reason" for each; confirming whether the fix is expected to add distinct error-classification (404 vs. timeout vs.
-   connection-refused vs. parse-error) in this same PR, or whether a single improved-but-still-generic log message
-   satisfies the acceptance bar for Chunk A.
-3. **TC-712-014's defensive `(channel, chatId)` fallback** is speculative — the host contract in §1 shows it is not
-   needed for the documented 2026.9.6 behavior. Confirming whether to keep it as a "defense in depth" test or drop it
-   as out-of-scope speculation about harnesses that don't currently exist.
-4. **TC-709-008 and TC-INT-001 both require a live/staging gateway**, not just unit-level assertions. Confirming
-   staging availability and the workflow-34 rebuild window for whoever implements/runs these.
-5. No design concerns about the pinned refs — `git rev-parse HEAD` matches `12ecc0b` exactly, working tree is clean,
-   and the OpenClaw fork production host-contract reference matches the step-2 comment's pinned `6ced19b`.
+> Rev 0 open questions #1 (TC-709-002 scope), #2 (classifier distinct-reason scope), #3 (speculative fallback cache),
+> and #4 (staging availability) were all resolved by the step-4 PL review on 2026-10-13 (I)ruid) — see Revision Log.
+> No open questions remain for Chunk A at this time.

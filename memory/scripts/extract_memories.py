@@ -74,8 +74,58 @@ CONFIG_MAX_TOKENS = CONFIG.get("max_tokens") or 2048
 
 # ── DB helpers ────────────────────────────────────────────────────────────────
 
+def _expected_memory_database(session_key: str) -> str:
+    """Map an agent session key to its owning memory database."""
+    import re
+    match = re.match(r'^agent:([^:]+):', session_key or '')
+    if not match:
+        raise RuntimeError(
+            f"[extract_memories] Cannot derive agent from session_key={session_key!r}; "
+            "refusing to connect"
+        )
+    agent = match.group(1)
+    # Nova and its subagent Athena share nova_memory; each peer has its own DB.
+    agent_dbs = {
+        'nova': 'nova_memory',
+        'athena': 'nova_memory',
+        'graybeard': 'graybeard_memory',
+        'newhart': 'newhart_memory',
+        'victoria': 'victoria_memory',
+    }
+    db = agent_dbs.get(agent)
+    if not db:
+        raise RuntimeError(
+            f"[extract_memories] Unknown agent '{agent}' from session_key={session_key!r}; "
+            "refusing to connect"
+        )
+    return db
+
+
 def get_db_connection():
-    """Return a psycopg2 connection using PG* env vars."""
+    """Return a psycopg2 connection using PG* env vars.
+
+    Issue #703: fail loudly if PGDATABASE is missing or points at the wrong
+    agent's memory database. Never fall back to nova_memory.
+    """
+    pg_database = os.environ.get('PGDATABASE')
+    if not pg_database:
+        raise RuntimeError(
+            "[extract_memories] PGDATABASE is not set; refusing to fall back to nova_memory"
+        )
+    if not pg_database.endswith('_memory'):
+        raise RuntimeError(
+            f"[extract_memories] PGDATABASE={pg_database!r} does not look like a memory database; "
+            "refusing to connect"
+        )
+
+    session_key = os.environ.get('SOURCE_SESSION_ID', '')
+    expected_db = _expected_memory_database(session_key)
+    if pg_database != expected_db:
+        raise RuntimeError(
+            f"[extract_memories] PGDATABASE mismatch: expected {expected_db!r} for session "
+            f"{session_key!r}, but PGDATABASE={pg_database!r}"
+        )
+
     return psycopg2.connect()
 
 

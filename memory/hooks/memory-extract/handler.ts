@@ -215,6 +215,78 @@ function truncateSenderId(senderId: string): string {
  * Log a psql failure without leaking connection secrets. The error object from
  * execFile may contain the full command line, so we only log `.message`.
  */
+// ---------------------------------------------------------------------------
+// Issue #703 — peer memory DB resolution (no nova_memory fallback)
+// ---------------------------------------------------------------------------
+
+/**
+ * Known agent → memory-database mapping.
+ * nova + athena share nova_memory (athena is a NOVA subagent); each peer has
+ * its own <peer>_memory database. Unknown agents are rejected.
+ */
+const AGENT_MEMORY_DATABASES: Readonly<Record<string, string>> = {
+  nova: 'nova_memory',
+  athena: 'nova_memory', // NOVA subagent
+  graybeard: 'graybeard_memory',
+  newhart: 'newhart_memory',
+  victoria: 'victoria_memory',
+};
+
+function parseAgentFromSessionKey(sessionKey: string): string | null {
+  if (!sessionKey) return null;
+  const match = sessionKey.match(/^agent:([^:]+):/);
+  return match ? match[1] : null;
+}
+
+/**
+ * Resolve the memory database name for the current event.
+ *
+ * Rules:
+ *   - PGDATABASE must be set; the old `|| 'nova_memory'` fallback is gone.
+ *   - PGDATABASE must end with `_memory`.
+ *   - The agent prefix in `sessionKey` must be known.
+ *   - If the agent is a peer/subagent, PGDATABASE must equal the mapped DB.
+ *
+ * Any violation throws a clear error so the caller can fail loudly instead of
+ * silently contaminating nova_memory.
+ */
+export function resolveMemoryDatabase(sessionKey: string): string {
+  const pgDatabase = process.env.PGDATABASE;
+  if (!pgDatabase) {
+    throw new Error(
+      '[memory-extract] PGDATABASE is not set; refusing to fall back to nova_memory'
+    );
+  }
+  if (!pgDatabase.endsWith('_memory')) {
+    throw new Error(
+      `[memory-extract] PGDATABASE=${pgDatabase} does not look like a memory database; refusing to connect`
+    );
+  }
+
+  const agent = parseAgentFromSessionKey(sessionKey);
+  if (!agent) {
+    throw new Error(
+      `[memory-extract] Cannot derive agent from session_key=${sessionKey}; refusing to connect`
+    );
+  }
+
+  const expectedDb = AGENT_MEMORY_DATABASES[agent];
+  if (!expectedDb) {
+    throw new Error(
+      `[memory-extract] Unknown agent '${agent}' from session_key=${sessionKey}; refusing to connect`
+    );
+  }
+
+  if (pgDatabase !== expectedDb) {
+    throw new Error(
+      `[memory-extract] PGDATABASE mismatch: expected ${expectedDb} for agent '${agent}' ` +
+      `(session_key=${sessionKey}), but PGDATABASE=${pgDatabase}`
+    );
+  }
+
+  return pgDatabase;
+}
+
 function logPsqlError(site: string, err: any): { stdout: string } {
   const message = err?.message ?? String(err);
   console.error('[memory-extract] psql upsert failed', {
@@ -272,7 +344,7 @@ async function insertExtractionFailure(args: {
   `;
 
   try {
-    await execFileAsync('psql', [(process.env.PGDATABASE || 'nova_memory'), '-t', '-A', '-c', sql]);
+    await execFileAsync('psql', [args.sessionKey ? resolveMemoryDatabase(args.sessionKey) : (process.env.PGDATABASE || ''), '-t', '-A', '-c', sql]);
   } catch (err) {
     console.error('[memory-extract] Failed to insert extraction_failure', {
       error: (err as Error).message,
@@ -340,6 +412,20 @@ const handler = async (event: any) => {
     // Store the full sessionKey as the source identifier — it's the canonical session reference
     // When chat logs move to DB (#170), this maps directly to the session record
     const sessionKey = event.sessionKey ?? '';
+
+    // Resolve the target memory database BEFORE any write. Issue #703: never
+    // fall back to nova_memory. If resolution fails, log loudly and stop.
+    let memoryDatabase: string;
+    try {
+      memoryDatabase = resolveMemoryDatabase(sessionKey);
+    } catch (dbErr) {
+      console.error('[memory-extract] Database resolution failed', {
+        sessionKey,
+        error: (dbErr as Error).message
+      });
+      return;
+    }
+
     const messageTimestamp = new Date().toISOString();  // Current time as extraction timestamp
 
     // Resolve DB-level channel transcript / session FK ids (C1 fix — #170).
@@ -378,7 +464,7 @@ const handler = async (event: any) => {
         if (externalMessageId || rawBody.length > 0) {
           // Upsert session row
           const sessArgs = [
-            (process.env.PGDATABASE || 'nova_memory'), '-t', '-A', '-c',
+            memoryDatabase, '-t', '-A', '-c',
             `INSERT INTO channel_sessions (session_key, agent_id, provider, external_chat_id, chat_type` +
             (groupSubject ? ', group_subject, title' : '') +
             (groupSpace ? ', group_space_id' : '') +
@@ -410,7 +496,7 @@ const handler = async (event: any) => {
             const senderUsernameEsc = senderUsername.replace(/'/g, "''");
 
             const txArgs = [
-              (process.env.PGDATABASE || 'nova_memory'), '-t', '-A', '-c',
+              memoryDatabase, '-t', '-A', '-c',
               `INSERT INTO channel_transcripts (session_id, external_message_id, timestamp, role, content` +
               (senderId ? ', sender_id' : '') +
               (senderName && senderName !== 'unknown' ? ', sender_name' : '') +
@@ -439,7 +525,7 @@ const handler = async (event: any) => {
             // falling back to body storage.
             if (!channelTranscriptId && channelSessionId && derivedMessageId) {
               const lookupArgs = [
-                (process.env.PGDATABASE || 'nova_memory'), '-t', '-A', '-c',
+                memoryDatabase, '-t', '-A', '-c',
                 `SELECT id FROM channel_transcripts WHERE session_id = ${channelSessionId} AND external_message_id = '${derivedMessageId.replace(/'/g, "''")}' LIMIT 1;`
               ];
               const { stdout: lookupOut } = await execFileAsync('psql', lookupArgs)

@@ -37,7 +37,10 @@ function getOllamaClassifyModel(): string {
   return process.env.OLLAMA_CLASSIFY_MODEL || "phi4-mini:latest";
 }
 
-const OLLAMA_TIMEOUT_MS = 2000;
+function getOllamaTimeoutMs(): number {
+  const parsed = parseInt(process.env.OLLAMA_TIMEOUT_MS || "2000", 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 2000;
+}
 
 // ── Rule sets ─────────────────────────────────────────────────────────────────
 
@@ -175,11 +178,12 @@ Respond with ONLY valid JSON (no markdown):
 
   return new Promise((resolve, reject) => {
     let req: http.ClientRequest;
+    const timeoutMs = getOllamaTimeoutMs();
 
     const timeout = setTimeout(() => {
       req?.destroy();
-      reject(new Error(`Ollama classify timeout after ${OLLAMA_TIMEOUT_MS}ms`));
-    }, OLLAMA_TIMEOUT_MS);
+      reject(new Error(`Ollama classify timeout after ${timeoutMs}ms`));
+    }, timeoutMs);
 
     try {
       const url = new URL(`${getOllamaBaseUrl()}/api/generate`);

@@ -7,6 +7,27 @@ retirement + liveness alarm), nova-workspace #250 (gate-check idle detection), n
 **superseded by today's retirement decision**). Chunk C of tracking issue #715. Continues in the same pinned
 nova-mind clone/branch as Chunks A and B.
 
+**Rev 2 (2026-10-13 19:52 — I)ruid's step-4 corrections to Rev 1):**
+- **§5 field-name CORRECTED:** idle field is `lastInteractionAt` (`docs/concepts/session.md:234`), not
+  `updatedAt` — the CLI returns both. All TC-250-* rewritten; added TC-250-007 (a cron/bookkeeping `updatedAt`
+  bump must NOT count as activity).
+- **§3 TC-714-002 REVERSED:** NO session merge. `agent:nova:heartbeat:heartbeat` name AND `isolatedSession: true`
+  are KEPT (02:44 ruling supersedes the 01:28 ruling this file's Rev 1 was built on). Only the
+  `agent:nova:main:heartbeat` wake path's DELIVERY TARGET changes, to #proactive-mode. Added TC-714-004b: audit
+  every agent's effective heartbeat target resolves to #proactive-mode (cites `sync.ts:131-140`'s
+  heartbeat_enabled/to inheritance logic).
+- **§3 TC-714-001 (cadence 20m) marked PENDING**, written parametrized for both the nova-only and
+  `agents.defaults`-wide scope options — scope is explicitly still open per step-4 review.
+- **§4 liveness alarm refined:** posts to #proactive-mode, at most once per day per stalled job until recovery
+  (closes Rev 1's two open questions on this point).
+- **§4 work_queue scope widened:** from "don't orphan the 9 pending rows" to "close the 1 remaining pending row AND
+  drop the INSERT requirement entirely going forward." Added TC-711-011/012/013 — VERIFY-ONLY tests confirming the
+  two bootstrap records (`SUBAGENT_SPAWNING`, `ORCHESTRATION_PRINCIPLES`, both confirmed live in
+  `agent_bootstrap_context`) and the `agent-ecosystem` skill no longer mandate a work_queue INSERT, once NOVA
+  edits them herself (these tests do not write the edits).
+- Case count: #714 11→12 (TC-714-004b added, TC-714-001 now pending); #711 10→13 (TC-711-011/012/013 added);
+  nova-workspace#250 7→8 (TC-250-007 added).
+
 ---
 
 ## 0. Pinned source artifacts
@@ -59,48 +80,67 @@ nova-mind clone/branch as Chunks A and B.
 
 ---
 
-## 3. #714 — Cadence 20m, single heartbeat session, delivery to #proactive-mode (11 cases: TC-714-001…011)
+## 3. #714 — Delivery to #proactive-mode (session NOT merged — step-4 correction), heartbeat-target audit, cadence PENDING (12 cases: TC-714-001…004, 004b, 005…011; TC-714-002/004 corrected, TC-714-001 marked pending — see Revision Log Rev 2)
 
-### TC-714-001 — Heartbeat cadence is 20m, not 30m
-**Priority:** P1 (Critical) — direct acceptance test, per I)ruid's scope addition: "Shorten the heartbeat cadence
-from 30m to 20m. In 2026.9.x a scheduled poll is skipped, not retried, whenever the agent is busy, so the old
-cadence fires much less often in practice."
-**Steps:** Inspect `agents.entries.nova.heartbeat.every` (or `agents.defaults.heartbeat.every`) post-fix; confirm
-via `openclaw cron list --all` that the materialized `Heartbeat (nova)` automation job's persisted schedule
-reflects 20m, not just the desired-state config (per heartbeat.md line 21: config is desired-state input, the
-persisted monitor schedule owns the actual tick — a config-only change without the monitor row refreshing would
-silently not take effect; `openclaw doctor --fix` materializes stale rows per the same doc section).
-**Expected:** Both the config value AND the live automation job's schedule show 20m.
+### TC-714-001 — Heartbeat cadence 20m: SCOPE STILL OPEN — PENDING, parametrized test
+**Priority:** Pending (not yet in the acceptance bar) — per step-4 review: "Cadence 20m: SCOPE IS STILL OPEN
+(nova-only override vs. agents.defaults, which would also speed up every subagent's heartbeat)."
+**Design (parametrized, both scopes written, exactly one activates once scope is decided):**
+- **Scope A (nova-only):** `agents.entries.nova.heartbeat.every` set to `20m`; `agents.defaults.heartbeat.every`
+  unchanged (still `30m` or provider-default). Expected: only nova's materialized automation job shows 20m;
+  every subagent's own heartbeat job is unaffected.
+- **Scope B (agents.defaults):** `agents.defaults.heartbeat.every` set to `20m`. Expected: EVERY agent without its
+  own explicit `heartbeat.every` override (i.e. every subagent, since per TC-714-011 below only nova has an
+  explicit heartbeat row) now ticks at 20m — a much larger blast radius, deliberately flagged pending or confirmation
+  this is actually wanted before it's treated as in-scope.
+**Status:** Neither variant is required to pass in this run's acceptance bar until the orchestrator picks a scope.
+Both are written now so whichever is chosen can be run immediately without a new design pass.
 
-### TC-714-002 — `agent:nova:main:heartbeat` (webchat) and `agent:nova:heartbeat:heartbeat` become ONE session, `agent:nova:heartbeat`
-**Priority:** P1 (Critical) — direct acceptance test, per I)ruid's scope addition #2.
-**Preconditions:** Pre-fix baseline: two distinct session keys exist/are used for heartbeat-triggered work (per
-#714's own evidence — the work-queue sweeper's output landed in `agent:nova:main:heartbeat` via webchat, while
-the correctly-routed scheduled heartbeat used `agent:nova:heartbeat:heartbeat` → #proactive-mode).
-**Steps:** Trigger (a) a scheduled cadence tick and (b) an event-driven wake (e.g. a background-exec completion
-notification) for nova.
-**Expected:** Both route into the SAME session key, `agent:nova:heartbeat` — no second, differently-named session
-is created or written to for either trigger path.
+### TC-714-002 — `agent:nova:main:heartbeat` (webchat) wake output must deliver to #proactive-mode (REWRITTEN per step-4 — NO session merge)
+**Priority:** P1 (Critical) — direct acceptance test, CORRECTED per step-4 review: "Heartbeat session: KEEP
+`isolatedSession: true` and accept the name `agent:nova:heartbeat:heartbeat`. I)ruid's 02:44 ruling supersedes the
+01:28 one. Rewrite TC-714-002: NO merge into `agent:nova:heartbeat`. Instead, the `agent:nova:main:heartbeat` wake
+output must deliver to #proactive-mode." This REVERSES Rev-1's TC-714-002 (which required unifying the two session
+keys into one `agent:nova:heartbeat` — that design is now wrong and withdrawn).
+**Preconditions:** Pre-fix baseline: `agent:nova:main:heartbeat` (webchat-routed event-driven wake session) and
+`agent:nova:heartbeat:heartbeat` (correctly #proactive-mode-routed scheduled heartbeat session) remain TWO
+DISTINCT session keys — this is accepted, not a bug to fix.
+**Steps:** Trigger the event-driven wake path that lands in `agent:nova:main:heartbeat` (e.g. a background-exec
+completion notification, per #714's own evidence that the work-queue sweeper's output landed there via webchat).
+**Expected:** The session key itself remains `agent:nova:main:heartbeat` (unchanged — no merge); ONLY its delivery
+target changes, from webchat to #proactive-mode (`1504054635231445112`).
 
-### TC-714-003 — No heartbeat output of any kind goes to webchat
-**Priority:** P1 (Critical) — direct acceptance test, REQUIRED by dispatch ("No heartbeat output should go to
-webchat").
-**Preconditions:** Same two trigger paths as TC-714-002.
-**Steps:** Inspect delivery target/channel for both.
-**Expected:** Both deliver to #proactive-mode (Discord channel `1504054635231445112`); zero deliveries to webchat
-under any trigger path, including the event-driven background-work-completion path that #714's evidence shows was
-previously leaking into webchat via the `agent:nova:main:heartbeat` session.
+### TC-714-003 — No heartbeat output of any kind (scheduled OR wake, from EITHER session key) goes to webchat
+**Priority:** P1 (Critical) — direct acceptance test, REQUIRED ("No heartbeat output should go to webchat").
+Unchanged in intent from Rev 1, but now explicitly spans TWO separate session keys rather than one unified key.
+**Steps:** Trigger (a) `agent:nova:heartbeat:heartbeat`'s scheduled cadence tick and (b) `agent:nova:main:
+heartbeat`'s event-driven wake.
+**Expected:** Both deliver to #proactive-mode; zero deliveries to webchat from either session key.
 
-### TC-714-004 — `isolatedSession: true` is preserved (regression guard — NOT touched by the cadence/session-unification fix)
-**Priority:** P1 (Critical) — explicit regression guard per dispatch ("isolatedSession stays true").
+### TC-714-004 — `isolatedSession: true` is preserved on `agent:nova:heartbeat:heartbeat` (regression guard — simplified, no merge-interaction concern)
+**Priority:** P1 (Critical) — explicit regression guard per step-4 review ("KEEP isolatedSession: true").
 **Preconditions:** Post-fix config.
 **Steps:** Inspect `agents.entries.nova.heartbeat.isolatedSession`.
-**Expected:** `true` — each heartbeat run still gets a fresh session with no conversation history (per
-heartbeat.md lines 66-67/278-280), even though all heartbeat-triggered work now shares the single SESSION KEY
-`agent:nova:heartbeat` from TC-714-002. **Flagged for clarification in §6**: "one session key" + "isolated/fresh
-session each run" is not self-contradictory in OpenClaw's model (isolatedSession governs conversation-history
-continuity within runs under that key, not the key's uniqueness), but this interaction should be explicitly
-confirmed against the real automation-job behavior, not just assumed compatible.
+**Expected:** `true` — unchanged. **Rev 1's "flagged for clarification" tension between isolatedSession and a
+unified session key is now MOOT**: since TC-714-002 no longer merges the two session keys, there is no interaction
+to reconcile — `agent:nova:heartbeat:heartbeat` keeps its own isolated-per-run behavior exactly as it always has.
+
+### TC-714-004b — NEW: every agent's effective heartbeat delivery target resolves to #proactive-mode, none other
+**Priority:** P1 (Critical) — REQUIRED by step-4 review: "ALL heartbeat output (scheduled and wake, NOVA's and
+every subagent's) delivers to #proactive-mode... Add a test that no agent's effective heartbeat target is anything
+else." Host-contract citation: `cognition/focus/agent-config-sync/src/sync.ts:131-140` (pinned `12ecc0b`) — a
+per-agent `heartbeat` key is only emitted into `agents.json` when `heartbeat_enabled===true AND
+heartbeat_every` is set on that agent's DB row, and even then `to`/`target` are only included if the DB row has
+them explicitly set; otherwise the `heartbeat` key is omitted entirely and the agent inherits
+`agents.defaults.heartbeat` wholesale (confirmed: today, per step-4 review, "only nova has an explicit row;
+nothing overrides it elsewhere").
+**Steps:** For every agent in the live `agents` table (status='active'), resolve its EFFECTIVE heartbeat delivery
+target (explicit per-agent override if present, else `agents.defaults.heartbeat.to`).
+**Expected:** Every single resolved target is #proactive-mode (`1504054635231445112`) — nova's (if she has an
+explicit override) AND every subagent's (via the `agents.defaults` inheritance path) AND confirm the audit itself
+catches a planted counter-example (mutation test: temporarily set one subagent's `heartbeat_to` to a different
+channel in a test fixture and confirm the audit flags it) — a test that can't actually detect a wrong target isn't
+verifying anything.
 
 ### TC-714-005 — A genuinely busy tick still defers (NOT a bug — confirms line-104 behavior is unaffected by this fix)
 **Priority:** P2 (High) — negative/regression case; the fix must not accidentally force ticks to fire through
@@ -157,7 +197,7 @@ proving the host actually reads and applies the fixed config, not just that the 
 
 ---
 
-## 4. #711 — Maintenance/decay/embed catch-up, sweeper retirement, 48h liveness alarm (10 cases: TC-711-001…010)
+## 4. #711 — Maintenance/decay/embed catch-up, sweeper retirement, 48h liveness alarm, work_queue requirement DROPPED (13 cases: TC-711-001…013; TC-711-004/006/010 refined, TC-711-011/012/013 added — see Revision Log Rev 2)
 
 ### TC-711-001 — Overdue maintenance/decay/embed work catches up on the next tick that actually fires
 **Priority:** P1 (Critical) — direct acceptance test, the core of #711's fix per the dispatch ("overdue maintenance/
@@ -182,157 +222,190 @@ successful tick.
 **Expected:** Catch-up still runs completely on the next idle tick — no partial/truncated catch-up, no silent
 drop of phases queued furthest in the past.
 
-### TC-711-004 — Liveness alarm fires when maintenance hasn't run for >48h
-**Priority:** P1 (Critical) — direct acceptance test, REQUIRED by #711's own fix list ("Add a liveness check that
-alarms when maintenance hasn't run for more than 48h").
+### TC-711-004 — Liveness alarm fires when maintenance hasn't run for >48h, posts to #proactive-mode
+**Priority:** P1 (Critical) — direct acceptance test; delivery channel and cadence now SPECIFIED (step-4 review
+resolves the two open questions Rev 1 had flagged here): "48h liveness alarm: posts to #proactive-mode, at most
+once per day per stalled job until it recovers."
 **Preconditions:** Simulate a maintenance-run timestamp 49h in the past with no successful run since.
 **Steps:** Run the liveness check.
-**Expected:** An alarm fires (delivery channel TBD — see Open Question §6); the alarm identifies WHICH phase
-(maintenance/decay/embed) is stale, not just "something is wrong."
+**Expected:** An alarm posts to #proactive-mode (`1504054635231445112`), identifying WHICH phase/job is stale.
 
-### TC-711-005 — Liveness alarm boundary: 47h59m does NOT fire, 48h01m DOES (non-identity fixture, not a round-number boundary)
-**Priority:** P1 (Critical) — REQUIRED non-identity-fixture adversarial case (lesson-787 pattern): testing only at
-0h/24h/48h exactly would make an off-by-one in the boundary comparison invisible.
-**Steps:** Run the check at both boundary points.
-**Expected:** Correct `>`/`>=` semantics at exactly the 48h threshold, verified with genuinely adjacent
-(not round) timestamps.
+### TC-711-005 — Liveness alarm boundary: 47h59m does NOT fire, 48h01m DOES (non-identity fixture)
+**Priority:** P1 (Critical) — unchanged from Rev 1; still REQUIRED non-identity-fixture case.
+**Expected:** Correct boundary semantics at exactly 48h, verified with genuinely adjacent (not round) timestamps.
 
-### TC-711-006 — Liveness alarm does not fire repeatedly/spam once triggered (de-duplication)
-**Priority:** P2 (High) — operational sanity guard; an alarm re-firing every 20m cadence tick once past 48h would
-be noise, not signal.
-**Expected:** One alarm per stale-incident (or a sane re-notify cadence, e.g. daily) — confirm the intended
-behavior and test it, rather than assuming either "fire once" or "fire every tick" without checking.
+### TC-711-006 — Liveness alarm re-fires AT MOST ONCE PER DAY per stalled job, until that job recovers (cadence now SPECIFIED)
+**Priority:** P1 (Critical) — direct acceptance test, cadence resolved per step-4 review (no longer an open
+question).
+**Preconditions:** A job remains stalled across multiple days.
+**Steps:** Let the liveness check run every 20m-cadence heartbeat tick across 3+ days while the job stays stalled.
+**Expected:** Exactly one alarm post per calendar day per stalled job (not one per tick — would be ~72/day at 20m
+cadence) — and once the job recovers (a successful run is observed), alarms for that job stop entirely on the
+next check.
 
-### TC-711-007 — Sweeper RETIREMENT: script, payload docs, and all references are deleted (NOT fixed — supersedes nova-workspace#251's own bug list)
-**Priority:** P1 (Critical) — direct acceptance test. Per #715's step-2 design comment AND this dispatch: "retire
-the sweeper (job removed 2026-10-13): delete the script, payload docs and references." **This supersedes
-nova-workspace#251's own comment**, which (as of 2026-10-12) was proposing to FIX the sweeper's bugs (subagent-error
-misclassification, stale job-id refs in 3 docs, an audit crash, a backfill count mismatch) rather than delete it —
-that comment is now stale; none of its 4 listed bugs need fixing since the code they're in is being removed
-entirely.
-**Steps:** `grep -rln` both pinned repos (nova-mind `12ecc0b`+Chunks A/B/C, nova-workspace `da56b303`) for
-`work_queue_sweeper`, `work-queue-sweeper-payload`, `wq-sweeper-payload-151`, and the specific job ids named in
-#251 (`7b7da93b-e486-437a-982f-66939093d0b7`, `bbbb0c43-...`).
-**Expected:** Zero hits post-fix in both repos (for the script/payload-doc files themselves — historical mentions
-in issue trackers/changelogs are out of scope for this grep). The scheduler job itself is removed from both
-`crontab -l` and `openclaw cron list --all`.
+### TC-711-007 — Sweeper RETIREMENT: script, payload docs, and all references are deleted (unchanged from Rev 1)
+**Priority:** P1 (Critical) — direct acceptance test, per #715's step-2 design and this dispatch's retirement
+decision (supersedes nova-workspace#251's own bug-fix proposal).
+**Steps:** `grep -rln` both pinned repos for `work_queue_sweeper`, `work-queue-sweeper-payload`,
+`wq-sweeper-payload-151`, and the job ids named in #251.
+**Expected:** Zero hits post-fix in both repos; the scheduler job is removed from both `crontab -l` and `openclaw
+cron list --all`.
 
-### TC-711-008 — wf27 step 2 Phase E fully covers what the sweeper used to catch (orphaned/undelivered subagent completions)
-**Priority:** P1 (Critical) — direct acceptance test for the REPLACEMENT mechanism, cited in full from the live
-`workflow_steps` row (`workflow_id=27, step_order=2`): "OpenClaw 2026.9.x announces subagent completions to the
-parent session on its own. The rare gap is a subagent that finishes after the parent session died, so the
-completion lands nowhere." Phase E's 4-step procedure: (1) list subagent runs ended in the last 24h
-(`subagents(action="list")` or `openclaw sessions list --json` filtered to `agent:*:subagent:*`); (2) for each,
-check whether completion was delivered to a LIVE parent (parent session still exists, has a turn after the child
-ended); (3) undelivered/orphaned → read the child's final output via `sessions_history`, give it a Phase-C-table
-disposition (finish the implied work, report in originating channel or #proactive-mode, or track); (4) nothing
-orphaned → no output, no report line.
-**Steps:** Simulate a subagent that completes AFTER its parent session has ended/died.
-**Expected:** The orphan is detected on the next wf27 step-2 run, given a disposition per Phase C, and is NOT
-silently lost (which the retired sweeper previously existed to catch via a different mechanism).
+### TC-711-008 — wf27 step 2 Phase E fully covers what the sweeper used to catch (unchanged from Rev 1)
+**Priority:** P1 (Critical) — direct acceptance test for the replacement mechanism (full Phase E text cited in Rev 1).
+**Expected:** An orphaned subagent completion is detected on the next wf27 step-2 run, given a Phase-C disposition,
+never silently lost.
 
-### TC-711-009 — wf27 step 2 Phase E correctly reports "nothing orphaned" with no noise when the parent-delivery path (OpenClaw's own announcement) works normally
-**Priority:** P2 (High) — negative-space test, prevents Phase E from becoming spammy for the common case.
-**Expected:** A subagent that completes while its parent is still alive produces zero Phase E output/report line —
-distinguishes "nothing to catch" from "the check itself silently failed to run."
+### TC-711-009 — wf27 step 2 Phase E reports "nothing orphaned" with no noise in the common case (unchanged from Rev 1)
+**Priority:** P2 (High) — negative-space test.
+**Expected:** Zero Phase E output/report line when parent-delivery works normally.
 
-### TC-711-010 — Work-queue sweeper's own 9 pending items (oldest 2026-10-04, per #711's evidence) are not silently orphaned by the retirement
-**Priority:** P1 (Critical) — data-safety regression guard; retiring the sweeper code must not abandon whatever
-real work_queue rows it was responsible for processing.
-**Preconditions:** The 9 pending `work_queue` items cited in #711's problem statement (oldest from 2026-10-04).
-**Steps:** Confirm the disposition of these specific rows as part of the retirement work — processed, migrated to
-a different mechanism, or explicitly and visibly marked as abandoned-with-reason.
-**Expected:** None of the 9 rows is silently left in a `pending`/`stale` state forever with no owner and no
-visible record of the retirement decision covering them.
+### TC-711-010 — work_queue retirement: the 1 remaining pending row is closed in the retirement PR; the INSERT requirement is DROPPED ENTIRELY (REWRITTEN per step-4 review — bigger scope than Rev 1's data-safety framing)
+**Priority:** P1 (Critical) — direct acceptance test, CORRECTED per step-4 review: "work_queue: close the 1
+remaining pending row in the retirement PR, and DROP the work_queue INSERT requirement entirely." (Rev 1 had cited
+#711's original "9 pending items" figure and framed this only as "don't orphan pre-existing rows" — the live count
+has since narrowed to 1, and the scope is now explicitly bigger: the INSERT-tracking PRACTICE itself is retired
+going forward, not just its backlog.)
+**Steps:** (a) Confirm the 1 remaining pending `work_queue` row is closed (processed or explicitly resolved) as
+part of the retirement PR. (b) Confirm no code path anywhere in the fixed branch still expects/requires a
+`work_queue` INSERT as a precondition for anything (e.g. no remaining consumer reads `work_queue` rows as its
+sole/required completion-detection signal — wf27 step 2 Phase E, per TC-711-008, is the full replacement).
+**Expected:** Zero pending `work_queue` rows remain unaddressed after the retirement PR; no code requires a NEW
+`work_queue` INSERT to function correctly going forward.
+
+### TC-711-011 — Bootstrap record `UNIVERSAL/SUBAGENT_SPAWNING` no longer REQUIRES a work_queue INSERT (VERIFY-ONLY — NOVA edits this herself)
+**Priority:** P1 (Critical) — REQUIRED verification, per step-4 review: "Test that the bootstrap records
+(UNIVERSAL/SUBAGENT_SPAWNING, DOMAIN ORCHESTRATION_PRINCIPLES) and the agent-ecosystem skill no longer require it.
+NOVA edits the bootstrap records herself; your tests only verify them." **This test does NOT write the edit — it
+only checks the end state after NOVA's own edit lands.**
+**Current content (confirmed live, `agent_bootstrap_context` table, `file_key='SUBAGENT_SPAWNING'`, `agent_name IS
+NULL`, 4,569 chars, read-only query at design time):** contains a `## Work Queue Tracking (mandatory)` section
+with an explicit `INSERT INTO work_queue (...)` SQL template and the instruction "Whenever you dispatch
+fire-and-forget work... INSERT a row into work_queue in the same turn as the dispatch."
+**Steps (post-NOVA's-edit):** Query `agent_bootstrap_context` for `file_key='SUBAGENT_SPAWNING'`; grep its content
+for `work_queue`/`INSERT INTO work_queue`/the word "mandatory" in proximity to `work_queue`.
+**Expected:** No remaining MANDATORY work_queue-INSERT instruction in this record's content — either the whole
+section is removed, or it's reframed as historical/optional/superseded-by-wf27-Phase-E, not as a required step in
+the spawn sequence.
+
+### TC-711-012 — Bootstrap record `DOMAIN ORCHESTRATION_PRINCIPLES` no longer lists work_queue INSERT as a mandatory spawn-sequence step (VERIFY-ONLY)
+**Priority:** P1 (Critical) — same verify-only framing as TC-711-011, distinct bootstrap record.
+**Current content (confirmed live, `file_key='ORCHESTRATION_PRINCIPLES'`, `agent_name IS NULL`, 8,907 chars):**
+describes `work_queue` + the (now-retired) sweeper as "the primary completion-detection mechanism" and includes a
+numbered spawn sequence whose step 3 is "INSERT work_queue row (dispatch-tracking for the sweeper)."
+**Steps (post-NOVA's-edit):** Re-query this record; check the spawn-sequence numbering no longer includes a
+work_queue INSERT step, and the "primary completion-detection mechanism" framing is updated to reflect wf27 step 2
+Phase E (per TC-711-008) as the actual mechanism, not the retired sweeper.
+**Expected:** No remaining reference to the sweeper as a live mechanism; no mandatory work_queue INSERT step in the
+spawn sequence.
+
+### TC-711-013 — agent-ecosystem skill no longer requires marking/using work_queue rows (VERIFY-ONLY)
+**Priority:** P1 (Critical) — same verify-only framing; third of the three sources step-4 review names.
+**Current content (confirmed live, `~/.openclaw/skills/agent-ecosystem/SKILL.md`, 7,872 chars):** contains, in its
+retry/respawn guidance, the line "Mark the failed work_queue row and respawn; never wait for billing/provider
+restore mid-run."
+**Steps (post-NOVA's-edit):** Re-read the skill file; grep for `work_queue`.
+**Expected:** Zero remaining references to marking/reading/inserting `work_queue` rows as a required step — the
+retry/respawn guidance itself (the underlying behavioral advice) may remain, just without the work_queue-specific
+mechanic.
+
+
 
 ---
 
-## 5. nova-workspace#250 — Gate-check idle detection (7 cases: TC-250-001…007)
+## 5. nova-workspace#250 — Gate-check idle detection (8 cases: TC-250-001…008)
 
-**Field-name citation note (from the live issue investigation, not the dispatch brief — flagged as a discrepancy,
-see §6):** nova-workspace#250's 2026-10-12 comment documents the actual supported data source as
-`openclaw sessions --agent nova --active <min> --json` returning **`.sessions[].updatedAt`** (epoch ms) and
-**`.key`**, filtered on `discord|signal|telegram|slack` key prefixes for user-facing activity. This dispatch's own
-wording names the field **`lastInteractionAt`** instead — these may be the same field under different names in
-different CLI output shapes, or one of the two sources is stale. Test cases below are written against the
-field name empirically documented in the issue (`updatedAt`), with the discrepancy flagged for confirmation.
+**Field-name CORRECTION (step-4 review, 2026-10-13 19:52): the idle field is `lastInteractionAt`, not `updatedAt`.**
+Per I)ruid: "Idle field = `lastInteractionAt` (`docs/concepts/session.md:234`); `updatedAt` changes on any
+bookkeeping write. The CLI returns BOTH fields." This corrects Rev 1's §5 header note, which had flagged
+`updatedAt` (from the live #250 2026-10-12 comment) as the likely-correct field — that comment either described a
+transitional/incomplete reading, or conflated the two fields; `lastInteractionAt` is the authoritative one per the
+session-concept doc. **`updatedAt` bumps on ANY bookkeeping write (including non-user-facing ones), so using it
+for idle detection would produce false "not idle" readings whenever routine internal writes touch a session row —
+a DIFFERENT failure mode than the original false-idle bug, but just as real.** All TC-250-* cases below are
+rewritten against `lastInteractionAt`.
 
-### TC-250-001 — Gate check reads session recency via `openclaw sessions --json`, not the gone `sessions.json`
+### TC-250-001 — Gate check reads session recency via `openclaw sessions --json`'s `lastInteractionAt` field, not the gone `sessions.json`
 **Priority:** P1 (Critical) — direct acceptance test. Old source: `~/.openclaw/agents/nova/sessions/sessions.json`
-(confirmed absent per #250's 2026-10-11 comment; the SQLite store `~/.openclaw/agents/nova/nova.sqlite` replaced
-it). New source: `openclaw sessions --agent nova --active <min> --json`.
+(confirmed absent per #250's 2026-10-11 comment). New source: `openclaw sessions --agent nova --active <min>
+--json`, specifically its `lastInteractionAt` field (per `docs/concepts/session.md:234`) — NOT `updatedAt`,
+which the same CLI output also includes but which is NOT idle-detection-safe (see TC-250-007).
 **Steps:** Trigger a gate-check run.
-**Expected:** Zero reads of the old `sessions.json` path; the CLI invocation above (or its functional equivalent)
-is the sole data source.
+**Expected:** Zero reads of the old `sessions.json` path; the gate specifically reads `lastInteractionAt`, not
+`updatedAt`, from the CLI's JSON output.
 
 ### TC-250-002 — CLI failure (timeout, nonzero exit, malformed output) → fail CLOSED (`idle=false` + error field), never fail-open
 **Priority:** P1 (Critical) — direct acceptance test, REQUIRED by #250's own stated fix across all 3 of its
-comments ("fail CLOSED (idle=false + error) when the source is missing" / "...if the CLI fails"). This is the
-exact inverse of the pre-fix bug (fail-open `idle_minutes=Infinity` on a broken sensor, confirmed by #250's
-2026-10-11 SIGTERM'd-gate-run evidence AND its 2026-10-13 false-idle incident, TC-250-003).
+comments. Unchanged by the field-name correction.
 **Preconditions:** Simulate (a) CLI timeout, (b) CLI nonzero exit, (c) CLI returns malformed JSON.
 **Expected:** All three produce `idle=false` plus a populated error field — never `idle=true`/`idle_minutes=Infinity`
 silently treated as "safe to proceed with proactive steps."
 
-### TC-250-003 — Regression replay of the 2026-10-13 false-idle incident (INTENT-level check against the live/documented event, not a synthetic fixture)
-**Priority:** P1 (Critical) — REQUIRED INTENT-level case per workflow-step-3 rules; replays #250's own newest,
-highest-severity comment: gate reported `idle=true (Infinity)` while `openclaw sessions --agent nova --active 240
---json` showed real Discord activity at 09:12 and 09:06 UTC (10-16 min prior) plus two I)ruid-triggered workflow
-runs at 08:28/08:55 — running the 10 "actionable" steps would have interrupted an active human; a manual override
-was required.
-**Steps:** Reconstruct this exact session-activity fixture (real recent `updatedAt`/activity on a
-discord-prefixed key) and run the fixed gate check against it.
-**Expected:** The fixed gate correctly reports `idle=false` — this is the single most important regression test in
-this file's #250 section, since it is reproducing a CONFIRMED wrong-answer incident, not a hypothetical.
+### TC-250-003 — Regression replay of the 2026-10-13 false-idle incident, using `lastInteractionAt`
+**Priority:** P1 (Critical) — REQUIRED INTENT-level case; replays #250's own newest, highest-severity comment: gate
+reported `idle=true (Infinity)` while real Discord activity existed 10-16 min prior plus two I)ruid-triggered
+workflow runs.
+**Steps:** Reconstruct this exact session-activity fixture with a real, recent `lastInteractionAt` value on a
+discord-prefixed key, and run the fixed gate check against it.
+**Expected:** The fixed gate correctly reports `idle=false` — the single most important regression test in this
+section, reproducing a CONFIRMED wrong-answer incident.
 
-### TC-250-004 — Genuinely idle session (last activity 5h+ ago, matching the 2026-10-12 comment's own correctly-idle case) still reports `idle=true`
-**Priority:** P1 (Critical) — positive-case regression guard, so fail-CLOSED doesn't overcorrect into always-busy.
-**Steps:** Reconstruct the 2026-10-12 comment's own fixture (last user-facing activity 06:43 UTC, ~5h prior).
-**Expected:** `idle=true`, no error — matches the "gate got the right answer" outcome already observed, confirming
-the new mechanism doesn't regress the true-idle case while fixing the false-idle one.
+### TC-250-004 — Genuinely idle session (`lastInteractionAt` 5h+ in the past) still reports `idle=true`
+**Priority:** P1 (Critical) — positive-case regression guard.
+**Steps:** Reconstruct the 2026-10-12 comment's own fixture (last user-facing activity ~5h prior), expressed via
+`lastInteractionAt` rather than `updatedAt`.
+**Expected:** `idle=true`, no error.
 
 ### TC-250-005 — Non-user-facing keys (cron, heartbeat, subagent) are excluded from the idle-activity filter
-**Priority:** P1 (Critical) — direct test of the `discord|signal|telegram|slack` key-prefix filter described in
-the 2026-10-12 comment; a heartbeat's OWN tick activity must not count as "recent user activity" and falsely mark
-the agent as non-idle forever (a different failure mode than the documented false-idle bug, but a plausible
-regression of the same fix).
-**Steps:** Simulate recent activity ONLY on `agent:nova:heartbeat`/`agent:nova:cron:*`-prefixed keys, none on any
-channel-prefixed key.
+**Priority:** P1 (Critical) — unchanged by the field-name correction; still tests the `discord|signal|telegram|
+slack` key-prefix filter.
+**Steps:** Simulate recent `lastInteractionAt` activity ONLY on `agent:nova:heartbeat`/`agent:nova:cron:*`-prefixed
+keys, none on any channel-prefixed key.
 **Expected:** `idle=true` — heartbeat/cron/subagent activity alone does not suppress idle detection.
 
-### TC-250-006 — Multiple concurrent channel keys with different recency — the MOST recent wins, not an arbitrary one
+### TC-250-006 — Multiple concurrent channel keys with different `lastInteractionAt` recency — the MOST recent wins
 **Priority:** P2 (High) — correctness case for aggregating across `.sessions[]` entries.
-**Steps:** Fixture with a stale Discord key (last activity 6h ago) and a fresh Slack key (last activity 2 min ago).
-**Expected:** `idle=false` (driven by the freshest channel-prefixed entry, not the first one encountered or a
-single hardcoded channel).
+**Steps:** Fixture with a stale Discord key (`lastInteractionAt` 6h ago) and a fresh Slack key (`lastInteractionAt`
+2 min ago).
+**Expected:** `idle=false` (driven by the freshest channel-prefixed entry's `lastInteractionAt`).
 
-### TC-250-007 — Gate-check timeout value itself is adversarially tested (too-short timeout on a slow-but-working CLI call)
-**Priority:** P2 (High) — adversarial boundary case for the "with a timeout" fix detail in the 2026-10-12 comment.
+### TC-250-007 — A cron/bookkeeping write that bumps `updatedAt` does NOT count as activity (REQUIRED new case, step-4 review)
+**Priority:** P1 (Critical) — REQUIRED direct test of the `lastInteractionAt` vs. `updatedAt` distinction itself;
+this is the test that would have caught a naive implementation reading the wrong field.
+**Preconditions:** A session whose `updatedAt` is bumped by a routine internal/bookkeeping write (e.g. a heartbeat
+tick touching the row, a cron job's own housekeeping, or any non-user-facing write) while its `lastInteractionAt`
+remains stale (hours old, no real user interaction).
+**Steps:** Run the gate check against this fixture.
+**Expected:** `idle=true` — the fresh `updatedAt` does NOT suppress idle detection; only a fresh
+`lastInteractionAt` would. A gate implementation that (incorrectly) reads `updatedAt` instead of
+`lastInteractionAt` FAILS this test by reporting `idle=false`.
+
+### TC-250-008 — Gate-check timeout value itself is adversarially tested (too-short timeout on a slow-but-working CLI call)
+**Priority:** P2 (High) — adversarial boundary case, unchanged by the field-name correction.
 **Steps:** Simulate a CLI call that succeeds but takes longer than the configured timeout.
-**Expected:** Treated identically to TC-250-002's timeout case (fail closed), not left ambiguous between "slow
-success" and "hung failure" — confirm the implementation can't tell the difference and is this correctly
-conservative, not more permissive than intended.
+**Expected:** Treated identically to TC-250-002's timeout case (fail closed).
 
 ---
 
 ## 6. Open questions for the orchestrator / Project Leadership review
 
-1. **Field-name discrepancy (§5 header note, blocks TC-250-001/003/004/006 from being written against a confirmed
-   field name):** this dispatch says the gate-check field is `lastInteractionAt`; the live nova-workspace#250
-   investigation comment (2026-10-12, empirically found) documents `.sessions[].updatedAt`. Confirming which is
-   the actual 2026.9.x `openclaw sessions --json` field name (or whether both exist for different purposes)
-   before implementation proceeds — test cases above use `updatedAt` per the empirically-documented source, but
-   should be corrected if `lastInteractionAt` is in fact correct and `updatedAt` was a transitional/different field.
-2. **TC-714-004's isolatedSession + single-session-key interaction:** flagged as plausible-but-unconfirmed — would
-   benefit from an explicit design note (not just a passing test) on how OpenClaw's automation/session model
-   reconciles "one session KEY for all heartbeat-triggered work" with "isolatedSession: true = fresh session each
-   run, no history," since these sound like they could be in tension depending on what "session" means at the
-   implementation layer (session key vs. session generation/instance).
-3. **TC-711-004's liveness alarm delivery channel** is not specified in #711's own text ("add a liveness check that
-   alarms") — confirming whether this goes to #proactive-mode (consistent with #714's unification) or a distinct
-   ops/alerting channel.
-4. **TC-711-006's de-duplication cadence** (once vs. daily vs. every-tick-until-resolved) is a judgment call not
-   specified in #711 — confirming intended behavior before finalizing that test's exact assertion.
-5. **TC-711-010's disposition for the 9 pre-existing pending work_queue rows** is not addressed in either #711 or
-   #251's text — confirming whether this is explicitly in scope for the sweeper-retirement PR or a separate,
-   already-tracked cleanup.
+> Rev 2 (2026-10-13 19:52) resolves: the `lastInteractionAt`/`updatedAt` field question (§5, now corrected), the
+> session-merge question (§3, now explicitly reversed — no merge), the liveness-alarm channel/cadence questions
+> (§4, now #proactive-mode + once/day/job), and the work_queue scope question (§4, now "drop the requirement
+> entirely," not just "don't orphan the backlog"). Remaining:
+
+1. **TC-714-001's cadence scope is EXPLICITLY STILL OPEN** (nova-only vs. `agents.defaults`) — this is not a gap in
+   this test design, it's a genuine pending decision; the test itself is written parametrized for both outcomes and
+   flagged `Pending`, not counted toward this run's pass/fail bar until the scope is chosen.
+2. **TC-714-004b's mutation-test counter-example** (temporarily planting a wrong `heartbeat_to` value to prove the
+   audit can actually detect it) needs a safe place to run — confirming this is a staging-only exercise, never
+   attempted against the live `agents` table's real rows.
+3. **TC-250-001/003/004/006/007's exact `lastInteractionAt` semantics** (is it updated on every channel-provider
+   message, or only ones classified as "user-facing" by some other filter already, making the `discord|signal|
+   telegram|slack` key-prefix filter in TC-250-005 partially redundant with what `lastInteractionAt` itself already
+   encodes) — `docs/concepts/session.md:234` wasn't independently re-read in this revision pass (time-boxed); the
+   citation is taken from step-4 review as authoritative, but implementation review should confirm the field's
+   exact update semantics before TC-250-007 is finalized.
+4. **TC-708-012's exact migration mechanics**, **TC-708-014's nova-staging disposition**, **TC-706-003's exact
+   owning-table names**, and **TC-710-008's publish-active-sessions.py disposition** are Chunk B open items, carried
+   forward unchanged (see `tests/TEST-CASES-ISSUE-708.md`'s own §7).

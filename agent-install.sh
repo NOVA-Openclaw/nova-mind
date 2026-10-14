@@ -2767,12 +2767,19 @@ if [ -f "$OPENCLAW_CONFIG" ] && command -v jq &>/dev/null; then
     if [ "$HOOKS_ENABLED" = "true" ] || [ "$INTERNAL_HOOKS_ENABLED" = "true" ]; then
         EXISTING_TOKEN=$(jq -r '.hooks.token // empty' "$OPENCLAW_CONFIG")
         if [ -z "$EXISTING_TOKEN" ]; then
+            if ! command -v openssl &>/dev/null; then
+                echo -e "  ${CROSS_MARK} openssl is required to generate hooks.token"
+                exit 1
+            fi
             HOOKS_TOKEN=$(openssl rand -hex 32)
-            jq --arg token "$HOOKS_TOKEN" '.hooks.token = $token' \
-                "$OPENCLAW_CONFIG" >"$OPENCLAW_CONFIG.tmp" && \
-                mv "$OPENCLAW_CONFIG.tmp" "$OPENCLAW_CONFIG" && \
-                echo -e "  ${CHECK_MARK} Generated hooks.token" || \
-                echo -e "  ${WARNING} Could not set hooks.token"
+            if jq --arg token "$HOOKS_TOKEN" '.hooks.token = $token' \
+                    "$OPENCLAW_CONFIG" >"$OPENCLAW_CONFIG.tmp" && \
+                    mv "$OPENCLAW_CONFIG.tmp" "$OPENCLAW_CONFIG"; then
+                echo -e "  ${CHECK_MARK} Generated hooks.token"
+            else
+                echo -e "  ${CROSS_MARK} Could not set hooks.token"
+                exit 1
+            fi
         else
             echo -e "  ${CHECK_MARK} hooks.token already exists (preserved)"
         fi

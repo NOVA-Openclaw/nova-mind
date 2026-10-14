@@ -131,11 +131,11 @@ function makeAgentRow(name: string, thinking: string | null): AgentRow {
 }
 
 function buildConfig(rows: AgentRow[], globalDefault?: string) {
-  const list = buildAgentsList(rows);
+  const { entries } = buildAgentsList(rows);
   return {
     agents: {
       defaults: globalDefault ? { thinkingDefault: globalDefault } : {},
-      list,
+      entries,
     },
   };
 }

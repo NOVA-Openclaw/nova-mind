@@ -1,6 +1,10 @@
 /**
  * Unit tests for buildAgentsList() and syncHeartbeatFiles()
  *
+ * Updated for nova-mind#707: buildAgentsList() now returns a keyed object
+ * (`{ "<id>": {...} }`) matching OpenClaw 2026.9.x agents.entries schema.
+ * Existing TC-244/262/269/273/660 assertions were adapted from array to object shape.
+ *
  * TC-244-U-01  NOVA session — self as default, NOVA's subagents only
  * TC-244-U-02  Newhart session — self as default, Newhart's subagents only
  * TC-244-U-03  Mutual exclusion — NOVA and Newhart never see each other
@@ -39,8 +43,8 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { buildAgentsList, syncHeartbeatFiles } from "./sync.js";
-import type { AgentRow, HeartbeatRow } from "./sync.js";
+import { buildAgentsList, syncHeartbeatFiles, validateAgentsEntries, writeAgentsJsonAtomically } from "./sync.js";
+import type { AgentRow, HeartbeatRow, AgentEntryConfig } from "./sync.js";
 
 // ── Mock pg.Client helper ───────────────────────────────────────────────────
 
@@ -96,41 +100,41 @@ describe("TC-244-U-01: NOVA session — self as default, NOVA's subagents only",
     },
   ];
 
-  const result = buildAgentsList(novaRows);
+  const { entries: result } = buildAgentsList(novaRows);
 
   it("nova entry has default: true", () => {
-    assert.strictEqual(result.find((e) => e.id === "nova")?.default, true);
+    assert.strictEqual(result["nova"]?.default, true);
   });
 
   it("coder entry has no default key", () => {
-    assert.strictEqual(result.find((e) => e.id === "coder")?.default, undefined);
+    assert.strictEqual(result["coder"]?.default, undefined);
   });
 
   it("gem entry has no default key", () => {
-    assert.strictEqual(result.find((e) => e.id === "gem")?.default, undefined);
+    assert.strictEqual(result["gem"]?.default, undefined);
   });
 
   it("scout entry has no default key", () => {
-    assert.strictEqual(result.find((e) => e.id === "scout")?.default, undefined);
+    assert.strictEqual(result["scout"]?.default, undefined);
   });
 
   it("all four agents are present", () => {
     assert.deepStrictEqual(
-      result.map((e) => e.id).sort(),
+      Object.keys(result).sort(),
       ["coder", "gem", "nova", "scout"],
     );
   });
 
   it("nova's allowAgents are sorted", () => {
     assert.deepStrictEqual(
-      result.find((e) => e.id === "nova")?.subagents?.allowAgents,
+      result["nova"]?.subagents?.allowAgents,
       ["coder", "gem", "scout"],
     );
   });
 
   it("thinkingDefault is emitted for agents with a valid thinking value", () => {
-    const novaEntry = result.find((e) => e.id === "nova");
-    const coderEntry = result.find((e) => e.id === "coder");
+    const novaEntry = result["nova"];
+    const coderEntry = result["coder"];
     assert.ok(novaEntry !== undefined);
     assert.ok(coderEntry !== undefined);
     assert.strictEqual(novaEntry.thinkingDefault, "high");
@@ -138,11 +142,11 @@ describe("TC-244-U-01: NOVA session — self as default, NOVA's subagents only",
   });
 
   it("thinkingDefault is omitted for agents with thinking = null", () => {
-    for (const entry of result) {
-      if (entry.id === "gem" || entry.id === "scout") {
+    for (const [id, entry] of Object.entries(result)) {
+      if (id === "gem" || id === "scout") {
         assert.ok(
           !Object.prototype.hasOwnProperty.call(entry, "thinkingDefault"),
-          `Entry '${entry.id}' should not have a thinkingDefault property`,
+          `Entry '${id}' should not have a thinkingDefault property`,
         );
       }
     }
@@ -182,27 +186,27 @@ describe("TC-244-U-02: Newhart session — self as default, Newhart's subagents 
     },
   ];
 
-  const result = buildAgentsList(newhartRows);
+  const { entries: result } = buildAgentsList(newhartRows);
 
   it("newhart entry has default: true", () => {
-    assert.strictEqual(result.find((e) => e.id === "newhart")?.default, true);
+    assert.strictEqual(result["newhart"]?.default, true);
   });
 
   it("coder entry has no default key", () => {
-    assert.strictEqual(result.find((e) => e.id === "coder")?.default, undefined);
+    assert.strictEqual(result["coder"]?.default, undefined);
   });
 
   it("gem is NOT present (not a Newhart subagent)", () => {
-    assert.strictEqual(result.find((e) => e.id === "gem"), undefined);
+    assert.strictEqual(result["gem"], undefined);
   });
 
   it("nova is NOT present", () => {
-    assert.strictEqual(result.find((e) => e.id === "nova"), undefined);
+    assert.strictEqual(result["nova"], undefined);
   });
 
   it("exactly three agents are present: newhart, coder, scout", () => {
     assert.deepStrictEqual(
-      result.map((e) => e.id).sort(),
+      Object.keys(result).sort(),
       ["coder", "newhart", "scout"],
     );
   });
@@ -280,37 +284,37 @@ describe("TC-244-U-03: Mutual exclusion — NOVA and Newhart never see each othe
     },
   ];
 
-  const novaResult = buildAgentsList(novaRows);
-  const newhartResult = buildAgentsList(newhartRows);
+  const { entries: novaResult } = buildAgentsList(novaRows);
+  const { entries: newhartResult } = buildAgentsList(newhartRows);
 
   it("nova's agent list does not include newhart", () => {
     assert.strictEqual(
-      novaResult.find((e) => e.id === "newhart"),
+      novaResult["newhart"],
       undefined,
     );
   });
 
   it("newhart's agent list does not include nova", () => {
     assert.strictEqual(
-      newhartResult.find((e) => e.id === "nova"),
+      newhartResult["nova"],
       undefined,
     );
   });
 
   it("each list has exactly one entry with default: true", () => {
-    const novaDefaults = novaResult.filter((e) => e.default === true);
-    const newhartDefaults = newhartResult.filter((e) => e.default === true);
+    const novaDefaults = Object.values(novaResult).filter((e) => e.default === true);
+    const newhartDefaults = Object.values(newhartResult).filter((e) => e.default === true);
     assert.strictEqual(novaDefaults.length, 1);
     assert.strictEqual(newhartDefaults.length, 1);
   });
 
   it("nova is default in NOVA's list", () => {
-    assert.strictEqual(novaResult.find((e) => e.id === "nova")?.default, true);
+    assert.strictEqual(novaResult["nova"]?.default, true);
   });
 
   it("newhart is default in Newhart's list", () => {
     assert.strictEqual(
-      newhartResult.find((e) => e.id === "newhart")?.default,
+      newhartResult["newhart"]?.default,
       true,
     );
   });
@@ -349,28 +353,28 @@ describe("TC-244-U-04: Fallback model shape preserved from function rows", () =>
     },
   ];
 
-  const result = buildAgentsList(rows);
+  const { entries: result } = buildAgentsList(rows);
 
   it("coder model is object form with primary and fallbacks", () => {
-    assert.deepStrictEqual(result.find((e) => e.id === "coder")?.model, {
+    assert.deepStrictEqual(result["coder"]?.model, {
       primary: "anthropic/claude-sonnet-4",
       fallbacks: ["openai/gpt-4o", "google/gemini-pro"],
     });
   });
 
   it("fallback order is preserved from DB array", () => {
-    const model = result.find((e) => e.id === "coder")?.model;
+    const model = result["coder"]?.model;
     assert.ok(typeof model === "object" && "fallbacks" in model);
     assert.deepStrictEqual(model.fallbacks, ["openai/gpt-4o", "google/gemini-pro"]);
   });
 
   it("gem with null fallback_models uses string model form", () => {
-    assert.strictEqual(result.find((e) => e.id === "gem")?.model, "google/gemini-flash");
+    assert.strictEqual(result["gem"]?.model, "google/gemini-flash");
   });
 
   it("scout with empty fallback_models array uses string model form", () => {
     assert.strictEqual(
-      result.find((e) => e.id === "scout")?.model,
+      result["scout"]?.model,
       "google/gemini-flash",
     );
   });
@@ -400,10 +404,10 @@ describe("TC-244-U-05: Row with is_default = null emits no `default` key", () =>
     },
   ];
 
-  const result = buildAgentsList(rows);
+  const { entries: result } = buildAgentsList(rows);
 
   it("is_default = null → no default key on entry", () => {
-    const entry = result.find((e) => e.id === "someagent");
+    const entry = result["someagent"];
     assert.ok(entry !== undefined);
     assert.ok(
       !Object.prototype.hasOwnProperty.call(entry, "default"),
@@ -413,7 +417,7 @@ describe("TC-244-U-05: Row with is_default = null emits no `default` key", () =>
   });
 
   it("is_default = false → no default key on entry", () => {
-    const entry = result.find((e) => e.id === "falseagent");
+    const entry = result["falseagent"];
     assert.ok(entry !== undefined);
     assert.ok(
       !Object.prototype.hasOwnProperty.call(entry, "default"),
@@ -434,10 +438,10 @@ describe("TC-244-U-05: Row with is_default = null emits no `default` key", () =>
         allowed_subagents: null,
       },
     ];
-    const trueResult = buildAgentsList(trueRow);
-    assert.strictEqual(trueResult[0]?.default, true);
+    const { entries: trueResult } = buildAgentsList(trueRow);
+    assert.strictEqual(trueResult["trueagent"]?.default, true);
     assert.ok(
-      Object.prototype.hasOwnProperty.call(trueResult[0], "default"),
+      Object.prototype.hasOwnProperty.call(trueResult["trueagent"], "default"),
       "default key must be present when is_default is true",
     );
   });
@@ -910,10 +914,10 @@ describe("TC-262-U-01: heartbeat_enabled=true → emits heartbeat object in agen
   const rows: AgentRow[] = [
     makeAgentRow("nova", true, "5m", "discord", "channel:1234", true),
   ];
-  const result = buildAgentsList(rows);
+  const { entries: result } = buildAgentsList(rows);
 
   it("nova entry has heartbeat object with all four fields", () => {
-    const entry = result.find((e) => e.id === "nova");
+    const entry = result["nova"];
     assert.ok(entry !== undefined);
     assert.deepStrictEqual(entry.heartbeat, {
       every: "5m",
@@ -923,7 +927,7 @@ describe("TC-262-U-01: heartbeat_enabled=true → emits heartbeat object in agen
   });
 
   it("heartbeat key is present (not missing)", () => {
-    const entry = result.find((e) => e.id === "nova");
+    const entry = result["nova"];
     assert.ok(Object.prototype.hasOwnProperty.call(entry, "heartbeat"));
   });
 });
@@ -934,10 +938,10 @@ describe("TC-262-U-02: heartbeat_enabled=false → heartbeat key is ABSENT from 
   const rows: AgentRow[] = [
     makeAgentRow("coder", false),
   ];
-  const result = buildAgentsList(rows);
+  const { entries: result } = buildAgentsList(rows);
 
   it("coder entry has heartbeat: undefined (key absent)", () => {
-    const entry = result.find((e) => e.id === "coder");
+    const entry = result["coder"];
     assert.ok(entry !== undefined);
     assert.strictEqual(entry.heartbeat, undefined);
     assert.ok(
@@ -954,10 +958,10 @@ describe("TC-262-U-03: heartbeat_enabled=null → heartbeat key is ABSENT from e
   const rows: AgentRow[] = [
     makeAgentRow("gem", null),
   ];
-  const result = buildAgentsList(rows);
+  const { entries: result } = buildAgentsList(rows);
 
   it("gem entry has heartbeat: undefined (key absent) when heartbeat_enabled is null", () => {
-    const entry = result.find((e) => e.id === "gem");
+    const entry = result["gem"];
     assert.ok(entry !== undefined);
     assert.strictEqual(entry.heartbeat, undefined);
     assert.ok(
@@ -977,10 +981,10 @@ describe("TC-262-U-04: heartbeat key present IFF enabled; absent when disabled o
     makeAgentRow("gem", null),
     makeAgentRow("scout", true, "10m", null, null),
   ];
-  const result = buildAgentsList(rows);
+  const { entries: result } = buildAgentsList(rows);
 
   it("nova entry (enabled) has a heartbeat property", () => {
-    const entry = result.find((e) => e.id === "nova");
+    const entry = result["nova"];
     assert.ok(entry !== undefined);
     assert.ok(
       Object.prototype.hasOwnProperty.call(entry, "heartbeat"),
@@ -990,7 +994,7 @@ describe("TC-262-U-04: heartbeat key present IFF enabled; absent when disabled o
   });
 
   it("scout entry (enabled) has a heartbeat property", () => {
-    const entry = result.find((e) => e.id === "scout");
+    const entry = result["scout"];
     assert.ok(entry !== undefined);
     assert.ok(
       Object.prototype.hasOwnProperty.call(entry, "heartbeat"),
@@ -1000,7 +1004,7 @@ describe("TC-262-U-04: heartbeat key present IFF enabled; absent when disabled o
   });
 
   it("coder entry (disabled) has heartbeat key ABSENT", () => {
-    const entry = result.find((e) => e.id === "coder");
+    const entry = result["coder"];
     assert.ok(entry !== undefined);
     assert.ok(
       !Object.prototype.hasOwnProperty.call(entry, "heartbeat"),
@@ -1010,7 +1014,7 @@ describe("TC-262-U-04: heartbeat key present IFF enabled; absent when disabled o
   });
 
   it("gem entry (null) has heartbeat key ABSENT", () => {
-    const entry = result.find((e) => e.id === "gem");
+    const entry = result["gem"];
     assert.ok(entry !== undefined);
     assert.ok(
       !Object.prototype.hasOwnProperty.call(entry, "heartbeat"),
@@ -1027,8 +1031,8 @@ describe("TC-262-U-05: heartbeat_enabled=true with NULL sub-fields → partial o
     const rows: AgentRow[] = [
       makeAgentRow("coder", true, "5m", null, null),
     ];
-    const result = buildAgentsList(rows);
-    const entry = result.find((e) => e.id === "coder");
+    const { entries: result } = buildAgentsList(rows);
+    const entry = result["coder"];
     assert.ok(entry !== undefined);
     assert.deepStrictEqual(entry.heartbeat, { every: "5m" });
   });
@@ -1037,8 +1041,8 @@ describe("TC-262-U-05: heartbeat_enabled=true with NULL sub-fields → partial o
     const rows: AgentRow[] = [
       makeAgentRow("gem", true, null, null, null),
     ];
-    const result = buildAgentsList(rows);
-    const entry = result.find((e) => e.id === "gem");
+    const { entries: result } = buildAgentsList(rows);
+    const entry = result["gem"];
     assert.ok(entry !== undefined);
     assert.deepStrictEqual(entry.heartbeat, {});
   });
@@ -1052,10 +1056,10 @@ describe("TC-262-U-06: heartbeat config does not affect sort order", () => {
     makeAgentRow("coder", false),
     makeAgentRow("gem", null),
   ];
-  const result = buildAgentsList(rows);
+  const { entries: result } = buildAgentsList(rows);
 
   it("output is sorted by agent name (id)", () => {
-    const ids = result.map((e) => e.id);
+    const ids = Object.keys(result);
     const sorted = [...ids].sort();
     assert.deepStrictEqual(ids, sorted);
   });
@@ -1067,8 +1071,8 @@ describe("TC-262-U-07: heartbeat object field order is stable (every, target, to
   const rows: AgentRow[] = [
     makeAgentRow("nova", true, "5m", "discord", "channel:1234", true),
   ];
-  const result = buildAgentsList(rows);
-  const entry = result.find((e) => e.id === "nova");
+  const { entries: result } = buildAgentsList(rows);
+  const entry = result["nova"];
 
   it("heartbeat object has keys in order: every, target, to", () => {
     assert.ok(entry !== undefined);
@@ -1086,8 +1090,8 @@ describe("TC-262-U-08: BVA — heartbeat_every boundary values", () => {
   for (const val of testValues) {
     it(`heartbeat_every="${val.length > 20 ? val.slice(0, 20) + "..." : val}" is passed through as-is`, () => {
       const rows: AgentRow[] = [makeAgentRow("coder", true, val, null, null)];
-      const result = buildAgentsList(rows);
-      const entry = result.find((e) => e.id === "coder");
+      const { entries: result } = buildAgentsList(rows);
+      const entry = result["coder"];
       assert.ok(entry !== undefined);
       assert.ok(typeof entry.heartbeat === "object", "heartbeat should be an object when enabled");
       if (val !== "") {
@@ -1123,30 +1127,30 @@ describe("TC-273-U-01: Boolean guard — no agent entry ever has typeof heartbea
       // heartbeat_enabled field entirely absent (undefined)
     },
   ];
-  const result = buildAgentsList(rows);
+  const { entries: result } = buildAgentsList(rows);
 
   it("returns 4 entries", () => {
-    assert.strictEqual(result.length, 4);
+    assert.strictEqual(Object.keys(result).length, 4);
   });
 
   it("no entry has typeof heartbeat === \"boolean\"", () => {
-    for (const entry of result) {
+    for (const [id, entry] of Object.entries(result)) {
       assert.ok(
         typeof entry.heartbeat !== "boolean",
-        `Entry '${entry.id}' must not have a boolean heartbeat (got ${typeof entry.heartbeat})`,
+        `Entry '${id}' must not have a boolean heartbeat (got ${typeof entry.heartbeat})`,
       );
     }
   });
 
   it("no entry has heartbeat === false", () => {
-    for (const entry of result) {
-      assert.notStrictEqual(entry.heartbeat, false, `Entry '${entry.id}' heartbeat must not be false`);
+    for (const [id, entry] of Object.entries(result)) {
+      assert.notStrictEqual(entry.heartbeat, false, `Entry '${id}' heartbeat must not be false`);
     }
   });
 
   it("no entry has heartbeat === true", () => {
-    for (const entry of result) {
-      assert.notStrictEqual(entry.heartbeat, true, `Entry '${entry.id}' heartbeat must not be true`);
+    for (const [id, entry] of Object.entries(result)) {
+      assert.notStrictEqual(entry.heartbeat, true, `Entry '${id}' heartbeat must not be true`);
     }
   });
 });
@@ -1161,10 +1165,10 @@ describe("TC-273-U-02: Schema compliance — heartbeat values are objects or und
     makeAgentRow("agent-false",    false),
     makeAgentRow("agent-null",     null),
   ];
-  const result = buildAgentsList(rows);
+  const { entries: result } = buildAgentsList(rows);
 
   it("agent-enabled: heartbeat key present, value is object with all sub-fields", () => {
-    const entry = result.find((e) => e.id === "agent-enabled");
+    const entry = result["agent-enabled"];
     assert.ok(entry !== undefined);
     assert.ok(Object.prototype.hasOwnProperty.call(entry, "heartbeat"), "agent-enabled must have heartbeat key");
     assert.ok(typeof entry.heartbeat === "object" && entry.heartbeat !== null, "heartbeat must be object");
@@ -1172,7 +1176,7 @@ describe("TC-273-U-02: Schema compliance — heartbeat values are objects or und
   });
 
   it("agent-partial: heartbeat key present, value is object with only 'every' field", () => {
-    const entry = result.find((e) => e.id === "agent-partial");
+    const entry = result["agent-partial"];
     assert.ok(entry !== undefined);
     assert.ok(Object.prototype.hasOwnProperty.call(entry, "heartbeat"), "agent-partial must have heartbeat key");
     assert.ok(typeof entry.heartbeat === "object" && entry.heartbeat !== null, "heartbeat must be object");
@@ -1180,21 +1184,21 @@ describe("TC-273-U-02: Schema compliance — heartbeat values are objects or und
   });
 
   it("agent-min: heartbeat key present, value is empty object {}", () => {
-    const entry = result.find((e) => e.id === "agent-min");
+    const entry = result["agent-min"];
     assert.ok(entry !== undefined);
     assert.ok(Object.prototype.hasOwnProperty.call(entry, "heartbeat"), "agent-min must have heartbeat key");
     assert.deepStrictEqual(entry.heartbeat, {});
   });
 
   it("agent-false: heartbeat key ABSENT, value is undefined", () => {
-    const entry = result.find((e) => e.id === "agent-false");
+    const entry = result["agent-false"];
     assert.ok(entry !== undefined);
     assert.ok(!Object.prototype.hasOwnProperty.call(entry, "heartbeat"), "agent-false must NOT have heartbeat key");
     assert.strictEqual(entry.heartbeat, undefined);
   });
 
   it("agent-null: heartbeat key ABSENT, value is undefined", () => {
-    const entry = result.find((e) => e.id === "agent-null");
+    const entry = result["agent-null"];
     assert.ok(entry !== undefined);
     assert.ok(!Object.prototype.hasOwnProperty.call(entry, "heartbeat"), "agent-null must NOT have heartbeat key");
     assert.strictEqual(entry.heartbeat, undefined);
@@ -1211,36 +1215,36 @@ describe("TC-273-U-03: Mixed scenario — primary regression test for #273", () 
     makeAgentRow("scout", null),
     makeAgentRow("iris",  true,  null,  null,      null),
   ];
-  const result = buildAgentsList(rows);
+  const { entries: result } = buildAgentsList(rows);
 
   it("nova: heartbeat present with correct value", () => {
-    const entry = result.find((e) => e.id === "nova");
+    const entry = result["nova"];
     assert.ok(entry !== undefined);
     assert.deepStrictEqual(entry.heartbeat, { every: "5m", target: "discord", to: "channel:1234" });
   });
 
   it("coder: heartbeat present with correct value", () => {
-    const entry = result.find((e) => e.id === "coder");
+    const entry = result["coder"];
     assert.ok(entry !== undefined);
     assert.deepStrictEqual(entry.heartbeat, { every: "10m", target: "slack", to: "channel:5678" });
   });
 
   it("gem: heartbeat key ABSENT", () => {
-    const entry = result.find((e) => e.id === "gem");
+    const entry = result["gem"];
     assert.ok(entry !== undefined);
     assert.ok(!Object.prototype.hasOwnProperty.call(entry, "heartbeat"), "gem must not have heartbeat key");
     assert.strictEqual(entry.heartbeat, undefined);
   });
 
   it("scout: heartbeat key ABSENT", () => {
-    const entry = result.find((e) => e.id === "scout");
+    const entry = result["scout"];
     assert.ok(entry !== undefined);
     assert.ok(!Object.prototype.hasOwnProperty.call(entry, "heartbeat"), "scout must not have heartbeat key");
     assert.strictEqual(entry.heartbeat, undefined);
   });
 
   it("iris: heartbeat present with empty object (enabled, no sub-fields)", () => {
-    const entry = result.find((e) => e.id === "iris");
+    const entry = result["iris"];
     assert.ok(entry !== undefined);
     assert.ok(Object.prototype.hasOwnProperty.call(entry, "heartbeat"), "iris must have heartbeat key");
     assert.deepStrictEqual(entry.heartbeat, {});
@@ -1248,7 +1252,7 @@ describe("TC-273-U-03: Mixed scenario — primary regression test for #273", () 
 
   it("all enabled agents have object heartbeat (never boolean)", () => {
     for (const id of ["nova", "coder", "iris"]) {
-      const entry = result.find((e) => e.id === id);
+      const entry = result[id];
       assert.ok(entry !== undefined);
       assert.ok(typeof entry.heartbeat === "object" && entry.heartbeat !== null,
         `${id}: heartbeat must be an object`);
@@ -1257,19 +1261,19 @@ describe("TC-273-U-03: Mixed scenario — primary regression test for #273", () 
 
   it("all disabled agents have heartbeat === undefined", () => {
     for (const id of ["gem", "scout"]) {
-      const entry = result.find((e) => e.id === id);
+      const entry = result[id];
       assert.ok(entry !== undefined);
       assert.strictEqual(entry.heartbeat, undefined, `${id}: heartbeat must be undefined`);
     }
   });
 
   it("count of entries with heartbeat key is 3 (nova, coder, iris)", () => {
-    const withHeartbeat = result.filter((e) => Object.prototype.hasOwnProperty.call(e, "heartbeat"));
+    const withHeartbeat = Object.values(result).filter((e) => Object.prototype.hasOwnProperty.call(e, "heartbeat"));
     assert.strictEqual(withHeartbeat.length, 3);
   });
 
   it("count of entries without heartbeat key is 2 (gem, scout)", () => {
-    const withoutHeartbeat = result.filter((e) => !Object.prototype.hasOwnProperty.call(e, "heartbeat"));
+    const withoutHeartbeat = Object.values(result).filter((e) => !Object.prototype.hasOwnProperty.call(e, "heartbeat"));
     assert.strictEqual(withoutHeartbeat.length, 2);
   });
 });
@@ -1282,7 +1286,7 @@ describe("TC-273-U-04: JSON serialization guard — JSON output never contains \
     makeAgentRow("coder", false),
     makeAgentRow("gem",   null),
   ];
-  const result = buildAgentsList(rows);
+  const { entries: result } = buildAgentsList(rows);
   const jsonStr = JSON.stringify(result);
 
   it("JSON output does not contain '\"heartbeat\":false'", () => {
@@ -1317,25 +1321,25 @@ describe("TC-273-U-05: TypeScript type guard — heartbeat is HeartbeatConfig | 
     makeAgentRow("coder", false),
     makeAgentRow("gem",   null),
   ];
-  const result = buildAgentsList(rows);
+  const { entries: result } = buildAgentsList(rows);
 
   it("coder: heartbeat is undefined, not false", () => {
-    const entry = result.find((e) => e.id === "coder");
+    const entry = result["coder"];
     assert.ok(entry !== undefined);
     assert.strictEqual(entry.heartbeat, undefined);
     assert.ok(typeof entry.heartbeat !== "boolean", "heartbeat must not be the boolean false");
   });
 
   it("gem: heartbeat is undefined, not false", () => {
-    const entry = result.find((e) => e.id === "gem");
+    const entry = result["gem"];
     assert.ok(entry !== undefined);
     assert.strictEqual(entry.heartbeat, undefined);
     assert.ok(typeof entry.heartbeat !== "boolean", "heartbeat must not be the boolean false");
   });
 
   it("no disabled agent's heartbeat is strictly false (boolean)", () => {
-    for (const entry of result) {
-      assert.ok(typeof entry.heartbeat !== "boolean", `Entry '${entry.id}' must not have heartbeat === false`);
+    for (const [id, entry] of Object.entries(result)) {
+      assert.ok(typeof entry.heartbeat !== "boolean", `Entry '${id}' must not have heartbeat === false`);
     }
   });
 });
@@ -1344,9 +1348,9 @@ describe("TC-273-U-05: TypeScript type guard — heartbeat is HeartbeatConfig | 
 
 describe("TC-273-U-06: Edge case — empty rows input produces empty output", () => {
   it("buildAgentsList([]) returns an empty array", () => {
-    const result = buildAgentsList([]);
-    assert.ok(Array.isArray(result), "result must be an array");
-    assert.strictEqual(result.length, 0);
+    const { entries: result } = buildAgentsList([]);
+    assert.ok(typeof result === "object" && result !== null && !Array.isArray(result), "result must be an object");
+    assert.strictEqual(Object.keys(result).length, 0);
   });
 });
 
@@ -1363,29 +1367,29 @@ describe("TC-273-U-07: Edge case — heartbeat_enabled field entirely absent (pr
     allowed_subagents: null,
     // heartbeat_enabled, heartbeat_every, etc. all absent (undefined)
   };
-  const result = buildAgentsList([row]);
+  const { entries: result } = buildAgentsList([row]);
 
   it("returns 1 entry", () => {
-    assert.strictEqual(result.length, 1);
+    assert.strictEqual(Object.keys(result).length, 1);
   });
 
   it("entry id is 'legacy-agent'", () => {
-    assert.strictEqual(result[0]!.id, "legacy-agent");
+    assert.strictEqual(Object.keys(result)[0], "legacy-agent");
   });
 
   it("heartbeat key is ABSENT from legacy-agent entry", () => {
     assert.ok(
-      !Object.prototype.hasOwnProperty.call(result[0], "heartbeat"),
+      !Object.prototype.hasOwnProperty.call(Object.values(result)[0], "heartbeat"),
       "heartbeat key must not be present for pre-migration row",
     );
   });
 
   it("legacy-agent heartbeat is undefined", () => {
-    assert.strictEqual(result[0]!.heartbeat, undefined);
+    assert.strictEqual(Object.values(result)[0]!.heartbeat, undefined);
   });
 
   it("typeof legacy-agent heartbeat is not boolean", () => {
-    assert.ok(typeof result[0]!.heartbeat !== "boolean", "heartbeat must never be a boolean");
+    assert.ok(typeof Object.values(result)[0]!.heartbeat !== "boolean", "heartbeat must never be a boolean");
   });
 });
 
@@ -1399,24 +1403,24 @@ describe("TC-273-U-08: All-disabled scenario — zero agents have heartbeat key"
     makeAgentRow("scout",  null),
     makeAgentRow("iris",   false),
   ];
-  const result = buildAgentsList(rows);
+  const { entries: result } = buildAgentsList(rows);
 
   it("returns 5 entries", () => {
-    assert.strictEqual(result.length, 5);
+    assert.strictEqual(Object.keys(result).length, 5);
   });
 
   it("not a single entry has a heartbeat property", () => {
-    for (const entry of result) {
+    for (const [id, entry] of Object.entries(result)) {
       assert.ok(
         !Object.prototype.hasOwnProperty.call(entry, "heartbeat"),
-        `Entry '${entry.id}' must NOT have a heartbeat property`,
+        `Entry '${id}' must NOT have a heartbeat property`,
       );
     }
   });
 
   it("every entry has heartbeat === undefined", () => {
-    for (const entry of result) {
-      assert.strictEqual(entry.heartbeat, undefined, `Entry '${entry.id}' heartbeat must be undefined`);
+    for (const [id, entry] of Object.entries(result)) {
+      assert.strictEqual(entry.heartbeat, undefined, `Entry '${id}' heartbeat must be undefined`);
     }
   });
 
@@ -1434,40 +1438,40 @@ describe("TC-273-U-09: All-enabled scenario — every agent has heartbeat object
     makeAgentRow("coder", true, "10m", "slack",   "ch:2"),
     makeAgentRow("gem",   true, null,  null,      null),
   ];
-  const result = buildAgentsList(rows);
+  const { entries: result } = buildAgentsList(rows);
 
   it("returns 3 entries", () => {
-    assert.strictEqual(result.length, 3);
+    assert.strictEqual(Object.keys(result).length, 3);
   });
 
   it("every entry has a heartbeat property", () => {
-    for (const entry of result) {
+    for (const [id, entry] of Object.entries(result)) {
       assert.ok(
         Object.prototype.hasOwnProperty.call(entry, "heartbeat"),
-        `Entry '${entry.id}' must have a heartbeat property`,
+        `Entry '${id}' must have a heartbeat property`,
       );
     }
   });
 
   it("every entry heartbeat is typeof 'object'", () => {
-    for (const entry of result) {
+    for (const [id, entry] of Object.entries(result)) {
       assert.ok(
         typeof entry.heartbeat === "object",
-        `Entry '${entry.id}' heartbeat must be an object`,
+        `Entry '${id}' heartbeat must be an object`,
       );
     }
   });
 
   it("no entry heartbeat is null", () => {
-    for (const entry of result) {
-      assert.ok(entry.heartbeat !== null, `Entry '${entry.id}' heartbeat must not be null`);
+    for (const [id, entry] of Object.entries(result)) {
+      assert.ok(entry.heartbeat !== null, `Entry '${id}' heartbeat must not be null`);
     }
   });
 
   it("no entry heartbeat is a boolean (false or true)", () => {
-    for (const entry of result) {
-      assert.ok(typeof entry.heartbeat !== "boolean", `Entry '${entry.id}' heartbeat must not be false`);
-      assert.ok(typeof entry.heartbeat !== "boolean", `Entry '${entry.id}' heartbeat must not be true`);
+    for (const [id, entry] of Object.entries(result)) {
+      assert.ok(typeof entry.heartbeat !== "boolean", `Entry '${id}' heartbeat must not be false`);
+      assert.ok(typeof entry.heartbeat !== "boolean", `Entry '${id}' heartbeat must not be true`);
     }
   });
 });
@@ -1477,8 +1481,8 @@ describe("TC-273-U-09: All-enabled scenario — every agent has heartbeat object
 describe("TC-273-U-10: BVA — partial heartbeat objects (each sub-field in isolation)", () => {
   it("Sub-test A: only 'every' set → heartbeat = {every: '5m'}", () => {
     const rows: AgentRow[] = [makeAgentRow("a1", true, "5m", null, null)];
-    const result = buildAgentsList(rows);
-    const entry = result.find((e) => e.id === "a1");
+    const { entries: result } = buildAgentsList(rows);
+    const entry = result["a1"];
     assert.ok(entry !== undefined);
     assert.ok(Object.prototype.hasOwnProperty.call(entry, "heartbeat"), "a1 must have heartbeat key");
     assert.deepStrictEqual(entry.heartbeat, { every: "5m" });
@@ -1495,8 +1499,8 @@ describe("TC-273-U-10: BVA — partial heartbeat objects (each sub-field in isol
 
   it("Sub-test B: only 'target' set → heartbeat = {target: 'discord'}", () => {
     const rows: AgentRow[] = [makeAgentRow("a2", true, null, "discord", null)];
-    const result = buildAgentsList(rows);
-    const entry = result.find((e) => e.id === "a2");
+    const { entries: result } = buildAgentsList(rows);
+    const entry = result["a2"];
     assert.ok(entry !== undefined);
     assert.ok(Object.prototype.hasOwnProperty.call(entry, "heartbeat"), "a2 must have heartbeat key");
     assert.deepStrictEqual(entry.heartbeat, { target: "discord" });
@@ -1512,8 +1516,8 @@ describe("TC-273-U-10: BVA — partial heartbeat objects (each sub-field in isol
 
   it("Sub-test C: only 'to' set → heartbeat = {to: 'channel:1234'}", () => {
     const rows: AgentRow[] = [makeAgentRow("a3", true, null, null, "channel:1234")];
-    const result = buildAgentsList(rows);
-    const entry = result.find((e) => e.id === "a3");
+    const { entries: result } = buildAgentsList(rows);
+    const entry = result["a3"];
     assert.ok(entry !== undefined);
     assert.ok(Object.prototype.hasOwnProperty.call(entry, "heartbeat"), "a3 must have heartbeat key");
     assert.deepStrictEqual(entry.heartbeat, { to: "channel:1234" });
@@ -1556,10 +1560,10 @@ function makeThinkingRow(
 
 describe("TC-660-U-01: Regression guard — thinking='off' maps to thinkingDefault='off'", () => {
   const rows: AgentRow[] = [makeThinkingRow("bastion", "off")];
-  const result = buildAgentsList(rows);
+  const { entries: result } = buildAgentsList(rows);
 
   it("emits thinkingDefault: 'off'", () => {
-    const entry = result.find((e) => e.id === "bastion");
+    const entry = result["bastion"];
     assert.ok(entry !== undefined);
     assert.ok(
       Object.prototype.hasOwnProperty.call(entry, "thinkingDefault"),
@@ -1573,10 +1577,10 @@ describe("TC-660-U-01: Regression guard — thinking='off' maps to thinkingDefau
 
 describe("TC-660-U-02: thinking='high' maps to thinkingDefault='high'", () => {
   const rows: AgentRow[] = [makeThinkingRow("newhart", "high")];
-  const result = buildAgentsList(rows);
+  const { entries: result } = buildAgentsList(rows);
 
   it("emits thinkingDefault: 'high' even when it matches a typical global default", () => {
-    const entry = result.find((e) => e.id === "newhart");
+    const entry = result["newhart"];
     assert.ok(entry !== undefined);
     assert.strictEqual(entry.thinkingDefault, "high");
   });
@@ -1590,8 +1594,8 @@ describe("TC-660-U-03: All 7 DB-legal thinking values map 1:1", () => {
   for (const value of values) {
     it(`thinking='${value}' → thinkingDefault='${value}'`, () => {
       const rows: AgentRow[] = [makeThinkingRow(`agent-${value}`, value)];
-      const result = buildAgentsList(rows);
-      const entry = result.find((e) => e.id === `agent-${value}`);
+      const { entries: result } = buildAgentsList(rows);
+      const entry = result[`agent-${value}`];
       assert.ok(entry !== undefined);
       assert.strictEqual(entry.thinkingDefault, value);
     });
@@ -1616,15 +1620,15 @@ describe("TC-660-U-04: Existing fields unaffected by thinkingDefault mapping", (
   };
   const rowWithoutThinking: AgentRow = { ...rowWithThinking, thinking: null };
 
-  const resultWith = buildAgentsList([rowWithThinking]);
-  const resultWithout = buildAgentsList([rowWithoutThinking]);
+  const { entries: resultWith } = buildAgentsList([rowWithThinking]);
+  const { entries: resultWithout } = buildAgentsList([rowWithoutThinking]);
 
   it("only difference is the added thinkingDefault key", () => {
-    assert.strictEqual(resultWith.length, 1);
-    assert.strictEqual(resultWithout.length, 1);
+    assert.strictEqual(Object.keys(resultWith).length, 1);
+    assert.strictEqual(Object.keys(resultWithout).length, 1);
 
-    const withEntry = resultWith[0];
-    const withoutEntry = resultWithout[0];
+    const withEntry = Object.values(resultWith)[0];
+    const withoutEntry = Object.values(resultWithout)[0];
 
     assert.strictEqual(withEntry.thinkingDefault, "low");
     assert.ok(
@@ -1642,8 +1646,8 @@ describe("TC-660-U-04: Existing fields unaffected by thinkingDefault mapping", (
 describe("TC-660-U-05..06: Null and empty string thinking values are omitted", () => {
   it("TC-660-U-05: thinking = null → key omitted", () => {
     const rows: AgentRow[] = [makeThinkingRow("nullagent", null)];
-    const result = buildAgentsList(rows);
-    const entry = result.find((e) => e.id === "nullagent");
+    const { entries: result } = buildAgentsList(rows);
+    const entry = result["nullagent"];
     assert.ok(entry !== undefined);
     assert.ok(
       !Object.prototype.hasOwnProperty.call(entry, "thinkingDefault"),
@@ -1654,8 +1658,8 @@ describe("TC-660-U-05..06: Null and empty string thinking values are omitted", (
 
   it("TC-660-U-06: thinking = '' → key omitted", () => {
     const rows: AgentRow[] = [makeThinkingRow("emptyagent", "")];
-    const result = buildAgentsList(rows);
-    const entry = result.find((e) => e.id === "emptyagent");
+    const { entries: result } = buildAgentsList(rows);
+    const entry = result["emptyagent"];
     assert.ok(entry !== undefined);
     assert.ok(
       !Object.prototype.hasOwnProperty.call(entry, "thinkingDefault"),
@@ -1668,14 +1672,14 @@ describe("TC-660-U-05..06: Null and empty string thinking values are omitted", (
 describe("TC-660-U-07: Schema-valid but DB-illegal values 'max' and 'ultra' pass through", () => {
   it("thinking='max' → thinkingDefault='max'", () => {
     const rows: AgentRow[] = [makeThinkingRow("maxagent", "max")];
-    const result = buildAgentsList(rows);
-    assert.strictEqual(result[0]?.thinkingDefault, "max");
+    const { entries: result } = buildAgentsList(rows);
+    assert.strictEqual(Object.values(result)[0]?.thinkingDefault, "max");
   });
 
   it("thinking='ultra' → thinkingDefault='ultra'", () => {
     const rows: AgentRow[] = [makeThinkingRow("ultraagent", "ultra")];
-    const result = buildAgentsList(rows);
-    assert.strictEqual(result[0]?.thinkingDefault, "ultra");
+    const { entries: result } = buildAgentsList(rows);
+    assert.strictEqual(Object.values(result)[0]?.thinkingDefault, "ultra");
   });
 });
 
@@ -1687,10 +1691,10 @@ describe("TC-660-U-08: Unknown thinking tier is omitted without crashing", () =>
     makeThinkingRow("bad", "notarealvalue"),
     makeThinkingRow("good2", "medium"),
   ];
-  const result = buildAgentsList(rows);
+  const { entries: result } = buildAgentsList(rows);
 
   it("omits thinkingDefault for the unknown value", () => {
-    const badEntry = result.find((e) => e.id === "bad");
+    const badEntry = result["bad"];
     assert.ok(badEntry !== undefined);
     assert.ok(
       !Object.prototype.hasOwnProperty.call(badEntry, "thinkingDefault"),
@@ -1698,8 +1702,8 @@ describe("TC-660-U-08: Unknown thinking tier is omitted without crashing", () =>
   });
 
   it("still emits thinkingDefault for valid sibling rows", () => {
-    assert.strictEqual(result.find((e) => e.id === "good")?.thinkingDefault, "low");
-    assert.strictEqual(result.find((e) => e.id === "good2")?.thinkingDefault, "medium");
+    assert.strictEqual(result["good"]?.thinkingDefault, "low");
+    assert.strictEqual(result["good2"]?.thinkingDefault, "medium");
   });
 });
 
@@ -1710,8 +1714,8 @@ describe("TC-660-U-09..10: Wrong-type thinking values are omitted without throwi
     const rows: AgentRow[] = [
       makeThinkingRow("numagent", 5 as unknown as string),
     ];
-    const result = buildAgentsList(rows);
-    const entry = result.find((e) => e.id === "numagent");
+    const { entries: result } = buildAgentsList(rows);
+    const entry = result["numagent"];
     assert.ok(entry !== undefined);
     assert.ok(
       !Object.prototype.hasOwnProperty.call(entry, "thinkingDefault"),
@@ -1722,8 +1726,8 @@ describe("TC-660-U-09..10: Wrong-type thinking values are omitted without throwi
     const rows: AgentRow[] = [
       makeThinkingRow("boolagent", true as unknown as string),
     ];
-    const result = buildAgentsList(rows);
-    const entry = result.find((e) => e.id === "boolagent");
+    const { entries: result } = buildAgentsList(rows);
+    const entry = result["boolagent"];
     assert.ok(entry !== undefined);
     assert.ok(
       !Object.prototype.hasOwnProperty.call(entry, "thinkingDefault"),
@@ -1739,13 +1743,13 @@ describe("TC-660-U-11: Mixed-case thinking values are omitted (strict membership
     makeThinkingRow("h2", "OFF"),
     makeThinkingRow("h3", "AdAptive"),
   ];
-  const result = buildAgentsList(rows);
+  const { entries: result } = buildAgentsList(rows);
 
   it("omits thinkingDefault for every mixed-case variant", () => {
-    for (const entry of result) {
+    for (const [id, entry] of Object.entries(result)) {
       assert.ok(
         !Object.prototype.hasOwnProperty.call(entry, "thinkingDefault"),
-        `Entry '${entry.id}' must not have thinkingDefault for mixed-case input`,
+        `Entry '${id}' must not have thinkingDefault for mixed-case input`,
       );
     }
   });
@@ -1759,13 +1763,13 @@ describe("TC-660-U-12: Whitespace-padded thinking values are omitted (strict mem
     makeThinkingRow("w2", "high "),
     makeThinkingRow("w3", " low "),
   ];
-  const result = buildAgentsList(rows);
+  const { entries: result } = buildAgentsList(rows);
 
   it("omits thinkingDefault for every whitespace-padded variant", () => {
-    for (const entry of result) {
+    for (const [id, entry] of Object.entries(result)) {
       assert.ok(
         !Object.prototype.hasOwnProperty.call(entry, "thinkingDefault"),
-        `Entry '${entry.id}' must not have thinkingDefault for whitespace-padded input`,
+        `Entry '${id}' must not have thinkingDefault for whitespace-padded input`,
       );
     }
   });
@@ -1775,8 +1779,8 @@ describe("TC-660-U-12: Whitespace-padded thinking values are omitted (strict mem
 
 describe("TC-660-U-13: Empty agent list", () => {
   it("returns an empty array", () => {
-    const result = buildAgentsList([]);
-    assert.deepStrictEqual(result, []);
+    const { entries: result } = buildAgentsList([]);
+    assert.deepStrictEqual(result, {});
   });
 });
 
@@ -1784,12 +1788,12 @@ describe("TC-660-U-13: Empty agent list", () => {
 
 describe("TC-660-U-14: Single agent with thinking set", () => {
   const rows: AgentRow[] = [makeThinkingRow("solo", "medium")];
-  const result = buildAgentsList(rows);
+  const { entries: result } = buildAgentsList(rows);
 
   it("returns one entry with thinkingDefault matching the input", () => {
-    assert.strictEqual(result.length, 1);
-    assert.strictEqual(result[0]?.id, "solo");
-    assert.strictEqual(result[0]?.thinkingDefault, "medium");
+    assert.strictEqual(Object.keys(result).length, 1);
+    assert.strictEqual(Object.keys(result)[0], "solo");
+    assert.strictEqual(Object.values(result)[0]?.thinkingDefault, "medium");
   });
 });
 
@@ -1806,31 +1810,31 @@ describe("TC-660-U-15: Large fleet with mixed thinking values", () => {
       ),
     );
   }
-  const result = buildAgentsList(rows);
+  const { entries: result } = buildAgentsList(rows);
 
   it("emits thinkingDefault for exactly the 25 non-null rows", () => {
-    const withKey = result.filter((e) =>
+    const withKey = Object.values(result).filter((e) =>
       Object.prototype.hasOwnProperty.call(e, "thinkingDefault"),
     );
     assert.strictEqual(withKey.length, 25);
   });
 
   it("omits thinkingDefault for exactly the 5 null rows", () => {
-    const withoutKey = result.filter(
+    const withoutKey = Object.values(result).filter(
       (e) => !Object.prototype.hasOwnProperty.call(e, "thinkingDefault"),
     );
     assert.strictEqual(withoutKey.length, 5);
   });
 
   it("sort order is unaffected by the new field", () => {
-    const ids = result.map((e) => e.id);
+    const ids = Object.keys(result);
     assert.deepStrictEqual(ids, [...ids].sort((a, b) => a.localeCompare(b)));
   });
 
   it("spot-checks preserve correct per-row values", () => {
-    assert.strictEqual(result.find((e) => e.id === "agent-01")?.thinkingDefault, "minimal");
-    assert.strictEqual(result.find((e) => e.id === "agent-07")?.thinkingDefault, "off");
-    assert.strictEqual(result.find((e) => e.id === "agent-11")?.thinkingDefault, "high");
+    assert.strictEqual(result["agent-01"]?.thinkingDefault, "minimal");
+    assert.strictEqual(result["agent-07"]?.thinkingDefault, "off");
+    assert.strictEqual(result["agent-11"]?.thinkingDefault, "high");
   });
 });
 
@@ -1846,8 +1850,8 @@ describe("TC-660-U-16: thinking property absent from row object", () => {
       is_default: false,
       allowed_subagents: null,
     } as unknown as AgentRow;
-    const result = buildAgentsList([row]);
-    const entry = result.find((e) => e.id === "legacy");
+    const { entries: result } = buildAgentsList([row]);
+    const entry = result["legacy"];
     assert.ok(entry !== undefined);
     assert.ok(
       !Object.prototype.hasOwnProperty.call(entry, "thinkingDefault"),
@@ -1858,10 +1862,10 @@ describe("TC-660-U-16: thinking property absent from row object", () => {
 // ── TC-660-U-17: Explicit value equal to hypothetical global default is emitted
 describe("TC-660-U-17: Explicit value equal to a hypothetical global default is still emitted", () => {
   const rows: AgentRow[] = [makeThinkingRow("explicit-high", "high")];
-  const result = buildAgentsList(rows);
+  const { entries: result } = buildAgentsList(rows);
 
   it("emits explicit thinkingDefault: 'high'", () => {
-    const entry = result.find((e) => e.id === "explicit-high");
+    const entry = result["explicit-high"];
     assert.ok(entry !== undefined);
     assert.ok(
       Object.prototype.hasOwnProperty.call(entry, "thinkingDefault"),
@@ -1887,23 +1891,342 @@ describe("TC-660-U-18: Fleet-shape regression — issue-cited agents get expecte
     makeThinkingRow("gem", "adaptive"),
     makeThinkingRow("coder", "medium"),
   ];
-  const result = buildAgentsList(rows);
+  const { entries: result } = buildAgentsList(rows);
 
   it("every 'off'-configured agent gets thinkingDefault: 'off'", () => {
     for (const name of ["bastion", "ember", "flicker", "flint", "gallan", "gidget", "grain", "hermes"]) {
-      const entry = result.find((e) => e.id === name);
+      const entry = result[name];
       assert.ok(entry !== undefined, `entry for ${name} must exist`);
       assert.strictEqual(entry.thinkingDefault, "off", `${name} must have thinkingDefault: off`);
     }
   });
 
   it("newhart gets thinkingDefault: 'high'", () => {
-    assert.strictEqual(result.find((e) => e.id === "newhart")?.thinkingDefault, "high");
+    assert.strictEqual(result["newhart"]?.thinkingDefault, "high");
   });
 
   it("other tiered agents keep their explicit values", () => {
-    assert.strictEqual(result.find((e) => e.id === "scout")?.thinkingDefault, "low");
-    assert.strictEqual(result.find((e) => e.id === "gem")?.thinkingDefault, "adaptive");
-    assert.strictEqual(result.find((e) => e.id === "coder")?.thinkingDefault, "medium");
+    assert.strictEqual(result["scout"]?.thinkingDefault, "low");
+    assert.strictEqual(result["gem"]?.thinkingDefault, "adaptive");
+    assert.strictEqual(result["coder"]?.thinkingDefault, "medium");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TC-707-U-001..011: agents.entries keyed-object shape, validation, adversarial
+// rows (#707)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ── TC-707-001: buildAgentsList output changes from bare array to keyed object
+
+describe("TC-707-001: buildAgentsList emits keyed-object agents.entries shape", () => {
+  const rows: AgentRow[] = [
+    {
+      name: "alpha",
+      model: "anthropic/claude-sonnet-4",
+      fallback_models: null,
+      thinking: "low",
+      instance_type: "subagent",
+      is_default: false,
+      allowed_subagents: null,
+      status: "active",
+    },
+    {
+      name: "beta",
+      model: "google/gemini-flash",
+      fallback_models: ["openai/gpt-4o"],
+      thinking: null,
+      instance_type: "subagent",
+      is_default: true,
+      allowed_subagents: ["alpha"],
+      status: "active",
+    },
+  ];
+  const { entries: result } = buildAgentsList(rows);
+
+  it("output is a plain object, not an array", () => {
+    assert.ok(typeof result === "object" && result !== null && !Array.isArray(result));
+  });
+
+  it("keys are agent ids", () => {
+    assert.deepStrictEqual(Object.keys(result).sort(), ["alpha", "beta"]);
+  });
+
+  it("each value does NOT contain an id field", () => {
+    for (const [id, entry] of Object.entries(result)) {
+      assert.ok(
+        !Object.prototype.hasOwnProperty.call(entry, "id"),
+        `entry ${id} must not have an id field`,
+      );
+    }
+  });
+
+  it("default marker is preserved on the keyed value", () => {
+    assert.strictEqual(result["beta"]?.default, true);
+    assert.strictEqual(result["alpha"]?.default, undefined);
+  });
+
+  it("model object shape is preserved", () => {
+    assert.deepStrictEqual(result["beta"]?.model, {
+      primary: "google/gemini-flash",
+      fallbacks: ["openai/gpt-4o"],
+    });
+  });
+
+  it("output passes validateAgentsEntries", () => {
+    assert.doesNotThrow(() => validateAgentsEntries(result));
+  });
+});
+
+// ── TC-707-004: validation BEFORE atomic write ───────────────────────────────
+
+describe("TC-707-004: validation happens before atomic write", () => {
+  let tmpDir: string;
+
+  before(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "sync-write-test-"));
+  });
+
+  after(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("writes a valid keyed object and leaves no tmp file", async () => {
+    const filePath = path.join(tmpDir, "agents.json");
+    const entries: Record<string, AgentEntryConfig> = {
+      nova: { model: "anthropic/claude-opus-4" },
+    };
+    await writeAgentsJsonAtomically(filePath, entries);
+
+    assert.ok(fs.existsSync(filePath));
+    const parsed = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+    assert.strictEqual(parsed.nova.model, "anthropic/claude-opus-4");
+    assert.ok(!Object.prototype.hasOwnProperty.call(parsed.nova, "id"));
+
+    const tmpFiles = fs.readdirSync(tmpDir).filter((f) => f.endsWith(".tmp"));
+    assert.deepStrictEqual(tmpFiles, []);
+  });
+
+  it("aborts write and leaves live file untouched when validation fails", async () => {
+    const filePath = path.join(tmpDir, "agents-invalid.json");
+    fs.writeFileSync(filePath, "{\"nova\":{\"model\":\"good\"}}\n", "utf-8");
+    const originalContent = fs.readFileSync(filePath, "utf-8");
+
+    // Invalid: contains an id field inside the value
+    const invalidEntries: Record<string, AgentEntryConfig> = {
+      nova: { id: "nova", model: "anthropic/claude-opus-4" } as unknown as AgentEntryConfig,
+    };
+
+    await assert.rejects(
+      async () => writeAgentsJsonAtomically(filePath, invalidEntries),
+      /must not contain an "id" field/,
+    );
+
+    const afterContent = fs.readFileSync(filePath, "utf-8");
+    assert.strictEqual(afterContent, originalContent, "live file must be untouched");
+
+    const tmpFiles = fs.readdirSync(tmpDir).filter((f) => f.endsWith(".tmp"));
+    assert.deepStrictEqual(tmpFiles, [], "no tmp file should remain after aborted write");
+  });
+
+  it("rejects empty entries object before writing", async () => {
+    const filePath = path.join(tmpDir, "agents-empty.json");
+    await assert.rejects(
+      async () => writeAgentsJsonAtomically(filePath, {}),
+      /must contain at least one configured agent/,
+    );
+    assert.ok(!fs.existsSync(filePath));
+  });
+});
+
+// ── TC-707-005: only status='active' rows are included ───────────────────────
+
+describe("TC-707-005: only status='active' rows are included", () => {
+  it("includes active rows", () => {
+    const rows: AgentRow[] = [
+      { name: "active1", model: "m1", fallback_models: null, thinking: null, instance_type: "subagent", is_default: false, allowed_subagents: null, status: "active" },
+      { name: "active2", model: "m2", fallback_models: null, thinking: null, instance_type: "subagent", is_default: false, allowed_subagents: null, status: "active" },
+    ];
+    const { entries: result } = buildAgentsList(rows);
+    assert.deepStrictEqual(Object.keys(result).sort(), ["active1", "active2"]);
+  });
+
+  it("excludes retired/archived/non-active rows even with real content", () => {
+    const rows: AgentRow[] = [
+      { name: "active", model: "anthropic/claude-opus-4", fallback_models: ["openai/gpt-4o"], thinking: "high", instance_type: "primary", is_default: true, allowed_subagents: ["retired", "shared"], status: "active" },
+      {
+        name: "retired",
+        model: "google/gemini-flash",
+        fallback_models: ["anthropic/claude-sonnet-4"],
+        thinking: "xhigh",
+        instance_type: "subagent",
+        is_default: false,
+        allowed_subagents: ["*"],
+        status: "retired",
+      },
+    ];
+    const { entries: result, skipped } = buildAgentsList(rows);
+    assert.strictEqual(Object.keys(result).length, 1);
+    assert.ok(result["active"]);
+    assert.strictEqual(result["retired"], undefined);
+    assert.ok(skipped.some((s) => s.name === "retired" && s.reason.includes("retired")));
+  });
+});
+
+// ── TC-707-008: adversarial wrong-type fallback_models ───────────────────────
+
+describe("TC-707-008: wrong-type fallback_models is handled without breaking file", () => {
+  it("normalizes a scalar string fallback_models to a single-element array", () => {
+    const rows: AgentRow[] = [
+      { name: "scalar", model: "primary", fallback_models: "fallback-model", thinking: null, instance_type: "subagent", is_default: false, allowed_subagents: null, status: "active" },
+    ];
+    const { entries: result, skipped } = buildAgentsList(rows);
+    assert.deepStrictEqual(result["scalar"]?.model, {
+      primary: "primary",
+      fallbacks: ["fallback-model"],
+    });
+    assert.ok(skipped.some((s) => s.name === "scalar" && s.reason.includes("scalar string")));
+    assert.doesNotThrow(() => validateAgentsEntries(result));
+  });
+
+  it("skips rows with unsupported fallback_models type", () => {
+    const rows: AgentRow[] = [
+      { name: "good", model: "m1", fallback_models: null, thinking: null, instance_type: "subagent", is_default: false, allowed_subagents: null, status: "active" },
+      { name: "bad", model: "m2", fallback_models: 123, thinking: null, instance_type: "subagent", is_default: false, allowed_subagents: null, status: "active" },
+    ];
+    const { entries: result, skipped } = buildAgentsList(rows);
+    assert.strictEqual(Object.keys(result).length, 1);
+    assert.ok(result["good"]);
+    assert.strictEqual(result["bad"], undefined);
+    assert.ok(skipped.some((s) => s.name === "bad" && s.reason.includes("unsupported type")));
+    assert.doesNotThrow(() => validateAgentsEntries(result));
+  });
+});
+
+// ── TC-707-009: NULL model on an active row ──────────────────────────────────
+
+describe("TC-707-009: NULL model on active row is skipped, never emits model:null", () => {
+  it("omits rows with null model and reports the skip", () => {
+    const rows: AgentRow[] = [
+      { name: "good", model: "anthropic/claude-opus-4", fallback_models: null, thinking: null, instance_type: "subagent", is_default: false, allowed_subagents: null, status: "active" },
+      { name: "nullmodel", model: null, fallback_models: null, thinking: "high", instance_type: "subagent", is_default: false, allowed_subagents: null, status: "active" },
+    ];
+    const { entries: result, skipped } = buildAgentsList(rows);
+    assert.strictEqual(Object.keys(result).length, 1);
+    assert.ok(result["good"]);
+    assert.strictEqual(result["nullmodel"], undefined);
+    assert.ok(skipped.some((s) => s.name === "nullmodel" && s.reason.includes("model is null")));
+  });
+
+  it("serialized output never contains a literal null model", () => {
+    const rows: AgentRow[] = [
+      { name: "good", model: "m", fallback_models: null, thinking: null, instance_type: "subagent", is_default: false, allowed_subagents: null, status: "active" },
+    ];
+    const { entries: result } = buildAgentsList(rows);
+    const json = JSON.stringify(result);
+    assert.ok(!json.includes('"model":null'));
+    assert.ok(!json.includes('"model":"null"'));
+  });
+});
+
+// ── TC-707-010: unknown/malformed provider prefix ────────────────────────────
+
+describe("TC-707-010: unknown provider prefix does not crash the generator", () => {
+  it("passes through an unrecognized provider prefix", () => {
+    const rows: AgentRow[] = [
+      { name: "weird", model: "totally-unknown-provider/some-model", fallback_models: null, thinking: null, instance_type: "subagent", is_default: false, allowed_subagents: null, status: "active" },
+      { name: "bare", model: "some-model-name", fallback_models: null, thinking: null, instance_type: "subagent", is_default: false, allowed_subagents: null, status: "active" },
+    ];
+    const { entries: result } = buildAgentsList(rows);
+    assert.strictEqual(result["weird"]?.model, "totally-unknown-provider/some-model");
+    assert.strictEqual(result["bare"]?.model, "some-model-name");
+    assert.doesNotThrow(() => validateAgentsEntries(result));
+  });
+});
+
+// ── TC-707-011: non-active fixture rows use real, distinguishable content ────
+
+describe("TC-707-011: non-active rows with distinctive real content are filtered", () => {
+  it("a retired row with full config is excluded from output", () => {
+    const rows: AgentRow[] = [
+      { name: "nova", model: "anthropic/claude-opus-4", fallback_models: null, thinking: "high", instance_type: "primary", is_default: true, allowed_subagents: ["gem", "coder"], status: "active" },
+      {
+        name: "retired-shadow",
+        model: "openrouter/anthropic/claude-opus-5.5",
+        fallback_models: ["anthropic/claude-opus-4-8", "openai/gpt-5.4"],
+        thinking: "ultra",
+        instance_type: "subagent",
+        is_default: false,
+        allowed_subagents: ["nova", "gem", "coder", "scout"],
+        status: "retired",
+      },
+    ];
+    const { entries: result } = buildAgentsList(rows);
+    assert.strictEqual(Object.keys(result).length, 1);
+    assert.ok(result["nova"]);
+    assert.strictEqual(result["retired-shadow"], undefined);
+  });
+});
+
+// ── TC-707-013: cutover drift report (fixture-based diff logic) ──────────────
+
+describe("TC-707-013: cutover drift report detects model drift and new agents", () => {
+  it("reports model drift for a shared agent and lists DB-only agents", () => {
+    // Simulated inline agents.entries (the currently-running config).
+    const inline: Record<string, AgentEntryConfig> = {
+      nova: {
+        model: {
+          primary: "openrouter/anthropic/claude-opus-5.5",
+          fallbacks: ["anthropic/claude-opus-4-8"],
+        },
+        thinkingDefault: "high",
+      },
+      gem: { model: "google/gemini-flash" },
+    };
+
+    // Simulated generated roster from the DB.
+    const generated: Record<string, AgentEntryConfig> = {
+      nova: {
+        model: "anthropic/claude-opus-4-8", // DB has live fallback as primary
+        thinkingDefault: "high",
+      },
+      gem: { model: "google/gemini-flash" },
+      coder: { model: "anthropic/claude-sonnet-4" },
+      scout: { model: "google/gemini-flash" },
+    };
+
+    const inlineIds = Object.keys(inline);
+    const generatedIds = Object.keys(generated);
+    const commonIds = inlineIds.filter((id) => generatedIds.includes(id));
+    const dbOnlyIds = generatedIds.filter((id) => !inlineIds.includes(id));
+
+    // Drift: nova's model differs.
+    const novaDrift = !(
+      JSON.stringify(generated["nova"]?.model) === JSON.stringify(inline["nova"]?.model)
+    );
+    assert.strictEqual(novaDrift, true, "nova model drift must be detected");
+
+    // New agents that a naive cutover would add.
+    assert.deepStrictEqual(dbOnlyIds.sort(), ["coder", "scout"]);
+
+    // Shared agent with no drift.
+    assert.strictEqual(
+      JSON.stringify(generated["gem"]),
+      JSON.stringify(inline["gem"]),
+    );
+
+    // Report line as the real tool would emit.
+    const reportLines: string[] = [];
+    for (const id of commonIds) {
+      if (JSON.stringify(generated[id]) !== JSON.stringify(inline[id])) {
+        reportLines.push(
+          `${id}: model differs — generated=${JSON.stringify(generated[id]!.model)} inline=${JSON.stringify(inline[id]!.model)}`,
+        );
+      }
+    }
+    assert.ok(
+      reportLines.some((line) => line.includes("nova") && line.includes("openrouter")),
+      "report must surface nova's model drift",
+    );
   });
 });

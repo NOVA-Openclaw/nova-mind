@@ -2378,15 +2378,18 @@ if [ -d "$AGENT_CONFIG_SYNC_SOURCE" ]; then
                 echo -e "  ${WARNING} Could not remove agent-config-db hook from config"
         fi
 
-        # Set agents.list to { "$include": "./agents.json" }
-        EXISTING_LIST_INCLUDE=$(jq -r '.agents.list["$include"] // empty' "$OPENCLAW_CONFIG" 2>/dev/null || true)
-        if [ -n "$EXISTING_LIST_INCLUDE" ]; then
-            echo -e "  ${CHECK_MARK} agents.list already uses \$include: $EXISTING_LIST_INCLUDE"
+        # Set agents.entries to { "$include": "./agents.json" } (#707)
+        # OpenClaw 2026.9.x uses keyed agents.entries (z.record) rather than the
+        # legacy agents.list array. The included agents.json is a keyed object.
+        EXISTING_ENTRIES_INCLUDE=$(jq -r '.agents.entries["$include"] // empty' "$OPENCLAW_CONFIG" 2>/dev/null || true)
+        if [ -n "$EXISTING_ENTRIES_INCLUDE" ]; then
+            echo -e "  ${CHECK_MARK} agents.entries already uses \$include: $EXISTING_ENTRIES_INCLUDE"
         else
-            jq '.agents.list = { "$include": "./agents.json" }' "$OPENCLAW_CONFIG" >"$OPENCLAW_CONFIG.tmp" && \
+            # Remove legacy agents.list if present so it does not shadow entries.
+            jq 'del(.agents.list) | .agents.entries = { "$include": "./agents.json" }' "$OPENCLAW_CONFIG" >"$OPENCLAW_CONFIG.tmp" && \
                 mv "$OPENCLAW_CONFIG.tmp" "$OPENCLAW_CONFIG" && \
-                echo -e "  ${CHECK_MARK} Set agents.list = { \"\$include\": \"./agents.json\" }" || \
-                echo -e "  ${WARNING} Could not set agents.list \$include directive"
+                echo -e "  ${CHECK_MARK} Set agents.entries = { \"\$include\": \"./agents.json\" }" || \
+                echo -e "  ${WARNING} Could not set agents.entries \$include directive"
         fi
 
         # Keep gateway.reload.mode valid for OpenClaw 2026.9.x (#723)
@@ -2422,31 +2425,25 @@ if [ -d "$AGENT_CONFIG_SYNC_SOURCE" ]; then
         # filters to active, modeled agents. Shape logic mirrors sync.ts's
         # buildAgentsList(); final serialization uses the same
         # JSON.stringify(data, null, 2) + "\n" the agent_config_sync plugin uses.
+        #
+        # Output is the OpenClaw 2026.9.x agents.entries shape: a keyed object
+        # { "<id>": { model, default?, thinkingDefault?, subagents?, heartbeat? } }
+        # with the id itself as the object key, NOT a field inside the value.
         local INITIAL_SYNC_QUERY="
-            SELECT COALESCE(json_agg(entry), NULL)::text
+            SELECT COALESCE(json_agg(row_to_json(sub)), NULL)::text
             FROM (
-                SELECT jsonb_strip_nulls(
-                    jsonb_build_object(
-                        'id', name,
-                        'model',
-                        CASE
-                            WHEN fallback_models IS NOT NULL AND array_length(fallback_models, 1) > 0
-                            THEN jsonb_build_object('primary', model, 'fallbacks', to_jsonb(fallback_models))
-                            ELSE to_jsonb(model)
-                        END
-                    )
-                    || CASE WHEN is_default = true THEN jsonb_build_object('default', true) ELSE '{}'::jsonb END
-                    || CASE WHEN allowed_subagents IS NOT NULL AND array_length(allowed_subagents, 1) > 0
-                        THEN jsonb_build_object('subagents', jsonb_build_object('allowAgents',
-                            (SELECT jsonb_agg(s ORDER BY s) FROM unnest(allowed_subagents) s)))
-                        ELSE '{}'::jsonb END
-                    || CASE WHEN heartbeat_enabled = true AND heartbeat_every IS NOT NULL AND heartbeat_every <> ''
-                        THEN jsonb_build_object('heartbeat', jsonb_strip_nulls(
-                            jsonb_build_object('every', heartbeat_every)
-                            || CASE WHEN heartbeat_target IS NOT NULL AND heartbeat_target <> '' THEN jsonb_build_object('target', heartbeat_target) ELSE '{}'::jsonb END
-                            || CASE WHEN heartbeat_to IS NOT NULL AND heartbeat_to <> '' THEN jsonb_build_object('to', heartbeat_to) ELSE '{}'::jsonb END))
-                        ELSE '{}'::jsonb END
-                ) AS entry
+                SELECT
+                    name,
+                    model,
+                    fallback_models,
+                    thinking,
+                    instance_type,
+                    is_default,
+                    allowed_subagents,
+                    heartbeat_enabled,
+                    heartbeat_every,
+                    heartbeat_target,
+                    heartbeat_to
                 FROM get_agent_export_rows()
             ) sub
         "
@@ -2456,47 +2453,93 @@ if [ -d "$AGENT_CONFIG_SYNC_SOURCE" ]; then
                 local FORMAT_OK=0
                 if command -v node &>/dev/null; then
                     # Preferred: byte-match the plugin's JSON.stringify(data, null, 2) + "\n"
-                    # Reconstruct each entry in the exact key order buildAgentsList()
-                    # uses (id, model, default, subagents, heartbeat) so PostgreSQL's
-                    # jsonb canonical ordering does not leak through.
+                    # Build a keyed object, omitting the id from each value, applying
+                    # the same thinkingDefault validation and heartbeat shape as sync.ts.
                     if echo "$AGENTS_DATA" | node -e '
                         let input = "";
                         process.stdin.setEncoding("utf8");
                         process.stdin.on("data", c => input += c);
                         process.stdin.on("end", () => {
+                            const VALID_THINKING_DEFAULTS = new Set([
+                                "off", "minimal", "low", "medium", "high",
+                                "xhigh", "adaptive", "max", "ultra",
+                            ]);
+                            const AGENT_ID_REGEX = /^[a-z0-9_][a-z0-9_-]{0,63}$/i;
                             const rows = JSON.parse(input);
-                            const list = [];
+                            const entries = {};
                             for (const row of rows) {
-                                const entry = { id: row.id, model: row.model };
-                                if (row.default === true) entry.default = true;
-                                if (row.subagents) entry.subagents = row.subagents;
-                                if (row.heartbeat) {
-                                    const hb = { every: row.heartbeat.every };
-                                    if (row.heartbeat.target) hb.target = row.heartbeat.target;
-                                    if (row.heartbeat.to) hb.to = row.heartbeat.to;
+                                // Defensive: get_agent_export_rows() already filters
+                                // status=active and model IS NOT NULL, but we re-apply
+                                // here so a fixture or future function change cannot emit
+                                // invalid entries.
+                                if (row.status != null && row.status !== "active") continue;
+                                if (row.model == null) continue;
+                                if (typeof row.name !== "string" || !AGENT_ID_REGEX.test(row.name)) continue;
+
+                                const hasFallbacks = Array.isArray(row.fallback_models) && row.fallback_models.length > 0;
+                                const entry = { model: hasFallbacks
+                                    ? { primary: row.model, fallbacks: [...row.fallback_models] }
+                                    : row.model };
+
+                                if (row.is_default === true) entry.default = true;
+
+                                if (typeof row.thinking === "string" && row.thinking.length > 0 &&
+                                    VALID_THINKING_DEFAULTS.has(row.thinking)) {
+                                    entry.thinkingDefault = row.thinking;
+                                }
+
+                                if (Array.isArray(row.allowed_subagents) && row.allowed_subagents.length > 0) {
+                                    entry.subagents = { allowAgents: [...row.allowed_subagents].sort() };
+                                }
+
+                                if (row.heartbeat_enabled === true) {
+                                    const hb = {};
+                                    if (row.heartbeat_every != null) hb.every = row.heartbeat_every;
+                                    if (row.heartbeat_target != null) hb.target = row.heartbeat_target;
+                                    if (row.heartbeat_to != null) hb.to = row.heartbeat_to;
                                     entry.heartbeat = hb;
                                 }
-                                list.push(entry);
+
+                                entries[row.name] = entry;
                             }
-                            list.sort((a, b) => a.id.localeCompare(b.id));
-                            process.stdout.write(JSON.stringify(list, null, 2) + "\n");
+                            const sorted = {};
+                            for (const key of Object.keys(entries).sort((a, b) => a.localeCompare(b))) {
+                                sorted[key] = entries[key];
+                            }
+                            process.stdout.write(JSON.stringify(sorted, null, 2) + "\n");
                         });
                     ' >"$AGENTS_JSON_TMP" 2>/dev/null; then
                         FORMAT_OK=1
                     fi
                 else
-                    # Fallback if node is unavailable: jq reconstructs the same key order and sorts.
+                    # Fallback if node is unavailable: best-effort keyed object via jq.
+                    # thinkingDefault is not validated here (node is preferred);
+                    # the resulting file is still structurally a keyed object.
                     if echo "$AGENTS_DATA" | jq '
-                        map(
-                            {id: .id, model: .model} +
-                            (if .default == true then {default: true} else {} end) +
-                            (if .subagents then {subagents: .subagents} else {} end) +
-                            (if .heartbeat then {heartbeat: (
-                                {every: .heartbeat.every} +
-                                (if .heartbeat.target then {target: .heartbeat.target} else {} end) +
-                                (if .heartbeat.to then {to: .heartbeat.to} else {} end)
-                            )} else {} end)
-                        ) | sort_by(.id)
+                        map({
+                            key: .name,
+                            value: (
+                                {model: (
+                                    if (.fallback_models | type) == "array" and (.fallback_models | length) > 0
+                                    then {primary: .model, fallbacks: .fallback_models}
+                                    else .model
+                                    end
+                                )}
+                                + (if .is_default == true then {default: true} else {} end)
+                                + (if (.allowed_subagents | type) == "array" and (.allowed_subagents | length) > 0
+                                    then {subagents: {allowAgents: (.allowed_subagents | sort)}}
+                                    else {} end)
+                                + (if .heartbeat_enabled == true
+                                    then {heartbeat: (
+                                        (if .heartbeat_every != null then {every: .heartbeat_every} else {} end)
+                                        + (if .heartbeat_target != null then {target: .heartbeat_target} else {} end)
+                                        + (if .heartbeat_to != null then {to: .heartbeat_to} else {} end)
+                                    )}
+                                    else {} end)
+                            )
+                        })
+                        | sort_by(.key)
+                        | from_entries
                     ' >"$AGENTS_JSON_TMP" 2>/dev/null; then
                         if [ -s "$AGENTS_JSON_TMP" ] && [ "$(tail -c 1 "$AGENTS_JSON_TMP" | wc -l)" -eq 0 ]; then
                             echo >> "$AGENTS_JSON_TMP"
@@ -2521,12 +2564,12 @@ if [ -d "$AGENT_CONFIG_SYNC_SOURCE" ]; then
                 fi
             else
                 # DB returned NULL or empty — no agents in scope, but psql succeeded.
-                # Write an empty placeholder so the openclaw.json $include stays valid
-                # and the gateway can boot; agent_config_sync will populate real data
-                # on startup. Failure paths (psql error / non-JSON) still write nothing.
-                printf '[]\n' > "$AGENTS_JSON_TMP"
+                # Write a valid placeholder so the openclaw.json agents.entries $include
+                # stays valid and the gateway can boot; agent_config_sync will populate
+                # real data on startup. Failure paths (psql error / non-JSON) still write nothing.
+                printf '{"main": {}}\n' > "$AGENTS_JSON_TMP"
                 if mv "$AGENTS_JSON_TMP" "$AGENTS_JSON"; then
-                    echo -e "  ${INFO} no agents in scope — wrote empty agents.json placeholder; agent_config_sync will populate on startup"
+                    echo -e "  ${INFO} no agents in scope — wrote placeholder agents.json; agent_config_sync will populate on startup"
                     return 0
                 else
                     echo -e "  ${WARNING} Could not write empty agents.json placeholder"
@@ -2535,7 +2578,7 @@ if [ -d "$AGENT_CONFIG_SYNC_SOURCE" ]; then
                 fi
             fi
         else
-            # psql failed — NEVER write '[]'
+            # psql failed — NEVER write placeholder
             echo -e "  ${WARNING} Could not query DB for agents.json — agents.json not written"
             echo -e "  ${INFO} agent_config_sync will generate agents.json when gateway starts"
             rm -f "$AGENTS_JSON_TMP"

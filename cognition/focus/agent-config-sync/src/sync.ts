@@ -1,12 +1,19 @@
 /**
  * Agent Config Sync — core logic
  *
- * Queries the `agents` table and builds the agents.json config as a bare JSON
- * array of non-peer agents. Writes atomically (tmp + rename) to prevent
- * partial reads.
+ * Queries the `agents` table and builds the agents.json config as a keyed
+ * object `{ "<id>": {...} }` matching the OpenClaw 2026.9.x
+ * `agents.entries` schema. Writes atomically (tmp + rename) to prevent
+ * partial reads, and validates the generated shape BEFORE promoting the temp
+ * file so a hot-reload watcher can never pick up an invalid file.
  *
  * Also syncs HEARTBEAT.md files from `agent_bootstrap_context` to the correct
  * workspace directories for each agent.
+ *
+ * Schema contract (OpenClaw 2026.9.x):
+ *   src/config/zod-schema.agents.ts:35-39 — entries is a z.record keyed by
+ *   /^[a-z0-9_][a-z0-9_-]{0,63}$/i, values are AgentEntrySchema.omit({id:true})
+ *   .extend({default: z.boolean().optional()}).
  */
 
 import fs from "node:fs";
@@ -23,12 +30,13 @@ export type HeartbeatRow = {
 
 export type AgentRow = {
   name: string;
-  model: string;
-  fallback_models: string[] | null;
+  model: string | null;
+  fallback_models: string[] | string | null | unknown;
   thinking: string | null;
   instance_type: string;
   is_default: boolean | null;
   allowed_subagents: string[] | null;
+  status?: string | null;
   // #262 — Per-agent heartbeat config (optional: present once DB migration applied)
   heartbeat_enabled?: boolean | null;
   heartbeat_every?: string | null;
@@ -38,8 +46,8 @@ export type AgentRow = {
 
 type HeartbeatConfig = { every?: string; target?: string; to?: string };
 
-type AgentListEntry = {
-  id: string;
+/** Value shape for a single agent inside `agents.entries`. */
+export type AgentEntryConfig = {
   default?: true;
   model: string | { primary: string; fallbacks: string[] };
   thinkingDefault?: string;
@@ -47,11 +55,39 @@ type AgentListEntry = {
   heartbeat?: HeartbeatConfig;
 };
 
+/** Result of `buildAgentsList()` — keyed entries plus any skipped rows. */
+export type BuildAgentsListResult = {
+  entries: Record<string, AgentEntryConfig>;
+  skipped: Array<{ name: string; reason: string }>;
+};
+
+// ── Constants ───────────────────────────────────────────────────────────────
+
+// Regex copied from OpenClaw 2026.9.x src/config/zod-schema.agents.ts:35-39
+const AGENT_ID_REGEX = /^[a-z0-9_][a-z0-9_-]{0,63}$/i;
+
+// #660 — The config schema (zod-schema.agent-runtime.ts) accepts 9 values;
+// the DB CHECK only enforces 7. We validate against the schema contract
+// (the consumer boundary), not the DB CHECK.
+const VALID_THINKING_DEFAULTS = new Set([
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "adaptive",
+  "max",
+  "ultra",
+]);
+
 // ── SQL ─────────────────────────────────────────────────────────────────────
 
 // Queries get_agent_export_rows(), which scopes results to the connecting role
 // (session_user) and subagents owning that role via `parent_agents` array overlap.
 // The function lives in nova-mind/database/schema.sql and is owned by newhart.
+// It already filters to status='active' AND model IS NOT NULL; the generator
+// re-applies those filters defensively so adversarial fixtures cannot bypass them.
 const AGENTS_QUERY = `
   SELECT name, model, fallback_models, thinking, instance_type, is_default, allowed_subagents,
          heartbeat_enabled, heartbeat_every, heartbeat_target, heartbeat_to
@@ -66,31 +102,98 @@ const HEARTBEAT_QUERY = `
     AND agent_name IS NOT NULL
 `;
 
+// ── Helpers ─────────────────────────────────────────────────────────────────
+
+/**
+ * Normalize the DB `fallback_models` value into a string array.
+ *
+ * - `null` / `undefined` → `[]`
+ * - array → shallow copy
+ * - string → `[string]` and report via skipped
+ * - any other type → `undefined` (caller should skip the row)
+ */
+function normalizeFallbackModels(
+  value: unknown,
+  agentName: string,
+  skipped: Array<{ name: string; reason: string }>,
+): string[] | undefined {
+  if (value == null) {
+    return [];
+  }
+  if (Array.isArray(value)) {
+    return [...value as string[]];
+  }
+  if (typeof value === "string") {
+    // Malformed scalar: report loudly but recover to a single-element array
+    // so one bad row does not break the whole file.
+    skipped.push({
+      name: agentName,
+      reason: "fallback_models was a scalar string; normalized to single-element array",
+    });
+    return [value];
+  }
+  skipped.push({
+    name: agentName,
+    reason: `fallback_models has unsupported type ${typeof value}`,
+  });
+  return undefined;
+}
+
 // ── Build ───────────────────────────────────────────────────────────────────
 
 /**
- * Build the agents list as a bare array from raw DB rows.
+ * Build the agents entries as a keyed object from raw DB rows.
  *
  * - Peer agents are already excluded by the SQL query
+ * - Only `status='active'` rows are included (TC-707-005)
+ * - Rows with a missing/NULL model are skipped (TC-707-009)
+ * - Rows with malformed `fallback_models` are skipped or normalized (TC-707-008)
+ * - Rows with an invalid agent id are skipped (defensive)
  * - `default: true` included ONLY when is_default = true (key omitted otherwise)
  * - Empty or NULL fallback_models → string model form (not object)
  * - DB `thinking` column mapped to `thinkingDefault` when it is a valid
  *   schema enum value; key omitted when null, empty, or unknown
  * - subagents.allowAgents included when allowed_subagents is non-empty, sorted
- * - Output sorted by agent name (id)
+ * - Output keys sorted by agent name (id)
  */
-export function buildAgentsList(rows: AgentRow[]): AgentListEntry[] {
-  const list: AgentListEntry[] = [];
+export function buildAgentsList(rows: AgentRow[]): BuildAgentsListResult {
+  const entries: Record<string, AgentEntryConfig> = {};
+  const skipped: Array<{ name: string; reason: string }> = [];
 
   for (const row of rows) {
-    const hasFallbacks =
-      Array.isArray(row.fallback_models) && row.fallback_models.length > 0;
+    const rowName = row.name ?? "(unnamed)";
 
-    // Build list entry
-    const entry: AgentListEntry = {
-      id: row.name,
+    // TC-707-005: only active rows
+    if (row.status != null && row.status !== "active") {
+      skipped.push({ name: rowName, reason: `status='${row.status}' (not 'active')` });
+      continue;
+    }
+
+    // Defensive: every emitted entry key must satisfy the 2026.9.x agent-id regex
+    if (typeof row.name !== "string" || !AGENT_ID_REGEX.test(row.name)) {
+      skipped.push({ name: rowName, reason: "invalid or missing agent id" });
+      continue;
+    }
+
+    // TC-707-009: NULL model on an active row must never emit "model": null
+    if (row.model == null) {
+      skipped.push({ name: row.name, reason: "model is null or missing" });
+      continue;
+    }
+
+    // TC-707-008: fallback_models must be an array (or a single string we can normalize)
+    const fallbackModels = normalizeFallbackModels(row.fallback_models, row.name, skipped);
+    if (fallbackModels === undefined) {
+      // Row was skipped due to an unrecoverable wrong-type fallback_models.
+      continue;
+    }
+
+    const hasFallbacks = fallbackModels.length > 0;
+
+    // Build entry value (no `id` — the object key IS the id)
+    const entry: AgentEntryConfig = {
       model: hasFallbacks
-        ? { primary: row.model, fallbacks: [...row.fallback_models!] }
+        ? { primary: row.model, fallbacks: fallbackModels }
         : row.model,
     };
 
@@ -100,21 +203,7 @@ export function buildAgentsList(rows: AgentRow[]): AgentListEntry[] {
     }
 
     // #660 — Map DB `thinking` → `thinkingDefault` when it is a valid schema enum value.
-    // The config schema (zod-schema.agent-runtime.ts) accepts 9 values; the DB CHECK only enforces 7.
-    // We validate against the schema contract (the consumer boundary), not the DB CHECK.
     // Null, empty, unknown, wrong-type, mixed-case, or whitespace-padded values are omitted.
-    const VALID_THINKING_DEFAULTS = new Set([
-      "off",
-      "minimal",
-      "low",
-      "medium",
-      "high",
-      "xhigh",
-      "adaptive",
-      "max",
-      "ultra",
-    ]);
-
     if (
       typeof row.thinking === "string" &&
       row.thinking.length > 0 &&
@@ -132,18 +221,156 @@ export function buildAgentsList(rows: AgentRow[]): AgentListEntry[] {
     // OpenClaw schema requires heartbeat to be an object, not a boolean.
     // heartbeat_enabled = true  → emit heartbeat object with non-NULL sub-fields only
     // heartbeat_enabled = false | NULL → omit key (inherits agents.defaults.heartbeat)
-    if (row.heartbeat_enabled === true && row.heartbeat_every) {
-      const hb: HeartbeatConfig = { every: row.heartbeat_every };
-      if (row.heartbeat_target) hb.target = row.heartbeat_target;
-      if (row.heartbeat_to) hb.to = row.heartbeat_to;
+    if (row.heartbeat_enabled === true) {
+      const hb: HeartbeatConfig = {};
+      if (row.heartbeat_every != null) hb.every = row.heartbeat_every;
+      if (row.heartbeat_target != null) hb.target = row.heartbeat_target;
+      if (row.heartbeat_to != null) hb.to = row.heartbeat_to;
       entry.heartbeat = hb;
     }
 
-    list.push(entry);
+    entries[row.name] = entry;
   }
 
-  // Sort by agent name (id) for stable, deterministic output
-  return list.sort((a, b) => a.id.localeCompare(b.id));
+  // Sort keys by agent name (id) for stable, deterministic output
+  const sortedEntries: Record<string, AgentEntryConfig> = {};
+  for (const key of Object.keys(entries).sort((a, b) => a.localeCompare(b))) {
+    sortedEntries[key] = entries[key];
+  }
+
+  return { entries: sortedEntries, skipped };
+}
+
+// ── Validation ──────────────────────────────────────────────────────────────
+
+/**
+ * Validate that a candidate `agents.entries` object satisfies the 2026.9.x
+ * schema subset actually emitted by this generator. Throws a descriptive error
+ * if the object would fail `openclaw config validate`.
+ *
+ * This is called BEFORE the atomic rename in writeAgentsJsonAtomically() so a
+ * bad generated file can never be promoted where hot reload could pick it up
+ * (TC-707-004).
+ */
+export function validateAgentsEntries(
+  entries: Record<string, AgentEntryConfig>,
+): void {
+  if (!entries || typeof entries !== "object" || Array.isArray(entries)) {
+    throw new Error("agents.entries must be an object");
+  }
+
+  const keys = Object.keys(entries);
+  if (keys.length === 0) {
+    throw new Error("agents.entries must contain at least one configured agent");
+  }
+
+  const normalizedIds = new Map<string, string>();
+  let defaultCount = 0;
+
+  for (const id of keys) {
+    if (!AGENT_ID_REGEX.test(id)) {
+      throw new Error(`agents.entries key "${id}" is not a valid agent id`);
+    }
+
+    const entry = entries[id];
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      throw new Error(`agents.entries["${id}"] must be an object`);
+    }
+
+    if (Object.hasOwn(entry, "id")) {
+      throw new Error(
+        `agents.entries["${id}"] must not contain an "id" field (the key is the id)`,
+      );
+    }
+
+    if (!Object.hasOwn(entry, "model")) {
+      throw new Error(`agents.entries["${id}"] is missing required "model"`);
+    }
+
+    if (typeof entry.model === "string") {
+      // TC-707-010: unknown provider prefixes are allowed by AgentModelSchema,
+      // so we only enforce the type here.
+      if (entry.model.length === 0) {
+        throw new Error(`agents.entries["${id}"].model must not be empty`);
+      }
+    } else if (typeof entry.model === "object" && entry.model !== null) {
+      if (typeof entry.model.primary !== "string" || entry.model.primary.length === 0) {
+        throw new Error(
+          `agents.entries["${id}"].model.primary must be a non-empty string`,
+        );
+      }
+      if (
+        entry.model.fallbacks !== undefined &&
+        !Array.isArray(entry.model.fallbacks)
+      ) {
+        throw new Error(
+          `agents.entries["${id}"].model.fallbacks must be an array`,
+        );
+      }
+    } else {
+      throw new Error(
+        `agents.entries["${id}"].model must be a string or an object with primary/fallbacks`,
+      );
+    }
+
+    if (entry.default === true) {
+      defaultCount += 1;
+    } else if (entry.default !== undefined) {
+      throw new Error(
+        `agents.entries["${id}"].default must be true or omitted (got ${entry.default})`,
+      );
+    }
+
+    if (
+      Object.hasOwn(entry, "thinkingDefault") &&
+      (typeof entry.thinkingDefault !== "string" ||
+        !VALID_THINKING_DEFAULTS.has(entry.thinkingDefault))
+    ) {
+      throw new Error(
+        `agents.entries["${id}"].thinkingDefault is not a valid thinking tier`,
+      );
+    }
+
+    if (Object.hasOwn(entry, "subagents")) {
+      if (
+        !entry.subagents ||
+        typeof entry.subagents !== "object" ||
+        Array.isArray(entry.subagents) ||
+        !Array.isArray(entry.subagents.allowAgents)
+      ) {
+        throw new Error(
+          `agents.entries["${id}"].subagents must be an object with allowAgents array`,
+        );
+      }
+    }
+
+    if (Object.hasOwn(entry, "heartbeat")) {
+      if (
+        !entry.heartbeat ||
+        typeof entry.heartbeat !== "object" ||
+        Array.isArray(entry.heartbeat)
+      ) {
+        throw new Error(
+          `agents.entries["${id}"].heartbeat must be an object`,
+        );
+      }
+    }
+
+    const normalized = id.toLowerCase();
+    const firstKey = normalizedIds.get(normalized);
+    if (firstKey) {
+      throw new Error(
+        `agents.entries keys "${firstKey}" and "${id}" resolve to the same normalized id`,
+      );
+    }
+    normalizedIds.set(normalized, id);
+  }
+
+  if (defaultCount > 1) {
+    throw new Error(
+      `agents.entries must contain at most one default=true entry (found ${defaultCount})`,
+    );
+  }
 }
 
 // ── Query ───────────────────────────────────────────────────────────────────
@@ -169,13 +396,17 @@ export async function fetchHeartbeatRecords(
 // ── Write ───────────────────────────────────────────────────────────────────
 
 /**
- * Write agents.json atomically (write to temp, then rename).
- * Accepts a bare array of agent list entries.
+ * Write agents.json atomically (write to temp with 0600, validate, then rename).
+ * Accepts a keyed object of agent entries. Validation happens BEFORE the rename
+ * so an invalid file is never promoted to the live path (TC-707-004).
  */
 export async function writeAgentsJsonAtomically(
   filePath: string,
-  data: AgentListEntry[],
+  data: Record<string, AgentEntryConfig>,
 ): Promise<void> {
+  // TC-707-004: validate BEFORE any file is written where a watcher could see it.
+  validateAgentsEntries(data);
+
   const dir = path.dirname(filePath);
   await fs.promises.mkdir(dir, { recursive: true });
 
@@ -186,7 +417,7 @@ export async function writeAgentsJsonAtomically(
 
   const content = JSON.stringify(data, null, 2) + "\n";
 
-  await fs.promises.writeFile(tmpFile, content, { encoding: "utf-8" });
+  await fs.promises.writeFile(tmpFile, content, { encoding: "utf-8", mode: 0o600 });
   await fs.promises.rename(tmpFile, filePath);
 }
 
@@ -252,7 +483,7 @@ export async function syncHeartbeatFiles(
 // ── Full sync ───────────────────────────────────────────────────────────────
 
 /**
- * Perform a full sync: query DB → build JSON array → write file.
+ * Perform a full sync: query DB → build keyed entries → validate → atomic write.
  * Returns true if the file was changed, false if identical.
  */
 export async function syncAgentsConfig(
@@ -260,8 +491,8 @@ export async function syncAgentsConfig(
   outputPath: string,
 ): Promise<boolean> {
   const rows = await fetchAgentRows(client);
-  const data = buildAgentsList(rows);
-  const newContent = JSON.stringify(data, null, 2) + "\n";
+  const { entries } = buildAgentsList(rows);
+  const newContent = JSON.stringify(entries, null, 2) + "\n";
 
   // Check if file already matches (avoid unnecessary writes / watcher triggers)
   try {
@@ -273,6 +504,6 @@ export async function syncAgentsConfig(
     // File doesn't exist yet — continue to write
   }
 
-  await writeAgentsJsonAtomically(outputPath, data);
+  await writeAgentsJsonAtomically(outputPath, entries);
   return true;
 }

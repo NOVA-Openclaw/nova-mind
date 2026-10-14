@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# BATS tests for agent-install.sh agents.json safety (#252)
+# BATS tests for agent-install.sh agents.json safety (#252, #707)
 #
 # Test cases:
 #   TC-252-B-01: Skip write when agents.json exists and is valid JSON
@@ -11,6 +11,9 @@
 #   TC-252-B-08: Skip write when agents.json exists but is invalid JSON — warn and preserve
 #   TC-252-B-09: --regenerate-agents-json replaces invalid JSON file
 #   TC-252-B-10: ShellCheck — zero warnings on agent-install.sh
+#
+# Updated for nova-mind#707: agents.json is a keyed object; empty-scope
+# placeholder is {"main":{}}.
 #
 # Pre-requisites:
 #   - bats-core installed
@@ -53,7 +56,7 @@ run_agents_json_logic() {
     local AGENTS_JSON="$FAKE_AGENTS_JSON"
     local AGENTS_JSON_TMP="${AGENTS_JSON}.tmp.$$"
     local REGENERATE_AGENTS_JSON="$regen"
-    local TMPFILES=()
+    local TMPFILES=("$AGENTS_JSON_TMP")
 
     # Mock psql behavior via subshell override
     if [ -n "$fake_psql_output" ] && [ "$fake_psql_output" != "FAIL" ]; then
@@ -74,7 +77,38 @@ run_agents_json_logic() {
         local AGENTS_DATA
         if AGENTS_DATA=$(psql -U "$DB_USER" -d "$DB_NAME" -tAc "dummy" 2>/dev/null); then
             if [ -n "$AGENTS_DATA" ] && [ "$AGENTS_DATA" != "null" ] && [ "$AGENTS_DATA" != "" ]; then
-                if echo "$AGENTS_DATA" | jq '.' >"$AGENTS_JSON_TMP" 2>/dev/null; then
+                if echo "$AGENTS_DATA" | node -e '
+                    let input = "";
+                    process.stdin.setEncoding("utf8");
+                    process.stdin.on("data", c => input += c);
+                    process.stdin.on("end", () => {
+                        const rows = JSON.parse(input);
+                        const entries = {};
+                        for (const row of rows) {
+                            const hasFallbacks = Array.isArray(row.fallback_models) && row.fallback_models.length > 0;
+                            const entry = { model: hasFallbacks
+                                ? { primary: row.model, fallbacks: [...row.fallback_models] }
+                                : row.model };
+                            if (row.is_default === true) entry.default = true;
+                            if (Array.isArray(row.allowed_subagents) && row.allowed_subagents.length > 0) {
+                                entry.subagents = { allowAgents: [...row.allowed_subagents].sort() };
+                            }
+                            if (row.heartbeat_enabled === true) {
+                                const hb = {};
+                                if (row.heartbeat_every != null) hb.every = row.heartbeat_every;
+                                if (row.heartbeat_target != null) hb.target = row.heartbeat_target;
+                                if (row.heartbeat_to != null) hb.to = row.heartbeat_to;
+                                entry.heartbeat = hb;
+                            }
+                            entries[row.name] = entry;
+                        }
+                        const sorted = {};
+                        for (const key of Object.keys(entries).sort((a, b) => a.localeCompare(b))) {
+                            sorted[key] = entries[key];
+                        }
+                        process.stdout.write(JSON.stringify(sorted, null, 2) + "\n");
+                    });
+                ' >"$AGENTS_JSON_TMP" 2>/dev/null; then
                     mv "$AGENTS_JSON_TMP" "$AGENTS_JSON" && return 0 || { rm -f "$AGENTS_JSON_TMP"; return 1; }
                 else
                     echo "  ${warning} DB returned non-JSON data for agents.json — not writing"
@@ -82,9 +116,15 @@ run_agents_json_logic() {
                     return 1
                 fi
             else
-                echo "  ${warning} DB query returned no agents — agents.json not written"
-                echo "  ${info} agent_config_sync will generate agents.json when gateway starts"
-                return 0
+                printf '{"main": {}}\n' > "$AGENTS_JSON_TMP"
+                if mv "$AGENTS_JSON_TMP" "$AGENTS_JSON"; then
+                    echo "  ${info} no agents in scope — wrote placeholder agents.json; agent_config_sync will populate on startup"
+                    return 0
+                else
+                    echo "  ${warning} Could not write empty agents.json placeholder"
+                    rm -f "$AGENTS_JSON_TMP"
+                    return 1
+                fi
             fi
         else
             echo "  ${warning} Could not query DB for agents.json — agents.json not written"
@@ -122,12 +162,12 @@ run_agents_json_logic() {
 # ─── TC-252-B-01 ─────────────────────────────────────────────────────────────
 
 @test "TC-252-B-01: Skip write when agents.json exists and is valid JSON" {
-    # Pre-populate with valid JSON
-    echo '[{"id":"nova","model":"test"}]' > "$FAKE_AGENTS_JSON"
+    # Pre-populate with valid keyed-object JSON
+    echo '{"nova":{"model":"test"}}' > "$FAKE_AGENTS_JSON"
     local original_content
     original_content=$(cat "$FAKE_AGENTS_JSON")
 
-    run run_agents_json_logic 0 '[{"id":"something_different"}]'
+    run run_agents_json_logic 0 '[{"name":"something_different","model":"m","fallback_models":null,"thinking":null,"instance_type":"subagent","is_default":false,"allowed_subagents":null,"heartbeat_enabled":false,"heartbeat_every":null,"heartbeat_target":null,"heartbeat_to":null}]'
     [ "$status" -eq 0 ]
 
     # Content should be unchanged
@@ -140,9 +180,9 @@ run_agents_json_logic() {
 # ─── TC-252-B-02 ─────────────────────────────────────────────────────────────
 
 @test "TC-252-B-02: Write (backup + overwrite) when --regenerate-agents-json flag is passed" {
-    echo '[{"id":"nova","model":"old"}]' > "$FAKE_AGENTS_JSON"
+    echo '{"nova":{"model":"old"}}' > "$FAKE_AGENTS_JSON"
 
-    run run_agents_json_logic 1 '[{"id":"nova","model":"new"}]'
+    run run_agents_json_logic 1 '[{"name":"nova","model":"new_from_db","fallback_models":null,"thinking":null,"instance_type":"subagent","is_default":false,"allowed_subagents":null,"heartbeat_enabled":false,"heartbeat_every":null,"heartbeat_target":null,"heartbeat_to":null}]'
     [ "$status" -eq 0 ]
 
     # Backup should exist
@@ -192,11 +232,11 @@ run_agents_json_logic() {
 # ─── TC-252-B-05 ─────────────────────────────────────────────────────────────
 
 @test "TC-252-B-05: Backup created before forced overwrite" {
-    echo '[{"id":"nova","model":"original"}]' > "$FAKE_AGENTS_JSON"
+    echo '{"nova":{"model":"original"}}' > "$FAKE_AGENTS_JSON"
     local original_content
     original_content=$(cat "$FAKE_AGENTS_JSON")
 
-    run run_agents_json_logic 1 '[{"id":"nova","model":"new_from_db"}]'
+    run run_agents_json_logic 1 '[{"name":"nova","model":"new_from_db","fallback_models":null,"thinking":null,"instance_type":"subagent","is_default":false,"allowed_subagents":null,"heartbeat_enabled":false,"heartbeat_every":null,"heartbeat_target":null,"heartbeat_to":null}]'
     [ "$status" -eq 0 ]
 
     # Backup must contain original content
@@ -211,7 +251,7 @@ run_agents_json_logic() {
 # ─── TC-252-B-07 ─────────────────────────────────────────────────────────────
 
 @test "TC-252-B-07: Idempotency — running installer twice does not corrupt agents.json" {
-    local db_output='[{"id":"nova","model":"test"}]'
+    local db_output='[{"name":"nova","model":"test","fallback_models":null,"thinking":null,"instance_type":"subagent","is_default":false,"allowed_subagents":null,"heartbeat_enabled":false,"heartbeat_every":null,"heartbeat_target":null,"heartbeat_to":null}]'
 
     # First run (no existing agents.json)
     run run_agents_json_logic 0 "$db_output"
@@ -238,7 +278,7 @@ run_agents_json_logic() {
     local original_content
     original_content=$(cat "$FAKE_AGENTS_JSON")
 
-    run run_agents_json_logic 0 '[{"id":"nova"}]'
+    run run_agents_json_logic 0 '[{"name":"nova","model":"test","fallback_models":null,"thinking":null,"instance_type":"subagent","is_default":false,"allowed_subagents":null,"heartbeat_enabled":false,"heartbeat_every":null,"heartbeat_target":null,"heartbeat_to":null}]'
     [ "$status" -eq 0 ]
 
     # File must be preserved as-is (not overwritten)
@@ -258,7 +298,7 @@ run_agents_json_logic() {
     local original_corrupt
     original_corrupt=$(cat "$FAKE_AGENTS_JSON")
 
-    run run_agents_json_logic 1 '[{"id":"nova","model":"good"}]'
+    run run_agents_json_logic 1 '[{"name":"nova","model":"good","fallback_models":null,"thinking":null,"instance_type":"subagent","is_default":false,"allowed_subagents":null,"heartbeat_enabled":false,"heartbeat_every":null,"heartbeat_target":null,"heartbeat_to":null}]'
     [ "$status" -eq 0 ]
 
     # agents.json must now be valid

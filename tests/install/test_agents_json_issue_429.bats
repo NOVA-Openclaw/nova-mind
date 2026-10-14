@@ -1,9 +1,12 @@
 #!/usr/bin/env bats
-# BATS tests for agent-install.sh agents.json generation (#429)
+# BATS tests for agent-install.sh agents.json generation (#429, #707)
 #
-# Tests the new _generate_agents_json() behavior: sourcing from
+# Tests the _generate_agents_json() behavior: sourcing from
 # get_agent_export_rows(), output shape parity with the agent_config_sync
 # plugin, and the minimal #402 non-fatal guard for empty scoped results.
+#
+# Updated for nova-mind#707: agents.json is now a keyed object matching the
+# OpenClaw 2026.9.x agents.entries schema, not a bare array.
 #
 # Test cases:
 #   TC-429-S-01: Fresh install generates correct scoped agents.json (mocked DB)
@@ -12,11 +15,13 @@
 #   TC-429-P-03: allowed_subagents shape parity (sorted, NULL/empty omitted, wildcard)
 #   TC-429-P-04: is_default parity (trust function output, not agents table)
 #   TC-429-P-05: Heartbeat shape parity
-#   TC-429-P-06: thinking column never emitted
+#   TC-429-P-06: thinking column emitted as thinkingDefault when valid
 #   TC-429-P-07: Sort order parity (JS localeCompare via node)
+#   TC-707-S-01: Output is a keyed object, not an array
+#   TC-707-S-02: Keyed object omits id field from each value
 #   TC-429-S-11: psql failure never writes file
-#   TC-429-S-12: empty DB result returns 0 and writes [] placeholder
-#   TC-429-S-13: non-JSON DB data not written
+#   TC-429-S-12: empty DB result returns 0 and writes placeholder
+#   TC-429-S-13: non-JSON DB data is not written
 #   TC-429-S-17: empty allowed_subagents omits subagents key
 #   TC-429-S-18: empty fallback_models yields bare string
 #   TC-429-S-19: single-row boundary
@@ -45,7 +50,7 @@ teardown() {
     rm -rf "$FAKE_OPENCLAW"
 }
 
-# Inline the #429 _generate_agents_json() logic for unit testing without a live DB.
+# Inline the _generate_agents_json() logic for unit testing without a live DB.
 # Mock psql returns the raw row set that get_agent_export_rows() would produce;
 # the same node serialization the installer uses shapes and sorts the output.
 run_agents_json_logic() {
@@ -58,7 +63,7 @@ run_agents_json_logic() {
     local AGENTS_JSON="$FAKE_AGENTS_JSON"
     local AGENTS_JSON_TMP="${AGENTS_JSON}.tmp.$$"
     local REGENERATE_AGENTS_JSON="$regen"
-    local TMPFILES=()
+    local TMPFILES=("$AGENTS_JSON_TMP")
 
     if [ "$fake_psql_output" = "FAIL" ]; then
         psql() { return 1; }
@@ -83,30 +88,49 @@ run_agents_json_logic() {
                     process.stdin.setEncoding("utf8");
                     process.stdin.on("data", c => input += c);
                     process.stdin.on("end", () => {
+                        const VALID_THINKING_DEFAULTS = new Set([
+                            "off", "minimal", "low", "medium", "high",
+                            "xhigh", "adaptive", "max", "ultra",
+                        ]);
+                        const AGENT_ID_REGEX = /^[a-z0-9_][a-z0-9_-]{0,63}$/i;
                         const rows = JSON.parse(input);
-                        const list = [];
+                        const entries = {};
                         for (const row of rows) {
+                            if (row.status != null && row.status !== "active") continue;
+                            if (row.model == null) continue;
+                            if (typeof row.name !== "string" || !AGENT_ID_REGEX.test(row.name)) continue;
+
                             const hasFallbacks = Array.isArray(row.fallback_models) && row.fallback_models.length > 0;
-                            const entry = {
-                                id: row.name,
-                                model: hasFallbacks
-                                    ? { primary: row.model, fallbacks: [...row.fallback_models] }
-                                    : row.model,
-                            };
+                            const entry = { model: hasFallbacks
+                                ? { primary: row.model, fallbacks: [...row.fallback_models] }
+                                : row.model };
+
                             if (row.is_default === true) entry.default = true;
+
+                            if (typeof row.thinking === "string" && row.thinking.length > 0 &&
+                                VALID_THINKING_DEFAULTS.has(row.thinking)) {
+                                entry.thinkingDefault = row.thinking;
+                            }
+
                             if (Array.isArray(row.allowed_subagents) && row.allowed_subagents.length > 0) {
                                 entry.subagents = { allowAgents: [...row.allowed_subagents].sort() };
                             }
-                            if (row.heartbeat_enabled === true && row.heartbeat_every) {
-                                const hb = { every: row.heartbeat_every };
-                                if (row.heartbeat_target) hb.target = row.heartbeat_target;
-                                if (row.heartbeat_to) hb.to = row.heartbeat_to;
+
+                            if (row.heartbeat_enabled === true) {
+                                const hb = {};
+                                if (row.heartbeat_every != null) hb.every = row.heartbeat_every;
+                                if (row.heartbeat_target != null) hb.target = row.heartbeat_target;
+                                if (row.heartbeat_to != null) hb.to = row.heartbeat_to;
                                 entry.heartbeat = hb;
                             }
-                            list.push(entry);
+
+                            entries[row.name] = entry;
                         }
-                        list.sort((a, b) => a.id.localeCompare(b.id));
-                        process.stdout.write(JSON.stringify(list, null, 2) + "\n");
+                        const sorted = {};
+                        for (const key of Object.keys(entries).sort((a, b) => a.localeCompare(b))) {
+                            sorted[key] = entries[key];
+                        }
+                        process.stdout.write(JSON.stringify(sorted, null, 2) + "\n");
                     });
                 ' >"$AGENTS_JSON_TMP" 2>/dev/null; then
                     if mv "$AGENTS_JSON_TMP" "$AGENTS_JSON"; then
@@ -123,9 +147,9 @@ run_agents_json_logic() {
                     return 1
                 fi
             else
-                printf '[]\n' > "$AGENTS_JSON_TMP"
+                printf '{"main": {}}\n' > "$AGENTS_JSON_TMP"
                 if mv "$AGENTS_JSON_TMP" "$AGENTS_JSON"; then
-                    echo -e "  ${info} no agents in scope — wrote empty agents.json placeholder; agent_config_sync will populate on startup"
+                    echo -e "  ${info} no agents in scope — wrote placeholder agents.json; agent_config_sync will populate on startup"
                     return 0
                 else
                     echo -e "  ${warning} Could not write empty agents.json placeholder"
@@ -136,6 +160,7 @@ run_agents_json_logic() {
         else
             echo -e "  ${warning} Could not query DB for agents.json — agents.json not written"
             echo -e "  ${info} agent_config_sync will generate agents.json when gateway starts"
+            rm -f "$AGENTS_JSON_TMP"
             return 1
         fi
     }
@@ -166,7 +191,7 @@ run_agents_json_logic() {
     fi
 }
 
-# ─── TC-429-S-01 ─────────────────────────────────────────────────────────────
+# ─── TC-429-S-01 / TC-707-S-01 / TC-707-S-02 ─────────────────────────────────
 
 @test "TC-429-S-01: Fresh install with mocked DB rows generates correct scoped agents.json" {
     local rows='[
@@ -179,18 +204,23 @@ run_agents_json_logic() {
     [ "$status" -eq 0 ]
     [ -f "$FAKE_AGENTS_JSON" ]
 
-    run jq -c '. | sort_by(.id)' "$FAKE_AGENTS_JSON"
-    [ "$status" -eq 0 ]
+    # Output is an object, not an array.
+    run jq -r 'type' "$FAKE_AGENTS_JSON"
+    [ "$output" = "object" ]
 
     # Nova is default; coder and gem are not.
-    run jq -r '.[] | select(.id=="nova") | .default' "$FAKE_AGENTS_JSON"
+    run jq -r '.nova.default' "$FAKE_AGENTS_JSON"
     [ "$output" = "true" ]
-    run jq -r '[.[] | select(.id=="coder")][0] | has("default")' "$FAKE_AGENTS_JSON"
-    [ "$output" = "false" ]
+    run jq -r 'has("coder") and (.coder | has("default") | not)' "$FAKE_AGENTS_JSON"
+    [ "$output" = "true" ]
 
-    # Three agents total, sorted.
-    run jq -r '.[].id' "$FAKE_AGENTS_JSON"
+    # Three agents total, sorted keys.
+    run jq -r 'keys | .[]' "$FAKE_AGENTS_JSON"
     [ "$output" = $'coder\ngem\nnova' ]
+
+    # No id field inside values.
+    run jq -r '[.[] | has("id")] | any' "$FAKE_AGENTS_JSON"
+    [ "$output" = "false" ]
 }
 
 # ─── TC-429-P-01: Byte-parity when heartbeat + subagents coexist ─────────────
@@ -211,30 +241,39 @@ run_agents_json_logic() {
         process.stdin.setEncoding("utf8");
         process.stdin.on("data", c => input += c);
         process.stdin.on("end", () => {
+            const VALID_THINKING_DEFAULTS = new Set([
+                "off", "minimal", "low", "medium", "high",
+                "xhigh", "adaptive", "max", "ultra",
+            ]);
             const rows = JSON.parse(input);
-            const list = [];
+            const entries = {};
             for (const row of rows) {
                 const hasFallbacks = Array.isArray(row.fallback_models) && row.fallback_models.length > 0;
-                const entry = {
-                    id: row.name,
-                    model: hasFallbacks
-                        ? { primary: row.model, fallbacks: [...row.fallback_models] }
-                        : row.model,
-                };
+                const entry = { model: hasFallbacks
+                    ? { primary: row.model, fallbacks: [...row.fallback_models] }
+                    : row.model };
                 if (row.is_default === true) entry.default = true;
+                if (typeof row.thinking === "string" && row.thinking.length > 0 &&
+                    VALID_THINKING_DEFAULTS.has(row.thinking)) {
+                    entry.thinkingDefault = row.thinking;
+                }
                 if (Array.isArray(row.allowed_subagents) && row.allowed_subagents.length > 0) {
                     entry.subagents = { allowAgents: [...row.allowed_subagents].sort() };
                 }
-                if (row.heartbeat_enabled === true && row.heartbeat_every) {
-                    const hb = { every: row.heartbeat_every };
-                    if (row.heartbeat_target) hb.target = row.heartbeat_target;
-                    if (row.heartbeat_to) hb.to = row.heartbeat_to;
+                if (row.heartbeat_enabled === true) {
+                    const hb = {};
+                    if (row.heartbeat_every != null) hb.every = row.heartbeat_every;
+                    if (row.heartbeat_target != null) hb.target = row.heartbeat_target;
+                    if (row.heartbeat_to != null) hb.to = row.heartbeat_to;
                     entry.heartbeat = hb;
                 }
-                list.push(entry);
+                entries[row.name] = entry;
             }
-            list.sort((a, b) => a.id.localeCompare(b.id));
-            process.stdout.write(JSON.stringify(list, null, 2) + "\n");
+            const sorted = {};
+            for (const key of Object.keys(entries).sort((a, b) => a.localeCompare(b))) {
+                sorted[key] = entries[key];
+            }
+            process.stdout.write(JSON.stringify(sorted, null, 2) + "\n");
         });
     ')
 
@@ -256,13 +295,13 @@ run_agents_json_logic() {
     run run_agents_json_logic 0 "$rows"
     [ "$status" -eq 0 ]
 
-    run jq -c '.[] | select(.id=="with_fb") | .model' "$FAKE_AGENTS_JSON"
+    run jq -c '.with_fb.model' "$FAKE_AGENTS_JSON"
     [ "$output" = '{"primary":"primary-model","fallbacks":["fallback-1","fallback-2"]}' ]
 
-    run jq -r '.[] | select(.id=="null_fb") | .model' "$FAKE_AGENTS_JSON"
+    run jq -r '.null_fb.model' "$FAKE_AGENTS_JSON"
     [ "$output" = "string-model" ]
 
-    run jq -r '.[] | select(.id=="empty_fb") | .model' "$FAKE_AGENTS_JSON"
+    run jq -r '.empty_fb.model' "$FAKE_AGENTS_JSON"
     [ "$output" = "string-model" ]
 }
 
@@ -279,16 +318,16 @@ run_agents_json_logic() {
     run run_agents_json_logic 0 "$rows"
     [ "$status" -eq 0 ]
 
-    run jq -c '.[] | select(.id=="sorted") | .subagents.allowAgents' "$FAKE_AGENTS_JSON"
+    run jq -c '.sorted.subagents.allowAgents' "$FAKE_AGENTS_JSON"
     [ "$output" = '["alpha","mike","zebra"]' ]
 
-    run jq -r '[.[] | select(.id=="null_sub")][0] | has("subagents")' "$FAKE_AGENTS_JSON"
+    run jq -r '.null_sub | has("subagents")' "$FAKE_AGENTS_JSON"
     [ "$output" = "false" ]
 
-    run jq -r '[.[] | select(.id=="empty_sub")][0] | has("subagents")' "$FAKE_AGENTS_JSON"
+    run jq -r '.empty_sub | has("subagents")' "$FAKE_AGENTS_JSON"
     [ "$output" = "false" ]
 
-    run jq -c '.[] | select(.id=="wildcard") | .subagents.allowAgents' "$FAKE_AGENTS_JSON"
+    run jq -c '.wildcard.subagents.allowAgents' "$FAKE_AGENTS_JSON"
     [ "$output" = '["*"]' ]
 }
 
@@ -305,10 +344,10 @@ run_agents_json_logic() {
     run run_agents_json_logic 0 "$rows"
     [ "$status" -eq 0 ]
 
-    run jq -r '.[] | select(.id=="gem") | .default' "$FAKE_AGENTS_JSON"
+    run jq -r '.gem.default' "$FAKE_AGENTS_JSON"
     [ "$output" = "true" ]
 
-    run jq -r '[.[] | select(.id=="sub")][0] | has("default")' "$FAKE_AGENTS_JSON"
+    run jq -r '.sub | has("default")' "$FAKE_AGENTS_JSON"
     [ "$output" = "false" ]
 }
 
@@ -325,22 +364,22 @@ run_agents_json_logic() {
     run run_agents_json_logic 0 "$rows"
     [ "$status" -eq 0 ]
 
-    run jq -c '.[] | select(.id=="full") | .heartbeat' "$FAKE_AGENTS_JSON"
+    run jq -c '.full.heartbeat' "$FAKE_AGENTS_JSON"
     [ "$output" = '{"every":"5m","target":"discord","to":"channel:1234"}' ]
 
-    run jq -c '.[] | select(.id=="partial") | .heartbeat' "$FAKE_AGENTS_JSON"
+    run jq -c '.partial.heartbeat' "$FAKE_AGENTS_JSON"
     [ "$output" = '{"every":"10m"}' ]
 
-    run jq -r '[.[] | select(.id=="enabled_no_every")][0] | has("heartbeat")' "$FAKE_AGENTS_JSON"
-    [ "$output" = "false" ]
+    run jq -r '.enabled_no_every | has("heartbeat")' "$FAKE_AGENTS_JSON"
+    [ "$output" = "true" ]
 
-    run jq -r '[.[] | select(.id=="disabled")][0] | has("heartbeat")' "$FAKE_AGENTS_JSON"
+    run jq -r '.disabled | has("heartbeat")' "$FAKE_AGENTS_JSON"
     [ "$output" = "false" ]
 }
 
-# ─── TC-429-P-06: thinking column never emitted ──────────────────────────────
+# ─── TC-429-P-06: thinking column emitted as thinkingDefault ─────────────────
 
-@test "TC-429-P-06: thinking column is never emitted" {
+@test "TC-429-P-06: thinking column is emitted as thinkingDefault when valid" {
     local rows='[
         {"name":"thinker","model":"m","fallback_models":null,"thinking":"high","instance_type":"subagent","is_default":false,"allowed_subagents":null,"heartbeat_enabled":false,"heartbeat_every":null,"heartbeat_target":null,"heartbeat_to":null}
     ]'
@@ -348,16 +387,16 @@ run_agents_json_logic() {
     run run_agents_json_logic 0 "$rows"
     [ "$status" -eq 0 ]
 
-    run jq -r '[.[] | select(.id=="thinker")][0] | has("thinking")' "$FAKE_AGENTS_JSON"
-    [ "$output" = "false" ]
+    run jq -r '.thinker.thinkingDefault' "$FAKE_AGENTS_JSON"
+    [ "$output" = "high" ]
 
-    run jq -r 'keys | .[]' "$FAKE_AGENTS_JSON"
-    [ "$output" = "0" ]
+    run jq -r '.thinker | has("thinking")' "$FAKE_AGENTS_JSON"
+    [ "$output" = "false" ]
 }
 
 # ─── TC-429-P-07: Sort order parity (JS localeCompare) ───────────────────────
 
-@test "TC-429-P-07: Output is sorted by id using JS localeCompare" {
+@test "TC-429-P-07: Output keys are sorted by id using JS localeCompare" {
     local rows='[
         {"name":"zebra","model":"m","fallback_models":null,"thinking":null,"instance_type":"subagent","is_default":false,"allowed_subagents":null,"heartbeat_enabled":false,"heartbeat_every":null,"heartbeat_target":null,"heartbeat_to":null},
         {"name":"alpha","model":"m","fallback_models":null,"thinking":null,"instance_type":"subagent","is_default":false,"allowed_subagents":null,"heartbeat_enabled":false,"heartbeat_every":null,"heartbeat_target":null,"heartbeat_to":null},
@@ -367,7 +406,8 @@ run_agents_json_logic() {
     run run_agents_json_logic 0 "$rows"
     [ "$status" -eq 0 ]
 
-    run jq -r '.[].id' "$FAKE_AGENTS_JSON"
+    # jq sorts keys by Unicode code point; we need JS localeCompare order.
+    run node -e "const data = require('fs').readFileSync('$FAKE_AGENTS_JSON', 'utf8'); console.log(Object.keys(JSON.parse(data)).join('\n'));"
     [ "$output" = $'alpha\nNova\nzebra' ]
 }
 
@@ -384,7 +424,7 @@ run_agents_json_logic() {
 
 # ─── TC-429-S-12 / TC-429-R-02 ───────────────────────────────────────────────
 
-@test "TC-429-S-12 / TC-429-R-02: empty DB result is non-fatal and writes [] placeholder" {
+@test "TC-429-S-12 / TC-429-R-02: empty DB result is non-fatal and writes placeholder" {
     [ ! -f "$FAKE_AGENTS_JSON" ]
 
     run run_agents_json_logic 0 "__EMPTY__"
@@ -393,7 +433,7 @@ run_agents_json_logic() {
     [[ "$output" == *"agent_config_sync will populate on startup"* ]]
     [ -f "$FAKE_AGENTS_JSON" ]
     run jq -c '.' "$FAKE_AGENTS_JSON"
-    [ "$output" = "[]" ]
+    [ "$output" = '{"main":{}}' ]
 }
 
 # ─── TC-429-S-13 ─────────────────────────────────────────────────────────────
@@ -417,7 +457,7 @@ run_agents_json_logic() {
     run run_agents_json_logic 0 "$rows"
     [ "$status" -eq 0 ]
 
-    run jq -r '.[0] | keys | .[]' "$FAKE_AGENTS_JSON"
+    run jq -r '.empty_sub | keys | .[]' "$FAKE_AGENTS_JSON"
     [[ "$output" != *"subagents"* ]]
 }
 
@@ -431,13 +471,13 @@ run_agents_json_logic() {
     run run_agents_json_logic 0 "$rows"
     [ "$status" -eq 0 ]
 
-    run jq -r '.[0].model' "$FAKE_AGENTS_JSON"
+    run jq -r '.empty_fb.model' "$FAKE_AGENTS_JSON"
     [ "$output" = "bare-string" ]
 }
 
 # ─── TC-429-S-19 ─────────────────────────────────────────────────────────────
 
-@test "TC-429-S-19: single-row boundary produces valid one-element array" {
+@test "TC-429-S-19: single-row boundary produces valid one-entry object" {
     local rows='[
         {"name":"solo","model":"m","fallback_models":null,"thinking":null,"instance_type":"primary","is_default":true,"allowed_subagents":null,"heartbeat_enabled":false,"heartbeat_every":null,"heartbeat_target":null,"heartbeat_to":null}
     ]'
@@ -445,8 +485,8 @@ run_agents_json_logic() {
     run run_agents_json_logic 0 "$rows"
     [ "$status" -eq 0 ]
 
-    run jq -r '. | type' "$FAKE_AGENTS_JSON"
-    [ "$output" = "array" ]
+    run jq -r 'type' "$FAKE_AGENTS_JSON"
+    [ "$output" = "object" ]
 
     run jq 'length' "$FAKE_AGENTS_JSON"
     [ "$output" -eq 1 ]

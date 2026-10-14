@@ -68,7 +68,23 @@ MEMORY_MAINTENANCE_JSON = os.path.expanduser(
 FS_AUDIT_MARKER = os.path.expanduser("~/.openclaw/workspace/.last-fs-audit")
 
 # Session key substrings that indicate a user-facing session.
-USER_SESSION_PATTERNS = ("discord:channel", "signal:", "telegram:")
+# - :discord:channel: = public guild channels.
+# - agent:<agentId>:main = the agent's main session. With the default
+#   dmScope="main", EVERY direct message (Discord, Signal, Telegram, webchat)
+#   lands here; see session-key.ts buildSessionKey and resolve-route.ts.
+# - :direct: = per-peer / per-channel-peer / per-account-channel-peer DMs.
+# - signal:/telegram: are kept for backward compatibility / non-main group
+#   sessions. Under dmScope=main, Signal/Telegram DMs show up as :main.
+USER_SESSION_PATTERNS = (
+    ":discord:channel:",
+    ":direct:",
+    "signal:",
+    "telegram:",
+)
+
+# Matches the agent main session key exactly, e.g. agent:nova:main.
+# Must NOT match agent:nova:main:heartbeat or agent:nova:mainframe.
+_MAIN_SESSION_RE = re.compile(r"^agent:[^:]+:main$")
 
 # Session key substrings that indicate bot/system sessions to exclude.
 EXCLUDE_PATTERNS = (
@@ -102,6 +118,35 @@ BLOCKERS_PER_MESSAGE = 3
 
 # D100 forced-roll threshold (issue #358)
 D100_FORCED_COOLDOWN_H = 12
+
+
+def _is_user_session_key(key: str) -> bool:
+    """Return True if `key` represents a user-facing session.
+
+    Mirrors the SQL produced by _user_session_sql_conditions().
+    """
+    if _MAIN_SESSION_RE.match(key):
+        return True
+    return any(pat in key for pat in USER_SESSION_PATTERNS)
+
+
+def _is_excluded_session_key(key: str) -> bool:
+    """Return True if `key` is a bot/system session that should be ignored."""
+    return any(exc in key for exc in EXCLUDE_PATTERNS)
+
+
+def _user_session_sql_conditions(table_alias: str = "cs") -> tuple[str, list[str]]:
+    """Return (sql_fragment, params) matching user-facing session keys.
+
+    Must stay in sync with _is_user_session_key().
+    """
+    conditions = [f"{table_alias}.session_key ~ %s"]
+    params: list[str] = [r"^agent:[^:]+:main$"]
+    for pat in USER_SESSION_PATTERNS:
+        conditions.append(f"{table_alias}.session_key LIKE %s")
+        params.append(f"%{pat}%")
+    return " OR ".join(conditions), params
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -394,13 +439,16 @@ def check_idle() -> dict:
         key = session.get("key") if isinstance(session, dict) else None
         if not isinstance(key, str):
             continue
-        # Must match at least one user-facing pattern
-        if not any(pat in key for pat in USER_SESSION_PATTERNS):
+        # Must match at least one user-facing pattern.
+        if not _is_user_session_key(key):
             continue
-        # Must NOT match any exclude pattern
-        if any(exc in key for exc in EXCLUDE_PATTERNS):
+        # Must NOT match any exclude pattern (applied AFTER user-facing match).
+        if _is_excluded_session_key(key):
             continue
 
+        # Use lastInteractionAt only — user-originated activity. lastActivityAt
+        # also includes assistant/heartbeat/system writes; see
+        # nova-openclaw-production/src/shared/session-activity-timestamp.ts.
         ts = session.get("lastInteractionAt")
         if ts is not None:
             try:
@@ -478,10 +526,7 @@ def _fetch_unanswered_sessions() -> list[tuple[str, datetime]] | dict:
         try:
             with conn:
                 with conn.cursor() as cur:
-                    like_conditions = " OR ".join(
-                        "cs.session_key LIKE %s" for _ in USER_SESSION_PATTERNS
-                    )
-                    params = [f"%{pat}%" for pat in USER_SESSION_PATTERNS]
+                    user_conditions, params = _user_session_sql_conditions("cs")
                     cur.execute(
                         f"""
                         WITH latest AS (
@@ -491,7 +536,7 @@ def _fetch_unanswered_sessions() -> list[tuple[str, datetime]] | dict:
                             ct.timestamp
                           FROM channel_transcripts ct
                           JOIN channel_sessions cs ON cs.id = ct.session_id
-                          WHERE {like_conditions}
+                          WHERE {user_conditions}
                           ORDER BY ct.session_id, ct.timestamp DESC
                         )
                         SELECT cs.session_key, latest.timestamp

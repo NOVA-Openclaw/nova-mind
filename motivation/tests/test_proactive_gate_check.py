@@ -13,6 +13,7 @@ import importlib
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -347,6 +348,109 @@ class TestIdleDetection:
         assert result["idle"] is False
         assert result["idle_minutes"] < 60
 
+    def test_dm_only_main_session_not_idle(self, m, tmp_path):
+        """DM under default dmScope=main lands in agent:nova:main -> not idle."""
+        sessions = [
+            {
+                "key": "agent:nova:main",
+                "lastInteractionAt": _ms(2.0),
+                "updatedAt": _ms(2.0),
+                "kind": "direct",
+                "agentId": "nova",
+            }
+        ]
+        with _mock_openclaw_sessions(sessions), patch.object(m, "IDLE_THRESHOLD_MINUTES", 60):
+            result = m.check_idle()
+        assert result["idle"] is False
+        assert result["idle_minutes"] < 60
+
+    def test_per_peer_direct_session_not_idle(self, m, tmp_path):
+        """Per-peer DM scope -> agent:<id>:direct:<peer> -> not idle."""
+        sessions = [
+            {
+                "key": "agent:nova:direct:peer123",
+                "lastInteractionAt": _ms(2.0),
+                "updatedAt": _ms(2.0),
+                "kind": "direct",
+                "agentId": "nova",
+            }
+        ]
+        with _mock_openclaw_sessions(sessions), patch.object(m, "IDLE_THRESHOLD_MINUTES", 60):
+            result = m.check_idle()
+        assert result["idle"] is False
+        assert result["idle_minutes"] < 60
+
+    def test_per_channel_peer_direct_session_not_idle(self, m, tmp_path):
+        """Per-channel-peer DM scope -> agent:<id>:<channel>:direct:<peer> -> not idle."""
+        sessions = [
+            {
+                "key": "agent:nova:discord:direct:peer123",
+                "lastInteractionAt": _ms(2.0),
+                "updatedAt": _ms(2.0),
+                "kind": "direct",
+                "agentId": "nova",
+            }
+        ]
+        with _mock_openclaw_sessions(sessions), patch.object(m, "IDLE_THRESHOLD_MINUTES", 60):
+            result = m.check_idle()
+        assert result["idle"] is False
+        assert result["idle_minutes"] < 60
+
+    def test_main_session_heartbeat_still_idle(self, m, tmp_path):
+        """agent:nova:main:heartbeat matches main but is excluded -> still idle."""
+        sessions = [
+            {
+                "key": "agent:nova:main:heartbeat",
+                "lastInteractionAt": _ms(2.0),
+                "updatedAt": _ms(2.0),
+                "kind": "direct",
+                "agentId": "nova",
+            }
+        ]
+        with _mock_openclaw_sessions(sessions), patch.object(m, "IDLE_THRESHOLD_MINUTES", 60):
+            result = m.check_idle()
+        assert result["idle"] is True
+        assert "reason" in result
+
+    def test_mainframe_does_not_match_main(self, m, tmp_path):
+        """A key like agent:nova:mainframe must NOT be treated as the main session."""
+        sessions = [
+            {
+                "key": "agent:nova:mainframe",
+                "lastInteractionAt": _ms(2.0),
+                "updatedAt": _ms(2.0),
+                "kind": "channel",
+                "agentId": "nova",
+            }
+        ]
+        with _mock_openclaw_sessions(sessions), patch.object(m, "IDLE_THRESHOLD_MINUTES", 60):
+            result = m.check_idle()
+        assert result["idle"] is True
+        assert "No user-facing sessions" in result.get("reason", "")
+
+    def test_dm_main_session_fails_without_main_direct_patterns(self, m, tmp_path):
+        """Mutation check: without main/direct patterns, the DM test fails (idle=true)."""
+        sessions = [
+            {
+                "key": "agent:nova:main",
+                "lastInteractionAt": _ms(2.0),
+                "updatedAt": _ms(2.0),
+                "kind": "direct",
+                "agentId": "nova",
+            }
+        ]
+        original_patterns = m.USER_SESSION_PATTERNS
+        original_main_re = m._MAIN_SESSION_RE
+        try:
+            m.USER_SESSION_PATTERNS = (":discord:channel:", "signal:", "telegram:")
+            m._MAIN_SESSION_RE = re.compile(r"^$")
+            with _mock_openclaw_sessions(sessions), patch.object(m, "IDLE_THRESHOLD_MINUTES", 60):
+                result = m.check_idle()
+            assert result["idle"] is True
+        finally:
+            m.USER_SESSION_PATTERNS = original_patterns
+            m._MAIN_SESSION_RE = original_main_re
+
 
 # ---------------------------------------------------------------------------
 # Step 1 — agent_chat
@@ -464,6 +568,28 @@ class TestStep2UnansweredSessions:
         with self._mock_db_for_unanswered(m, []):
             result = m.check_step2_unanswered_sessions()
         assert result["actionable"] is False
+
+    def test_main_session_unanswered_counts(self, m, tmp_path):
+        """The same user-facing patterns apply to step 2: main session counts."""
+        now = datetime.now(timezone.utc)
+        with self._mock_db_for_unanswered(m, [
+            ("agent:nova:main", now - timedelta(minutes=5)),
+        ]):
+            result = m.check_step2_unanswered_sessions()
+        assert result["actionable"] is True
+        assert result["data"]["count"] == 1
+        assert "agent:nova:main" in result["data"]["sessions"]
+
+    def test_direct_session_unanswered_counts(self, m, tmp_path):
+        """The same user-facing patterns apply to step 2: direct sessions count."""
+        now = datetime.now(timezone.utc)
+        with self._mock_db_for_unanswered(m, [
+            ("agent:nova:direct:peer123", now - timedelta(minutes=5)),
+            ("agent:nova:discord:direct:peer123", now - timedelta(minutes=10)),
+        ]):
+            result = m.check_step2_unanswered_sessions()
+        assert result["actionable"] is True
+        assert result["data"]["count"] == 2
 
 
 # ---------------------------------------------------------------------------

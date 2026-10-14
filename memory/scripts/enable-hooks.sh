@@ -7,7 +7,8 @@ set -e
 CONFIG_FILE="${1:-$HOME/.openclaw/openclaw.json}"
 # Note: semantic-recall and agent-turn-context are now consolidated into the
 # turn-context plugin (memory/plugins/turn-context/). See issue #182.
-HOOKS_TO_ENABLE=("memory-extract" "session-init")
+# Note: memory-extract is now a plugin (memory/plugins/memory-extract/). See issue #726.
+HOOKS_TO_ENABLE=("session-init")
 DRY_RUN="${DRY_RUN:-0}"
 
 # Color codes
@@ -105,7 +106,7 @@ else . end |
 
 # Enable each hook
 # Note: semantic-recall and agent-turn-context replaced by turn-context plugin (#182)
-.hooks.internal.entries["memory-extract"] = {"enabled": true} |
+# Note: memory-extract replaced by plugin (#726)
 .hooks.internal.entries["session-init"] = {"enabled": true}
 '
 

@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { handleMessageReceived, resolveMemoryDatabase, peerDbCache } from "../../../hooks/memory-extract/handler.ts";
+import { handleMessageReceived, resolveMemoryDatabase, peerDbCache } from "../src/extraction.ts";
 
 /**
  * Unit tests for #708: memory-extract session upsert must populate
@@ -52,9 +52,10 @@ function mockPsql(): void {
       cb(null, "", "");
       return {} as any;
     }
-    if (args.includes("INSERT INTO channel_sessions")) {
+    const sqlArg = args.find((a: any) => typeof a === "string" && a.includes("INSERT INTO"));
+    if (sqlArg && sqlArg.includes("INSERT INTO channel_sessions")) {
       cb(null, "42\n", "");
-    } else if (args.includes("INSERT INTO channel_transcripts")) {
+    } else if (sqlArg && sqlArg.includes("INSERT INTO channel_transcripts")) {
       cb(null, "99\n", "");
     } else {
       cb(null, "", "");

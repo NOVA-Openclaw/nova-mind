@@ -8,7 +8,7 @@ import {
   peerDbCache,
   resetForTests,
   setModuleLogger,
-} from "../../../hooks/memory-extract/handler.ts";
+} from "../src/extraction.ts";
 
 /**
  * Unit tests for #703: memory-extract handler must resolve the current
@@ -97,9 +97,10 @@ function mockPsql(existsFor: Set<string> = new Set()): void {
       cb(null, existsFor.has(owner) ? "1\n" : "", "");
       return {} as any;
     }
-    if (args.includes("INSERT INTO channel_sessions")) {
+    const sqlArg = args.find((a: any) => typeof a === "string" && a.includes("INSERT INTO"));
+    if (sqlArg && sqlArg.includes("INSERT INTO channel_sessions")) {
       cb(null, "42\n", "");
-    } else if (args.includes("INSERT INTO channel_transcripts")) {
+    } else if (sqlArg && sqlArg.includes("INSERT INTO channel_transcripts")) {
       cb(null, "99\n", "");
     } else {
       cb(null, "", "");

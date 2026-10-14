@@ -10,6 +10,11 @@ import { join } from "path";
  * legacy hook loader rejects it because HOOK.md has no static events and the
  * default export is not an async handler.  These tests catch that regression
  * at desk-QA time without needing a running gateway.
+ *
+ * Harness change for #726: this file moved from
+ * memory/plugins/turn-context/vitest-tests/ to
+ * memory/plugins/memory-extract/vitest-tests/; import paths and assertions
+ * are unchanged.
  */
 
 const HOOK_DIR = join(__dirname, "../../../hooks/memory-extract");

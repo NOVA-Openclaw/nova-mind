@@ -34,7 +34,7 @@ import {
   resetForTests,
   setModuleLogger,
   emitShutdown,
-} from "../../../hooks/memory-extract/handler.ts";
+} from "../src/extraction.ts";
 
 function makeHomeDir(): string {
   return mkdtempSync(join(tmpdir(), "memory-extract-716-"));
@@ -68,9 +68,10 @@ function mockPsql(existsFor: Set<string> = new Set()): void {
       cb(null, existsFor.has(owner) ? "1\n" : "", "");
       return {} as any;
     }
-    if (args.includes("INSERT INTO channel_sessions")) {
+    const sqlArg = args.find((a: any) => typeof a === "string" && a.includes("INSERT INTO"));
+    if (sqlArg && sqlArg.includes("INSERT INTO channel_sessions")) {
       cb(null, "42\n", "");
-    } else if (args.includes("INSERT INTO channel_transcripts")) {
+    } else if (sqlArg && sqlArg.includes("INSERT INTO channel_transcripts")) {
       cb(null, "99\n", "");
     } else {
       cb(null, "", "");
@@ -590,10 +591,10 @@ describe("#716 lifecycle and summary logging", () => {
 
   // ── Output routing + adversarial robustness ──
 
-  it("TC-716-016: Zero bare console.* calls remain in handler.ts", () => {
+  it("TC-716-016: Zero bare console.* calls remain in extraction.ts", () => {
     const fs = require("fs");
     const source = fs.readFileSync(
-      join(__dirname, "../../../hooks/memory-extract/handler.ts"),
+      join(__dirname, "../src/extraction.ts"),
       "utf8"
     );
     const matches = source.match(/console\.(log|info|warn|error|debug)/g);

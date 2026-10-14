@@ -1,0 +1,46 @@
+{
+  "id": "memory-extract",
+  "name": "Memory Extract",
+  "description": "Extracts memories from incoming messages and stores them in the PostgreSQL memory database",
+  "version": "1.0.0-726",
+  "main": "./dist/index.js",
+  "hooks": [
+    "message_received",
+    "gateway_start",
+    "gateway_stop"
+  ],
+  "activation": {
+    "onStartup": true
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "summaryIntervalMs": {
+        "type": "integer",
+        "description": "Milliseconds between periodic summary log lines (default 30 min)",
+        "minimum": 1
+      },
+      "stallThresholdMs": {
+        "type": "integer",
+        "description": "Milliseconds without a successful store before a stall warning fires (default 6 h)",
+        "minimum": 1
+      },
+      "stallRepeatIntervalMs": {
+        "type": "integer",
+        "description": "Minimum milliseconds between repeat stall warnings while stalled (default 1 h)",
+        "minimum": 1
+      },
+      "stallCheckIntervalMs": {
+        "type": "integer",
+        "description": "Milliseconds between stall checks (default 1 min)",
+        "minimum": 1
+      },
+      "dbUnresolvedRateLimitMs": {
+        "type": "integer",
+        "description": "Minimum milliseconds between db_unresolved log lines after startup (default 10 min)",
+        "minimum": 1
+      }
+    }
+  }
+}

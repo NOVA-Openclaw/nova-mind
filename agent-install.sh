@@ -46,6 +46,95 @@ TMPDIRS=()
 cleanup_tmp() { rm -f "${TMPFILES[@]}"; rm -rf "${TMPDIRS[@]}"; }
 trap cleanup_tmp EXIT
 
+# Helper: install the memory-extract plugin.  Builds in the source tree,
+# copies dist/ to the target, installs only runtime dependencies (#598/#724),
+# and enables the plugin in OpenClaw config.
+_install_memory_extract_plugin() {
+    local MEMORY_EXTRACT_SOURCE="${1:-$SCRIPT_DIR/memory/plugins/memory-extract}"
+    local MEMORY_EXTRACT_TARGET="${2:-$EXTENSIONS_DIR/memory-extract}"
+
+    if [ ! -d "$MEMORY_EXTRACT_SOURCE" ]; then
+        echo -e "  ${CROSS_MARK} memory-extract plugin source not found at $MEMORY_EXTRACT_SOURCE"
+        VERIFICATION_ERRORS=$((VERIFICATION_ERRORS + 1))
+        return 1
+    fi
+
+    mkdir -p "$MEMORY_EXTRACT_TARGET/dist"
+
+    # Copy source and config files
+    for f in package.json package-lock.json openclaw.plugin.json tsconfig.json; do
+        if [ -f "$MEMORY_EXTRACT_SOURCE/$f" ]; then
+            cp "$MEMORY_EXTRACT_SOURCE/$f" "$MEMORY_EXTRACT_TARGET/$f"
+        fi
+    done
+    echo -e "  ${CHECK_MARK} memory-extract plugin config files copied"
+
+    # Build TypeScript in the source directory so the target only receives
+    # runtime dependencies (#598, #724).
+    if [ -d "$MEMORY_EXTRACT_SOURCE/src" ]; then
+        _install_plugin_build_dependencies "$MEMORY_EXTRACT_SOURCE" "memory-extract" || return 1
+
+        echo "  Building memory-extract TypeScript..."
+        local BUILD_LOG
+        BUILD_LOG=$(mktemp /tmp/memory-extract-build-XXXXXX.log)
+        TMPFILES+=("$BUILD_LOG")
+        if (cd "$MEMORY_EXTRACT_SOURCE" && "$MEMORY_EXTRACT_SOURCE/node_modules/.bin/tsc") >"$BUILD_LOG" 2>&1; then
+            cp -r "$MEMORY_EXTRACT_SOURCE/dist/"* "$MEMORY_EXTRACT_TARGET/dist/"
+            echo -e "  ${CHECK_MARK} memory-extract plugin built"
+            rm -f "$BUILD_LOG"
+        else
+            echo -e "  ${CROSS_MARK} memory-extract plugin build failed"
+            tail -10 "$BUILD_LOG"
+            VERIFICATION_ERRORS=$((VERIFICATION_ERRORS + 1))
+            cd "$SCRIPT_DIR"
+            return 1
+        fi
+    fi
+
+    # Install runtime dependencies in the target directory (#598)
+    _install_runtime_dependencies "$MEMORY_EXTRACT_TARGET" "memory-extract" || return 1
+    cd "$SCRIPT_DIR"
+
+    # Remove legacy memory-extract hook directory if present (#726)
+    if [ -d "$OPENCLAW_DIR/hooks/memory-extract" ]; then
+        rm -rf "$OPENCLAW_DIR/hooks/memory-extract"
+        echo -e "  ${CHECK_MARK} Removed legacy memory-extract hook directory"
+    fi
+
+    # Enable plugin in openclaw.json
+    if [ -f "$OPENCLAW_CONFIG" ] && command -v jq &>/dev/null; then
+        jq --arg path "$MEMORY_EXTRACT_TARGET" '
+            .plugins.load.paths = ((.plugins.load.paths // []) + [$path] | unique)
+            | .plugins.entries."memory-extract" = (.plugins.entries."memory-extract" // {}) * {
+                "enabled": true,
+                "hooks": {
+                  "allowConversationAccess": true
+                }
+              }
+        ' "$OPENCLAW_CONFIG" >"$OPENCLAW_CONFIG.tmp" && \
+            mv "$OPENCLAW_CONFIG.tmp" "$OPENCLAW_CONFIG" && \
+            echo -e "  ${CHECK_MARK} memory-extract plugin enabled in OpenClaw config" || \
+            echo -e "  ${WARNING} Could not enable memory-extract plugin in config"
+
+        # Remove legacy internal hook config entry if present (#726)
+        if jq -e '.hooks.internal.entries["memory-extract"]' "$OPENCLAW_CONFIG" &>/dev/null; then
+            jq 'del(.hooks.internal.entries["memory-extract"])' "$OPENCLAW_CONFIG" >"$OPENCLAW_CONFIG.tmp" && \
+                mv "$OPENCLAW_CONFIG.tmp" "$OPENCLAW_CONFIG" && \
+                echo -e "  ${CHECK_MARK} Removed memory-extract hook from config" || \
+                echo -e "  ${WARNING} Could not remove memory-extract hook from config"
+        fi
+    fi
+
+    # Verify installation
+    if [ -f "$MEMORY_EXTRACT_TARGET/dist/index.js" ] && [ -f "$MEMORY_EXTRACT_TARGET/openclaw.plugin.json" ]; then
+        echo -e "  ${CHECK_MARK} memory-extract plugin installed to $MEMORY_EXTRACT_TARGET"
+    else
+        echo -e "  ${CROSS_MARK} memory-extract plugin installation incomplete"
+        VERIFICATION_ERRORS=$((VERIFICATION_ERRORS + 1))
+        return 1
+    fi
+}
+
 # Helper: install the turn-context plugin's TypeScript build dependency.
 # Captures npm output so a peer-dependency failure is visible instead of
 # swallowed by >/dev/null 2>&1.  Exits non-zero on failure (#722).
@@ -1946,8 +2035,9 @@ echo "Memory hooks installation..."
 HOOKS_TARGET="$OPENCLAW_DIR/hooks"
 mkdir -p "$HOOKS_TARGET"
 
-# Note: semantic-recall and agent-turn-context were replaced by turn-context plugin (#182)
-for hook in "memory-extract" "session-init"; do
+# Note: semantic-recall and agent-turn-context were replaced by turn-context plugin (#182).
+# Note: memory-extract was migrated to a plugin (#726) and is no longer installed as a hook.
+for hook in "session-init"; do
     install_hook "$hook" "$SCRIPT_DIR/memory/hooks" && result=$? || result=$?
     if [ "$result" -eq 0 ]; then
         INSTALLED_HOOKS+=("$hook")
@@ -1955,6 +2045,12 @@ for hook in "memory-extract" "session-init"; do
         SKIPPED_HOOKS+=("$hook")
     fi
 done
+
+# --- Memory-extract plugin (replaces the legacy memory-extract hook) ---
+echo ""
+echo "Memory-extract plugin installation..."
+
+_install_memory_extract_plugin "$SCRIPT_DIR/memory/plugins/memory-extract" "$EXTENSIONS_DIR/memory-extract" || exit 1
 
 # --- Memory scripts ---
 echo ""
@@ -3009,6 +3105,7 @@ fi
 echo "    • Scripts → $SCRIPTS_TARGET_OPENCLAW"
 echo "    • Python venv → $VENV_DIR"
 echo "  [cognition]"
+echo "    • memory-extract extension → $EXTENSIONS_DIR/memory-extract"
 echo "    • agent_config_sync extension → $EXTENSIONS_DIR/agent_config_sync"
 echo "    • turn-context plugin → $OPENCLAW_DIR/plugins/turn-context"
 echo "    • Motivation system → $MOTIVATION_DIR"

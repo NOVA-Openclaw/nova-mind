@@ -212,6 +212,30 @@ function truncateSenderId(senderId: string): string {
 }
 
 /**
+ * Normalize the host-provided thread id for storage in external_thread_id.
+ *
+ * - undefined / null → NULL (missing thread id)
+ * - number → stringified number (e.g. 123456789 becomes "123456789")
+ * - string after trim:
+ *   - empty string → NULL (cannot distinguish from NULL at the unique index,
+ *     so normalize to NULL to keep application-level IS NULL checks clean)
+ *   - non-empty → trimmed string
+ *
+ * This keeps numeric and string forms of the same logical thread id from
+ * colliding into two rows (TC-708-005) and keeps absent thread ids as NULL
+ * rather than invented empty strings (TC-708-004).
+ */
+function normalizeExternalThreadId(threadId: unknown): string | null {
+  if (threadId === undefined || threadId === null) return null;
+  if (typeof threadId === 'number') return String(threadId);
+  if (typeof threadId === 'string') {
+    const trimmed = threadId.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  }
+  return null;
+}
+
+/**
  * Log a psql failure without leaking connection secrets. The error object from
  * execFile may contain the full command line, so we only log `.message`.
  */
@@ -555,22 +579,33 @@ const handler = async (event: any) => {
         const senderTag = String(meta.senderTag ?? ctx.senderTag ?? ctx.sender_tag ?? '');
         const senderUsername = String(meta.senderUsername ?? ctx.senderUsername ?? '');
 
+        // Issue #708: read the host-provided thread id from the message_received
+        // event. The OpenClaw 2026.9.6 type carries it directly on the event,
+        // but some channel plugins may also place it in context/metadata.
+        const rawThreadId = event.threadId ?? ctx.threadId ?? ctx.thread_id ?? meta.threadId ?? meta.thread_id;
+        const externalThreadId = normalizeExternalThreadId(rawThreadId);
+        const externalThreadIdVal = externalThreadId === null
+          ? 'NULL'
+          : `'${externalThreadId.replace(/'/g, "''")}'`;
+
         // Only attempt upsert when psql is available and we have minimal identifying info
         if (externalMessageId || rawBody.length > 0) {
           // Upsert session row
           const sessArgs = [
             memoryDatabase, '-t', '-A', '-c',
             `INSERT INTO channel_sessions (session_key, agent_id, provider, external_chat_id, chat_type` +
+            (externalThreadId !== null ? ', external_thread_id' : '') +
             (groupSubject ? ', group_subject, title' : '') +
             (groupSpace ? ', group_space_id' : '') +
-            `) VALUES (` +
+            `, last_message_at) VALUES (` +
             `'${sessionKey.replace(/'/g, "''")}', 'main', ` +
             `'${provider.replace(/'/g, "''")}', ` +
             `'${externalChatId.replace(/'/g, "''")}', ` +
             `'${chatType}'` +
+            (externalThreadId !== null ? `, ${externalThreadIdVal}` : '') +
             (groupSubject ? `, '${groupSubject.replace(/'/g, "''")}', '${groupSubject.replace(/'/g, "''")}' ` : '') +
             (groupSpace ? `, '${groupSpace.replace(/'/g, "''")}' ` : '') +
-            `) ON CONFLICT (provider, external_chat_id, COALESCE(external_thread_id, '')) DO UPDATE SET updated_at = NOW() RETURNING id;`
+            `, '${messageTimestamp}') ON CONFLICT (provider, external_chat_id, COALESCE(external_thread_id, '')) DO UPDATE SET updated_at = NOW(), last_message_at = '${messageTimestamp}' RETURNING id;`
           ];
 
           const { stdout: sessOut } = await execFileAsync('psql', sessArgs)

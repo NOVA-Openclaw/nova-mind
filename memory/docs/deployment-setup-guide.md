@@ -190,14 +190,14 @@ cd ~/.openclaw/workspace/nova-memory
 
 The installer copies hooks to the OpenClaw hooks directory and enables them automatically.
 
-### 2. Memory Hook Installation (Manual)
+### 2. Memory-Extract Plugin Installation (Manual)
 
 ```bash
-# Copy memory extraction hook
-cp -r ~/.openclaw/workspace/nova-memory/hooks/memory-extract ~/.openclaw/workspace/hooks/
+# Copy memory-extract plugin source
+cp -r ~/.openclaw/workspace/nova-memory/memory/plugins/memory-extract ~/.openclaw/workspace/extensions/memory-extract
 
-# Enable the hook
-openclaw hooks enable memory-extract
+# Enable the plugin (e.g., by adding it to openclaw.json plugins.load.paths)
+openclaw plugins enable memory-extract
 ```
 
 ### 3. Agent Configuration

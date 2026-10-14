@@ -5,6 +5,7 @@
 set -e
 
 VERSION="2.2"
+# memory-extract is a plugin since #726; this stale copy is not invoked (see memory/INSTALLATION.md)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Load centralized PG config (ENV → postgres.json → defaults)
@@ -460,7 +461,7 @@ verify_config() {
         # Check if our hooks are registered
         # Note: semantic-recall and agent-turn-context are now consolidated into the
         # turn-context plugin (memory/plugins/turn-context/). See issue #182.
-        for hook in "memory-extract" "session-init"; do
+        for hook in "session-init"; do
             if grep -q "\"$hook\"" "$HOOK_CONFIG" 2>/dev/null; then
                 ENABLED=$(grep -A5 "\"$hook\"" "$HOOK_CONFIG" | grep -c "\"enabled\": true" || echo "0")
                 if [ "$ENABLED" -gt 0 ]; then
@@ -891,7 +892,7 @@ install_hook() {
 # turn-context plugin (memory/plugins/turn-context/). See issue #182.
 INSTALLED_HOOKS=()
 SKIPPED_HOOKS=()
-for hook in "memory-extract" "session-init"; do
+for hook in "session-init"; do
     install_hook "$hook" && result=$? || result=$?
     if [ $result -eq 0 ]; then
         INSTALLED_HOOKS+=("$hook")

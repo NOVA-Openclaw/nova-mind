@@ -28,7 +28,7 @@ note).
 
 ## Tools
 
-- `memory/hooks/memory-extract/handler.ts` — hook entry point; spawns the extraction
+- `memory/plugins/memory-extract` — plugin entry point; spawns the extraction
   process per message, resolves `channel_transcripts`/`channel_sessions` FK pointers,
   captures stderr/stdout tails, enforces a timeout, and writes to `extraction_failures`
   on failure (#485)

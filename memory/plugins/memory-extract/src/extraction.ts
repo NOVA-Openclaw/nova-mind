@@ -24,14 +24,11 @@ async function psqlExec(args: string[]): Promise<{ stdout: string; stderr: strin
 
 
 // ── Shared memory-extraction core ──────────────────────────────────────────
-// This module is the single implementation used by both:
-//   * the new nova-mind plugin (memory/plugins/memory-extract/src/index.ts)
-//   * the legacy internal-hook wrapper (memory/hooks/memory-extract/handler.ts)
+// This module is the single implementation used by the nova-mind plugin
+// (memory/plugins/memory-extract/src/index.ts).
 //
 // It expects a logger to be injected via setModuleLogger().  The plugin
-// captures api.logger at registration time; the legacy wrapper injects a
-// process stdout/stderr fallback so existing standalone deployments keep
-// working until the installer migrates them to the plugin.
+// captures api.logger at registration time.
 
 export type PluginLogger = {
   debug?: (message: string) => void;

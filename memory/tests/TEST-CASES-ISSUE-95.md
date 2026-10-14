@@ -36,7 +36,7 @@ All scripts and hooks that connect to PostgreSQL must migrate from hardcoded/inl
 **Hook handlers (TypeScript — shell out to above scripts):**
 | Hook | Invocation |
 |---|---|
-| `hooks/memory-extract/handler.ts` | `exec()` with env prefix: `SENDER_NAME=... extract-memories.sh` |
+| `memory/plugins/memory-extract/src/extraction.ts` | spawns `extract_memories.py` with env vars (`SENDER_NAME=...`) |
 | `hooks/semantic-recall/handler.ts` | `execSync()` with `env: { ...process.env }` → proactive-recall.py |
 | `hooks/session-init/handler.ts` | `exec()` → generate-session-context.sh |
 
@@ -135,11 +135,11 @@ All scripts and hooks that connect to PostgreSQL must migrate from hardcoded/inl
 
 | # | Scenario | Check |
 |---|---|---|
-| 07.1 | `hooks/memory-extract/handler.ts` uses `exec()` with env prefix string: `SENDER_NAME=... SENDER_ID=... script.sh` — this uses shell string, so parent process env is inherited | Verify that if `PGHOST` is set in the Node.js process, the spawned shell script receives it. Test: `PGHOST=testhost node -e "require('child_process').exec('echo $PGHOST', (e,o)=>console.log(o))"` |
+| 07.1 | `memory/plugins/memory-extract/src/extraction.ts` spawns `extract_memories.py` with env vars (`SENDER_NAME=... SENDER_ID=...`) — parent process env is inherited | Verify that if `PGHOST` is set in the Node.js process, the spawned Python child receives it. Test: `PGHOST=testhost node -e "require('child_process').exec('echo $PGHOST', (e,o)=>console.log(o))"` |
 | 07.2 | `hooks/semantic-recall/handler.ts` uses `execSync()` with `env: { ...process.env }` — explicit spread | PG* vars from Node process env are forwarded. Verified by code inspection. |
 | 07.3 | `hooks/session-init/handler.ts` uses `exec()` without explicit `env` option | Child inherits parent env by default. PG* vars propagate. |
 | 07.4 | If `postgres.json` is the only config source (no PG* env vars on the Node process), the child script's loader reads it at runtime | Set up: no PG* env vars, valid `postgres.json`. Trigger hook. Script should connect successfully. |
-| 07.5 | `memory-extract/handler.ts` prepends env vars via string (`SENDER_NAME='x' script.sh`). Verify this doesn't *clobber* PG* vars — i.e., only `SENDER_NAME`, `SENDER_ID`, `IS_GROUP` are prepended, not a full env replacement | Code review: confirm no `env:` option on the `exec()` call that would replace inherited env |
+| 07.5 | `memory-extract` plugin prepends env vars to the `extract_memories.py` spawn. Verify this doesn't *clobber* PG* vars — i.e., only `SENDER_NAME`, `SENDER_ID`, `IS_GROUP` are prepended, not a full env replacement | Code review: confirm spawn options extend `process.env` rather than replacing it |
 
 ---
 

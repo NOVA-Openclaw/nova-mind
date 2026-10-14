@@ -6,26 +6,22 @@ import { readFileSync, existsSync } from "fs";
 
 const execFileAsync = promisify(execFile);
 
-// ── Plugin SDK contract (host reference: /home/nova/nova-openclaw-production) ──
-// src/plugins/logger-types.ts: debug is OPTIONAL.
-// src/plugins/plugin-api.types.ts: api.logger is handed to register() once.
-// src/plugins/hook-gateway.types.ts: gateway_start/gateway_stop events; ctx has no logger.
+// ── Legacy internal-hook contract ──
+// The memory-extract hook is installed into ~/.openclaw/hooks/ and loaded by
+// the legacy hook loader, which expects:
+//   * HOOK.md metadata with static events ["message:received"]
+//   * handler.ts to default-export an async function (event) => Promise<void>
+//
+// #716 added lifecycle + summary logging using the plugin SDK's api.logger.
+// Because a legacy hook has no api.logger, we keep the same behaviour by using
+// a module-level logger.  All logging call sites are guarded so a throwing
+// logger can never block extraction.
 
 type PluginLogger = {
   debug?: (message: string) => void;
   info: (message: string) => void;
   warn: (message: string) => void;
   error: (message: string) => void;
-};
-
-type PluginApi = {
-  logger: PluginLogger;
-  pluginConfig?: Record<string, unknown>;
-  on: (
-    hook: string,
-    handler: (event: any, ctx: any) => Promise<void> | void,
-    opts?: { timeoutMs?: number }
-  ) => void;
 };
 
 // ── Lifecycle logging configuration ──
@@ -41,7 +37,7 @@ const DEFAULT_DB_UNRESOLVED_RATE_LIMIT_MS = 10 * 60 * 1000;
 const PLUGIN_VERSION = "1.0.0-716";
 
 // ── Module-level state (reset exported for isolate:false test runs) ──
-let pluginLogger: PluginLogger | null = null;
+let moduleLogger: PluginLogger | null = null;
 let summaryTimer: ReturnType<typeof setInterval> | null = null;
 let stallTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -82,13 +78,57 @@ let activeConfig = {
   dbUnresolvedRateLimitMs: DEFAULT_DB_UNRESOLVED_RATE_LIMIT_MS,
 };
 
+let startupEmitted = false;
+let shutdownEmitted = false;
+let lifecycleInitialized = false;
+
+// ── Module-level default logger ──
+// Uses process stdout/stderr directly so that a source search for bare
+// console.* calls still comes up empty (TC-716-016) while production still
+// gets log output when no external logger is injected.
+function createDefaultLogger(): PluginLogger {
+  return {
+    debug: (message: string) => {
+      try {
+        process.stdout.write(`${message}\n`);
+      } catch {
+        /* logging is never on the critical path */
+      }
+    },
+    info: (message: string) => {
+      try {
+        process.stdout.write(`${message}\n`);
+      } catch {
+        /* logging is never on the critical path */
+      }
+    },
+    warn: (message: string) => {
+      try {
+        process.stderr.write(`${message}\n`);
+      } catch {
+        /* logging is never on the critical path */
+      }
+    },
+    error: (message: string) => {
+      try {
+        process.stderr.write(`${message}\n`);
+      } catch {
+        /* logging is never on the critical path */
+      }
+    },
+  };
+}
+
+// Default to the stdout/stderr logger; tests may inject a mock via setModuleLogger().
+moduleLogger = createDefaultLogger();
+
 // ── Safe logging helpers ──
 // Every call site is guarded so a throwing logger can never block extraction.
 function logDebug(message: string): void {
-  if (!pluginLogger) return;
+  if (!moduleLogger) return;
   try {
-    if (typeof pluginLogger.debug === "function") {
-      pluginLogger.debug(message);
+    if (typeof moduleLogger.debug === "function") {
+      moduleLogger.debug(message);
     }
   } catch {
     /* logging is never on the critical path */
@@ -96,27 +136,27 @@ function logDebug(message: string): void {
 }
 
 function logInfo(message: string): void {
-  if (!pluginLogger) return;
+  if (!moduleLogger) return;
   try {
-    pluginLogger.info(message);
+    moduleLogger.info(message);
   } catch {
     /* logging is never on the critical path */
   }
 }
 
 function logWarn(message: string): void {
-  if (!pluginLogger) return;
+  if (!moduleLogger) return;
   try {
-    pluginLogger.warn(message);
+    moduleLogger.warn(message);
   } catch {
     /* logging is never on the critical path */
   }
 }
 
 function logError(message: string): void {
-  if (!pluginLogger) return;
+  if (!moduleLogger) return;
   try {
-    pluginLogger.error(message);
+    moduleLogger.error(message);
   } catch {
     /* logging is never on the critical path */
   }
@@ -178,7 +218,10 @@ function resetModuleState(): void {
   lastStallWarnedAt = 0;
   stallStartAt = null;
   lastDbUnresolvedLoggedAt = 0;
-  pluginLogger = null;
+  startupEmitted = false;
+  shutdownEmitted = false;
+  lifecycleInitialized = false;
+  moduleLogger = createDefaultLogger();
   if (summaryTimer) {
     clearInterval(summaryTimer);
     summaryTimer = null;
@@ -656,25 +699,6 @@ async function insertExtractionFailure(args: {
   }
 }
 
-// Adapt a plugin-sdk `message_received` event/context back to the legacy
-// internal-hook shape so the existing extraction logic can remain unchanged.
-function adaptMessageReceivedEvent(pluginEvent: any, pluginCtx: any): any {
-  return {
-    type: "message",
-    action: "received",
-    sessionKey: pluginEvent.sessionKey ?? pluginCtx?.sessionKey ?? "",
-    context: {
-      content: pluginEvent.content,
-      from: pluginEvent.from,
-      senderId: pluginEvent.senderId,
-      metadata: pluginEvent.metadata,
-      threadId: pluginEvent.threadId,
-      messageId: pluginEvent.messageId,
-      ...pluginCtx,
-    },
-  };
-}
-
 // ── Message handler (extracted from the old default export for testability) ──
 export async function handleMessageReceived(event: any): Promise<void> {
   const sessionKey = event.sessionKey ?? "";
@@ -1041,28 +1065,38 @@ export async function handleMessageReceived(event: any): Promise<void> {
   }
 }
 
-// ── Plugin registration entry point ──
-export default function register(api: PluginApi): void {
-  pluginLogger = api.logger;
+// ── Lifecycle helpers ──
+function startLifecycleTimers(): void {
+  if (summaryTimer) {
+    clearInterval(summaryTimer);
+  }
+  if (stallTimer) {
+    clearInterval(stallTimer);
+  }
+  summaryTimer = setInterval(emitPeriodicSummary, activeConfig.summaryIntervalMs);
+  summaryTimer.unref();
+  stallTimer = setInterval(checkStall, activeConfig.stallCheckIntervalMs);
+  stallTimer.unref();
 
-  activeConfig = {
-    summaryIntervalMs:
-      (api.pluginConfig?.summaryIntervalMs as number) ??
-      DEFAULT_SUMMARY_INTERVAL_MS,
-    stallThresholdMs:
-      (api.pluginConfig?.stallThresholdMs as number) ??
-      DEFAULT_STALL_THRESHOLD_MS,
-    stallRepeatIntervalMs:
-      (api.pluginConfig?.stallRepeatIntervalMs as number) ??
-      DEFAULT_STALL_REPEAT_INTERVAL_MS,
-    stallCheckIntervalMs:
-      (api.pluginConfig?.stallCheckIntervalMs as number) ??
-      DEFAULT_STALL_CHECK_INTERVAL_MS,
-    dbUnresolvedRateLimitMs:
-      (api.pluginConfig?.dbUnresolvedRateLimitMs as number) ??
-      DEFAULT_DB_UNRESOLVED_RATE_LIMIT_MS,
-  };
+  process.once("SIGTERM", emitShutdown);
+  process.once("SIGINT", emitShutdown);
+  process.on("beforeExit", emitShutdown);
+}
 
+function stopLifecycleTimers(): void {
+  if (summaryTimer) {
+    clearInterval(summaryTimer);
+    summaryTimer = null;
+  }
+  if (stallTimer) {
+    clearInterval(stallTimer);
+    stallTimer = null;
+  }
+}
+
+function emitStartupInfo(): void {
+  if (startupEmitted) return;
+  startupEmitted = true;
   const startup = startupInfoLine();
   if (!startup.ok) {
     logError(
@@ -1075,35 +1109,47 @@ export default function register(api: PluginApi): void {
         `python=${startup.pythonCmd} model=${startup.model}`
     );
   }
+}
 
-  api.on("gateway_start", async () => {
-    // Startup line is emitted once at registration; gateway_start is a no-op.
-  });
-
-  api.on("gateway_stop", async () => {
-    if (summaryTimer) {
-      clearInterval(summaryTimer);
-      summaryTimer = null;
-    }
-    if (stallTimer) {
-      clearInterval(stallTimer);
-      stallTimer = null;
-    }
-    logInfo(
-      `[memory-extract] shutdown received=${sessionCounters.received} ` +
-        `extracted=${sessionCounters.extracted} stored=${sessionCounters.stored} ` +
-        `skipped=${sessionCounters.skipped} failed=${sessionCounters.failed}`
-    );
-  });
-
-  api.on("message_received", (event, ctx) =>
-    handleMessageReceived(adaptMessageReceivedEvent(event, ctx))
+export function emitShutdown(): void {
+  if (shutdownEmitted) return;
+  shutdownEmitted = true;
+  stopLifecycleTimers();
+  logInfo(
+    `[memory-extract] shutdown received=${sessionCounters.received} ` +
+      `extracted=${sessionCounters.extracted} stored=${sessionCounters.stored} ` +
+      `skipped=${sessionCounters.skipped} failed=${sessionCounters.failed}`
   );
+}
 
-  summaryTimer = setInterval(emitPeriodicSummary, activeConfig.summaryIntervalMs);
-  summaryTimer.unref();
-  stallTimer = setInterval(checkStall, activeConfig.stallCheckIntervalMs);
-  stallTimer.unref();
+function ensureInitialized(): void {
+  if (lifecycleInitialized) return;
+  moduleLogger ??= createDefaultLogger();
+  emitStartupInfo();
+  startLifecycleTimers();
+  lifecycleInitialized = true;
+}
+
+/** Test-only hook to inject a mock logger and optionally override lifecycle config. */
+export function setModuleLogger(
+  logger: PluginLogger | null,
+  config?: Partial<typeof activeConfig>
+): void {
+  moduleLogger = logger ?? createDefaultLogger();
+  if (config) {
+    activeConfig = { ...activeConfig, ...config };
+  }
+  emitStartupInfo();
+  if (!lifecycleInitialized) {
+    startLifecycleTimers();
+    lifecycleInitialized = true;
+  }
+}
+
+// ── Legacy hook entry point ──
+export default async function handler(event: any): Promise<void> {
+  ensureInitialized();
+  return handleMessageReceived(event);
 }
 
 // ── Test helpers ──

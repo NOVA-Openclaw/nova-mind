@@ -1,18 +1,16 @@
 ---
 name: memory-extract
 description: "Extracts memories from incoming messages and stores in database"
-enabled: false
-metadata: {"openclaw":{"emoji":"🧠","events":[]}}
+metadata: {"openclaw":{"emoji":"🧠","events":["message:received"]}}
 ---
 
-# Memory Extraction Plugin
+# Memory Extraction Hook
 
 Automatically extracts entities, facts, opinions, and relationships from incoming messages and stores them in the PostgreSQL memory database.
 
-> **Note:** This component is now registered as an OpenClaw Plugin SDK plugin
-> (`@nova/memory-extract`) so it can capture `api.logger` and subscribe to
-> `gateway_start`, `gateway_stop`, and `message_received` lifecycle hooks.
-> The internal-hook entry is disabled to avoid double registration.
+This is a **legacy internal hook** installed into `~/.openclaw/hooks/`.  The
+legacy loader requires a static `events` field in `HOOK.md` and expects
+`handler.ts` to default-export an async function `(event) => Promise<void>`.
 
 ## What It Does
 

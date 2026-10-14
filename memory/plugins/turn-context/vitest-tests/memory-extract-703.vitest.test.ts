@@ -2,11 +2,12 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import register, {
+import {
   handleMessageReceived,
   resolveMemoryDatabase,
   peerDbCache,
   resetForTests,
+  setModuleLogger,
 } from "../../../hooks/memory-extract/handler.ts";
 
 /**
@@ -209,21 +210,14 @@ describe("memory-extract handler DB resolution (#703 integration)", () => {
   let logger: { debug: any; info: any; warn: any; error: any };
   let api: { logger: typeof logger; pluginConfig: Record<string, unknown>; on: any; handlers: Record<string, any> };
 
-  function makeApiForTest(): typeof api {
+  function makeLoggerForTest(): typeof logger {
     logger = {
       debug: vi.fn(),
       info: vi.fn(),
       warn: vi.fn(),
       error: vi.fn((msg: string) => errors.push(msg)),
     };
-    return {
-      logger,
-      pluginConfig: {},
-      on: vi.fn((hook: string, handler: unknown) => {
-        (api as any).handlers[hook] = handler;
-      }),
-      handlers: {},
-    } as any;
+    return logger;
   }
 
   beforeEach(() => {
@@ -236,10 +230,10 @@ describe("memory-extract handler DB resolution (#703 integration)", () => {
     // handler. Tests that specifically need unresolved DB delete this below.
     process.env.PGDATABASE = "nova_memory";
     errors = [];
-    api = makeApiForTest();
     resetForTests();
-    register(api);
+    setModuleLogger(makeLoggerForTest());
     errors.length = 0;
+    api = {} as any;
     vi.mocked(spawn).mockImplementation(() => makeSuccessfulChild() as any);
     vi.mocked(execFile).mockReset();
     peerDbCache.clear();

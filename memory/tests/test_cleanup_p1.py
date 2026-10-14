@@ -12,6 +12,7 @@ import io
 import itertools
 import json
 import os
+import stat
 import sys
 import tempfile
 import unittest
@@ -1427,6 +1428,126 @@ class TestPeerImportTransactions(CleanupP1TestCase):
             )
             self.assertEqual(r_verify["inserted"], 0)
             self.assertEqual(r_verify["skipped"], 3)
+
+
+# ---------------------------------------------------------------------------
+# TC-708-011/012: file permissions are owner-only from creation
+# ---------------------------------------------------------------------------
+
+
+class TestBackupExportPermissions(CleanupP1TestCase):
+    """Backup/export files and directories are created owner-only."""
+
+    def test_backup_files_are_owner_only(self) -> None:
+        """All backup files are 0600 and output directory is 0700 under umask 022."""
+        ident_conn = FakeConnection(_identification_handler(existing_dbs={"graybeard"}))
+        result = cleanup_708_703.identify_misplaced_sessions(
+            ident_conn, "nova_memory"
+        )
+        backup_conn = FakeConnection(_backup_export_handler())
+        old_umask = os.umask(0o022)
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                out_dir = Path(tmp) / "backup"
+                cleanup_708_703.backup_misplaced_rows(backup_conn, result, out_dir)
+                self.assertEqual(
+                    stat.S_IMODE(out_dir.stat().st_mode),
+                    0o700,
+                    "Backup output directory must be 0700",
+                )
+                for path in out_dir.iterdir():
+                    self.assertEqual(
+                        stat.S_IMODE(path.stat().st_mode),
+                        0o600,
+                        f"Backup file {path.name} must be 0600",
+                    )
+        finally:
+            os.umask(old_umask)
+
+    def test_export_files_are_owner_only(self) -> None:
+        """All export files are 0600 and output directory is 0700 under umask 022."""
+        ident_conn = FakeConnection(_identification_handler(existing_dbs={"graybeard"}))
+        result = cleanup_708_703.identify_misplaced_sessions(
+            ident_conn, "nova_memory"
+        )
+        export_conn = FakeConnection(_backup_export_handler())
+        old_umask = os.umask(0o022)
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                out_dir = Path(tmp) / "export"
+                cleanup_708_703.export_peer_rows(export_conn, result, out_dir)
+                self.assertEqual(
+                    stat.S_IMODE(out_dir.stat().st_mode),
+                    0o700,
+                    "Export output directory must be 0700",
+                )
+                for path in out_dir.iterdir():
+                    self.assertEqual(
+                        stat.S_IMODE(path.stat().st_mode),
+                        0o600,
+                        f"Export file {path.name} must be 0600",
+                    )
+        finally:
+            os.umask(old_umask)
+
+    def test_overwrite_tightens_existing_file(self) -> None:
+        """A pre-existing 0644 file is tightened to 0600 when overwritten."""
+        ident_conn = FakeConnection(_identification_handler(existing_dbs={"graybeard"}))
+        result = cleanup_708_703.identify_misplaced_sessions(
+            ident_conn, "nova_memory"
+        )
+        export_conn = FakeConnection(_backup_export_handler())
+        old_umask = os.umask(0o022)
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                out_dir = Path(tmp) / "export"
+                out_dir.mkdir(parents=True, exist_ok=True)
+                os.chmod(out_dir, 0o700)
+                # Pre-create the export file with permissive mode.
+                export_file = out_dir / "graybeard_memory_export.jsonl"
+                export_file.write_text("placeholder\n", encoding="utf-8")
+                os.chmod(export_file, 0o644)
+                cleanup_708_703.export_peer_rows(export_conn, result, out_dir)
+                self.assertEqual(
+                    stat.S_IMODE(export_file.stat().st_mode),
+                    0o600,
+                    "Overwritten export file must be tightened to 0600",
+                )
+        finally:
+            os.umask(old_umask)
+
+    def test_mutation_plain_open_fails(self) -> None:
+        """Patching _open_private back to plain open() yields non-0600 files.
+
+        This confirms the owner-only assertions above would fail if the
+        private-file helper were replaced with a normal open().
+        """
+        ident_conn = FakeConnection(_identification_handler(existing_dbs={"graybeard"}))
+        result = cleanup_708_703.identify_misplaced_sessions(
+            ident_conn, "nova_memory"
+        )
+        export_conn = FakeConnection(_backup_export_handler())
+
+        def _plain_open(path: Path) -> Any:
+            return path.open("w", encoding="utf-8")
+
+        old_umask = os.umask(0o022)
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                out_dir = Path(tmp) / "export"
+                with patch.object(cleanup_708_703, "_open_private", _plain_open):
+                    cleanup_708_703.export_peer_rows(export_conn, result, out_dir)
+                bad_perms = [
+                    p
+                    for p in out_dir.iterdir()
+                    if stat.S_IMODE(p.stat().st_mode) != 0o600
+                ]
+                self.assertTrue(
+                    bad_perms,
+                    "Mutation check: plain open() should have produced non-0600 files",
+                )
+        finally:
+            os.umask(old_umask)
 
 
 # ---------------------------------------------------------------------------

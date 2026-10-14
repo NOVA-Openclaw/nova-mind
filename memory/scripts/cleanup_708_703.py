@@ -37,6 +37,41 @@ if str(SCRIPT_DIR) not in sys.path:
 
 
 # ---------------------------------------------------------------------------
+# Private file helpers
+# ---------------------------------------------------------------------------
+
+
+def _open_private(path: Path) -> Any:
+    """Open *path* for writing with owner-only permissions from the start.
+
+    Uses os.open(..., 0o600) so the file is created with mode 0600 even under
+    a permissive umask, then chmods to 0600 in case the file already existed
+    with wider permissions. The returned file object is text-mode with UTF-8
+    encoding.
+    """
+    path = Path(path)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        os.chmod(path, 0o600)
+        return os.fdopen(fd, "w", encoding="utf-8", closefd=True)
+    except Exception:
+        os.close(fd)
+        raise
+
+
+def _mkdir_private(path: Path) -> Path:
+    """Create *path* as a directory with owner-only permissions.
+
+    mkdir's mode argument is masked by the process umask, so we chmod to 0700
+    after creation to guarantee the permission regardless of umask.
+    """
+    path = Path(path)
+    path.mkdir(parents=True, exist_ok=True)
+    os.chmod(path, 0o700)
+    return path
+
+
+# ---------------------------------------------------------------------------
 # Derivation comments for every literal
 # ---------------------------------------------------------------------------
 
@@ -682,7 +717,7 @@ def _backup_derived_rows(
 
     derived_file = output_dir / "derived_backup.jsonl"
     per_row_checksums: list[str] = []
-    with derived_file.open("w", encoding="utf-8") as f:
+    with _open_private(derived_file) as f:
         f.write(
             _canonical_json({"type": "facts_header", "columns": DERIVED_FACT_EXPORT_COLUMNS})
             + "\n"
@@ -740,7 +775,7 @@ def backup_misplaced_rows(
     aggregate checksum. Derivation: TEST-CASES-ISSUE-708.md TC-708-011.
     """
     output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
+    _mkdir_private(output_dir)
     timestamp = datetime.now(timezone.utc).isoformat()
 
     sessions_backup: list[dict[str, Any]] = []
@@ -769,7 +804,7 @@ def backup_misplaced_rows(
                 aggregate_hasher.update(chk.encode("ascii"))
 
             session_file = output_dir / f"session_{session.session_id}_backup.jsonl"
-            with session_file.open("w", encoding="utf-8") as f:
+            with _open_private(session_file) as f:
                 f.write(_canonical_json({"session_context": context}) + "\n")
                 for row, chk in zip(rows, per_row_checksums):
                     f.write(_canonical_json({"row": row, "checksum": chk}) + "\n")
@@ -810,10 +845,8 @@ def backup_misplaced_rows(
     manifest_data.update(derived_backup)
 
     manifest_path = output_dir / "backup_manifest.json"
-    manifest_path.write_text(
-        _canonical_json(manifest_data) + "\n",
-        encoding="utf-8",
-    )
+    with _open_private(manifest_path) as f:
+        f.write(_canonical_json(manifest_data) + "\n")
     return manifest
 
 
@@ -832,7 +865,7 @@ def export_peer_rows(
     NOVA never writes into a peer database; exports are files.
     """
     output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
+    _mkdir_private(output_dir)
     timestamp = datetime.now(timezone.utc).isoformat()
     manifests: list[PeerExportManifest] = []
 
@@ -847,7 +880,7 @@ def export_peer_rows(
             per_row_checksums = [_row_checksum(r) for r in rows]
 
             export_file = output_dir / f"{agent}_memory_export.jsonl"
-            with export_file.open("w", encoding="utf-8") as f:
+            with _open_private(export_file) as f:
                 # Header line carries session context so a peer import script
                 # can reconstruct the parent session without guessing IDs.
                 header = {
@@ -888,11 +921,11 @@ def export_peer_rows(
             manifests.append(manifest)
 
             manifest_path = output_dir / f"{agent}_memory_manifest.json"
-            manifest_path.write_text(
-                _canonical_json({**asdict(manifest), "schema": "cleanup-peer-export-v1"})
-                + "\n",
-                encoding="utf-8",
-            )
+            with _open_private(manifest_path) as f:
+                f.write(
+                    _canonical_json({**asdict(manifest), "schema": "cleanup-peer-export-v1"})
+                    + "\n"
+                )
 
     return manifests
 

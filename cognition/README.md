@@ -282,6 +282,9 @@ Provides agents with "who can help" and "how work flows" knowledge for effective
 ### [System-Level Controls](docs/system-level-controls.md)
 OS-level mechanisms that enforce agent role boundaries independent of policy or convention. Covers the global git pre-push hook as a concrete example: it reads `OPENCLAW_AGENT_ID` (injected by OpenClaw at runtime) to enforce the delegation model at the system level — Gidget can push anything, Coder/Scribe can push feature branches, all other agents are blocked. Works alongside GitHub branch protection for layered enforcement.
 
+### [Shared Memory Database](docs/shared-memory-database.md)
+Optional local tooling for multi-agent systems where **each agent has its own memory database** but some tables must be **shared identically** (shared UNIVERSAL/GLOBAL/DOMAIN bootstrap context, the model registry). A canonical `shared_memory` database is the single source; every `<agent>_memory` is an identical `postgres_fdw` consumer with a federation view over a local AGENT table. Includes an idempotent, parameterized setup + `reconcile` script (the recurring fix for foreign-table drift, nova-mind#675) and a test harness. The installer does **not** run it. Use a single shared DB (like `agent_chat`, #320) when agents do not need their own databases.
+
 ## Philosophy
 
 > "Subagents are extensions of your thinking. Peer agents are colleagues."

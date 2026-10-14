@@ -449,6 +449,78 @@ install_metacognition_plugin() {
         done
     fi
 }
+
+verify_config() {
+    echo ""
+    echo "Config verification..."
+
+    if [ -z "${PGUSER:-}" ]; then
+        echo -e "  ${WARNING} PGUSER not set (using: $(whoami))"
+        VERIFICATION_WARNINGS=$((VERIFICATION_WARNINGS + 1))
+    else
+        echo -e "  ${CHECK_MARK} PGUSER set: $PGUSER"
+    fi
+
+    if psql -U "$DB_USER" -d "$DB_NAME" -c '\q' 2>/dev/null; then
+        echo -e "  ${CHECK_MARK} Database connection works"
+    else
+        echo -e "  ${CROSS_MARK} Database connection failed"
+        VERIFICATION_ERRORS=$((VERIFICATION_ERRORS + 1))
+    fi
+
+    # memory-extract is a plugin after #726.
+    if [ -f "$OPENCLAW_CONFIG" ]; then
+        if command -v jq &>/dev/null; then
+            if jq -e '.plugins.entries["memory-extract"]' "$OPENCLAW_CONFIG" &>/dev/null; then
+                echo -e "  ${CHECK_MARK} memory-extract plugin configured"
+            else
+                echo -e "  ${WARNING} memory-extract plugin not found in OpenClaw config"
+                VERIFICATION_WARNINGS=$((VERIFICATION_WARNINGS + 1))
+            fi
+
+            # Legacy hook config entry must not remain.
+            if jq -e '.hooks.internal.entries["memory-extract"]' "$OPENCLAW_CONFIG" &>/dev/null; then
+                echo -e "  ${WARNING} Legacy memory-extract hook entry still present in OpenClaw config"
+                VERIFICATION_WARNINGS=$((VERIFICATION_WARNINGS + 1))
+            fi
+        else
+            echo -e "  ${WARNING} jq not available; cannot verify memory-extract plugin configuration"
+            VERIFICATION_WARNINGS=$((VERIFICATION_WARNINGS + 1))
+        fi
+    else
+        echo -e "  ${WARNING} OpenClaw config not found at $OPENCLAW_CONFIG"
+        VERIFICATION_WARNINGS=$((VERIFICATION_WARNINGS + 1))
+    fi
+
+    # Legacy hook directory must not remain.
+    if [ -d "$OPENCLAW_DIR/hooks/memory-extract" ]; then
+        echo -e "  ${WARNING} Legacy memory-extract hook directory still present at $OPENCLAW_DIR/hooks/memory-extract"
+        VERIFICATION_WARNINGS=$((VERIFICATION_WARNINGS + 1))
+    fi
+
+    # session-init remains a hook.
+    local HOOK_CONFIG="$HOME/.openclaw/hooks.json"
+    if [ -f "$HOOK_CONFIG" ]; then
+        echo -e "  ${CHECK_MARK} OpenClaw hook config exists"
+        if grep -q '"session-init"' "$HOOK_CONFIG" 2>/dev/null; then
+            local ENABLED
+            ENABLED=$(grep -A5 '"session-init"' "$HOOK_CONFIG" | grep -cE '"enabled"\s*:\s*true' || echo "0")
+            if [ "$ENABLED" -gt 0 ]; then
+                echo -e "  ${CHECK_MARK} Hook 'session-init' enabled"
+            else
+                echo -e "  ${WARNING} Hook 'session-init' exists but not enabled"
+                VERIFICATION_WARNINGS=$((VERIFICATION_WARNINGS + 1))
+            fi
+        else
+            echo -e "  ${WARNING} Hook 'session-init' not found in OpenClaw config"
+            VERIFICATION_WARNINGS=$((VERIFICATION_WARNINGS + 1))
+        fi
+    else
+        echo -e "  ${WARNING} OpenClaw hook config not found at $HOOK_CONFIG"
+        VERIFICATION_WARNINGS=$((VERIFICATION_WARNINGS + 1))
+    fi
+}
+
 # When the installer is sourced by unit tests, stop here so tests can call
 # the helper functions above without running the full installer.  This guard
 # is NOT used in normal execution.
@@ -1378,48 +1450,6 @@ verify_cognition() {
 
 }
 
-verify_config() {
-    echo ""
-    echo "Config verification..."
-
-    if [ -z "${PGUSER:-}" ]; then
-        echo -e "  ${WARNING} PGUSER not set (using: $(whoami))"
-        VERIFICATION_WARNINGS=$((VERIFICATION_WARNINGS + 1))
-    else
-        echo -e "  ${CHECK_MARK} PGUSER set: $PGUSER"
-    fi
-
-    if psql -U "$DB_USER" -d "$DB_NAME" -c '\q' 2>/dev/null; then
-        echo -e "  ${CHECK_MARK} Database connection works"
-    else
-        echo -e "  ${CROSS_MARK} Database connection failed"
-        VERIFICATION_ERRORS=$((VERIFICATION_ERRORS + 1))
-    fi
-
-    local HOOK_CONFIG="$HOME/.openclaw/hooks.json"
-    if [ -f "$HOOK_CONFIG" ]; then
-        echo -e "  ${CHECK_MARK} OpenClaw hook config exists"
-        for hook in "memory-extract" "session-init"; do
-            if grep -q "\"$hook\"" "$HOOK_CONFIG" 2>/dev/null; then
-                local ENABLED
-                ENABLED=$(grep -A5 "\"$hook\"" "$HOOK_CONFIG" | grep -c "\"enabled\": true" || echo "0")
-                if [ "$ENABLED" -gt 0 ]; then
-                    echo -e "  ${CHECK_MARK} Hook '$hook' enabled"
-                else
-                    echo -e "  ${WARNING} Hook '$hook' exists but not enabled"
-                    VERIFICATION_WARNINGS=$((VERIFICATION_WARNINGS + 1))
-                fi
-            else
-                echo -e "  ${WARNING} Hook '$hook' not found in OpenClaw config"
-                VERIFICATION_WARNINGS=$((VERIFICATION_WARNINGS + 1))
-            fi
-        done
-    else
-        echo -e "  ${WARNING} OpenClaw hook config not found at $HOOK_CONFIG"
-        VERIFICATION_WARNINGS=$((VERIFICATION_WARNINGS + 1))
-    fi
-}
-
 # ============================================
 # Run verification early if --verify-only
 # ============================================
@@ -2037,14 +2067,12 @@ mkdir -p "$HOOKS_TARGET"
 
 # Note: semantic-recall and agent-turn-context were replaced by turn-context plugin (#182).
 # Note: memory-extract was migrated to a plugin (#726) and is no longer installed as a hook.
-for hook in "session-init"; do
-    install_hook "$hook" "$SCRIPT_DIR/memory/hooks" && result=$? || result=$?
-    if [ "$result" -eq 0 ]; then
-        INSTALLED_HOOKS+=("$hook")
-    elif [ "$result" -eq 2 ]; then
-        SKIPPED_HOOKS+=("$hook")
-    fi
-done
+install_hook "session-init" "$SCRIPT_DIR/memory/hooks" && result=$? || result=$?
+if [ "$result" -eq 0 ]; then
+    INSTALLED_HOOKS+=("session-init")
+elif [ "$result" -eq 2 ]; then
+    SKIPPED_HOOKS+=("session-init")
+fi
 
 # --- Memory-extract plugin (replaces the legacy memory-extract hook) ---
 echo ""

@@ -142,3 +142,81 @@ teardown() {
     run jq -e '.hooks.internal.entries["memory-extract"]' "$SCRATCH/.openclaw/openclaw.json"
     [ "$status" -ne 0 ]
 }
+
+@test "TC-726-004: verify_config treats memory-extract as plugin and warns on legacy hook remnants" {
+    # Stub psql so verify_config does not need a real database.
+    mkdir -p "$SCRATCH/bin"
+    printf '%s\n' '#!/usr/bin/env bash' 'exit 0' > "$SCRATCH/bin/psql"
+    chmod +x "$SCRATCH/bin/psql"
+
+    # Clean state: plugin configured, session-init hook enabled, no legacy remnants.
+    printf '{"plugins":{"entries":{"memory-extract":{"enabled":true}},"load":{"paths":[]}},"hooks":{"internal":{"enabled":true,"entries":{"session-init":{"enabled":true}}}},"agents":{"defaults":{}}}' > "$SCRATCH/.openclaw/openclaw.json"
+    printf '{"session-init":{"enabled":true}}' > "$SCRATCH/.openclaw/hooks.json"
+
+    run env -i \
+        HOME="$SCRATCH" \
+        PATH="$SCRATCH/bin:/usr/bin:/bin" \
+        AGENT_INSTALL_TEST_MODE=1 \
+        SCRIPT_DIR="$FAKE_REPO" \
+        OPENCLAW_DIR="$SCRATCH/.openclaw" \
+        OPENCLAW_CONFIG="$SCRATCH/.openclaw/openclaw.json" \
+        PGUSER="testuser" \
+        DB_USER="testuser" \
+        DB_NAME="test_memory" \
+        bash -c '
+            set -e
+            source "$SCRIPT_DIR/agent-install.sh"
+            verify_config
+        '
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"memory-extract plugin configured"* ]]
+    [[ "$output" == *"Hook 'session-init' enabled"* ]]
+    [[ "$output" != *"Legacy memory-extract hook entry still present"* ]]
+    [[ "$output" != *"Legacy memory-extract hook directory still present"* ]]
+
+    # Legacy hook config entry produces a warning.
+    printf '{"plugins":{"entries":{"memory-extract":{"enabled":true}},"load":{"paths":[]}},"hooks":{"internal":{"enabled":true,"entries":{"memory-extract":{"enabled":true},"session-init":{"enabled":true}}}},"agents":{"defaults":{}}}' > "$SCRATCH/.openclaw/openclaw.json"
+
+    run env -i \
+        HOME="$SCRATCH" \
+        PATH="$SCRATCH/bin:/usr/bin:/bin" \
+        AGENT_INSTALL_TEST_MODE=1 \
+        SCRIPT_DIR="$FAKE_REPO" \
+        OPENCLAW_DIR="$SCRATCH/.openclaw" \
+        OPENCLAW_CONFIG="$SCRATCH/.openclaw/openclaw.json" \
+        PGUSER="testuser" \
+        DB_USER="testuser" \
+        DB_NAME="test_memory" \
+        bash -c '
+            set -e
+            source "$SCRIPT_DIR/agent-install.sh"
+            verify_config
+        '
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Legacy memory-extract hook entry still present"* ]]
+
+    # Legacy hook directory produces a warning.
+    printf '{"plugins":{"entries":{"memory-extract":{"enabled":true}},"load":{"paths":[]}},"hooks":{"internal":{"enabled":true,"entries":{"session-init":{"enabled":true}}}},"agents":{"defaults":{}}}' > "$SCRATCH/.openclaw/openclaw.json"
+    mkdir -p "$SCRATCH/.openclaw/hooks/memory-extract"
+
+    run env -i \
+        HOME="$SCRATCH" \
+        PATH="$SCRATCH/bin:/usr/bin:/bin" \
+        AGENT_INSTALL_TEST_MODE=1 \
+        SCRIPT_DIR="$FAKE_REPO" \
+        OPENCLAW_DIR="$SCRATCH/.openclaw" \
+        OPENCLAW_CONFIG="$SCRATCH/.openclaw/openclaw.json" \
+        PGUSER="testuser" \
+        DB_USER="testuser" \
+        DB_NAME="test_memory" \
+        bash -c '
+            set -e
+            source "$SCRIPT_DIR/agent-install.sh"
+            verify_config
+        '
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Legacy memory-extract hook directory still present"* ]]
+}

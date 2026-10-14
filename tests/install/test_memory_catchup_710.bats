@@ -31,7 +31,9 @@ CATCHUP_SCRIPT="$REPO_ROOT/memory/scripts/memory-catchup.sh"
     # *detection* regexes (e.g. '\.sqlite') and matching test fixtures used
     # to flag broken embeddings, not a live SQLite reader. Genuine readers
     # are still caught.
-    hits="$(echo "$output" | grep -v 'tests/TEST-CASES' | grep -v 'node_modules' | grep -v 'memory/lib/source_anchor.py' | grep -v 'memory/tests/test_source_anchor_coverage.py' || true)"
+    # motivation/tests/test_proactive_gate_check.py contains '/tmp/openclaw/sessions.sqlite'
+    # only as a mock-fixture string inside tests for the proactive gate, not as a live reader.
+    hits="$(echo "$output" | grep -v 'tests/TEST-CASES' | grep -v 'node_modules' | grep -v 'memory/lib/source_anchor.py' | grep -v 'memory/tests/test_source_anchor_coverage.py' | grep -v 'motivation/tests/test_proactive_gate_check.py' || true)"
     [ -z "$hits" ]
 }
 

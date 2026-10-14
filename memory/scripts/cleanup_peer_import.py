@@ -222,13 +222,40 @@ def import_peer_rows(
     inserted = 0
     skipped = 0
 
-    with conn.cursor() as cur:
-        session_key = session_context["session_key"]
-        provider = session_context["provider"]
-        external_chat_id = session_context["external_chat_id"]
-        external_thread_id = session_context.get("external_thread_id")
-        chat_type = session_context.get("chat_type")
+    # Derivation: TC-703-003/004 require an all-or-nothing import per session;
+    # psycopg2 defaults to autocommit=False, so without an explicit commit the
+    # inserts are discarded at close(). We commit only after every row for the
+    # session has been inserted/skipped successfully, and roll back on any
+    # exception so partial work is never persisted.
+    session_key = session_context["session_key"]
+    provider = session_context["provider"]
+    external_chat_id = session_context["external_chat_id"]
+    external_thread_id = session_context.get("external_thread_id")
+    chat_type = session_context.get("chat_type")
 
+    if dry_run:
+        # Derivation: dry-run reports the actions that would occur without
+        # touching the database, so no transaction boundary is needed.
+        for row in transcript_rows:
+            external_message_id = row["external_message_id"]
+            inserted += 1
+            actions.append(
+                {
+                    "session_key": session_key,
+                    "external_message_id": external_message_id,
+                    "action": "would_insert",
+                }
+            )
+        return {
+            "dry_run": True,
+            "row_count": len(transcript_rows),
+            "inserted": inserted,
+            "skipped": skipped,
+            "actions": actions,
+        }
+
+    cur = conn.cursor()
+    try:
         for row in transcript_rows:
             external_message_id = row["external_message_id"]
 
@@ -255,62 +282,72 @@ def import_peer_rows(
                 )
                 continue
 
-            if not dry_run:
-                # Upsert session by unique index; returns the session id to use
-                # for transcript insertion.
-                cur.execute(
-                    """
-                    INSERT INTO channel_sessions
-                      (session_key, agent_id, provider, external_chat_id,
-                       external_thread_id, chat_type)
-                    VALUES (%s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (provider, external_chat_id,
-                                 COALESCE(external_thread_id, ''))
-                    DO UPDATE SET updated_at = NOW()
-                    RETURNING id
-                    """,
-                    (session_key, "main", provider, external_chat_id,
-                     external_thread_id, chat_type),
-                )
-                target_session_id = cur.fetchone()[0]
+            # Upsert session by unique index; returns the session id to use
+            # for transcript insertion.
+            cur.execute(
+                """
+                INSERT INTO channel_sessions
+                  (session_key, agent_id, provider, external_chat_id,
+                   external_thread_id, chat_type)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT (provider, external_chat_id,
+                             COALESCE(external_thread_id, ''))
+                DO UPDATE SET updated_at = NOW()
+                RETURNING id
+                """,
+                (session_key, "main", provider, external_chat_id,
+                 external_thread_id, chat_type),
+            )
+            target_session_id = cur.fetchone()[0]
 
-                raw_meta = row.get("raw_metadata")
-                cur.execute(
-                    """
-                    INSERT INTO channel_transcripts
-                      (session_id, external_message_id, timestamp, role,
-                       content, sender_id, sender_name, sender_username,
-                       sender_tag, sender_entity_id, content_type, raw_metadata)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (session_id, external_message_id) DO NOTHING
-                    """,
-                    (
-                        target_session_id,
-                        external_message_id,
-                        row["timestamp"],
-                        row["role"],
-                        row["content"],
-                        row.get("sender_id"),
-                        row.get("sender_name"),
-                        row.get("sender_username"),
-                        row.get("sender_tag"),
-                        row.get("sender_entity_id"),
-                        row.get("content_type"),
-                        json.dumps(raw_meta) if raw_meta is not None else None,
-                    ),
-                )
+            raw_meta = row.get("raw_metadata")
+            cur.execute(
+                """
+                INSERT INTO channel_transcripts
+                  (session_id, external_message_id, timestamp, role,
+                   content, sender_id, sender_name, sender_username,
+                   sender_tag, sender_entity_id, content_type, raw_metadata)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (session_id, external_message_id) DO NOTHING
+                """,
+                (
+                    target_session_id,
+                    external_message_id,
+                    row["timestamp"],
+                    row["role"],
+                    row["content"],
+                    row.get("sender_id"),
+                    row.get("sender_name"),
+                    row.get("sender_username"),
+                    row.get("sender_tag"),
+                    row.get("sender_entity_id"),
+                    row.get("content_type"),
+                    json.dumps(raw_meta) if raw_meta is not None else None,
+                ),
+            )
 
             inserted += 1
             actions.append(
                 {
                     "session_key": session_key,
                     "external_message_id": external_message_id,
-                    "action": "inserted" if not dry_run else "would_insert",
+                    "action": "inserted",
                 }
             )
 
+        # Commit only after every insert for this session succeeded; counts now
+        # match the persisted rows.
+        conn.commit()
+    except Exception:
+        # Roll back any partial inserts for this session and fail loudly so the
+        # caller knows nothing was persisted.
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+
     return {
-        "dry_run": dry_run,
+        "dry_run": False,
         "row_count": len(transcript_rows),
         "inserted": inserted,
         "skipped": skipped,

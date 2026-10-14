@@ -8,6 +8,8 @@ TC-708-012d and TC-703-003/004/005; #715 cleanup-part-1 dispatch.
 from __future__ import annotations
 
 import hashlib
+import io
+import itertools
 import json
 import os
 import sys
@@ -19,6 +21,11 @@ from unittest.mock import MagicMock, patch
 
 # Add scripts dir to path.
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
+
+# Monotonically increasing fake primary key for transactional mock inserts.
+# Derivation: every mock row needs a unique id across committed/staged stores
+# and across reconnects, but the actual numeric values are never asserted.
+_FAKE_ID = itertools.count(1)
 
 import cleanup_708_703
 import cleanup_peer_import
@@ -62,13 +69,224 @@ class FakeCursor:
 
 
 class FakeConnection:
-    """A mock psycopg2-like connection returning one FakeCursor."""
+    """A mock psycopg2-like connection.
 
-    def __init__(self, handler: Any | None = None):
-        self.cursor_obj = FakeCursor(handler)
+    Two modes:
+      * handler mode: returns a FakeCursor driven by a custom handler (used for
+        SELECT-only identification/backup/export tests).
+      * storage mode: a transactional in-memory database used for peer-import
+        tests; uncommitted inserts are visible within the same connection but
+        are discarded by rollback or close, and committed inserts are visible
+        to a new connection that shares the same committed store.
+    """
 
-    def cursor(self) -> FakeCursor:
+    def __init__(
+        self,
+        handler: Any | None = None,
+        committed: dict[str, list[dict[str, Any]]] | None = None,
+    ):
+        self._handler = handler
+        # Committed rows are shared across connections to simulate reconnects.
+        self._committed: dict[str, list[dict[str, Any]]] = (
+            committed if committed is not None else {}
+        )
+        # Staged rows belong to the current in-flight transaction only.
+        self._staged: dict[str, list[dict[str, Any]]] = {}
+        self._readonly: bool | None = None
+        self._isolation_level: str | None = None
+        self._fail_after: int | None = None
+        self._closed = False
+        if handler is not None:
+            self.cursor_obj: FakeCursor | FakeStorageCursor = FakeCursor(handler)
+        else:
+            self.cursor_obj = FakeStorageCursor(self)
+
+    def cursor(self) -> FakeCursor | FakeStorageCursor:
         return self.cursor_obj
+
+    def commit(self) -> None:
+        """Promote staged rows to committed so they survive close/reconnect."""
+        for table, rows in self._staged.items():
+            self._committed.setdefault(table, []).extend(rows)
+        self._staged.clear()
+
+    def rollback(self) -> None:
+        """Discard staged rows."""
+        self._staged.clear()
+
+    def close(self) -> None:
+        """Close the connection; uncommitted rows are discarded."""
+        self._staged.clear()
+        self._closed = True
+
+    def set_session(
+        self,
+        *,
+        readonly: bool | None = None,
+        isolation_level: str | None = None,
+        autocommit: bool | None = None,
+    ) -> None:
+        """Record transaction characteristics (psycopg2 set_session shim)."""
+        self._readonly = readonly
+        self._isolation_level = isolation_level
+
+
+class FakeStorageCursor:
+    """Transactional in-memory cursor for peer-import tests.
+
+    Implements just enough SQL semantics for the peer import script:
+      - idempotency SELECT on (session_key, external_message_id)
+      - upsert INSERT into channel_sessions
+      - INSERT INTO channel_transcripts with conflict DO NOTHING
+    """
+
+    def __init__(self, conn: FakeConnection):
+        self._conn = conn
+        self.executed: list[tuple[str, tuple[Any, ...] | None]] = []
+        self._fetchone: Any = None
+        self._fetchall: list[Any] = []
+        self._transcript_inserts = 0
+
+    def execute(self, sql: str, params: tuple[Any, ...] | None = None) -> None:
+        self.executed.append((sql, params))
+        self._fetchone = None
+        self._fetchall = []
+        conn = self._conn
+        sql_lower = sql.lower()
+
+        if "insert into channel_transcripts" in sql_lower:
+            self._transcript_inserts += 1
+            if conn._fail_after is not None and self._transcript_inserts >= conn._fail_after:
+                raise RuntimeError("injected mid-session failure")
+
+        if "insert into channel_sessions" in sql_lower:
+            # Derivation: parameter order in cleanup_peer_import.py session
+            # INSERT statement is (session_key, agent_id, provider,
+            # external_chat_id, external_thread_id, chat_type).
+            (
+                session_key,
+                agent_id,
+                provider,
+                external_chat_id,
+                external_thread_id,
+                chat_type,
+            ) = params
+            conflict_key = (
+                provider,
+                external_chat_id,
+                external_thread_id if external_thread_id is not None else "",
+            )
+            existing = None
+            for row in (
+                conn._committed.get("channel_sessions", [])
+                + conn._staged.get("channel_sessions", [])
+            ):
+                row_key = (
+                    row["provider"],
+                    row["external_chat_id"],
+                    row["external_thread_id"]
+                    if row["external_thread_id"] is not None
+                    else "",
+                )
+                if row_key == conflict_key:
+                    existing = row
+                    break
+            if existing is not None:
+                # ON CONFLICT DO UPDATE returns the existing session id.
+                self._fetchone = (existing["id"],)
+            else:
+                new_id = next(_FAKE_ID)
+                row = {
+                    "id": new_id,
+                    "session_key": session_key,
+                    "agent_id": agent_id,
+                    "provider": provider,
+                    "external_chat_id": external_chat_id,
+                    "external_thread_id": external_thread_id,
+                    "chat_type": chat_type,
+                }
+                conn._staged.setdefault("channel_sessions", []).append(row)
+                self._fetchone = (new_id,)
+        elif "insert into channel_transcripts" in sql_lower:
+            # Derivation: parameter order in cleanup_peer_import.py transcript
+            # INSERT statement is (session_id, external_message_id, timestamp,
+            # role, content, sender_id, sender_name, sender_username,
+            # sender_tag, sender_entity_id, content_type, raw_metadata).
+            session_id = params[0]
+            external_message_id = params[1]
+            exists = any(
+                row["session_id"] == session_id
+                and row["external_message_id"] == external_message_id
+                for rows in (
+                    conn._committed.get("channel_transcripts", []),
+                    conn._staged.get("channel_transcripts", []),
+                )
+                for row in rows
+            )
+            if not exists:
+                new_id = next(_FAKE_ID)
+                row = {
+                    "id": new_id,
+                    "session_id": session_id,
+                    "external_message_id": external_message_id,
+                    "timestamp": params[2],
+                    "role": params[3],
+                    "content": params[4],
+                    "sender_id": params[5],
+                    "sender_name": params[6],
+                    "sender_username": params[7],
+                    "sender_tag": params[8],
+                    "sender_entity_id": params[9],
+                    "content_type": params[10],
+                    "raw_metadata": params[11],
+                }
+                conn._staged.setdefault("channel_transcripts", []).append(row)
+            # INSERT ... ON CONFLICT DO NOTHING returns no rows.
+            self._fetchone = None
+        elif (
+            "select ct.id" in sql_lower
+            and "from channel_transcripts" in sql_lower
+            and params
+        ):
+            # Derivation: cleanup_peer_import.py idempotency query joins
+            # channel_transcripts to channel_sessions by session_id and filters
+            # on session_key + external_message_id.
+            session_key, external_message_id = params[0], params[1]
+            session_ids = [
+                row["id"]
+                for rows in (
+                    conn._staged.get("channel_sessions", []),
+                    conn._committed.get("channel_sessions", []),
+                )
+                for row in rows
+                if row["session_key"] == session_key
+            ]
+            for rows in (
+                conn._staged.get("channel_transcripts", []),
+                conn._committed.get("channel_transcripts", []),
+            ):
+                for row in rows:
+                    if (
+                        row["session_id"] in session_ids
+                        and row["external_message_id"] == external_message_id
+                    ):
+                        self._fetchone = (row["id"],)
+                        return
+        else:
+            # No matching data.
+            pass
+
+    def fetchone(self) -> Any:
+        return self._fetchone
+
+    def fetchall(self) -> list[Any]:
+        return self._fetchall
+
+    def __enter__(self) -> FakeStorageCursor:
+        return self
+
+    def __exit__(self, *args: Any) -> None:
+        pass
 
     def close(self) -> None:
         pass
@@ -302,6 +520,40 @@ def _backup_export_handler(
             sid = params[0] if params else None
             rows = _make_fixture_rows(sid)
             # Return as tuples matching _TRANSCRIPT_COLS order.
+            return (None, [tuple(r[c] for c in _TRANSCRIPT_COLS) for r in rows])
+        if "FROM channel_sessions" in sql and "WHERE id = %s" in sql:
+            sid = params[0] if params else None
+            ctx = _make_session_context(sid)
+            return (None, [tuple(ctx[c] for c in _SESSION_COLS)])
+        return (None, [])
+
+    return handler
+
+
+def _full_backup_export_handler(existing_dbs: set[str]) -> Any:
+    """Return a FakeCursor handler for the full identify+backup+export CLI.
+
+    Combines identification query responses with backup/export row fetching
+    so a single FakeConnection can drive ``_main_backup_export`` end-to-end.
+    """
+
+    def handler(sql: str, params: tuple[Any, ...] | None) -> tuple[Any, list[Any]]:
+        if "FROM channel_sessions cs" in sql and "LEFT JOIN channel_transcripts" in sql:
+            return (None, _FIXTURE_SESSIONS)
+        if "FROM channel_transcripts" in sql and "GROUP BY session_id" in sql:
+            results: list[tuple[int, str, Optional[str], int]] = []
+            for sid, breakdown in _FIXTURE_SENDERS.items():
+                for sender_name, sender_id, count in breakdown:
+                    results.append((sid, sender_name, sender_id, count))
+            return (None, results)
+        if "pg_database" in sql and params:
+            db_name = params[0]
+            if db_name in {f"{a}_memory" for a in existing_dbs}:
+                return ((1,), [])
+            return (None, [])
+        if "FROM channel_transcripts" in sql and "WHERE session_id = %s" in sql:
+            sid = params[0] if params else None
+            rows = _make_fixture_rows(sid)
             return (None, [tuple(r[c] for c in _TRANSCRIPT_COLS) for r in rows])
         if "FROM channel_sessions" in sql and "WHERE id = %s" in sql:
             sid = params[0] if params else None
@@ -721,22 +973,64 @@ class TestExport(CleanupP1TestCase):
 # ---------------------------------------------------------------------------
 
 
-def _make_peer_import_conn(existing_keys: set[tuple[str, str]]) -> FakeConnection:
-    """Return a FakeConnection that skips existing (session_key, message_id) keys."""
+def _make_peer_import_conn(
+    existing_keys: set[tuple[str, str]] | None = None,
+    committed_store: dict[str, list[dict[str, Any]]] | None = None,
+    fail_after: int | None = None,
+) -> FakeConnection:
+    """Return a FakeConnection for peer-import tests.
 
-    def handler(sql: str, params: tuple[Any, ...] | None) -> tuple[Any, list[Any]]:
-        if "SELECT ct.id" in sql and "session_key" in sql and params:
-            key = (params[0], params[1])
-            if key in existing_keys:
-                return ((1,), [])
-            return (None, [])
-        if "INSERT INTO channel_sessions" in sql:
-            return ((1000,), [])
-        if "INSERT INTO channel_transcripts" in sql and params:
-            return (None, [])
-        return (None, [])
-
-    return FakeConnection(handler)
+    ``existing_keys`` pre-seeds committed rows so idempotency checks find them.
+    ``committed_store`` is shared across connections to test reconnect
+    visibility. ``fail_after`` raises after the given number of transcript
+    INSERTs have been staged (used to verify rollback).
+    """
+    committed = committed_store if committed_store is not None else {}
+    if existing_keys:
+        sessions = committed.setdefault("channel_sessions", [])
+        transcripts = committed.setdefault("channel_transcripts", [])
+        by_session: dict[str, int] = {}
+        for session_key, external_message_id in existing_keys:
+            if session_key not in by_session:
+                sid = next(_FAKE_ID)
+                by_session[session_key] = sid
+                # Derivation: session_key has the form "agent:<peer>:..." and
+                # the import script derives external_chat_id from that prefix.
+                external_chat_id = f"agent_chat:{session_key.split(':')[1]}"
+                sessions.append(
+                    {
+                        "id": sid,
+                        "session_key": session_key,
+                        "agent_id": "main",
+                        "provider": "agent_chat",
+                        "external_chat_id": external_chat_id,
+                        "external_thread_id": None,
+                        "chat_type": None,
+                    }
+                )
+            else:
+                sid = by_session[session_key]
+            transcripts.append(
+                {
+                    "id": next(_FAKE_ID),
+                    "session_id": sid,
+                    "external_message_id": external_message_id,
+                    "timestamp": "2026-10-14T00:00:00+00:00",
+                    "role": "user",
+                    "content": "existing",
+                    "sender_id": "existing",
+                    "sender_name": "existing",
+                    "sender_username": "existing",
+                    "sender_tag": None,
+                    "sender_entity_id": None,
+                    "content_type": "text",
+                    "raw_metadata": None,
+                }
+            )
+    conn = FakeConnection(committed=committed)
+    if fail_after is not None:
+        conn._fail_after = fail_after
+    return conn
 
 
 class TestPeerImport(CleanupP1TestCase):
@@ -1000,6 +1294,165 @@ class TestPeerImportCLI(CleanupP1TestCase):
             mock_resolve.assert_called_once()
             mock_open.assert_called_once_with("newhart_memory")
 
+
+# ---------------------------------------------------------------------------
+# Peer import transaction semantics
+# ---------------------------------------------------------------------------
+
+
+class TestPeerImportTransactions(CleanupP1TestCase):
+    """Peer-side import commit/rollback behavior."""
+
+    def test_commit_makes_rows_visible_after_reconnect(self) -> None:
+        """A successful import commits rows so a new connection sees them.
+
+        Derivation: without commit(), psycopg2's autocommit=False discards the
+        inserts at close(); this test fails if commit is removed from
+        import_peer_rows.
+        """
+        self._postgres_json("graybeard_memory")
+        rows = _make_fixture_rows(155)
+        with tempfile.TemporaryDirectory() as tmp:
+            out_dir = Path(tmp)
+            export_file, manifest_file = _write_export_pair(
+                out_dir, "graybeard", 155, rows
+            )
+            # Derivation: committed_store is shared between two independent
+            # FakeConnections to simulate closing one connection and reopening
+            # another against the same database.
+            committed_store: dict[str, list[dict[str, Any]]] = {}
+            conn1 = _make_peer_import_conn(committed_store=committed_store)
+            r1 = cleanup_peer_import.import_peer_rows(
+                conn1, export_file, manifest_file, dry_run=False
+            )
+            self.assertEqual(r1["inserted"], 3)
+            self.assertEqual(r1["skipped"], 0)
+            conn1.close()
+
+            conn2 = _make_peer_import_conn(committed_store=committed_store)
+            r2 = cleanup_peer_import.import_peer_rows(
+                conn2, export_file, manifest_file, dry_run=False
+            )
+            self.assertEqual(r2["inserted"], 0)
+            self.assertEqual(r2["skipped"], 3)
+
+    def test_rollback_on_mid_session_exception(self) -> None:
+        """An exception mid-session rolls back all rows from that session.
+
+        Derivation: if import_peer_rows did not call rollback(), staged rows
+        would remain in committed_store after the exception; this assertion
+        verifies the store is still empty.
+        """
+        self._postgres_json("graybeard_memory")
+        rows = _make_fixture_rows(155)
+        with tempfile.TemporaryDirectory() as tmp:
+            out_dir = Path(tmp)
+            export_file, manifest_file = _write_export_pair(
+                out_dir, "graybeard", 155, rows
+            )
+            committed_store: dict[str, list[dict[str, Any]]] = {}
+            # Derivation: fail_after=1 raises after the first transcript INSERT
+            # has been staged, leaving one session row and one transcript row
+            # uncommitted that must be discarded by rollback.
+            conn = _make_peer_import_conn(
+                committed_store=committed_store, fail_after=1
+            )
+            with self.assertRaisesRegex(RuntimeError, "injected mid-session failure"):
+                cleanup_peer_import.import_peer_rows(
+                    conn, export_file, manifest_file, dry_run=False
+                )
+            self.assertEqual(
+                committed_store,
+                {},
+                "Partial inserts must be rolled back, leaving committed_store empty",
+            )
+
+    def test_rerun_after_partial_failure_inserts_exactly_once(self) -> None:
+        """After a rolled-back partial failure, a rerun inserts all rows once.
+
+        Derivation: combines the rollback guarantee with commit visibility:
+        the failed run leaves no committed rows, the retry inserts the full
+        session, and a third run sees everything already present.
+        """
+        self._postgres_json("graybeard_memory")
+        rows = _make_fixture_rows(155)
+        with tempfile.TemporaryDirectory() as tmp:
+            out_dir = Path(tmp)
+            export_file, manifest_file = _write_export_pair(
+                out_dir, "graybeard", 155, rows
+            )
+            committed_store: dict[str, list[dict[str, Any]]] = {}
+            failed_conn = _make_peer_import_conn(
+                committed_store=committed_store, fail_after=1
+            )
+            with self.assertRaisesRegex(RuntimeError, "injected mid-session failure"):
+                cleanup_peer_import.import_peer_rows(
+                    failed_conn, export_file, manifest_file, dry_run=False
+                )
+
+            retry_conn = _make_peer_import_conn(committed_store=committed_store)
+            r_retry = cleanup_peer_import.import_peer_rows(
+                retry_conn, export_file, manifest_file, dry_run=False
+            )
+            self.assertEqual(r_retry["inserted"], 3)
+            self.assertEqual(r_retry["skipped"], 0)
+
+            verify_conn = _make_peer_import_conn(committed_store=committed_store)
+            r_verify = cleanup_peer_import.import_peer_rows(
+                verify_conn, export_file, manifest_file, dry_run=False
+            )
+            self.assertEqual(r_verify["inserted"], 0)
+            self.assertEqual(r_verify["skipped"], 3)
+
+
+# ---------------------------------------------------------------------------
+# TC-708-011/012: backup/export share one REPEATABLE READ snapshot
+# ---------------------------------------------------------------------------
+
+
+class TestBackupExportSnapshot(CleanupP1TestCase):
+    """Backup and export run inside a single read-only snapshot."""
+
+    def test_main_backup_export_uses_repeatable_read_transaction(self) -> None:
+        """_main_backup_export opens one REPEATABLE READ READ ONLY snapshot."""
+        self._postgres_json("nova_memory")
+        conn = FakeConnection(_full_backup_export_handler({"graybeard"}))
+        with patch(
+            "cleanup_708_703._open_connection", return_value=conn
+        ) as mock_open:
+            with tempfile.TemporaryDirectory() as tmp:
+                cleanup_708_703._main_backup_export(tmp)
+        mock_open.assert_called_once_with("nova_memory")
+        self.assertTrue(conn._readonly)
+        self.assertEqual(conn._isolation_level, "REPEATABLE READ")
+
+    def test_backup_and_export_counts_match(self) -> None:
+        """Backup and export row counts are equal for the same identification.
+
+        Derivation: both phases must read the same snapshot; otherwise rows
+        inserted between identification/export could make the counts diverge.
+        """
+        self._postgres_json("nova_memory")
+        conn = FakeConnection(_full_backup_export_handler({"graybeard"}))
+        with patch("cleanup_708_703._open_connection", return_value=conn):
+            with tempfile.TemporaryDirectory() as tmp:
+                with patch("sys.stdout", new=io.StringIO()) as fake_stdout:
+                    cleanup_708_703._main_backup_export(tmp)
+                    output = json.loads(fake_stdout.getvalue())
+
+        backup_peer_rows = sum(
+            session["row_count"]
+            for session in output["backup_manifest"]["sessions"]
+            if session["disposition"] == "peer_misplaced"
+        )
+        export_peer_rows = sum(
+            manifest["row_count"] for manifest in output["peer_manifests"]
+        )
+        self.assertEqual(
+            backup_peer_rows,
+            export_peer_rows,
+            "Backup and export must agree on the number of peer-owned rows",
+        )
 
 
 if __name__ == "__main__":

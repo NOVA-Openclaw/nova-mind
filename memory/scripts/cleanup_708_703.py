@@ -655,14 +655,30 @@ def _main_identify() -> None:
 
 
 def _main_backup_export(output_dir: str) -> None:
-    """CLI: identify, backup, and export peer rows."""
+    """CLI: identify, backup, and export peer rows.
+
+    Derivation: TC-708-011/012 require that identify, backup, and export all
+    read the same database snapshot; otherwise new rows arriving between the
+    three phases can make backup and export counts disagree. We run the whole
+    sequence inside a single REPEATABLE READ READ ONLY transaction.
+    """
     dbname = resolve_memory_database_name()
     conn = _open_connection(dbname)
     try:
+        # One snapshot for all three read-only phases. set_session commits any
+        # prior transaction on the connection and starts a new one with the
+        # requested properties.
+        conn.set_session(
+            readonly=True,
+            isolation_level="REPEATABLE READ",
+            autocommit=False,
+        )
         ident = identify_misplaced_sessions(conn, dbname)
         out = Path(output_dir)
         backup_manifest = backup_misplaced_rows(conn, ident, out / "backup")
         peer_manifests = export_peer_rows(conn, ident, out / "exports")
+        # Read-only transaction: rollback to release the snapshot cleanly.
+        conn.rollback()
         print(_canonical_json({
             "backup_manifest": asdict(backup_manifest),
             "peer_manifests": [asdict(m) for m in peer_manifests],

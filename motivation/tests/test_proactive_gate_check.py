@@ -66,17 +66,44 @@ def _iso(hours_ago: float = 0.0) -> str:
     return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _make_sessions(entries: dict[str, int]) -> str:
-    """Build a minimal sessions.json payload from {key: lastInteractionAt_ms}."""
-    data = {k: {"lastInteractionAt": v, "chatType": "channel"} for k, v in entries.items()}
+def _make_sessions(
+    entries: dict[str, int] | list[dict[str, Any]],
+    has_more: bool = False,
+    limit_applied: int | None = None,
+) -> str:
+    """Build a real 2026.9.x sessions.json payload.
+
+    `entries` may be either:
+      - dict[str, int]: mapping session key -> lastInteractionAt_ms
+      - list[dict]: pre-built session objects (must include 'key' and 'lastInteractionAt')
+
+    Top-level fields match the real CLI output: activeMinutes, count, hasMore,
+    limitApplied, path, sessions, totalCount.
+    """
+    if isinstance(entries, dict):
+        sessions = [
+            {"key": k, "lastInteractionAt": v, "chatType": "channel"}
+            for k, v in entries.items()
+        ]
+    else:
+        sessions = entries
+    data: dict[str, Any] = {
+        "activeMinutes": 0,
+        "count": len(sessions),
+        "hasMore": has_more,
+        "limitApplied": limit_applied,
+        "path": "/tmp/openclaw/sessions.sqlite",
+        "sessions": sessions,
+        "totalCount": len(sessions),
+    }
     return json.dumps(data)
 
 
-def _mock_openclaw_sessions(entries: dict[str, int]):
+def _mock_openclaw_sessions(entries: dict[str, int] | list[dict[str, Any]], **kwargs):
     """Patch subprocess.run so `openclaw sessions --json` returns the given sessions."""
     result = MagicMock()
     result.returncode = 0
-    result.stdout = _make_sessions(entries)
+    result.stdout = _make_sessions(entries, **kwargs)
     return patch("subprocess.run", return_value=result)
 
 
@@ -202,6 +229,123 @@ class TestIdleDetection:
         assert "idle" in result
         assert "idle_minutes" in result
         assert "idle_threshold_minutes" in result
+
+    def test_real_shape_active_discord_session_two_minutes_ago(self, m, tmp_path):
+        """Real 2026.9.x CLI shape: active discord session 2 minutes ago -> not idle."""
+        sessions = [
+            {
+                "key": "agent:nova:discord:channel:1504704418551959685",
+                "lastInteractionAt": _ms(2.0),
+                "updatedAt": _ms(2.0),
+                "kind": "channel",
+                "agentId": "nova",
+            }
+        ]
+        with _mock_openclaw_sessions(sessions), patch.object(m, "IDLE_THRESHOLD_MINUTES", 60):
+            result = m.check_idle()
+        assert result["idle"] is False
+        assert result["idle_minutes"] < 60
+
+    def test_real_shape_newest_discord_session_ninety_minutes_ago(self, m, tmp_path):
+        """Real 2026.9.x CLI shape: newest user-facing session at 90 minutes -> idle."""
+        sessions = [
+            {
+                "key": "agent:nova:discord:channel:111",
+                "lastInteractionAt": _ms(120.0),
+                "updatedAt": _ms(120.0),
+                "kind": "channel",
+                "agentId": "nova",
+            },
+            {
+                "key": "agent:nova:discord:channel:222",
+                "lastInteractionAt": _ms(90.0),
+                "updatedAt": _ms(90.0),
+                "kind": "channel",
+                "agentId": "nova",
+            },
+        ]
+        with _mock_openclaw_sessions(sessions), patch.object(m, "IDLE_THRESHOLD_MINUTES", 60):
+            result = m.check_idle()
+        assert result["idle"] is True
+        assert result["idle_minutes"] >= 60
+
+    def test_real_shape_missing_sessions_list_fails_closed(self, m, tmp_path):
+        """Unexpected top-level shape (no 'sessions' list) -> fail closed, exit 3 via main."""
+        bad_payload = json.dumps({
+            "activeMinutes": 0,
+            "count": 0,
+            "hasMore": False,
+            "path": "/tmp/openclaw/sessions.sqlite",
+            "totalCount": 0,
+        })
+        result_mock = MagicMock()
+        result_mock.returncode = 0
+        result_mock.stdout = bad_payload
+        with patch("subprocess.run", return_value=result_mock), \
+             patch.object(m, "IDLE_THRESHOLD_MINUTES", 60):
+            result = m.check_idle()
+        assert result["idle"] is False
+        assert "error" in result
+        assert "shape" in result["error"].lower() or "sessions" in result["error"].lower()
+
+    def test_real_shape_sessions_not_list_fails_closed(self, m, tmp_path):
+        """Top-level 'sessions' key present but not a list -> fail closed."""
+        bad_payload = json.dumps({
+            "activeMinutes": 0,
+            "count": 1,
+            "hasMore": False,
+            "path": "/tmp/openclaw/sessions.sqlite",
+            "sessions": "not-a-list",
+            "totalCount": 1,
+        })
+        result_mock = MagicMock()
+        result_mock.returncode = 0
+        result_mock.stdout = bad_payload
+        with patch("subprocess.run", return_value=result_mock), \
+             patch.object(m, "IDLE_THRESHOLD_MINUTES", 60):
+            result = m.check_idle()
+        assert result["idle"] is False
+        assert "error" in result
+
+    def test_real_shape_has_more_re_fetches_with_limit_all(self, m, tmp_path):
+        """When hasMore=true, the code re-fetches with --limit all and uses that list."""
+        truncated = _make_sessions(
+            [{"key": "agent:nova:discord:channel:old", "lastInteractionAt": _ms(120.0), "kind": "channel", "agentId": "nova"}],
+            has_more=True,
+            limit_applied=100,
+        )
+        unlimited = _make_sessions(
+            [{"key": "agent:nova:discord:channel:new", "lastInteractionAt": _ms(5.0), "kind": "channel", "agentId": "nova"}]
+        )
+
+        def fake_run(cmd, **kwargs):
+            r = MagicMock()
+            r.returncode = 0
+            if "--limit" in cmd and "all" in cmd:
+                r.stdout = unlimited
+            else:
+                r.stdout = truncated
+            return r
+
+        with patch("subprocess.run", side_effect=fake_run), \
+             patch.object(m, "IDLE_THRESHOLD_MINUTES", 60):
+            result = m.check_idle()
+        assert result["idle"] is False
+        assert result["idle_minutes"] < 60
+
+    def test_legacy_dict_shape_still_works(self, m, tmp_path):
+        """Tolerate the legacy dict-of-key->session shape used by pre-2026.9.6 mocks."""
+        legacy = json.dumps({
+            "agent:nova:discord:channel:123": {"lastInteractionAt": _ms(30), "chatType": "channel"}
+        })
+        result_mock = MagicMock()
+        result_mock.returncode = 0
+        result_mock.stdout = legacy
+        with patch("subprocess.run", return_value=result_mock), \
+             patch.object(m, "IDLE_THRESHOLD_MINUTES", 60):
+            result = m.check_idle()
+        assert result["idle"] is False
+        assert result["idle_minutes"] < 60
 
 
 # ---------------------------------------------------------------------------

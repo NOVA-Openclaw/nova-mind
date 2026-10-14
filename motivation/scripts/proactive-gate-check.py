@@ -310,9 +310,90 @@ def check_idle() -> dict:
             "reason": "openclaw sessions output malformed — defaulting to not-idle",
         }
 
+    # Parse the 2026.9.x real CLI shape. The top level is an object whose
+    # "sessions" key is an array of session objects; each session object has
+    # a string "key" (e.g. "agent:nova:discord:channel:...") and an integer
+    # "lastInteractionAt" (epoch ms). Legacy callers may still hand us a
+    # dict-of-key->session; tolerate that only as a transparent fallback.
+    sessions_list: list[dict[str, Any]]
+    if isinstance(sessions, dict):
+        if "sessions" in sessions and isinstance(sessions["sessions"], list):
+            sessions_list = sessions["sessions"]
+        elif "sessions" in sessions:
+            # `sessions` key exists but is not a list -> unexpected shape.
+            return {
+                "idle": False,
+                "idle_minutes": 0.0,
+                "idle_threshold_minutes": IDLE_THRESHOLD_MINUTES,
+                "error": _scrub_error(
+                    "openclaw sessions top-level 'sessions' is not a list"
+                ),
+                "reason": "openclaw sessions shape unexpected — defaulting to not-idle",
+            }
+        elif any(k in sessions for k in ("activeMinutes", "count", "hasMore", "limitApplied", "path", "totalCount")):
+            # Looks like the real top-level envelope but is missing the
+            # `sessions` array entirely. Fail closed rather than treating it as
+            # the legacy dict-of-sessions shape.
+            return {
+                "idle": False,
+                "idle_minutes": 0.0,
+                "idle_threshold_minutes": IDLE_THRESHOLD_MINUTES,
+                "error": _scrub_error(
+                    "openclaw sessions top-level object is missing 'sessions' array"
+                ),
+                "reason": "openclaw sessions shape unexpected — defaulting to not-idle",
+            }
+        else:
+            # Legacy dict-of-key->session shape.
+            sessions_list = [
+                {"key": key, **session}
+                for key, session in sessions.items()
+                if isinstance(session, dict)
+            ]
+    elif isinstance(sessions, list):
+        sessions_list = sessions
+    else:
+        return {
+            "idle": False,
+            "idle_minutes": 0.0,
+            "idle_threshold_minutes": IDLE_THRESHOLD_MINUTES,
+            "error": _scrub_error(
+                f"openclaw sessions top-level shape is {type(sessions).__name__}, expected object"
+            ),
+            "reason": "openclaw sessions shape unexpected — defaulting to not-idle",
+        }
+
+    # If the response was truncated, the newest user-facing session might be
+    # missing. The CLI supports `--limit all` to remove the cap, so re-fetch
+    # once with the unlimited flag. We also accept `--active <minutes>` as a
+    # narrower filter, but only when we are confident the threshold covers it.
+    # The default ordering from the CLI returns newest-first, so even a capped
+    # page is safe IF it includes the user's most recent session.
+    has_more = isinstance(sessions, dict) and sessions.get("hasMore") is True
+    limit_applied = isinstance(sessions, dict) and sessions.get("limitApplied") is not None
+    if has_more or limit_applied:
+        try:
+            unlimited = subprocess.run(
+                ["openclaw", "sessions", "--json", "--limit", "all"],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            if unlimited.returncode == 0:
+                unlimited_data = json.loads(unlimited.stdout)
+                if isinstance(unlimited_data, dict) and isinstance(unlimited_data.get("sessions"), list):
+                    sessions_list = unlimited_data["sessions"]
+        except (subprocess.TimeoutExpired, json.JSONDecodeError, ValueError):
+            # Keep the original (possibly truncated) list and proceed; failing
+            # the unlimited retry must not mask real user activity.
+            pass
+
     latest_interaction_ms: int | None = None
 
-    for key, session in sessions.items():
+    for session in sessions_list:
+        key = session.get("key") if isinstance(session, dict) else None
+        if not isinstance(key, str):
+            continue
         # Must match at least one user-facing pattern
         if not any(pat in key for pat in USER_SESSION_PATTERNS):
             continue
@@ -330,6 +411,8 @@ def check_idle() -> dict:
                 pass
 
     if latest_interaction_ms is None:
+        # Only reach here when the parse succeeded and the session list really
+        # contains no user-facing entries. In that case idle=true is safe.
         return {
             "idle": True,
             "idle_minutes": float("inf"),

@@ -4,6 +4,7 @@ All database access is mocked.  No test in this file connects to a real
 Postgres database, so the suite is safe to run in any environment.
 """
 
+import os
 import sys
 import unittest
 from pathlib import Path
@@ -206,6 +207,24 @@ class TestEntityFactNoOutOfBand(unittest.TestCase):
 class TestPerSourceTypeResolution(unittest.TestCase):
     """TC-706-003: every memory_embeddings.source_type resolves to its own source record."""
 
+    def setUp(self):
+        """Parameterise the expected memory DB name from the same resolver the code uses."""
+        self._original_pgdatabase = os.environ.get("PGDATABASE")
+        os.environ.setdefault("PGDATABASE", "nova_memory")
+        # Clear the module-level cache so the resolver re-reads PGDATABASE.
+        sa._NOVA_MEMORY_DB = None
+
+    def tearDown(self):
+        if self._original_pgdatabase is None:
+            os.environ.pop("PGDATABASE", None)
+        else:
+            os.environ["PGDATABASE"] = self._original_pgdatabase
+        sa._NOVA_MEMORY_DB = None
+
+    def _expected_memory_location(self, table: str, key_column: str, source_id: str) -> str:
+        """Return the location string using the same DB resolution as source_anchor.py."""
+        return f"{sa._resolve_memory_database()}.{table}({key_column}={source_id})"
+
     def _assert_resolved(self, result: dict):
         self.assertTrue(result["resolved"], f"expected resolved, got {result}")
 
@@ -266,7 +285,7 @@ class TestPerSourceTypeResolution(unittest.TestCase):
         })
         result = resolver.resolve("library", "113")
         self._assert_resolved(result)
-        self.assertEqual(result["location"], "nova_memory.library_works(id=113)")
+        self.assertEqual(result["location"], self._expected_memory_location("library_works", "id", "113"))
 
     def test_motivation_d100_resolves_by_roll(self):
         # motivation_d100 has no surrogate id; it is keyed by roll number.
@@ -303,7 +322,7 @@ class TestPerSourceTypeResolution(unittest.TestCase):
         result = resolver.resolve("entity_relationship", "42")
         self._assert_resolved(result)
         self.assertEqual(result["row"]["relationship"], "friend")
-        self.assertEqual(result["location"], "nova_memory.entity_relationships(id=42)")
+        self.assertEqual(result["location"], self._expected_memory_location("entity_relationships", "id", "42"))
 
     def test_comms_digest_uses_real_columns(self):
         # QA round 4: comms_digests has `generated_at`, not `created_at`.
@@ -315,7 +334,7 @@ class TestPerSourceTypeResolution(unittest.TestCase):
         result = resolver.resolve("comms_digest", "7")
         self._assert_resolved(result)
         self.assertIn("generated_at", result["row"])
-        self.assertEqual(result["location"], "nova_memory.comms_digests(id=7)")
+        self.assertEqual(result["location"], self._expected_memory_location("comms_digests", "id", "7"))
 
     def test_gambling_log_uses_real_columns(self):
         # QA round 4: gambling_logs has both `name` and `created_at`.
@@ -327,7 +346,7 @@ class TestPerSourceTypeResolution(unittest.TestCase):
         result = resolver.resolve("gambling_log", "99")
         self._assert_resolved(result)
         self.assertEqual(result["row"]["name"], "poker night")
-        self.assertEqual(result["location"], "nova_memory.gambling_logs(id=99)")
+        self.assertEqual(result["location"], self._expected_memory_location("gambling_logs", "id", "99"))
 
     def test_research_polymorphic_resolves_task(self):
         # Live sample: "research_task:9".
@@ -347,7 +366,7 @@ class TestPerSourceTypeResolution(unittest.TestCase):
         })
         result = resolver.resolve("task", "100")
         self._assert_resolved(result)
-        self.assertEqual(result["location"], "nova_memory.work_queue(id=100)")
+        self.assertEqual(result["location"], self._expected_memory_location("work_queue", "id", "100"))
 
     def test_unmapped_source_type_returns_reason(self):
         _, _, resolver = make_resolver({})

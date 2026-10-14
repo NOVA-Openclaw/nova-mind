@@ -46,6 +46,54 @@ TMPDIRS=()
 cleanup_tmp() { rm -f "${TMPFILES[@]}"; rm -rf "${TMPDIRS[@]}"; }
 trap cleanup_tmp EXIT
 
+# Helper: install the turn-context plugin's TypeScript build dependency.
+# Captures npm output so a peer-dependency failure is visible instead of
+# swallowed by >/dev/null 2>&1.  Exits non-zero on failure (#722).
+_install_turn_context_typescript_deps() {
+    local target_dir="$1"
+    local npm_log
+    npm_log=$(mktemp /tmp/agent-install-npm-XXXXXX.log)
+    TMPFILES+=("$npm_log")
+
+    echo "  Installing build dependencies..."
+    if (cd "$target_dir" && npm install --save-dev --legacy-peer-deps typescript) >"$npm_log" 2>&1; then
+        return 0
+    fi
+
+    echo -e "  ${CROSS_MARK} Failed to install TypeScript build dependencies"
+    echo "  npm output:"
+    sed 's/^/    /' "$npm_log" >&2
+    echo "  Hint: the installer already uses --legacy-peer-deps." >&2
+    echo "        Check the npm output above for the underlying cause." >&2
+    return 1
+}
+
+# Helper: keep gateway.reload.mode valid for OpenClaw 2026.9.x.
+# Valid values are "off" and "hybrid"; never overwrite an existing valid
+# value, and never write the obsolete "hot" value (#723).
+_configure_gateway_reload_mode() {
+    local config_file="$1"
+    local existing_mode
+    existing_mode=$(jq -r '.gateway.reload.mode // empty' "$config_file" 2>/dev/null || true)
+
+    if [ "$existing_mode" = "off" ] || [ "$existing_mode" = "hybrid" ]; then
+        echo -e "  ${CHECK_MARK} gateway.reload.mode = \"$existing_mode\" (valid, left unchanged)"
+        return 0
+    fi
+
+    jq '.gateway.reload.mode = "hybrid"' "$config_file" >"$config_file.tmp" && \
+        mv "$config_file.tmp" "$config_file" && \
+        echo -e "  ${CHECK_MARK} Set gateway.reload.mode = \"hybrid\"" || \
+        echo -e "  ${WARNING} Could not set gateway.reload.mode"
+}
+
+# When the installer is sourced by unit tests, stop here so tests can call
+# the helper functions above without running the full installer.  This guard
+# is NOT used in normal execution.
+if [ "${AGENT_INSTALL_TEST_MODE:-}" = "1" ] && [ "${BASH_SOURCE[0]}" != "${0}" ]; then
+    return 0
+fi
+
 # ============================================
 # SECTION 2: Source shared library
 # ============================================
@@ -1964,8 +2012,7 @@ if [ -d "$TURN_CONTEXT_SOURCE" ]; then
         if [ "${NEEDS_BUILD:-0}" -eq 1 ]; then
             # Ensure typescript is available
             if [ ! -d "$TURN_CONTEXT_SOURCE/node_modules/typescript" ]; then
-                echo "  Installing build dependencies..."
-                (cd "$TURN_CONTEXT_SOURCE" && npm install --save-dev typescript) >/dev/null 2>&1
+                _install_turn_context_typescript_deps "$TURN_CONTEXT_SOURCE"
             fi
             echo "  Building turn-context plugin..."
             BUILD_LOG=$(mktemp /tmp/turn-context-build-XXXXXX.log)

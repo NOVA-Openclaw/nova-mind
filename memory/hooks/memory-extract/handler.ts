@@ -6,6 +6,372 @@ import { readFileSync, existsSync } from "fs";
 
 const execFileAsync = promisify(execFile);
 
+// ── Plugin SDK contract (host reference: /home/nova/nova-openclaw-production) ──
+// src/plugins/logger-types.ts: debug is OPTIONAL.
+// src/plugins/plugin-api.types.ts: api.logger is handed to register() once.
+// src/plugins/hook-gateway.types.ts: gateway_start/gateway_stop events; ctx has no logger.
+
+type PluginLogger = {
+  debug?: (message: string) => void;
+  info: (message: string) => void;
+  warn: (message: string) => void;
+  error: (message: string) => void;
+};
+
+type PluginApi = {
+  logger: PluginLogger;
+  pluginConfig?: Record<string, unknown>;
+  on: (
+    hook: string,
+    handler: (event: any, ctx: any) => Promise<void> | void,
+    opts?: { timeoutMs?: number }
+  ) => void;
+};
+
+// ── Lifecycle logging configuration ──
+// Defaults mirror #716 / TEST-CASES-ISSUE-716.md §11.
+const DEFAULT_SUMMARY_INTERVAL_MS = 30 * 60 * 1000;
+const DEFAULT_STALL_THRESHOLD_MS = 6 * 60 * 60 * 1000;
+const DEFAULT_STALL_REPEAT_INTERVAL_MS = 60 * 60 * 1000;
+const DEFAULT_STALL_CHECK_INTERVAL_MS = 60 * 1000;
+const DEFAULT_DB_UNRESOLVED_RATE_LIMIT_MS = 10 * 60 * 1000;
+
+// Hardcoded version identifier; tests assert its presence in the startup line.
+// Derivation: plugin semantic version for this logging refactor (#716).
+const PLUGIN_VERSION = "1.0.0-716";
+
+// ── Module-level state (reset exported for isolate:false test runs) ──
+let pluginLogger: PluginLogger | null = null;
+let summaryTimer: ReturnType<typeof setInterval> | null = null;
+let stallTimer: ReturnType<typeof setInterval> | null = null;
+
+interface Counters {
+  received: number;
+  extracted: number;
+  stored: number;
+  skipped: number;
+  failed: number;
+}
+
+const sessionCounters: Counters = {
+  received: 0,
+  extracted: 0,
+  stored: 0,
+  skipped: 0,
+  failed: 0,
+};
+
+const summaryCounters: Counters = {
+  received: 0,
+  extracted: 0,
+  stored: 0,
+  skipped: 0,
+  failed: 0,
+};
+
+let lastSuccessfulStoreAt: number | null = null;
+let lastStallWarnedAt = 0;
+let stallStartAt: number | null = null;
+let lastDbUnresolvedLoggedAt = 0;
+
+let activeConfig = {
+  summaryIntervalMs: DEFAULT_SUMMARY_INTERVAL_MS,
+  stallThresholdMs: DEFAULT_STALL_THRESHOLD_MS,
+  stallRepeatIntervalMs: DEFAULT_STALL_REPEAT_INTERVAL_MS,
+  stallCheckIntervalMs: DEFAULT_STALL_CHECK_INTERVAL_MS,
+  dbUnresolvedRateLimitMs: DEFAULT_DB_UNRESOLVED_RATE_LIMIT_MS,
+};
+
+// ── Safe logging helpers ──
+// Every call site is guarded so a throwing logger can never block extraction.
+function logDebug(message: string): void {
+  if (!pluginLogger) return;
+  try {
+    if (typeof pluginLogger.debug === "function") {
+      pluginLogger.debug(message);
+    }
+  } catch {
+    /* logging is never on the critical path */
+  }
+}
+
+function logInfo(message: string): void {
+  if (!pluginLogger) return;
+  try {
+    pluginLogger.info(message);
+  } catch {
+    /* logging is never on the critical path */
+  }
+}
+
+function logWarn(message: string): void {
+  if (!pluginLogger) return;
+  try {
+    pluginLogger.warn(message);
+  } catch {
+    /* logging is never on the critical path */
+  }
+}
+
+function logError(message: string): void {
+  if (!pluginLogger) return;
+  try {
+    pluginLogger.error(message);
+  } catch {
+    /* logging is never on the critical path */
+  }
+}
+
+// ── Counter helpers (never decrement) ──
+function incrementReceived(): void {
+  sessionCounters.received++;
+  summaryCounters.received++;
+}
+
+function incrementExtracted(): void {
+  sessionCounters.extracted++;
+  summaryCounters.extracted++;
+}
+
+function incrementStored(): void {
+  sessionCounters.stored++;
+  summaryCounters.stored++;
+  lastSuccessfulStoreAt = Date.now();
+  resetStallState();
+}
+
+function incrementSkipped(): void {
+  sessionCounters.skipped++;
+  summaryCounters.skipped++;
+}
+
+function incrementFailed(): void {
+  sessionCounters.failed++;
+  summaryCounters.failed++;
+}
+
+function resetCounters(): void {
+  sessionCounters.received = 0;
+  sessionCounters.extracted = 0;
+  sessionCounters.stored = 0;
+  sessionCounters.skipped = 0;
+  sessionCounters.failed = 0;
+  summaryCounters.received = 0;
+  summaryCounters.extracted = 0;
+  summaryCounters.stored = 0;
+  summaryCounters.skipped = 0;
+  summaryCounters.failed = 0;
+  lastSuccessfulStoreAt = null;
+}
+
+function resetStallState(): void {
+  if (stallStartAt !== null) {
+    const durationMs = Date.now() - stallStartAt;
+    logInfo(`[memory-extract] stall recovered durationMs=${durationMs}`);
+  }
+  stallStartAt = null;
+  lastStallWarnedAt = 0;
+}
+
+function resetModuleState(): void {
+  resetCounters();
+  lastStallWarnedAt = 0;
+  stallStartAt = null;
+  lastDbUnresolvedLoggedAt = 0;
+  pluginLogger = null;
+  if (summaryTimer) {
+    clearInterval(summaryTimer);
+    summaryTimer = null;
+  }
+  if (stallTimer) {
+    clearInterval(stallTimer);
+    stallTimer = null;
+  }
+}
+
+// ── Startup info resolution ──
+function loadDatabaseFromPostgresConfig(): string | null {
+  const configPath = join(os.homedir(), ".openclaw", "postgres.json");
+  try {
+    const raw = readFileSync(configPath, "utf8");
+    const parsed = JSON.parse(raw);
+    const db = parsed?.database;
+    if (typeof db === "string" && db.trim().length > 0) {
+      return db.trim();
+    }
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException)?.code;
+    if (code !== "ENOENT" && code !== "EACCES") {
+      logWarn(`[memory-extract] Could not read postgres.json: ${(err as Error).message}`);
+    }
+  }
+  return null;
+}
+
+export function resolveMemoryDatabaseSync(): {
+  dbName: string | null;
+  dbSource: "PGDATABASE" | "postgres.json" | null;
+} {
+  const pgDatabase = process.env.PGDATABASE;
+  if (pgDatabase && pgDatabase.trim().length > 0) {
+    return { dbName: pgDatabase.trim(), dbSource: "PGDATABASE" };
+  }
+  const dbName = loadDatabaseFromPostgresConfig();
+  if (dbName) {
+    return { dbName, dbSource: "postgres.json" };
+  }
+  return { dbName: null, dbSource: null };
+}
+
+const EXTRACTION_CONFIG_PATH =
+  process.env.EXTRACTION_CONFIG_PATH_OVERRIDE ||
+  join(os.homedir(), ".openclaw", "scripts", "memory-extraction-config.json");
+
+function loadConfigValue<T>(
+  key: string,
+  fallback: T,
+  validate: (v: unknown) => v is T
+): T {
+  try {
+    const raw = readFileSync(EXTRACTION_CONFIG_PATH, "utf8");
+    const parsed = JSON.parse(raw);
+    const value = parsed?.[key];
+    if (validate(value)) return value;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException)?.code;
+    if (code !== "ENOENT" && code !== "EACCES") {
+      logWarn(`[memory-extract] Could not read extraction config: ${(err as Error).message}`);
+    }
+  }
+  return fallback;
+}
+
+function resolvePythonCmd(): string {
+  const envOverride = process.env.EXTRACTION_PYTHON_CMD_OVERRIDE;
+  if (envOverride) return envOverride;
+
+  const configCmd = loadConfigValue<string>(
+    "python_cmd",
+    "",
+    (v): v is string => typeof v === "string" && v.trim().length > 0
+  );
+  if (configCmd) return configCmd;
+
+  const userName = process.env.USER || os.userInfo().username || "";
+  const venvPython = join(
+    os.homedir(),
+    ".local",
+    "share",
+    userName,
+    "venv",
+    "bin",
+    "python3"
+  );
+  if (existsSync(venvPython)) return venvPython;
+
+  return "python3";
+}
+
+function resolveExtractionModel(): string {
+  const envModel = process.env.MEMORY_EXTRACTION_MODEL;
+  if (envModel && envModel.trim().length > 0) return envModel.trim();
+
+  return loadConfigValue<string>(
+    "model",
+    "deepseek/deepseek-v4-flash",
+    (v): v is string => typeof v === "string" && v.trim().length > 0
+  );
+}
+
+function startupInfoLine(): {
+  ok: true;
+  dbName: string;
+  dbSource: string;
+  pythonCmd: string;
+  model: string;
+} | { ok: false; reason: "db_unresolved" } {
+  const { dbName, dbSource } = resolveMemoryDatabaseSync();
+  if (!dbName || !dbSource) {
+    return { ok: false, reason: "db_unresolved" };
+  }
+  return {
+    ok: true,
+    dbName,
+    dbSource,
+    pythonCmd: resolvePythonCmd(),
+    model: resolveExtractionModel(),
+  };
+}
+
+// ── Failure logging ──
+// Stable reason tokens required by #716 / TEST-CASES-ISSUE-716.md §6.
+function logFailure(reason: string, sessionKey: string, extra = ""): void {
+  const extraPart = extra ? ` ${extra}` : "";
+  logError(
+    `[memory-extract] failure reason=${reason} sessionKey=${sessionKey}${extraPart}`
+  );
+}
+
+// Rate-limited db_unresolved logging for runtime re-occurrences.
+function logDbUnresolved(sessionKey: string): void {
+  const now = Date.now();
+  if (now - lastDbUnresolvedLoggedAt < activeConfig.dbUnresolvedRateLimitMs) {
+    return;
+  }
+  lastDbUnresolvedLoggedAt = now;
+  logFailure("db_unresolved", sessionKey);
+}
+
+// ── Timers ──
+function emitPeriodicSummary(): void {
+  const hadActivity =
+    summaryCounters.received > 0 ||
+    summaryCounters.extracted > 0 ||
+    summaryCounters.stored > 0 ||
+    summaryCounters.skipped > 0 ||
+    summaryCounters.failed > 0;
+  if (!hadActivity) return;
+
+  const lastStore = lastSuccessfulStoreAt
+    ? new Date(lastSuccessfulStoreAt).toISOString()
+    : "none";
+  logInfo(
+    `[memory-extract] summary received=${summaryCounters.received} ` +
+      `extracted=${summaryCounters.extracted} stored=${summaryCounters.stored} ` +
+      `skipped=${summaryCounters.skipped} failed=${summaryCounters.failed} ` +
+      `lastSuccessfulStore=${lastStore}`
+  );
+
+  summaryCounters.received = 0;
+  summaryCounters.extracted = 0;
+  summaryCounters.stored = 0;
+  summaryCounters.skipped = 0;
+  summaryCounters.failed = 0;
+}
+
+function checkStall(): void {
+  if (lastSuccessfulStoreAt === null) return;
+  const now = Date.now();
+  const stalledForMs = now - lastSuccessfulStoreAt;
+  if (stalledForMs <= activeConfig.stallThresholdMs) return;
+
+  if (stallStartAt === null) {
+    stallStartAt = lastSuccessfulStoreAt;
+  }
+
+  if (
+    lastStallWarnedAt === 0 ||
+    now - lastStallWarnedAt >= activeConfig.stallRepeatIntervalMs
+  ) {
+    logWarn(
+      `[memory-extract] stall warning stalledForMs=${stalledForMs} sessionKey=last-store`
+    );
+    lastStallWarnedAt = now;
+  }
+}
+
+// ── Existing extraction helpers (preserved from pre-716 handler) ──
+
 interface ActivityState {
   activeMinutesToday: number;
   lastActiveAt: number | null;
@@ -14,34 +380,32 @@ interface ActivityState {
   heartbeats: number;
 }
 
-// In-memory activity tracking (no longer persisted to file)
 let activityState: ActivityState = {
   activeMinutesToday: 0,
   lastActiveAt: null,
   todayDate: null,
   userMessages: 0,
-  heartbeats: 0
+  heartbeats: 0,
 };
 
 function logActivity(isUserMessage: boolean) {
-  const today = new Date().toISOString().split('T')[0];
+  const today = new Date().toISOString().split("T")[0];
   const now = Date.now();
 
-  // Reset if new day
   if (activityState.todayDate !== today) {
-    console.info('[memory-extract] New day detected, resetting activity counters', {
-      previousDate: activityState.todayDate,
-      newDate: today,
-      previousUserMessages: activityState.userMessages,
-      previousHeartbeats: activityState.heartbeats,
-      previousActiveMinutes: activityState.activeMinutesToday
-    });
+    logInfo(
+      `[memory-extract] New day detected, resetting activity counters ` +
+        `previousDate=${activityState.todayDate} newDate=${today} ` +
+        `previousUserMessages=${activityState.userMessages} ` +
+        `previousHeartbeats=${activityState.heartbeats} ` +
+        `previousActiveMinutes=${activityState.activeMinutesToday}`
+    );
     activityState = {
       activeMinutesToday: 0,
       lastActiveAt: null,
       todayDate: today,
       userMessages: 0,
-      heartbeats: 0
+      heartbeats: 0,
     };
   }
 
@@ -58,125 +422,33 @@ function logActivity(isUserMessage: boolean) {
     activityState.heartbeats++;
   }
 
-  console.debug('[memory-extract] Activity update', {
-    isUserMessage,
-    activeMinutesToday: activityState.activeMinutesToday.toFixed(2),
-    userMessages: activityState.userMessages,
-    heartbeats: activityState.heartbeats,
-    date: activityState.todayDate
-  });
+  logDebug(
+    `[memory-extract] Activity update isUserMessage=${isUserMessage} ` +
+      `activeMinutesToday=${activityState.activeMinutesToday.toFixed(2)} ` +
+      `userMessages=${activityState.userMessages} ` +
+      `heartbeats=${activityState.heartbeats} date=${activityState.todayDate}`
+  );
 }
 
-// ---------------------------------------------------------------------------
 // Issue #485 / #497 constants
-// ---------------------------------------------------------------------------
 const KILL_GRACE_MS = 5000;
 const PIPE_TAIL_CAP_BYTES = 16384;
-
-// Default outer hook timeout. Set to 90s (not 60s) because the Python child's
-// inner requests timeout is 60s (extract_memories.py:841). An outer timeout <=
-// 60s risks SIGTERM'ing the child mid-HTTP-call, destroying clean dead-letter
-// context. The 30s buffer lets a normal inner-timeout-induced RuntimeError
-// unwind and exit cleanly before the hook ever needs to kill the process.
 const DEFAULT_EXTRACTION_TIMEOUT_MS = 90000;
 
-const EXTRACTION_CONFIG_PATH =
-  process.env.EXTRACTION_CONFIG_PATH_OVERRIDE ||
-  join(os.homedir(), '.openclaw', 'scripts', 'memory-extraction-config.json');
-
-/**
- * Read the per-event extraction timeout from the deployed config file.
- * No caching — every event does a fresh read so the timeout can be hot-reloaded
- * without a gateway restart. Falls back to DEFAULT_EXTRACTION_TIMEOUT_MS on
- * missing file, malformed JSON, unreadable file, or non-positive numeric value.
- */
 function loadExtractionTimeoutMs(): number {
-  try {
-    const raw = readFileSync(EXTRACTION_CONFIG_PATH, 'utf8');
-    const parsed = JSON.parse(raw);
-    const value = parsed?.extraction_timeout_ms;
-    if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
-      return value;
-    }
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException)?.code;
-    // ENOENT/EACCES/malformed are all expected operational states; swallow and
-    // fall back to the safe default so the hook never crashes the turn.
-    if (code !== 'ENOENT' && code !== 'EACCES') {
-      console.warn('[memory-extract] Could not read extraction timeout config', {
-        path: EXTRACTION_CONFIG_PATH,
-        error: (err as Error).message
-      });
-    }
-  }
-  return DEFAULT_EXTRACTION_TIMEOUT_MS;
+  return loadConfigValue<number>(
+    "extraction_timeout_ms",
+    DEFAULT_EXTRACTION_TIMEOUT_MS,
+    (v): v is number =>
+      typeof v === "number" && Number.isFinite(v) && v > 0
+  );
 }
 
-// Default interpreter fallback when no override or venv is available.
-const DEFAULT_PYTHON_CMD = 'python3';
-
-/**
- * Resolve the Python interpreter to use for extract_memories.py.
- *
- * Resolution order (first match wins):
- *   1. EXTRACTION_PYTHON_CMD_OVERRIDE environment variable
- *   2. "python_cmd" key in memory-extraction-config.json (read per event for hot reload)
- *   3. Agent venv python at ~/.local/share/$USER/venv/bin/python3 if it exists
- *   4. Bare "python3" from PATH
- *
- * The result is logged once per invocation so deploy verification can confirm
- * the venv is being selected in production.
- */
-function resolvePythonCmd(): string {
-  // 1. Explicit env override (used by tests and emergency ops).
-  const envOverride = process.env.EXTRACTION_PYTHON_CMD_OVERRIDE;
-  if (envOverride) {
-    return envOverride;
-  }
-
-  // 2. Config file key — read fresh each event so changes are hot-reload friendly.
-  try {
-    const raw = readFileSync(EXTRACTION_CONFIG_PATH, 'utf8');
-    const parsed = JSON.parse(raw);
-    const configCmd = parsed?.python_cmd;
-    if (typeof configCmd === 'string' && configCmd.trim().length > 0) {
-      return configCmd.trim();
-    }
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException)?.code;
-    if (code !== 'ENOENT' && code !== 'EACCES') {
-      console.warn('[memory-extract] Could not read python_cmd from extraction config', {
-        path: EXTRACTION_CONFIG_PATH,
-        error: (err as Error).message
-      });
-    }
-  }
-
-  // 3. Agent venv python installed by agent-install.sh.
-  const userName = process.env.USER || os.userInfo().username || '';
-  const venvPython = join(os.homedir(), '.local', 'share', userName, 'venv', 'bin', 'python3');
-  if (existsSync(venvPython)) {
-    return venvPython;
-  }
-
-  // 4. System fallback.
-  return DEFAULT_PYTHON_CMD;
-}
-
-// ---------------------------------------------------------------------------
-// Issue #485 helpers
-// ---------------------------------------------------------------------------
-
-/**
- * Attach a data handler to a child-process stream that retains only the last
- * `cap` bytes. Reading continuously prevents pipe stalls when the child writes
- * more than the OS pipe buffer can hold.
- */
 function attachTailBuffer(stream: any, cap: number): () => Buffer {
   const chunks: Buffer[] = [];
   let total = 0;
 
-  stream.on('data', (chunk: Buffer) => {
+  stream.on("data", (chunk: Buffer) => {
     chunks.push(chunk);
     total += chunk.length;
     while (total > cap && chunks.length > 0) {
@@ -193,81 +465,33 @@ function attachTailBuffer(stream: any, cap: number): () => Buffer {
   });
 
   return () => {
-    if (chunks.length === 0) {
-      return Buffer.alloc(0);
-    }
+    if (chunks.length === 0) return Buffer.alloc(0);
     const tail = Buffer.concat(chunks);
     return tail.length > cap ? tail.subarray(-cap) : tail;
   };
 }
 
 function tailToString(tail: Buffer): string {
-  // Node's utf8 decoder replaces incomplete sequences with U+FFFD automatically.
-  return tail.toString('utf8');
+  return tail.toString("utf8");
 }
 
 function truncateSenderId(senderId: string): string {
-  if (!senderId) return 'none';
-  return senderId.substring(0, 8) + '...';
+  if (!senderId) return "none";
+  return senderId.substring(0, 8) + "...";
 }
 
-/**
- * Normalize the host-provided thread id for storage in external_thread_id.
- *
- * - undefined / null → NULL (missing thread id)
- * - number → stringified number (e.g. 123456789 becomes "123456789")
- * - string after trim:
- *   - empty string → NULL (cannot distinguish from NULL at the unique index,
- *     so normalize to NULL to keep application-level IS NULL checks clean)
- *   - non-empty → trimmed string
- *
- * This keeps numeric and string forms of the same logical thread id from
- * colliding into two rows (TC-708-005) and keeps absent thread ids as NULL
- * rather than invented empty strings (TC-708-004).
- */
 function normalizeExternalThreadId(threadId: unknown): string | null {
   if (threadId === undefined || threadId === null) return null;
-  if (typeof threadId === 'number') return String(threadId);
-  if (typeof threadId === 'string') {
+  if (typeof threadId === "number") return String(threadId);
+  if (typeof threadId === "string") {
     const trimmed = threadId.trim();
     return trimmed.length > 0 ? trimmed : null;
   }
   return null;
 }
 
-/**
- * Log a psql failure without leaking connection secrets. The error object from
- * execFile may contain the full command line, so we only log `.message`.
- */
-// ---------------------------------------------------------------------------
-// Issue #703 — peer memory DB resolution (no nova_memory fallback)
-// ---------------------------------------------------------------------------
-
-/**
- * Read the database name from the running gateway's own postgres.json.
- * Returns null when the file is missing, unreadable, malformed, or has no
- * usable `database` field. Never hardcodes a default DB name.
- */
-function loadDatabaseFromPostgresConfig(): string | null {
-  const configPath = join(os.homedir(), '.openclaw', 'postgres.json');
-  try {
-    const raw = readFileSync(configPath, 'utf8');
-    const parsed = JSON.parse(raw);
-    const db = parsed?.database;
-    if (typeof db === 'string' && db.trim().length > 0) {
-      return db.trim();
-    }
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException)?.code;
-    if (code !== 'ENOENT' && code !== 'EACCES') {
-      console.warn('[memory-extract] Could not read postgres.json', {
-        path: configPath,
-        error: (err as Error).message,
-      });
-    }
-  }
-  return null;
-}
+// Process-level cache for peer-agent -> owns-a-database lookups.
+export const peerDbCache: Map<string, boolean> = new Map();
 
 function parseAgentFromSessionKey(sessionKey: string): string | null {
   if (!sessionKey) return null;
@@ -275,24 +499,15 @@ function parseAgentFromSessionKey(sessionKey: string): string | null {
   return match ? match[1] : null;
 }
 
-// Process-level cache for peer-agent -> owns-a-database lookups.
-// Exported so tests can clear it between cases when running with isolate:false.
-export const peerDbCache: Map<string, boolean> = new Map();
-
 function isDatabaseDoesNotExistError(err: unknown): boolean {
   const message = (err as any)?.message ?? String(err);
   return /\bdatabase\b.+\bdoes not exist\b/i.test(message);
 }
 
-/**
- * Return true when a database named `<agent>_memory` exists on the resolved
- * server. The result is cached per process. If the catalog lookup itself fails
- * because the resolved database does not exist, fail loudly so the handler
- * never falls back or spawns the extractor. For other failures (psql
- * unavailable, insufficient privileges) log a warning and return false so the
- * guard degrades safely; DB resolution remains the real access control.
- */
-async function agentHasMemoryDatabase(agent: string, resolvedDb: string): Promise<boolean> {
+async function agentHasMemoryDatabase(
+  agent: string,
+  resolvedDb: string
+): Promise<boolean> {
   if (peerDbCache.has(agent)) {
     return peerDbCache.get(agent)!;
   }
@@ -300,29 +515,28 @@ async function agentHasMemoryDatabase(agent: string, resolvedDb: string): Promis
   const candidate = `${agent}_memory`;
   let exists = false;
   try {
-    // Use execFile directly (not the module-level promisified wrapper) and
-    // normalize the callback shape so tests and production both work: vitest's
-    // mock may call back with either a plain stdout string or a { stdout,
-    // stderr } object, while production gives (err, stdout, stderr).
     const stdout = await new Promise<string>((resolve, reject) => {
       execFile(
-        'psql',
+        "psql",
         [
           resolvedDb,
-          '-t',
-          '-A',
-          '-c',
-          `SELECT 1 FROM pg_database WHERE datname = '${candidate.replace(/'/g, "''")}'`,
+          "-t",
+          "-A",
+          "-c",
+          `SELECT 1 FROM pg_database WHERE datname = '${candidate.replace(
+            /'/g,
+            "''"
+          )}'`,
         ],
         (err, out1, out2) => {
           if (err) {
             reject(err);
-          } else if (typeof out1 === 'string') {
+          } else if (typeof out1 === "string") {
             resolve(out1);
-          } else if (out1 && typeof (out1 as any).stdout === 'string') {
+          } else if (out1 && typeof (out1 as any).stdout === "string") {
             resolve((out1 as any).stdout);
           } else {
-            resolve(typeof out2 === 'string' ? out2 : '');
+            resolve(typeof out2 === "string" ? out2 : "");
           }
         }
       );
@@ -332,14 +546,14 @@ async function agentHasMemoryDatabase(agent: string, resolvedDb: string): Promis
     if (isDatabaseDoesNotExistError(err)) {
       throw new Error(
         `[memory-extract] Resolved database '${resolvedDb}' does not exist: ` +
-        ((err as Error).message ?? String(err))
+          ((err as Error).message ?? String(err))
       );
     }
-    console.warn('[memory-extract] Could not verify peer database ownership', {
-      agent,
-      database: resolvedDb,
-      error: (err as Error).message,
-    });
+    logWarn(
+      `[memory-extract] Could not verify peer database ownership agent=${agent} database=${resolvedDb} error=${
+        (err as Error).message
+      }`
+    );
     exists = false;
   }
 
@@ -347,45 +561,27 @@ async function agentHasMemoryDatabase(agent: string, resolvedDb: string): Promis
   return exists;
 }
 
-/**
- * Resolve the memory database name for the current event.
- *
- * Resolution order (first match wins):
- *   1. PGDATABASE environment variable
- *   2. The `database` field of the running user's ~/.openclaw/postgres.json
- *
- * The resolved name must be non-empty and end with `_memory`. If neither
- * source yields a valid name, fail loudly.
- *
- * Cross-peer guard: refuse only when the session agent is itself a DB-owning
- * peer (i.e. `<agent>_memory` exists on the server) AND that peer is not the
- * resolved DB owner. This prevents one peer's traffic from being written to
- * another peer's DB while still allowing arbitrary subagents of any owner.
- */
 export async function resolveMemoryDatabase(sessionKey: string): Promise<string> {
-  const pgDatabase = process.env.PGDATABASE;
-  const dbName = pgDatabase && pgDatabase.trim().length > 0
-    ? pgDatabase.trim()
-    : loadDatabaseFromPostgresConfig();
+  const { dbName } = resolveMemoryDatabaseSync();
 
   if (!dbName) {
     throw new Error(
-      '[memory-extract] Could not resolve memory database: PGDATABASE unset and ' +
-      '~/.openclaw/postgres.json missing or has no usable database field'
+      "[memory-extract] Could not resolve memory database: PGDATABASE unset and " +
+        "~/.openclaw/postgres.json missing or has no usable database field"
     );
   }
-  if (!dbName.endsWith('_memory')) {
+  if (!dbName.endsWith("_memory")) {
     throw new Error(
       `[memory-extract] Resolved database '${dbName}' does not look like a memory database`
     );
   }
 
-  const owner = dbName.replace(/_memory$/, '');
+  const owner = dbName.replace(/_memory$/, "");
   const agent = parseAgentFromSessionKey(sessionKey);
   if (agent && owner !== agent && (await agentHasMemoryDatabase(agent, dbName))) {
     throw new Error(
       `[memory-extract] Cross-peer guard: session agent '${agent}' does not match ` +
-      `DB owner '${owner}' (database=${dbName})`
+        `DB owner '${owner}' (database=${dbName})`
     );
   }
 
@@ -394,18 +590,10 @@ export async function resolveMemoryDatabase(sessionKey: string): Promise<string>
 
 function logPsqlError(site: string, err: any): { stdout: string } {
   const message = err?.message ?? String(err);
-  console.error('[memory-extract] psql upsert failed', {
-    site,
-    error: message
-  });
-  return { stdout: '' };
+  logError(`[memory-extract] psql upsert failed site=${site} error=${message}`);
+  return { stdout: "" };
 }
 
-/**
- * Insert a dead-letter row for a failed extraction. If a channel transcript FK
- * is available, store that and leave `content` NULL. Otherwise fall back to
- * storing the raw message body so the failure is still replayable.
- */
 async function insertExtractionFailure(args: {
   channelTranscriptId: string;
   sessionKey: string;
@@ -417,14 +605,12 @@ async function insertExtractionFailure(args: {
   exitCode: number | null;
   failureReason: string;
 }) {
-  const txId = args.channelTranscriptId && args.channelTranscriptId !== '0'
-    ? args.channelTranscriptId
-    : '';
+  const txId =
+    args.channelTranscriptId && args.channelTranscriptId !== "0"
+      ? args.channelTranscriptId
+      : "";
 
-  // If we have a transcript FK, do not duplicate the body; rely on the FK.
-  // If not, store the body as a fallback (same 65535 cap used by the
-  // channel_transcripts upsert path).
-  const bodyForFallback = txId ? '' : args.content.substring(0, 65535);
+  const bodyForFallback = txId ? "" : args.content.substring(0, 65535);
 
   const sessionKeyEsc = args.sessionKey.replace(/'/g, "''");
   const senderNameEsc = args.senderName.replace(/'/g, "''");
@@ -434,9 +620,9 @@ async function insertExtractionFailure(args: {
   const reasonEsc = args.failureReason.replace(/'/g, "''");
   const bodyEsc = bodyForFallback.replace(/'/g, "''");
 
-  const txIdVal = txId ? txId : 'NULL';
-  const bodyVal = bodyForFallback ? `'${bodyEsc}'` : 'NULL';
-  const exitCodeVal = args.exitCode === null ? 'NULL' : String(args.exitCode);
+  const txIdVal = txId ? txId : "NULL";
+  const bodyVal = bodyForFallback ? `'${bodyEsc}'` : "NULL";
+  const exitCodeVal = args.exitCode === null ? "NULL" : String(args.exitCode);
 
   const sql = `
     INSERT INTO extraction_failures (
@@ -450,173 +636,212 @@ async function insertExtractionFailure(args: {
 
   let memoryDatabase: string;
   try {
-    // Issue #703: resolve the same way regardless of whether sessionKey is
-    // present. An absent sessionKey simply skips the cross-peer guard.
-    memoryDatabase = await resolveMemoryDatabase(args.sessionKey || '');
+    memoryDatabase = await resolveMemoryDatabase(args.sessionKey || "");
   } catch (err) {
-    console.error('[memory-extract] Failed to resolve DB for extraction_failure insertion', {
-      sessionKey: args.sessionKey,
-      error: (err as Error).message,
-      failureReason: args.failureReason,
-    });
+    logError(
+      `[memory-extract] Failed to resolve DB for extraction_failure insertion ` +
+        `sessionKey=${args.sessionKey} error=${(err as Error).message} ` +
+        `failureReason=${args.failureReason}`
+    );
     return;
   }
 
   try {
-    await execFileAsync('psql', [memoryDatabase, '-t', '-A', '-c', sql]);
+    await execFileAsync("psql", [memoryDatabase, "-t", "-A", "-c", sql]);
   } catch (err) {
-    console.error('[memory-extract] Failed to insert extraction_failure', {
-      error: (err as Error).message,
-      failureReason: args.failureReason
-    });
+    logError(
+      `[memory-extract] Failed to insert extraction_failure ` +
+        `error=${(err as Error).message} failureReason=${args.failureReason}`
+    );
   }
 }
 
-const handler = async (event: any) => {
-  try {
-    console.info('[memory-extract] Hook triggered', {
-      eventType: event.type,
-      eventAction: event.action
-    });
+// Adapt a plugin-sdk `message_received` event/context back to the legacy
+// internal-hook shape so the existing extraction logic can remain unchanged.
+function adaptMessageReceivedEvent(pluginEvent: any, pluginCtx: any): any {
+  return {
+    type: "message",
+    action: "received",
+    sessionKey: pluginEvent.sessionKey ?? pluginCtx?.sessionKey ?? "",
+    context: {
+      content: pluginEvent.content,
+      from: pluginEvent.from,
+      senderId: pluginEvent.senderId,
+      metadata: pluginEvent.metadata,
+      threadId: pluginEvent.threadId,
+      messageId: pluginEvent.messageId,
+      ...pluginCtx,
+    },
+  };
+}
 
-    // Track activity for cost/hour calculations
+// ── Message handler (extracted from the old default export for testability) ──
+export async function handleMessageReceived(event: any): Promise<void> {
+  const sessionKey = event.sessionKey ?? "";
+  incrementReceived();
+
+  try {
+    logDebug(`[memory-extract] Hook triggered eventType=${event.type} eventAction=${event.action}`);
+
     if (event.type === "message") {
       const ctx = event.context ?? {};
-      const rawBody = ctx.content ?? ctx.rawBody ?? ctx.RawBody ?? ctx.message ?? ctx.Body ?? "";
-      const isHeartbeat = rawBody.includes("HEARTBEAT") || rawBody.includes("DASHBOARD UPDATE") || rawBody.startsWith("System: [");
+      const rawBody =
+        ctx.content ?? ctx.rawBody ?? ctx.RawBody ?? ctx.message ?? ctx.Body ?? "";
+      const isHeartbeat =
+        rawBody.includes("HEARTBEAT") ||
+        rawBody.includes("DASHBOARD UPDATE") ||
+        rawBody.startsWith("System: [");
       logActivity(!isHeartbeat);
     }
 
     if (event.type !== "message" || event.action !== "received") {
-      console.debug('[memory-extract] Skipping non-received message event');
+      logDebug("[memory-extract] Skipping non-received message event");
       return;
     }
 
     const ctx = event.context ?? {};
-    const rawBody = ctx.content ?? ctx.rawBody ?? ctx.RawBody ?? ctx.message ?? ctx.Body ?? "";
+    const rawBody =
+      ctx.content ?? ctx.rawBody ?? ctx.RawBody ?? ctx.message ?? ctx.Body ?? "";
 
     if (!rawBody || rawBody.trim().length < 10) {
-      console.debug('[memory-extract] Skipping short or empty message');
+      logDebug("[memory-extract] Skipping short or empty message");
+      incrementSkipped();
       return;
     }
 
-    // Skip commands
     if (rawBody.startsWith("/")) {
-      console.debug('[memory-extract] Skipping command message');
+      logDebug("[memory-extract] Skipping command message");
+      incrementSkipped();
       return;
     }
 
-    // Get sender info for attribution — canonical location is ctx.metadata
     const meta = (ctx.metadata ?? {}) as Record<string, any>;
-    // Canonical field paths per MessageReceivedHookContext spec (#184)
     const senderName = meta.senderName ?? ctx.from ?? "unknown";
-    const senderId = meta.senderId ?? "";  // Phone number or UUID for unique matching
+    const senderId = meta.senderId ?? "";
     const isGroup = meta.isGroup ?? ctx.isGroup ?? false;
 
-    console.info('[memory-extract] Processing message', {
-      sender: senderName,
-      senderId: senderId ? senderId.substring(0, 8) + '...' : 'none',
-      isGroup,
-      messageLength: rawBody.length,
-      messagePreview: rawBody.substring(0, 80) + (rawBody.length > 80 ? '...' : '')
-    });
+    logInfo(
+      `[memory-extract] Processing message sender=${senderName} ` +
+        `senderId=${senderId ? senderId.substring(0, 8) + "..." : "none"} ` +
+        `isGroup=${isGroup} messageLength=${rawBody.length}`
+    );
 
-    // Run extraction via stdin pipe — never pass untrusted message text as shell args (#155)
-    // LLM extracts every message directly via process-input.sh (#165)
-    // Updated to call Python extraction pipeline (#112)
-    // Env override allows tests to point at a mock script without touching prod path.
-    const scriptPath = process.env.EXTRACTION_SCRIPT_PATH_OVERRIDE
-      || join(os.homedir(), '.openclaw', 'scripts', 'extract_memories.py');
+    const scriptPath =
+      process.env.EXTRACTION_SCRIPT_PATH_OVERRIDE ||
+      join(os.homedir(), ".openclaw", "scripts", "extract_memories.py");
 
-    // Store the full sessionKey as the source identifier — it's the canonical session reference
-    // When chat logs move to DB (#170), this maps directly to the session record
-    const sessionKey = event.sessionKey ?? '';
-
-    // Resolve the target memory database BEFORE any write. Issue #703: never
-    // fall back to nova_memory. If resolution fails, log loudly and stop.
     let memoryDatabase: string;
     try {
       memoryDatabase = await resolveMemoryDatabase(sessionKey);
     } catch (dbErr) {
-      console.error('[memory-extract] Database resolution failed', {
-        sessionKey,
-        error: (dbErr as Error).message
-      });
+      const errMessage = (dbErr as Error).message ?? String(dbErr);
+      if (errMessage.includes("Cross-peer guard")) {
+        logFailure("peer_guard_refused", sessionKey);
+      } else if (errMessage.includes("does not exist")) {
+        const dbMatch = errMessage.match(/Resolved database '([^']+)'/);
+        const failedDb = dbMatch ? dbMatch[1] : "unknown";
+        logFailure("db_unreachable", sessionKey, `db=${failedDb}`);
+      } else if (
+        errMessage.includes("Could not resolve memory database")
+      ) {
+        logDbUnresolved(sessionKey);
+      } else if (errMessage.includes("does not look like a memory database")) {
+        logDbUnresolved(sessionKey);
+      } else {
+        logFailure("db_unreachable", sessionKey);
+      }
+      incrementFailed();
       return;
     }
 
-    const messageTimestamp = new Date().toISOString();  // Current time as extraction timestamp
+    const messageTimestamp = new Date().toISOString();
 
-    // Resolve DB-level channel transcript / session FK ids (C1 fix — #170).
-    // OpenClaw may populate these in ctx when the channel plugin has already persisted
-    // the message. When they are absent (real-time path before batch ingest), we do a
-    // lightweight upsert here so entity_facts always has valid FK pointers.
-    let channelTranscriptId = String(ctx.channelTranscriptId ?? ctx.channel_transcript_id ?? '');
-    let channelSessionId = String(ctx.channelSessionId ?? ctx.channel_session_id ?? '');
+    let channelTranscriptId = String(
+      ctx.channelTranscriptId ?? ctx.channel_transcript_id ?? ""
+    );
+    let channelSessionId = String(
+      ctx.channelSessionId ?? ctx.channel_session_id ?? ""
+    );
+    let externalMessageId = "";
+    let derivedMessageId = "";
 
-    // These identifiers are needed for FK recovery if the transcript upsert returns empty
-    // because the row already exists (ON CONFLICT DO NOTHING).
-    let externalMessageId = '';
-    let derivedMessageId = '';
-
-    if (!channelTranscriptId || channelTranscriptId === '0') {
+    if (!channelTranscriptId || channelTranscriptId === "0") {
       try {
-        // Derive provider from chat_id format — read from metadata first
-        const chatId = String(ctx.conversationId ?? meta.conversationId ?? ctx.chatId ?? ctx.chat_id ?? '');
-        let provider = String(meta.provider ?? ctx.provider ?? ctx.channelId ?? 'openclaw');
-        if (provider === 'openclaw') {
-          // Derive provider from chat_id format when ctx.provider is not set
-          if (chatId.startsWith('channel:')) provider = 'discord';
-          else if (chatId.startsWith('group:') || chatId.startsWith('+')) provider = 'signal';
+        const chatId = String(
+          ctx.conversationId ??
+            meta.conversationId ??
+            ctx.chatId ??
+            ctx.chat_id ??
+            ""
+        );
+        let provider = String(
+          meta.provider ?? ctx.provider ?? ctx.channelId ?? "openclaw"
+        );
+        if (provider === "openclaw") {
+          if (chatId.startsWith("channel:")) provider = "discord";
+          else if (chatId.startsWith("group:") || chatId.startsWith("+"))
+            provider = "signal";
         }
 
-        const externalChatId = chatId || sessionKey || 'unknown';
-        externalMessageId = String(ctx.messageId ?? meta.messageId ?? ctx.message_id ?? '');
+        const externalChatId = chatId || sessionKey || "unknown";
+        externalMessageId = String(
+          ctx.messageId ?? meta.messageId ?? ctx.message_id ?? ""
+        );
         const isGroupBool = Boolean(meta.isGroup ?? ctx.isGroup ?? false);
-        const chatType = isGroupBool ? 'group' : 'direct';
-        const groupSubject = String(meta.channelName ?? ctx.channelName ?? ctx.groupSubject ?? ctx.group_subject ?? '');
-        const groupSpace = String(meta.guildId ?? ctx.guildId ?? ctx.groupSpace ?? ctx.group_space ?? '');
-        const senderTag = String(meta.senderTag ?? ctx.senderTag ?? ctx.sender_tag ?? '');
-        const senderUsername = String(meta.senderUsername ?? ctx.senderUsername ?? '');
+        const chatType = isGroupBool ? "group" : "direct";
+        const groupSubject = String(
+          meta.channelName ?? ctx.channelName ?? ctx.groupSubject ?? ctx.group_subject ?? ""
+        );
+        const groupSpace = String(
+          meta.guildId ?? ctx.guildId ?? ctx.groupSpace ?? ctx.group_space ?? ""
+        );
+        const senderTag = String(meta.senderTag ?? ctx.senderTag ?? ctx.sender_tag ?? "");
+        const senderUsername = String(
+          meta.senderUsername ?? ctx.senderUsername ?? ""
+        );
 
-        // Issue #708: read the host-provided thread id from the message_received
-        // event. The OpenClaw 2026.9.6 type carries it directly on the event,
-        // but some channel plugins may also place it in context/metadata.
-        const rawThreadId = event.threadId ?? ctx.threadId ?? ctx.thread_id ?? meta.threadId ?? meta.thread_id;
+        const rawThreadId =
+          event.threadId ?? ctx.threadId ?? ctx.thread_id ?? meta.threadId ?? meta.thread_id;
         const externalThreadId = normalizeExternalThreadId(rawThreadId);
-        const externalThreadIdVal = externalThreadId === null
-          ? 'NULL'
-          : `'${externalThreadId.replace(/'/g, "''")}'`;
+        const externalThreadIdVal =
+          externalThreadId === null
+            ? "NULL"
+            : `'${externalThreadId.replace(/'/g, "''")}'`;
 
-        // Only attempt upsert when psql is available and we have minimal identifying info
         if (externalMessageId || rawBody.length > 0) {
-          // Upsert session row
           const sessArgs = [
-            memoryDatabase, '-t', '-A', '-c',
+            memoryDatabase,
+            "-t",
+            "-A",
+            "-c",
             `INSERT INTO channel_sessions (session_key, agent_id, provider, external_chat_id, chat_type` +
-            (externalThreadId !== null ? ', external_thread_id' : '') +
-            (groupSubject ? ', group_subject, title' : '') +
-            (groupSpace ? ', group_space_id' : '') +
-            `, last_message_at) VALUES (` +
-            `'${sessionKey.replace(/'/g, "''")}', 'main', ` +
-            `'${provider.replace(/'/g, "''")}', ` +
-            `'${externalChatId.replace(/'/g, "''")}', ` +
-            `'${chatType}'` +
-            (externalThreadId !== null ? `, ${externalThreadIdVal}` : '') +
-            (groupSubject ? `, '${groupSubject.replace(/'/g, "''")}', '${groupSubject.replace(/'/g, "''")}' ` : '') +
-            (groupSpace ? `, '${groupSpace.replace(/'/g, "''")}' ` : '') +
-            `, '${messageTimestamp}') ON CONFLICT (provider, external_chat_id, COALESCE(external_thread_id, '')) DO UPDATE SET updated_at = NOW(), last_message_at = '${messageTimestamp}' RETURNING id;`
+              (externalThreadId !== null ? ", external_thread_id" : "") +
+              (groupSubject ? ", group_subject, title" : "") +
+              (groupSpace ? ", group_space_id" : "") +
+              `, last_message_at) VALUES (` +
+              `'${sessionKey.replace(/'/g, "''")}', 'main', ` +
+              `'${provider.replace(/'/g, "''")}', ` +
+              `'${externalChatId.replace(/'/g, "''")}', ` +
+              `'${chatType}'` +
+              (externalThreadId !== null ? `, ${externalThreadIdVal}` : "") +
+              (groupSubject
+                ? `, '${groupSubject.replace(/'/g, "''")}', '${groupSubject.replace(
+                    /'/g,
+                    "''"
+                  )}' `
+                : "") +
+              (groupSpace
+                ? `, '${groupSpace.replace(/'/g, "''")}' `
+                : "") +
+              `, '${messageTimestamp}') ON CONFLICT (provider, external_chat_id, COALESCE(external_thread_id, '')) DO UPDATE SET updated_at = NOW(), last_message_at = '${messageTimestamp}' RETURNING id;`,
           ];
 
-          const { stdout: sessOut } = await execFileAsync('psql', sessArgs)
-            .catch((err) => logPsqlError('session-upsert', err));
-          // psql -t -A may include 'INSERT 0 1' status line — extract first numeric line
-          const resolvedSessionId = (sessOut.match(/^(\d+)/m) ?? [])[1] ?? '';
-          if (resolvedSessionId) {
-            channelSessionId = resolvedSessionId;
-          }
+          const { stdout: sessOut } = await execFileAsync("psql", sessArgs).catch((err) =>
+            logPsqlError("session-upsert", err)
+          );
+          const resolvedSessionId = (sessOut.match(/^(\d+)/m) ?? [])[1] ?? "";
+          if (resolvedSessionId) channelSessionId = resolvedSessionId;
 
-          // Upsert transcript row when we have a session and a message id or can derive one
           if (channelSessionId) {
             derivedMessageId = externalMessageId || `${messageTimestamp}_rt`;
             const contentSnippet = rawBody.substring(0, 65535).replace(/'/g, "''");
@@ -626,59 +851,60 @@ const handler = async (event: any) => {
             const senderUsernameEsc = senderUsername.replace(/'/g, "''");
 
             const txArgs = [
-              memoryDatabase, '-t', '-A', '-c',
+              memoryDatabase,
+              "-t",
+              "-A",
+              "-c",
               `INSERT INTO channel_transcripts (session_id, external_message_id, timestamp, role, content` +
-              (senderId ? ', sender_id' : '') +
-              (senderName && senderName !== 'unknown' ? ', sender_name' : '') +
-              (senderTag ? ', sender_tag' : '') +
-              (senderUsername ? ', sender_username' : '') +
-              `) VALUES (` +
-              `${channelSessionId}, '${derivedMessageId.replace(/'/g, "''")}', ` +
-              `'${messageTimestamp}', 'user', '${contentSnippet}'` +
-              (senderId ? `, '${senderIdEsc}'` : '') +
-              (senderName && senderName !== 'unknown' ? `, '${senderNameEsc}'` : '') +
-              (senderTag ? `, '${senderTagEsc}'` : '') +
-              (senderUsername ? `, '${senderUsernameEsc}'` : '') +
-              `) ON CONFLICT (session_id, external_message_id) DO NOTHING RETURNING id;`
+                (senderId ? ", sender_id" : "") +
+                (senderName && senderName !== "unknown" ? ", sender_name" : "") +
+                (senderTag ? ", sender_tag" : "") +
+                (senderUsername ? ", sender_username" : "") +
+                `) VALUES (` +
+                `${channelSessionId}, '${derivedMessageId.replace(/'/g, "''")}', ` +
+                `'${messageTimestamp}', 'user', '${contentSnippet}'` +
+                (senderId ? `, '${senderIdEsc}'` : "") +
+                (senderName && senderName !== "unknown" ? `, '${senderNameEsc}'` : "") +
+                (senderTag ? `, '${senderTagEsc}'` : "") +
+                (senderUsername ? `, '${senderUsernameEsc}'` : "") +
+                `) ON CONFLICT (session_id, external_message_id) DO NOTHING RETURNING id;`,
             ];
 
-            const { stdout: txOut } = await execFileAsync('psql', txArgs)
-              .catch((err) => logPsqlError('transcript-upsert', err));
-            // psql -t -A may include 'INSERT 0 1' status line — extract first numeric line
-            const resolvedTranscriptId = (txOut.match(/^(\d+)/m) ?? [])[1] ?? '';
-            if (resolvedTranscriptId) {
-              channelTranscriptId = resolvedTranscriptId;
-            }
+            const { stdout: txOut } = await execFileAsync("psql", txArgs).catch((err) =>
+              logPsqlError("transcript-upsert", err)
+            );
+            const resolvedTranscriptId = (txOut.match(/^(\d+)/m) ?? [])[1] ?? "";
+            if (resolvedTranscriptId) channelTranscriptId = resolvedTranscriptId;
 
-            // C1 recovery: ON CONFLICT DO NOTHING returns no id when the row already
-            // exists. Recover the real transcript id with a follow-up SELECT before
-            // falling back to body storage.
             if (!channelTranscriptId && channelSessionId && derivedMessageId) {
               const lookupArgs = [
-                memoryDatabase, '-t', '-A', '-c',
-                `SELECT id FROM channel_transcripts WHERE session_id = ${channelSessionId} AND external_message_id = '${derivedMessageId.replace(/'/g, "''")}' LIMIT 1;`
+                memoryDatabase,
+                "-t",
+                "-A",
+                "-c",
+                `SELECT id FROM channel_transcripts WHERE session_id = ${channelSessionId} AND external_message_id = '${derivedMessageId.replace(
+                  /'/g,
+                  "''"
+                )}' LIMIT 1;`,
               ];
-              const { stdout: lookupOut } = await execFileAsync('psql', lookupArgs)
-                .catch((err) => logPsqlError('transcript-lookup', err));
-              const foundId = (lookupOut.match(/^(\d+)/m) ?? [])[1] ?? '';
-              if (foundId) {
-                channelTranscriptId = foundId;
-              }
+              const { stdout: lookupOut } = await execFileAsync("psql", lookupArgs).catch(
+                (err) => logPsqlError("transcript-lookup", err)
+              );
+              const foundId = (lookupOut.match(/^(\d+)/m) ?? [])[1] ?? "";
+              if (foundId) channelTranscriptId = foundId;
             }
           }
         }
       } catch (err) {
-        console.warn('[memory-extract] Could not upsert channel_transcripts for FK wiring', {
-          error: (err as Error).message
-        });
+        logWarn(
+          `[memory-extract] Could not upsert channel_transcripts for FK wiring ` +
+            `error=${(err as Error).message}`
+        );
       }
     }
 
-    // Resolve the Python interpreter and timeout. Both can be overridden by
-    // env vars for tests; in production the venv python is preferred and the
-    // timeout is read fresh from the config file each event.
     const pythonCmd = resolvePythonCmd();
-    console.info('[memory-extract] Resolved extraction interpreter', { pythonCmd });
+    logInfo(`[memory-extract] Resolved extraction interpreter pythonCmd=${pythonCmd}`);
 
     const timeoutMs = (() => {
       const raw = process.env.EXTRACTION_TIMEOUT_MS_OVERRIDE;
@@ -688,22 +914,18 @@ const handler = async (event: any) => {
     })();
 
     const child = spawn(pythonCmd, [scriptPath], {
-      stdio: ['pipe', 'pipe', 'pipe'],
+      stdio: ["pipe", "pipe", "pipe"],
       env: {
         ...process.env,
-        // Issue #703: pass the explicitly-resolved memory DB to the child so
-        // handler and Python pipeline agree even when the gateway's launch env
-        // does not set PGDATABASE.
         PGDATABASE: memoryDatabase,
         SENDER_NAME: senderName,
         SENDER_ID: senderId,
         IS_GROUP: String(isGroup),
         SOURCE_SESSION_ID: sessionKey,
         SOURCE_TIMESTAMP: messageTimestamp,
-        // DB-level source pointers for entity_facts FK columns (may be empty string when not yet ingested)
         SOURCE_CHANNEL_TRANSCRIPT_ID: channelTranscriptId,
-        SOURCE_CHANNEL_SESSION_ID: channelSessionId
-      }
+        SOURCE_CHANNEL_SESSION_ID: channelSessionId,
+      },
     });
 
     const getStderrTail = attachTailBuffer(child.stderr, PIPE_TAIL_CAP_BYTES);
@@ -728,91 +950,175 @@ const handler = async (event: any) => {
         stderrTail: tailToString(getStderrTail()),
         stdoutTail: tailToString(getStdoutTail()),
         exitCode,
-        failureReason: reason
+        failureReason: reason,
       });
     };
 
     timeoutHandle = setTimeout(() => {
       didTimeout = true;
-      console.error('[memory-extract] Extraction timed out, terminating child', {
-        sender: senderName,
-        senderId: truncateSenderId(senderId)
-      });
-      child.kill('SIGTERM');
+      logError(
+        `[memory-extract] Extraction timed out sender=${senderName} ` +
+          `senderId=${truncateSenderId(senderId)}`
+      );
+      child.kill("SIGTERM");
       setTimeout(() => {
         if (!child.killed) {
-          console.error('[memory-extract] Extraction child did not terminate gracefully, forcing SIGKILL', {
-            sender: senderName,
-            senderId: truncateSenderId(senderId)
-          });
-          child.kill('SIGKILL');
+          logError(
+            `[memory-extract] Extraction child did not terminate gracefully, forcing SIGKILL ` +
+              `sender=${senderName} senderId=${truncateSenderId(senderId)}`
+          );
+          child.kill("SIGKILL");
         }
       }, KILL_GRACE_MS);
     }, timeoutMs);
 
-    child.on('close', async (code, signal) => {
-      if (timeoutHandle) {
-        clearTimeout(timeoutHandle);
-        timeoutHandle = null;
-      }
+    await new Promise<void>((resolve) => {
+      let settled = false;
+      const done = () => {
+        if (settled) return;
+        settled = true;
+        resolve();
+      };
 
-      if (didTimeout) {
-        console.error('[memory-extract] Extraction failed', {
-          sender: senderName,
-          senderId: truncateSenderId(senderId),
-          exitCode: code,
-          signal,
-          failureReason: 'timeout',
-          stderrTail: tailToString(getStderrTail())
-        });
-        await recordFailure('timeout', null);
-      } else if (code === 2) {
-        console.error('[memory-extract] Extraction failed', {
-          sender: senderName,
-          senderId: truncateSenderId(senderId),
-          exitCode: code,
-          signal,
-          failureReason: 'json_parse_failure',
-          stderrTail: tailToString(getStderrTail())
-        });
-        await recordFailure('json_parse_failure', code);
-      } else if (code !== 0) {
-        console.error('[memory-extract] Extraction failed', {
-          sender: senderName,
-          senderId: truncateSenderId(senderId),
-          exitCode: code,
-          signal,
-          failureReason: 'nonzero_exit',
-          stderrTail: tailToString(getStderrTail())
-        });
-        await recordFailure('nonzero_exit', code);
-      } else {
-        console.info('[memory-extract] Extraction complete', {
-          sender: senderName,
-          senderId: truncateSenderId(senderId)
-        });
-      }
-    });
+      child.on("close", async (code, signal) => {
+        if (timeoutHandle) {
+          clearTimeout(timeoutHandle);
+          timeoutHandle = null;
+        }
 
-    child.on('error', async (err) => {
-      if (timeoutHandle) {
-        clearTimeout(timeoutHandle);
-        timeoutHandle = null;
-      }
-      console.error('[memory-extract] Spawn error', {
-        sender: senderName,
-        senderId: truncateSenderId(senderId),
-        failureReason: 'spawn_error',
-        error: err.message
+        if (didTimeout) {
+          logFailure("timeout", sessionKey, `signal=${signal}`);
+          await recordFailure("timeout", null);
+          incrementFailed();
+        } else {
+          const stderrTail = tailToString(getStderrTail());
+          const hasProviderKeyMissing = stderrTail.includes(
+            "OPENROUTER_API_KEY not set"
+          );
+
+          if (code === 2) {
+            logFailure("extractor_exit_nonzero", sessionKey, `exitCode=${code}`);
+            await recordFailure("json_parse_failure", code);
+            incrementFailed();
+          } else if (code !== 0) {
+            if (hasProviderKeyMissing) {
+              logFailure("provider_key_missing", sessionKey, `exitCode=${code}`);
+              await recordFailure("provider_key_missing", code);
+            } else {
+              logFailure("extractor_exit_nonzero", sessionKey, `exitCode=${code}`);
+              await recordFailure("nonzero_exit", code);
+            }
+            incrementFailed();
+          } else {
+            logInfo(
+              `[memory-extract] Extraction complete sender=${senderName} ` +
+                `senderId=${truncateSenderId(senderId)}`
+            );
+            incrementExtracted();
+            incrementStored();
+          }
+        }
+        done();
       });
-      await recordFailure('spawn_error', null);
+
+      child.on("error", async (err) => {
+        if (timeoutHandle) {
+          clearTimeout(timeoutHandle);
+          timeoutHandle = null;
+        }
+        logFailure("extractor_spawn_failed", sessionKey, `error=${err.message}`);
+        await recordFailure("spawn_error", null);
+        incrementFailed();
+        done();
+      });
     });
   } catch (handlerErr) {
-    // Hook contract: handlers must not throw. Log and swallow so other handlers run.
-    console.error('[memory-extract] Unexpected handler error', {
-      error: (handlerErr as Error).message
-    });
+    logError(
+      `[memory-extract] Unexpected handler error error=${
+        (handlerErr as Error).message
+      }`
+    );
   }
-};
+}
 
-export default handler;
+// ── Plugin registration entry point ──
+export default function register(api: PluginApi): void {
+  pluginLogger = api.logger;
+
+  activeConfig = {
+    summaryIntervalMs:
+      (api.pluginConfig?.summaryIntervalMs as number) ??
+      DEFAULT_SUMMARY_INTERVAL_MS,
+    stallThresholdMs:
+      (api.pluginConfig?.stallThresholdMs as number) ??
+      DEFAULT_STALL_THRESHOLD_MS,
+    stallRepeatIntervalMs:
+      (api.pluginConfig?.stallRepeatIntervalMs as number) ??
+      DEFAULT_STALL_REPEAT_INTERVAL_MS,
+    stallCheckIntervalMs:
+      (api.pluginConfig?.stallCheckIntervalMs as number) ??
+      DEFAULT_STALL_CHECK_INTERVAL_MS,
+    dbUnresolvedRateLimitMs:
+      (api.pluginConfig?.dbUnresolvedRateLimitMs as number) ??
+      DEFAULT_DB_UNRESOLVED_RATE_LIMIT_MS,
+  };
+
+  const startup = startupInfoLine();
+  if (!startup.ok) {
+    logError(
+      `[memory-extract] startup failed version=${PLUGIN_VERSION} reason=db_unresolved`
+    );
+  } else {
+    logInfo(
+      `[memory-extract] startup version=${PLUGIN_VERSION} ` +
+        `db=${startup.dbName} source=${startup.dbSource} ` +
+        `python=${startup.pythonCmd} model=${startup.model}`
+    );
+  }
+
+  api.on("gateway_start", async () => {
+    // Startup line is emitted once at registration; gateway_start is a no-op.
+  });
+
+  api.on("gateway_stop", async () => {
+    if (summaryTimer) {
+      clearInterval(summaryTimer);
+      summaryTimer = null;
+    }
+    if (stallTimer) {
+      clearInterval(stallTimer);
+      stallTimer = null;
+    }
+    logInfo(
+      `[memory-extract] shutdown received=${sessionCounters.received} ` +
+        `extracted=${sessionCounters.extracted} stored=${sessionCounters.stored} ` +
+        `skipped=${sessionCounters.skipped} failed=${sessionCounters.failed}`
+    );
+  });
+
+  api.on("message_received", (event, ctx) =>
+    handleMessageReceived(adaptMessageReceivedEvent(event, ctx))
+  );
+
+  summaryTimer = setInterval(emitPeriodicSummary, activeConfig.summaryIntervalMs);
+  summaryTimer.unref();
+  stallTimer = setInterval(checkStall, activeConfig.stallCheckIntervalMs);
+  stallTimer.unref();
+}
+
+// ── Test helpers ──
+export function getSessionCounters(): Readonly<Counters> {
+  return { ...sessionCounters };
+}
+
+export function getSummaryCounters(): Readonly<Counters> {
+  return { ...summaryCounters };
+}
+
+export function getLastSuccessfulStoreAt(): number | null {
+  return lastSuccessfulStoreAt;
+}
+
+export function resetForTests(): void {
+  resetModuleState();
+}

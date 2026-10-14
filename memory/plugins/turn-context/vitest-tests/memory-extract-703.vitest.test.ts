@@ -2,7 +2,12 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import handler, { resolveMemoryDatabase, peerDbCache } from "../../../hooks/memory-extract/handler.ts";
+import register, {
+  handleMessageReceived,
+  resolveMemoryDatabase,
+  peerDbCache,
+  resetForTests,
+} from "../../../hooks/memory-extract/handler.ts";
 
 /**
  * Unit tests for #703: memory-extract handler must resolve the current
@@ -45,6 +50,24 @@ function cleanupHomeDir(homeDir: string): void {
   try {
     rmSync(homeDir, { recursive: true, force: true });
   } catch {}
+}
+
+/**
+ * Return a mock Python child that exits successfully. Used as the default
+ * spawn implementation so tests that do reach extraction don't crash on
+ * undefined streams.
+ */
+function makeSuccessfulChild(): any {
+  return {
+    stdin: { write: vi.fn(), end: vi.fn() },
+    stdout: { on: vi.fn() },
+    stderr: { on: vi.fn() },
+    kill: vi.fn(),
+    killed: false,
+    on: vi.fn((event: string, handler: any) => {
+      if (event === "close") handler(0, null);
+    }),
+  };
 }
 
 /**
@@ -182,21 +205,42 @@ describe("memory-extract handler DB resolution (#703 integration)", () => {
   let originalPgDatabase: string | undefined;
   let originalHome: string | undefined;
   let homeDir: string;
-  const errors: string[] = [];
-  const originalError = console.error;
+  let errors: string[] = [];
+  let logger: { debug: any; info: any; warn: any; error: any };
+  let api: { logger: typeof logger; pluginConfig: Record<string, unknown>; on: any; handlers: Record<string, any> };
+
+  function makeApiForTest(): typeof api {
+    logger = {
+      debug: vi.fn(),
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn((msg: string) => errors.push(msg)),
+    };
+    return {
+      logger,
+      pluginConfig: {},
+      on: vi.fn((hook: string, handler: unknown) => {
+        (api as any).handlers[hook] = handler;
+      }),
+      handlers: {},
+    } as any;
+  }
 
   beforeEach(() => {
     originalPgDatabase = process.env.PGDATABASE;
     originalHome = process.env.HOME;
     homeDir = makeHomeDir();
     process.env.HOME = homeDir;
-    delete process.env.PGDATABASE;
+    // Give register() a resolvable DB so its startup INFO line fires, then
+    // clear the captured log so each test only sees errors from the message
+    // handler. Tests that specifically need unresolved DB delete this below.
+    process.env.PGDATABASE = "nova_memory";
+    errors = [];
+    api = makeApiForTest();
+    resetForTests();
+    register(api);
     errors.length = 0;
-    console.error = (...args: unknown[]) => {
-      errors.push(args.map((a) => (typeof a === "string" ? a : JSON.stringify(a))).join(" "));
-      originalError.apply(console, args);
-    };
-    vi.mocked(spawn).mockReset();
+    vi.mocked(spawn).mockImplementation(() => makeSuccessfulChild() as any);
     vi.mocked(execFile).mockReset();
     peerDbCache.clear();
   });
@@ -207,7 +251,6 @@ describe("memory-extract handler DB resolution (#703 integration)", () => {
     if (originalHome === undefined) delete process.env.HOME;
     else process.env.HOME = originalHome;
     cleanupHomeDir(homeDir);
-    console.error = originalError;
   });
 
   function makeEvent(overrides: Record<string, unknown> = {}): any {
@@ -223,11 +266,16 @@ describe("memory-extract handler DB resolution (#703 integration)", () => {
     };
   }
 
-  it("TC-703-007: no PGDATABASE and no postgres.json fails loudly", async () => {
-    await handler(makeEvent());
+  async function triggerHandler(event: any): Promise<void> {
+    await handleMessageReceived(event);
+  }
 
-    expect(errors.some((e) => e.includes("Database resolution failed"))).toBe(true);
-    expect(errors.some((e) => e.includes("Could not resolve memory database"))).toBe(true);
+  it("TC-703-007: no PGDATABASE and no postgres.json fails loudly", async () => {
+    delete process.env.PGDATABASE;
+
+    await triggerHandler(makeEvent());
+
+    expect(errors.some((e) => e.includes("reason=db_unresolved"))).toBe(true);
     expect(vi.mocked(execFile)).not.toHaveBeenCalled();
     expect(vi.mocked(spawn)).not.toHaveBeenCalled();
   });
@@ -247,11 +295,10 @@ describe("memory-extract handler DB resolution (#703 integration)", () => {
       return {} as any;
     });
 
-    await handler(makeEvent({ sessionKey: "agent:nova:discord:channel:123" }));
+    await triggerHandler(makeEvent({ sessionKey: "agent:nova:discord:channel:123" }));
 
-    expect(errors.some((e) => e.includes("Database resolution failed"))).toBe(true);
-    expect(errors.some((e) => e.includes("does not exist"))).toBe(true);
-    expect(errors.some((e) => e.includes("nonexistent_peer_memory"))).toBe(true);
+    expect(errors.some((e) => e.includes("reason=db_unreachable"))).toBe(true);
+    expect(errors.some((e) => e.includes("db=nonexistent_peer_memory"))).toBe(true);
     expect(errors.some((e) => e.includes("nova_memory"))).toBe(false);
     expect(vi.mocked(spawn)).not.toHaveBeenCalled();
   });
@@ -260,9 +307,10 @@ describe("memory-extract handler DB resolution (#703 integration)", () => {
     process.env.PGDATABASE = "newhart_memory";
     mockPsql(new Set(["newhart"]));
 
-    await handler(makeEvent({ sessionKey: "agent:newhart:agent_chat" }));
+    await triggerHandler(makeEvent({ sessionKey: "agent:newhart:agent_chat" }));
 
-    expect(errors.some((e) => e.includes("Database resolution failed"))).toBe(false);
+    expect(errors.some((e) => e.includes("reason=db_unresolved"))).toBe(false);
+    expect(errors.some((e) => e.includes("reason=db_unreachable"))).toBe(false);
     const psqlCalls = vi.mocked(execFile).mock.calls.filter((c) => c[0] === "psql");
     expect(psqlCalls.length).toBeGreaterThan(0);
     for (const call of psqlCalls) {
@@ -276,10 +324,9 @@ describe("memory-extract handler DB resolution (#703 integration)", () => {
     process.env.PGDATABASE = "graybeard_memory";
     mockPsql(new Set(["graybeard", "newhart"]));
 
-    await handler(makeEvent({ sessionKey: "agent:newhart:agent_chat" }));
+    await triggerHandler(makeEvent({ sessionKey: "agent:newhart:agent_chat" }));
 
-    expect(errors.some((e) => e.includes("Database resolution failed"))).toBe(true);
-    expect(errors.some((e) => e.includes("Cross-peer guard"))).toBe(true);
+    expect(errors.some((e) => e.includes("reason=peer_guard_refused"))).toBe(true);
     // The guard itself performs one catalog lookup; no data writes or Python
     // extraction should be attempted.
     const psqlCalls = vi.mocked(execFile).mock.calls.filter((c) => c[0] === "psql");
@@ -292,20 +339,22 @@ describe("memory-extract handler DB resolution (#703 integration)", () => {
     makePostgresConfig(homeDir, "nova_memory");
     mockPsql();
 
-    await handler(makeEvent({ sessionKey: "discord:channel:123" }));
+    await triggerHandler(makeEvent({ sessionKey: "discord:channel:123" }));
 
     // No agent prefix means the cross-peer guard is not applicable; the DB
     // still resolves from config and processing continues.
-    expect(errors.some((e) => e.includes("Database resolution failed"))).toBe(false);
+    expect(errors.some((e) => e.includes("reason=db_unresolved"))).toBe(false);
+    expect(errors.some((e) => e.includes("reason=db_unreachable"))).toBe(false);
     const psqlCalls = vi.mocked(execFile).mock.calls.filter((c) => c[0] === "psql");
     expect(psqlCalls.length).toBeGreaterThan(0);
   });
 
   it("passes resolved PGDATABASE to the Python child explicitly", async () => {
+    delete process.env.PGDATABASE;
     makePostgresConfig(homeDir, "newhart_memory");
     mockPsql();
 
-    await handler(makeEvent({ sessionKey: "agent:newhart:agent_chat" }));
+    await triggerHandler(makeEvent({ sessionKey: "agent:newhart:agent_chat" }));
 
     expect(vi.mocked(spawn)).toHaveBeenCalled();
     const spawnEnv = vi.mocked(spawn).mock.calls[0][2]?.env as Record<string, string> | undefined;

@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import handler, { resolveMemoryDatabase, peerDbCache } from "../../../hooks/memory-extract/handler.ts";
+import { handleMessageReceived, resolveMemoryDatabase, peerDbCache } from "../../../hooks/memory-extract/handler.ts";
 
 /**
  * Unit tests for #708: memory-extract session upsert must populate
@@ -117,7 +117,7 @@ describe("memory-extract handler session upsert (#708)", () => {
     makePostgresConfig(homeDir, "nova_memory");
     mockPsql();
 
-    await handler(makeEvent({ threadId: "threadA" }));
+    await handleMessageReceived(makeEvent({ threadId: "threadA" }));
 
     const sql = capturedPsqlSql().find((s) => s.includes("INSERT INTO channel_sessions"));
     expect(sql).toBeDefined();
@@ -129,7 +129,7 @@ describe("memory-extract handler session upsert (#708)", () => {
     makePostgresConfig(homeDir, "nova_memory");
     mockPsql();
 
-    await handler(makeEvent());
+    await handleMessageReceived(makeEvent());
 
     const sql = capturedPsqlSql().find((s) => s.includes("INSERT INTO channel_sessions"));
     expect(sql).toBeDefined();
@@ -143,8 +143,8 @@ describe("memory-extract handler session upsert (#708)", () => {
     makePostgresConfig(homeDir, "nova_memory");
     mockPsql();
 
-    await handler(makeEvent({ threadId: "threadA" }));
-    await handler(makeEvent({ threadId: "threadB" }));
+    await handleMessageReceived(makeEvent({ threadId: "threadA" }));
+    await handleMessageReceived(makeEvent({ threadId: "threadB" }));
 
     const sessionSqls = capturedPsqlSql().filter((s) => s.includes("INSERT INTO channel_sessions"));
     expect(sessionSqls.length).toBe(2);
@@ -161,7 +161,7 @@ describe("memory-extract handler session upsert (#708)", () => {
     makePostgresConfig(homeDir, "nova_memory");
     mockPsql();
 
-    await handler(makeEvent());
+    await handleMessageReceived(makeEvent());
 
     const sql = capturedPsqlSql().find((s) => s.includes("INSERT INTO channel_sessions"));
     expect(sql).toBeDefined();
@@ -176,8 +176,8 @@ describe("memory-extract handler session upsert (#708)", () => {
     makePostgresConfig(homeDir, "nova_memory");
     mockPsql();
 
-    await handler(makeEvent({ threadId: 123456789 }));
-    await handler(makeEvent({ threadId: "123456789" }));
+    await handleMessageReceived(makeEvent({ threadId: 123456789 }));
+    await handleMessageReceived(makeEvent({ threadId: "123456789" }));
 
     const sessionSqls = capturedPsqlSql().filter((s) => s.includes("INSERT INTO channel_sessions"));
     expect(sessionSqls.length).toBe(2);
@@ -189,7 +189,7 @@ describe("memory-extract handler session upsert (#708)", () => {
     makePostgresConfig(homeDir, "nova_memory");
     mockPsql();
 
-    await handler(makeEvent({ threadId: "" }));
+    await handleMessageReceived(makeEvent({ threadId: "" }));
 
     const sql = capturedPsqlSql().find((s) => s.includes("INSERT INTO channel_sessions"));
     expect(sql).toBeDefined();
@@ -203,7 +203,7 @@ describe("memory-extract handler session upsert (#708)", () => {
     makePostgresConfig(homeDir, "nova_memory");
     mockPsql();
 
-    await handler(makeEvent({ threadId: "threadA" }));
+    await handleMessageReceived(makeEvent({ threadId: "threadA" }));
 
     const sql = capturedPsqlSql().find((s) => s.includes("INSERT INTO channel_sessions"));
     expect(sql).toBeDefined();
@@ -214,10 +214,10 @@ describe("memory-extract handler session upsert (#708)", () => {
     makePostgresConfig(homeDir, "nova_memory");
     mockPsql();
 
-    await handler(makeEvent());
+    await handleMessageReceived(makeEvent());
     // Small delay to ensure the second message has a strictly later timestamp.
     await new Promise((resolve) => setTimeout(resolve, 10));
-    await handler(makeEvent());
+    await handleMessageReceived(makeEvent());
 
     const sessionSqls = capturedPsqlSql().filter((s) => s.includes("INSERT INTO channel_sessions"));
     expect(sessionSqls.length).toBe(2);

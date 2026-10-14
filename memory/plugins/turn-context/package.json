@@ -17,13 +17,13 @@
     "test": "tsx --test src/**/*.test.ts"
   },
   "dependencies": {
-    "@types/node": "^20.0.0",
-    "@types/pg": "^8.0.0",
-    "pg": "^8.11.0",
-    "typescript": "^5.9.3"
+    "pg": "^8.11.0"
   },
   "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/pg": "^8.0.0",
     "tsx": "^4.23.0",
+    "typescript": "^5.9.3",
     "vite": "^8.3.4",
     "vitest": "^5.0.4"
   }

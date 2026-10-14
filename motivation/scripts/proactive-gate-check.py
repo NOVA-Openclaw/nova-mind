@@ -326,26 +326,110 @@ def check_step1_agent_chat() -> dict:
         return _step_error(f"DB error: {exc}")
 
 
+def _fetch_unanswered_sessions() -> list[tuple[str, datetime]] | dict:
+    """
+    Query nova_memory for user-facing sessions whose most recent transcript
+    row is a user turn within the last 24 hours.
+
+    Uses the same session_key pattern filters as check_idle(). Returns a list
+    of (session_key, last_user_timestamp) or a _step_error dict on DB failure.
+    """
+    try:
+        conn = _db_connect()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    like_conditions = " OR ".join(
+                        "cs.session_key LIKE %s" for _ in USER_SESSION_PATTERNS
+                    )
+                    params = [f"%{pat}%" for pat in USER_SESSION_PATTERNS]
+                    cur.execute(
+                        f"""
+                        WITH latest AS (
+                          SELECT DISTINCT ON (ct.session_id)
+                            ct.session_id,
+                            ct.role,
+                            ct.timestamp
+                          FROM channel_transcripts ct
+                          JOIN channel_sessions cs ON cs.id = ct.session_id
+                          WHERE {like_conditions}
+                          ORDER BY ct.session_id, ct.timestamp DESC
+                        )
+                        SELECT cs.session_key, latest.timestamp
+                        FROM channel_sessions cs
+                        JOIN latest ON latest.session_id = cs.id
+                        WHERE latest.timestamp > NOW() - INTERVAL '1 day'
+                          AND latest.role = 'user';
+                        """,
+                        params,
+                    )
+                    rows = cur.fetchall()
+        finally:
+            conn.close()
+    except Exception as exc:
+        return _step_error(f"DB error: {exc}")
+
+    # Apply the same exclude patterns as check_idle() in Python, matching the
+    # original sessions.json filtering semantics.
+    result: list[tuple[str, datetime]] = []
+    for session_key, ts in rows:
+        if any(exc in session_key for exc in EXCLUDE_PATTERNS):
+            continue
+        result.append((session_key, ts))
+    return result
+
+
 def check_step2_unanswered_sessions() -> dict:
     """
-    Step 2: Unanswered user messages in recent user-facing sessions.
+    Step 2: Check for unanswered user messages in recent user-facing sessions.
 
-    This step previously read OpenClaw session JSONL files directly. Per #710,
-    nova-mind no longer reads from OpenClaw-owned session storage. A replacement
-    implementation that derives the last conversational role without touching
-    session files is tracked separately; until then the step is intentionally
-    non-actionable.
+    Replaced the OpenClaw session JSONL reader with a query against
+    nova-mind's own channel_transcripts/channel_sessions tables (#710).
+    A session is unanswered when its latest transcript row is a user turn
+    with no later assistant turn within the last day.
     """
-    return {
-        "actionable": False,
-        "reason": "Step retired per #710 — no longer reads OpenClaw session files",
-    }
+    rows = _fetch_unanswered_sessions()
+    if isinstance(rows, dict):
+        return rows
+
+    unanswered = [key for key, _ in rows]
+    count = len(unanswered)
+    if count > 0:
+        return {
+            "actionable": True,
+            "reason": f"{count} session(s) with unanswered user messages",
+            "data": {"count": count, "sessions": unanswered},
+        }
+    return {"actionable": False, "reason": "No unanswered user messages in recent sessions"}
+
+
+def _fetch_transcript_content_bytes() -> int:
+    """
+    Sum LENGTH(content) across channel_transcripts.
+
+    This replaces the old JSONL byte-growth signal (du over OpenClaw session
+    files) with a nova-mind-native measure: the total size of transcript
+    content stored in nova_memory. Growth since the last introspection is
+    current_total - last_total, preserving the original threshold semantics.
+    """
+    try:
+        conn = _db_connect()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT COALESCE(SUM(LENGTH(content)), 0) FROM channel_transcripts")
+                    row = cur.fetchone()
+                    return int(row[0]) if row else 0
+        finally:
+            conn.close()
+    except Exception:
+        return 0
 
 
 def check_step3_introspection() -> dict:
     """
     Step 3: Introspection gate.
-    Compares current daily log lines + session transcript bytes + elapsed time
+    Compares current daily log lines + transcript content bytes + elapsed time
     against last recorded values. Any threshold exceeded → actionable.
 
     Reads heartbeat state from two mirrored locations and uses whichever
@@ -442,9 +526,20 @@ def check_step3_introspection() -> dict:
     except (subprocess.TimeoutExpired, ValueError, IndexError, FileNotFoundError):
         pass  # Non-fatal; skip this sub-check
 
-    # Session transcript byte growth check removed per #710: nova-mind no
-    # longer reads OpenClaw session files. The daily log line and elapsed-time
-    # sub-checks remain.
+    # Check transcript content byte growth.
+    # Replaces the old JSONL byte-growth signal (du over OpenClaw session
+    # files) with a nova-mind-native query: SUM(LENGTH(content)) from
+    # channel_transcripts. The threshold semantics are unchanged.
+    current_bytes = _fetch_transcript_content_bytes()
+    data["current_session_bytes"] = current_bytes
+    if last_bytes is not None:
+        byte_growth = current_bytes - last_bytes
+        data["byte_growth"] = byte_growth
+        if byte_growth >= INTROSPECT_BYTE_THRESHOLD:
+            reasons.append(
+                f"{byte_growth:,} bytes of new transcript content "
+                f"(threshold {INTROSPECT_BYTE_THRESHOLD:,})"
+            )
 
     if reasons:
         return {

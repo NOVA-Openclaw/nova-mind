@@ -68,6 +68,141 @@ _install_turn_context_typescript_deps() {
     return 1
 }
 
+# Helper: install only runtime npm dependencies for a deployed plugin or
+# extension.  Uses npm ci --omit=dev when a lockfile is present, falling back
+# to npm install --omit=dev otherwise.  Output is captured so a dependency
+# resolution failure is visible instead of swallowed.  Exits non-zero on
+# failure (see #598 and #722).
+_install_runtime_dependencies() {
+    local target_dir="$1"
+    local label="$2"
+    local npm_log
+    npm_log=$(mktemp /tmp/agent-install-runtime-deps-XXXXXX.log)
+    TMPFILES+=("$npm_log")
+
+    # Idempotency: skip when the installed tree already satisfies the lockfile.
+    if [ "${FORCE_INSTALL:-0}" -eq 0 ] && \
+       [ -d "$target_dir/node_modules" ] && \
+       [ -f "$target_dir/package-lock.json" ] && \
+       [ "$target_dir/node_modules" -nt "$target_dir/package-lock.json" ]; then
+        echo -e "  ${CHECK_MARK} $label runtime dependencies already installed (use --force to reinstall)"
+        return 0
+    fi
+
+    echo "  Installing $label runtime dependencies..."
+    if [ -f "$target_dir/package-lock.json" ]; then
+        if (cd "$target_dir" && npm ci --omit=dev --legacy-peer-deps) >"$npm_log" 2>&1; then
+            echo -e "  ${CHECK_MARK} $label runtime dependencies installed"
+            return 0
+        fi
+    else
+        if (cd "$target_dir" && npm install --omit=dev --legacy-peer-deps) >"$npm_log" 2>&1; then
+            echo -e "  ${CHECK_MARK} $label runtime dependencies installed"
+            return 0
+        fi
+    fi
+
+    echo -e "  ${CROSS_MARK} Failed to install $label runtime dependencies"
+    echo "  npm output:"
+    sed 's/^/    /' "$npm_log" >&2
+    echo "  Hint: the installer already uses --legacy-peer-deps." >&2
+    echo "        Check the npm output above for the underlying cause." >&2
+    return 1
+}
+
+# Helper: install the turn-context plugin.  Accepts optional source and
+# target directories so bats tests can run the install section into a
+# scratch HOME (#598).
+_install_turn_context_plugin() {
+    local TURN_CONTEXT_SOURCE="${1:-$SCRIPT_DIR/memory/plugins/turn-context}"
+    local TURN_CONTEXT_TARGET="${2:-$OPENCLAW_DIR/plugins/turn-context}"
+
+    if [ ! -d "$TURN_CONTEXT_SOURCE" ]; then
+        echo -e "  ${CROSS_MARK} turn-context plugin source not found at $TURN_CONTEXT_SOURCE"
+        VERIFICATION_ERRORS=$((VERIFICATION_ERRORS + 1))
+        return 1
+    fi
+
+    mkdir -p "$TURN_CONTEXT_TARGET/dist"
+
+    # Copy source and config files
+    for f in package.json package-lock.json openclaw.plugin.json tsconfig.json; do
+        if [ -f "$TURN_CONTEXT_SOURCE/$f" ]; then
+            cp "$TURN_CONTEXT_SOURCE/$f" "$TURN_CONTEXT_TARGET/$f"
+        fi
+    done
+    echo -e "  ${CHECK_MARK} Plugin config files copied"
+
+    # Install runtime dependencies in the target directory (#598)
+    _install_runtime_dependencies "$TURN_CONTEXT_TARGET" "turn-context" || return 1
+
+    # Build TypeScript if source exists
+    if [ -d "$TURN_CONTEXT_SOURCE/src" ]; then
+        local NEEDS_BUILD=0
+        if [ -f "$TURN_CONTEXT_TARGET/dist/index.js" ] && [ "$FORCE_INSTALL" -eq 0 ]; then
+            # Check if source is newer than dist
+            local NEWEST_SRC
+            NEWEST_SRC=$(find "$TURN_CONTEXT_SOURCE/src" -name '*.ts' -newer "$TURN_CONTEXT_TARGET/dist/index.js" 2>/dev/null | head -1)
+            if [ -z "$NEWEST_SRC" ]; then
+                echo -e "  ${CHECK_MARK} Plugin dist is up to date (use --force to rebuild)"
+            else
+                echo "  Source changed, rebuilding..."
+                NEEDS_BUILD=1
+            fi
+        else
+            NEEDS_BUILD=1
+        fi
+
+        if [ "$NEEDS_BUILD" -eq 1 ]; then
+            # Ensure typescript is available
+            if [ ! -d "$TURN_CONTEXT_SOURCE/node_modules/typescript" ]; then
+                _install_turn_context_typescript_deps "$TURN_CONTEXT_SOURCE" || return 1
+            fi
+            echo "  Building turn-context plugin..."
+            local BUILD_LOG
+            BUILD_LOG=$(mktemp /tmp/turn-context-build-XXXXXX.log)
+            TMPFILES+=("$BUILD_LOG")
+            if (cd "$TURN_CONTEXT_SOURCE" && npx tsc) >"$BUILD_LOG" 2>&1; then
+                # Copy built dist to target
+                cp -r "$TURN_CONTEXT_SOURCE/dist/"* "$TURN_CONTEXT_TARGET/dist/"
+                echo -e "  ${CHECK_MARK} Plugin built and installed"
+            else
+                echo -e "  ${CROSS_MARK} Plugin build failed"
+                tail -10 "$BUILD_LOG"
+                VERIFICATION_ERRORS=$((VERIFICATION_ERRORS + 1))
+                return 1
+            fi
+        fi
+    fi
+
+    # Enable in OpenClaw config
+    if [ -f "${OPENCLAW_CONFIG:-}" ] && command -v jq &>/dev/null; then
+        local PLUGIN_PATH
+        PLUGIN_PATH="$TURN_CONTEXT_TARGET"
+        jq --arg path "$PLUGIN_PATH" '
+            .plugins.load.paths = ((.plugins.load.paths // []) + [$path] | unique)
+            | .plugins.entries."turn-context" = (.plugins.entries."turn-context" // {}) * {
+                "enabled": true,
+                "hooks": {
+                  "allowConversationAccess": true
+                }
+              }
+        ' "$OPENCLAW_CONFIG" >"$OPENCLAW_CONFIG.tmp" && \
+            mv "$OPENCLAW_CONFIG.tmp" "$OPENCLAW_CONFIG" && \
+            echo -e "  ${CHECK_MARK} Plugin enabled in OpenClaw config" || \
+            echo -e "  ${WARNING} Could not enable plugin in config"
+    fi
+
+    # Verify installation
+    if [ -f "$TURN_CONTEXT_TARGET/dist/index.js" ] && [ -f "$TURN_CONTEXT_TARGET/openclaw.plugin.json" ]; then
+        echo -e "  ${CHECK_MARK} turn-context plugin installed to $TURN_CONTEXT_TARGET"
+    else
+        echo -e "  ${CROSS_MARK} turn-context plugin installation incomplete"
+        VERIFICATION_ERRORS=$((VERIFICATION_ERRORS + 1))
+        return 1
+    fi
+}
+
 # Helper: keep gateway.reload.mode valid for OpenClaw 2026.9.x.
 # Valid values are "off" and "hybrid"; never overwrite an existing valid
 # value, and never write the obsolete "hot" value (#723).
@@ -1980,83 +2115,7 @@ done
 echo ""
 echo "Turn-context plugin installation..."
 
-TURN_CONTEXT_SOURCE="$SCRIPT_DIR/memory/plugins/turn-context"
-TURN_CONTEXT_TARGET="$OPENCLAW_DIR/plugins/turn-context"
-
-if [ -d "$TURN_CONTEXT_SOURCE" ]; then
-    mkdir -p "$TURN_CONTEXT_TARGET/dist"
-
-    # Copy source and config files
-    for f in package.json openclaw.plugin.json tsconfig.json; do
-        if [ -f "$TURN_CONTEXT_SOURCE/$f" ]; then
-            cp "$TURN_CONTEXT_SOURCE/$f" "$TURN_CONTEXT_TARGET/$f"
-        fi
-    done
-    echo -e "  ${CHECK_MARK} Plugin config files copied"
-
-    # Build TypeScript if source exists
-    if [ -d "$TURN_CONTEXT_SOURCE/src" ]; then
-        if [ -f "$TURN_CONTEXT_TARGET/dist/index.js" ] && [ "$FORCE_INSTALL" -eq 0 ]; then
-            # Check if source is newer than dist
-            NEWEST_SRC=$(find "$TURN_CONTEXT_SOURCE/src" -name '*.ts' -newer "$TURN_CONTEXT_TARGET/dist/index.js" 2>/dev/null | head -1)
-            if [ -z "$NEWEST_SRC" ]; then
-                echo -e "  ${CHECK_MARK} Plugin dist is up to date (use --force to rebuild)"
-            else
-                echo "  Source changed, rebuilding..."
-                NEEDS_BUILD=1
-            fi
-        else
-            NEEDS_BUILD=1
-        fi
-
-        if [ "${NEEDS_BUILD:-0}" -eq 1 ]; then
-            # Ensure typescript is available
-            if [ ! -d "$TURN_CONTEXT_SOURCE/node_modules/typescript" ]; then
-                _install_turn_context_typescript_deps "$TURN_CONTEXT_SOURCE"
-            fi
-            echo "  Building turn-context plugin..."
-            BUILD_LOG=$(mktemp /tmp/turn-context-build-XXXXXX.log)
-            TMPFILES+=("$BUILD_LOG")
-            if (cd "$TURN_CONTEXT_SOURCE" && npx tsc) >"$BUILD_LOG" 2>&1; then
-                # Copy built dist to target
-                cp -r "$TURN_CONTEXT_SOURCE/dist/"* "$TURN_CONTEXT_TARGET/dist/"
-                echo -e "  ${CHECK_MARK} Plugin built and installed"
-            else
-                echo -e "  ${CROSS_MARK} Plugin build failed"
-                tail -10 "$BUILD_LOG"
-                VERIFICATION_ERRORS=$((VERIFICATION_ERRORS + 1))
-            fi
-        fi
-    fi
-
-    # Enable in OpenClaw config
-    if [ -f "$OPENCLAW_CONFIG" ] && command -v jq &>/dev/null; then
-        PLUGIN_PATH="$TURN_CONTEXT_TARGET"
-        jq --arg path "$PLUGIN_PATH" '
-            .plugins.load.paths = ((.plugins.load.paths // []) + [$path] | unique)
-            | .plugins.entries."turn-context" = (.plugins.entries."turn-context" // {}) * {
-                "enabled": true,
-                "hooks": {
-                  "allowConversationAccess": true
-                }
-              }
-        ' "$OPENCLAW_CONFIG" >"$OPENCLAW_CONFIG.tmp" && \
-            mv "$OPENCLAW_CONFIG.tmp" "$OPENCLAW_CONFIG" && \
-            echo -e "  ${CHECK_MARK} Plugin enabled in OpenClaw config" || \
-            echo -e "  ${WARNING} Could not enable plugin in config"
-    fi
-
-    # Verify installation
-    if [ -f "$TURN_CONTEXT_TARGET/dist/index.js" ] && [ -f "$TURN_CONTEXT_TARGET/openclaw.plugin.json" ]; then
-        echo -e "  ${CHECK_MARK} turn-context plugin installed to $TURN_CONTEXT_TARGET"
-    else
-        echo -e "  ${CROSS_MARK} turn-context plugin installation incomplete"
-        VERIFICATION_ERRORS=$((VERIFICATION_ERRORS + 1))
-    fi
-else
-    echo -e "  ${CROSS_MARK} turn-context plugin source not found at $TURN_CONTEXT_SOURCE"
-    VERIFICATION_ERRORS=$((VERIFICATION_ERRORS + 1))
-fi
+_install_turn_context_plugin "$SCRIPT_DIR/memory/plugins/turn-context" "$OPENCLAW_DIR/plugins/turn-context" || exit 1
 
 # --- Metacognition plugins (self-awareness, confidence-check) ---
 echo ""
@@ -2077,7 +2136,7 @@ install_metacognition_plugin() {
     mkdir -p "$plugin_target"
 
     # Copy source and config files
-    for f in package.json openclaw.plugin.json tsconfig.json src; do
+    for f in package.json package-lock.json openclaw.plugin.json tsconfig.json src; do
         if [ -e "$plugin_source/$f" ]; then
             if [ -d "$plugin_source/$f" ]; then
                 rm -rf "${plugin_target:?}/$f"
@@ -2089,20 +2148,8 @@ install_metacognition_plugin() {
     done
     echo -e "    ${CHECK_MARK} Source files copied"
 
-    # Install dependencies and build
-    cd "$plugin_target"
-    if [ ! -d "node_modules" ] || [ "$FORCE_INSTALL" -eq 1 ]; then
-        echo "    Installing dependencies..."
-        NPM_INSTALL_LOG=$(mktemp "/tmp/npm-install-${plugin_name}-XXXXXX.log")
-        TMPFILES+=("$NPM_INSTALL_LOG")
-        if npm install >"$NPM_INSTALL_LOG" 2>&1; then
-            echo -e "    ${CHECK_MARK} Dependencies installed"
-            rm -f "$NPM_INSTALL_LOG"
-        else
-            echo -e "    ${WARNING} npm install had issues"
-            tail -10 "$NPM_INSTALL_LOG"
-        fi
-    fi
+    # Install runtime dependencies in the target directory (#598)
+    _install_runtime_dependencies "$plugin_target" "$plugin_name" || return 1
 
     # Build TypeScript
     if [ -d "$plugin_target/src" ]; then
@@ -2192,19 +2239,9 @@ if [ -d "$BOOTSTRAP_SOURCE" ]; then
     echo "  Syncing bootstrap-context files..."
     sync_directory "$BOOTSTRAP_SOURCE" "$BOOTSTRAP_TARGET" "bootstrap-context files"
 
-    # Install npm dependencies if package.json exists
+    # Install runtime dependencies if package.json exists (#598)
     if [ -f "$BOOTSTRAP_TARGET/package.json" ]; then
-        if [ ! -d "$BOOTSTRAP_TARGET/node_modules" ] || [ "$FORCE_INSTALL" -eq 1 ]; then
-            echo "  Installing hook dependencies..."
-            NPM_INSTALL_LOG="${TMPDIR:-/tmp}/npm-install-hook-$$.log"
-            if (cd "$BOOTSTRAP_TARGET" && npm install) >"$NPM_INSTALL_LOG" 2>&1; then
-                echo -e "  ${CHECK_MARK} Hook dependencies installed"
-                rm -f "$NPM_INSTALL_LOG"
-            else
-                echo -e "  ${WARNING} npm install had issues (hook may use shared node_modules)"
-                rm -f "$NPM_INSTALL_LOG"
-            fi
-        fi
+        _install_runtime_dependencies "$BOOTSTRAP_TARGET" "bootstrap-context" || true
     fi
 
     # Run the DB setup script
@@ -2241,16 +2278,8 @@ if [ -d "$AGENT_CONFIG_SYNC_SOURCE" ]; then
     echo "  Building agent_config_sync TypeScript..."
     cd "$AGENT_CONFIG_SYNC_TARGET"
 
-    if [ ! -d "node_modules" ] || [ "$FORCE_INSTALL" -eq 1 ]; then
-        NPM_INSTALL_LOG="${TMPDIR:-/tmp}/npm-install-config-sync-$$.log"
-        if npm install >"$NPM_INSTALL_LOG" 2>&1; then
-            echo -e "  ${CHECK_MARK} Dependencies installed"
-            rm -f "$NPM_INSTALL_LOG"
-        else
-            echo -e "  ${WARNING} npm install had issues (may use shared node_modules)"
-            rm -f "$NPM_INSTALL_LOG"
-        fi
-    fi
+    # Install runtime dependencies in the target directory (#598)
+    _install_runtime_dependencies "$AGENT_CONFIG_SYNC_TARGET" "agent_config_sync" || true
 
     NPM_BUILD_LOG="${TMPDIR:-/tmp}/npm-build-config-sync-$$.log"
     if npm run build >"$NPM_BUILD_LOG" 2>&1; then

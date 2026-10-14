@@ -8,6 +8,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import psycopg2
+
 # Add scripts to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 
@@ -60,18 +62,12 @@ class TestGetDbConnectionResolution(unittest.TestCase):
     def setUp(self):
         self._orig_pgdatabase = os.environ.get("PGDATABASE")
         self._orig_session_id = os.environ.get("SOURCE_SESSION_ID")
-        self._orig_override = os.environ.get("OPENCLAW_POSTGRES_CONFIG_OVERRIDE")
         self._orig_home = os.environ.get("HOME")
         self._tmp_dir = tempfile.TemporaryDirectory()
 
         os.environ["HOME"] = self._tmp_dir.name
         os.environ.pop("PGDATABASE", None)
         os.environ.pop("SOURCE_SESSION_ID", None)
-        # Point away from the real config so tests are hermetic even when
-        # ~/.openclaw/postgres.json exists.
-        os.environ["OPENCLAW_POSTGRES_CONFIG_OVERRIDE"] = os.path.join(
-            self._tmp_dir.name, "nonexistent-postgres.json"
-        )
 
         self._expanduser_patcher = patch(
             "os.path.expanduser",
@@ -83,7 +79,6 @@ class TestGetDbConnectionResolution(unittest.TestCase):
         self._expanduser_patcher.stop()
         self._restore("PGDATABASE", self._orig_pgdatabase)
         self._restore("SOURCE_SESSION_ID", self._orig_session_id)
-        self._restore("OPENCLAW_POSTGRES_CONFIG_OVERRIDE", self._orig_override)
         self._restore("HOME", self._orig_home)
         self._tmp_dir.cleanup()
 
@@ -94,7 +89,9 @@ class TestGetDbConnectionResolution(unittest.TestCase):
             os.environ[key] = value
 
     def _config_path(self, database):
-        path = os.path.join(self._tmp_dir.name, "postgres.json")
+        config_dir = os.path.join(self._tmp_dir.name, ".openclaw")
+        os.makedirs(config_dir, exist_ok=True)
+        path = os.path.join(config_dir, "postgres.json")
         with open(path, "w") as f:
             json.dump({"database": database}, f)
         return path
@@ -110,8 +107,7 @@ class TestGetDbConnectionResolution(unittest.TestCase):
 
     def test_pgdatabase_unset_uses_postgres_config(self):
         """Production reality: PGDATABASE absent, DB comes from postgres.json."""
-        config_path = self._config_path("nova_memory")
-        os.environ["OPENCLAW_POSTGRES_CONFIG_OVERRIDE"] = config_path
+        self._config_path("nova_memory")
         os.environ["SOURCE_SESSION_ID"] = "agent:nova:discord:channel:123"
         mod = self._import_fresh()
         with patch("psycopg2.connect", side_effect=_make_mock_connect()) as mock_connect:
@@ -130,8 +126,7 @@ class TestGetDbConnectionResolution(unittest.TestCase):
 
     def test_pgdatabase_overrides_postgres_config(self):
         """Env wins over config file."""
-        config_path = self._config_path("nova_memory")
-        os.environ["OPENCLAW_POSTGRES_CONFIG_OVERRIDE"] = config_path
+        self._config_path("nova_memory")
         os.environ["PGDATABASE"] = "newhart_memory"
         os.environ["SOURCE_SESSION_ID"] = "agent:newhart:agent_chat"
         mod = self._import_fresh()
@@ -142,8 +137,7 @@ class TestGetDbConnectionResolution(unittest.TestCase):
 
     def test_subagent_lex_uses_nova_memory(self):
         """No hardcoded roster: lex resolves to nova_memory like any subagent."""
-        config_path = self._config_path("nova_memory")
-        os.environ["OPENCLAW_POSTGRES_CONFIG_OVERRIDE"] = config_path
+        self._config_path("nova_memory")
         os.environ["SOURCE_SESSION_ID"] = "agent:lex:agent_chat"
         mod = self._import_fresh()
         with patch("psycopg2.connect", side_effect=_make_mock_connect()) as mock_connect:
@@ -153,8 +147,7 @@ class TestGetDbConnectionResolution(unittest.TestCase):
 
     def test_arbitrary_new_subagent_against_nova_memory(self):
         """A brand-new agent name still works as long as DB is nova_memory."""
-        config_path = self._config_path("nova_memory")
-        os.environ["OPENCLAW_POSTGRES_CONFIG_OVERRIDE"] = config_path
+        self._config_path("nova_memory")
         os.environ["SOURCE_SESSION_ID"] = "agent:futurebot:agent_chat"
         mod = self._import_fresh()
         with patch("psycopg2.connect", side_effect=_make_mock_connect()) as mock_connect:
@@ -221,8 +214,7 @@ class TestGetDbConnectionResolution(unittest.TestCase):
         Derivation: lex_memory does not exist as a database, so lex is treated
         as a subagent rather than a DB-owning peer.
         """
-        config_path = self._config_path("nova_memory")
-        os.environ["OPENCLAW_POSTGRES_CONFIG_OVERRIDE"] = config_path
+        self._config_path("nova_memory")
         os.environ["SOURCE_SESSION_ID"] = "agent:lex:agent_chat"
         mod = self._import_fresh()
         with patch("psycopg2.connect", side_effect=_make_mock_connect()) as mock_connect:
@@ -232,14 +224,34 @@ class TestGetDbConnectionResolution(unittest.TestCase):
 
     def test_non_memory_db_name_rejected(self):
         """Resolved DB must end with _memory."""
-        config_path = self._config_path("not_a_memory_db")
-        os.environ["OPENCLAW_POSTGRES_CONFIG_OVERRIDE"] = config_path
+        self._config_path("not_a_memory_db")
         os.environ["SOURCE_SESSION_ID"] = "agent:nova:agent_chat"
         mod = self._import_fresh()
         with patch("psycopg2.connect") as mock_connect:
             with self.assertRaisesRegex(RuntimeError, "does not look like a memory database"):
                 mod.get_db_connection()
         mock_connect.assert_not_called()
+
+    def test_nonexistent_database_fails_loudly(self):
+        """TC-703-008: PGDATABASE points at a DB that does not exist.
+
+        Derivation: "ghost_memory" is a synthetic _memory-suffixed database
+        name reported by the mocked DB layer as not existing; it must surface
+        as a clear error and never fall back to another database.
+        """
+        os.environ["PGDATABASE"] = "ghost_memory"
+        os.environ["SOURCE_SESSION_ID"] = "agent:ghost:agent_chat"
+        mod = self._import_fresh()
+        with patch(
+            "psycopg2.connect",
+            side_effect=psycopg2.OperationalError(
+                'FATAL: database "ghost_memory" does not exist'
+            ),
+        ) as mock_connect:
+            with self.assertRaisesRegex(RuntimeError, "does not exist"):
+                mod.get_db_connection()
+        mock_connect.assert_called_once()
+        self.assertEqual(mock_connect.call_args.kwargs.get("dbname"), "ghost_memory")
 
     def test_guard_lookup_failure_is_allowed(self):
         """If pg_database lookup fails, log warning and allow (defense-in-depth)."""

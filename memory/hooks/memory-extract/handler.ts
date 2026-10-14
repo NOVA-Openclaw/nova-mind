@@ -225,9 +225,7 @@ function truncateSenderId(senderId: string): string {
  * usable `database` field. Never hardcodes a default DB name.
  */
 function loadDatabaseFromPostgresConfig(): string | null {
-  const configPath =
-    process.env.OPENCLAW_POSTGRES_CONFIG_OVERRIDE ||
-    join(os.homedir(), '.openclaw', 'postgres.json');
+  const configPath = join(os.homedir(), '.openclaw', 'postgres.json');
   try {
     const raw = readFileSync(configPath, 'utf8');
     const parsed = JSON.parse(raw);
@@ -257,12 +255,18 @@ function parseAgentFromSessionKey(sessionKey: string): string | null {
 // Exported so tests can clear it between cases when running with isolate:false.
 export const peerDbCache: Map<string, boolean> = new Map();
 
+function isDatabaseDoesNotExistError(err: unknown): boolean {
+  const message = (err as any)?.message ?? String(err);
+  return /\bdatabase\b.+\bdoes not exist\b/i.test(message);
+}
+
 /**
  * Return true when a database named `<agent>_memory` exists on the resolved
  * server. The result is cached per process. If the catalog lookup itself fails
- * (e.g. psql unavailable or insufficient privileges), log a warning and
- * return false so the guard degrades safely; DB resolution remains the real
- * access control.
+ * because the resolved database does not exist, fail loudly so the handler
+ * never falls back or spawns the extractor. For other failures (psql
+ * unavailable, insufficient privileges) log a warning and return false so the
+ * guard degrades safely; DB resolution remains the real access control.
  */
 async function agentHasMemoryDatabase(agent: string, resolvedDb: string): Promise<boolean> {
   if (peerDbCache.has(agent)) {
@@ -301,6 +305,12 @@ async function agentHasMemoryDatabase(agent: string, resolvedDb: string): Promis
     });
     exists = /^1$/m.test(stdout.trim());
   } catch (err) {
+    if (isDatabaseDoesNotExistError(err)) {
+      throw new Error(
+        `[memory-extract] Resolved database '${resolvedDb}' does not exist: ` +
+        ((err as Error).message ?? String(err))
+      );
+    }
     console.warn('[memory-extract] Could not verify peer database ownership', {
       agent,
       database: resolvedDb,

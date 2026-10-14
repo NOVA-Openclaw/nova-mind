@@ -82,10 +82,7 @@ _PEER_DB_CACHE: dict[str, bool] = {}
 
 def _load_database_from_postgres_config() -> str | None:
     """Read database name from the running user's ~/.openclaw/postgres.json."""
-    config_path = os.environ.get(
-        'OPENCLAW_POSTGRES_CONFIG_OVERRIDE',
-        os.path.expanduser('~/.openclaw/postgres.json')
-    )
+    config_path = os.path.expanduser('~/.openclaw/postgres.json')
     try:
         with open(config_path, 'r') as f:
             parsed = json.load(f)
@@ -157,7 +154,14 @@ def get_db_connection():
 
     owner = db_name[:-len('_memory')]
     agent = _parse_agent_from_session_key(os.environ.get('SOURCE_SESSION_ID', ''))
-    conn = psycopg2.connect(dbname=db_name)
+    try:
+        conn = psycopg2.connect(dbname=db_name)
+    except psycopg2.OperationalError as e:
+        if 'does not exist' in str(e):
+            raise RuntimeError(
+                f"[extract_memories] Resolved database '{db_name}' does not exist: {e}"
+            ) from e
+        raise
 
     # Cross-peer guard: refuse only when the session agent is itself a DB-owning
     # peer (i.e. <agent>_memory exists) AND that peer is not the DB owner.

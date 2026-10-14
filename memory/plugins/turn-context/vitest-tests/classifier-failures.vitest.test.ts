@@ -21,10 +21,12 @@ import { classifyMessage } from "../src/classifier.ts";
 
 describe("classifyMessage failure reasons (#697 / #361)", () => {
   let originalBaseUrl: string | undefined;
+  let originalTimeoutMs: string | undefined;
   let server: http.Server | undefined;
 
   beforeEach(() => {
     originalBaseUrl = process.env.OLLAMA_BASE_URL;
+    originalTimeoutMs = process.env.OLLAMA_TIMEOUT_MS;
   });
 
   afterEach(async () => {
@@ -38,6 +40,11 @@ describe("classifyMessage failure reasons (#697 / #361)", () => {
       delete process.env.OLLAMA_BASE_URL;
     } else {
       process.env.OLLAMA_BASE_URL = originalBaseUrl;
+    }
+    if (originalTimeoutMs === undefined) {
+      delete process.env.OLLAMA_TIMEOUT_MS;
+    } else {
+      process.env.OLLAMA_TIMEOUT_MS = originalTimeoutMs;
     }
   });
 

@@ -25,6 +25,8 @@ explicit migration step.
 
 from __future__ import annotations
 
+import json
+import os
 import re
 from dataclasses import dataclass
 from typing import Any, Optional
@@ -54,8 +56,9 @@ class SourceSpec:
     source_type: str
     # Target table (unqualified). None means this source_type is not a DB row.
     table: Optional[str]
-    # Database name.  Defaults to nova_memory; agent_chat uses its own DB.
-    db: str = "nova_memory"
+    # Database name.  None means "resolve to the runtime memory database";
+    # "agent_chat" is the only explicit named database today.
+    db: Optional[str] = None
     # Column that source_id matches against.  Defaults to the table's id column.
     key_column: str = "id"
     # Columns fetched as "provenance" when the anchor resolves.
@@ -110,13 +113,13 @@ SOURCE_SPECS: dict[str, SourceSpec] = {
     ),
     "artwork": SourceSpec(source_type="artwork", table="artwork", provenance_columns=("title", "created_at")),
     "comms_digest": SourceSpec(
-        source_type="comms_digest", table="comms_digests", provenance_columns=("created_at",)
+        source_type="comms_digest", table="comms_digests", provenance_columns=("generated_at",)
     ),
     "entity": SourceSpec(source_type="entity", table="entities", provenance_columns=("name", "type", "created_at")),
     "entity_relationship": SourceSpec(
         source_type="entity_relationship",
         table="entity_relationships",
-        provenance_columns=("relationship_type", "created_at"),
+        provenance_columns=("relationship", "since"),
     ),
     "event": SourceSpec(
         source_type="event", table="events", provenance_columns=("title", "event_date", "source")
@@ -137,11 +140,11 @@ SOURCE_SPECS: dict[str, SourceSpec] = {
     "journal_entry": SourceSpec(
         source_type="journal_entry", table="journal_entries", provenance_columns=("content", "created_at")
     ),
-    "lesson": SourceSpec(source_type="lesson", table="lessons", provenance_columns=("lesson", "created_at")),
+    "lesson": SourceSpec(source_type="lesson", table="lessons", provenance_columns=("lesson", "learned_at")),
     # library source_type predates the library -> library_works rename (#259);
     # memory-maintenance.py keeps source_type='library' for backward compat.
     "library": SourceSpec(
-        source_type="library", table="library_works", provenance_columns=("title", "created_at")
+        source_type="library", table="library_works", provenance_columns=("title", "added_at")
     ),
     "media_consumed": SourceSpec(
         source_type="media_consumed", table="media_consumed", provenance_columns=("title", "created_at")
@@ -161,7 +164,7 @@ SOURCE_SPECS: dict[str, SourceSpec] = {
         source_type="preference", table="preferences", provenance_columns=("key", "value", "learned_at")
     ),
     "project": SourceSpec(
-        source_type="project", table="projects", provenance_columns=("name", "created_at")
+        source_type="project", table="projects", provenance_columns=("name", "started_at")
     ),
     # "research" is a polymorphic legacy source_type: source_id is
     # "research_task:<id>", "research_finding:<id>", or
@@ -192,7 +195,7 @@ SOURCE_SPECS: dict[str, SourceSpec] = {
     "unsolved_problem": SourceSpec(
         source_type="unsolved_problem",
         table="unsolved_problems",
-        provenance_columns=("description", "created_at"),
+        provenance_columns=("description", "added_at"),
     ),
     "vehicle": SourceSpec(
         source_type="vehicle", table="vehicles", provenance_columns=("make", "model", "year")
@@ -206,7 +209,7 @@ SOURCE_SPECS: dict[str, SourceSpec] = {
     "workflow_run": SourceSpec(
         source_type="workflow_run",
         table="workflow_runs",
-        provenance_columns=("trigger_context", "notes", "created_at"),
+        provenance_columns=("trigger_context", "notes", "started_at"),
     ),
     # File-based anchors -----------------------------------------------------------
     # These do not point at a DB row; the source_id names a file/chunk.
@@ -228,6 +231,70 @@ SOURCE_SPECS: dict[str, SourceSpec] = {
 # Types that are currently expected in nova_memory but for which no explicit
 # spec exists yet.  The resolver treats them as "unmapped" rather than silently
 # failing coverage checks.
+
+
+# ---------------------------------------------------------------------------
+# Memory database resolution (mirrors #703 in extract_memories.py)
+# ---------------------------------------------------------------------------
+
+_NOVA_MEMORY_DB: Optional[str] = None
+
+
+def _load_database_from_postgres_config() -> Optional[str]:
+    """Read database name from the running user's ~/.openclaw/postgres.json."""
+    config_path = os.path.expanduser("~/.openclaw/postgres.json")
+    try:
+        with open(config_path, "r") as f:
+            parsed = json.load(f)
+        db = parsed.get("database")
+        if isinstance(db, str) and db.strip():
+            return db.strip()
+    except FileNotFoundError:
+        pass
+    except (OSError, json.JSONDecodeError) as e:
+        print(f"[source_anchor] Could not read postgres.json: {e}", file=sys.stderr)
+    return None
+
+
+def _resolve_memory_database() -> str:
+    """Resolve the target memory database the same way #703 does.
+
+    Precedence:
+      1. PGDATABASE environment variable (if non-empty)
+      2. The `database` field of ~/.openclaw/postgres.json
+
+    The resolved name must end with `_memory`.  This function is intentionally
+    self-contained so that importing source_anchor does not pull in the
+    import-time side effects of extract_memories.py.
+    """
+    pg_database = os.environ.get("PGDATABASE")
+    db_name = pg_database.strip() if pg_database and pg_database.strip() else _load_database_from_postgres_config()
+
+    if not db_name:
+        raise RuntimeError(
+            "[source_anchor] Could not resolve memory database: PGDATABASE unset and "
+            "~/.openclaw/postgres.json missing or has no usable database field"
+        )
+    if not db_name.endswith("_memory"):
+        raise RuntimeError(
+            f"[source_anchor] Resolved database '{db_name}' does not look like a memory database"
+        )
+    return db_name
+
+
+def _get_memory_database() -> str:
+    """Return the cached resolved memory database name."""
+    global _NOVA_MEMORY_DB
+    if _NOVA_MEMORY_DB is None:
+        _NOVA_MEMORY_DB = _resolve_memory_database()
+    return _NOVA_MEMORY_DB
+
+
+def _db_name_for(spec: SourceSpec) -> str:
+    """Return the effective database name for a spec."""
+    if spec.db is not None:
+        return spec.db
+    return _get_memory_database()
 
 
 # ---------------------------------------------------------------------------
@@ -266,15 +333,17 @@ class SourceAnchorResolver:
         self.nova_conn = nova_conn
         self.agent_chat_conn = agent_chat_conn
 
-    def _connection_for(self, db: str) -> Any:
+    def _connection_for(self, spec: SourceSpec) -> Any:
         """Pick the right connection for a spec's database."""
-        if db == "agent_chat":
+        if spec.db == "agent_chat":
             return self.agent_chat_conn
         return self.nova_conn
 
-    @staticmethod
     def _resolve_polymorphic_research(
-        cur: Any, source_id: str
+        self,
+        cur: Any,
+        source_id: str,
+        db_name: str,
     ) -> Optional[dict[str, Any]]:
         """Resolve a "research" source_id of the form "<kind>:<id>".
 
@@ -304,7 +373,7 @@ class SourceAnchorResolver:
             return None
         return {
             "resolved": True,
-            "location": f"nova_memory.{table}(id={raw_id})",
+            "location": f"{db_name}.{table}(id={raw_id})",
             "polymorphic_kind": kind,
             "resolved_table": table,
             "row_id": raw_id,
@@ -317,15 +386,17 @@ class SourceAnchorResolver:
         source_id: str,
     ) -> dict[str, Any]:
         """Resolve a source_id against its spec's DB table."""
+        db_name = _db_name_for(spec)
+
         if conn is None:
             return {
                 "resolved": False,
                 "location": None,
-                "reason": f"no connection available for {spec.db}",
+                "reason": f"no connection available for {db_name}",
             }
 
         if spec.source_type == "research":
-            result = self._resolve_polymorphic_research(conn.cursor(), source_id)
+            result = self._resolve_polymorphic_research(conn.cursor(), source_id, db_name)
             if result is not None:
                 return result
             return {
@@ -354,12 +425,12 @@ class SourceAnchorResolver:
         if row is None:
             return {
                 "resolved": False,
-                "location": f"{spec.db}.{spec.table}({spec.key_column}={source_id})",
+                "location": f"{db_name}.{spec.table}({spec.key_column}={source_id})",
                 "reason": "no matching row",
             }
 
         values = dict(zip(select_cols, row))
-        location = f"{spec.db}.{spec.table}({spec.key_column}={source_id})"
+        location = f"{db_name}.{spec.table}({spec.key_column}={source_id})"
         result: dict[str, Any] = {
             "resolved": True,
             "location": location,
@@ -449,7 +520,7 @@ class SourceAnchorResolver:
             result.update(file_result)
             return result
 
-        conn = self._connection_for(spec.db)
+        conn = self._connection_for(spec)
         db_result = self._resolve_db_anchor(conn, spec, source_id)
         result.update(db_result)
         return result
@@ -617,6 +688,90 @@ class SourceAnchorResolver:
         return {
             "source_type_count": len(by_type),
             "per_type": per_type,
+        }
+
+    def validate_specs_against_schema(
+        self,
+        *,
+        extra_allowed: dict[str, set[str]] | None = None,
+    ) -> dict[str, Any]:
+        """Cross-check SOURCE_SPECS against information_schema.columns.
+
+        For every spec with a real table, verify that the table exists in the
+        appropriate database and that the key column + every provenance column
+        exists.  Returns a report with a list of mismatches; ``ok`` is True
+        when no mismatches are found.
+
+        The "research" source_type is polymorphic: its placeholder table
+        ``research_polymorphic`` does not exist, so it is skipped by default.
+        The "agent_chat" source_type lives in the separate agent_chat database;
+        it is validated against that connection when available, otherwise
+        skipped.  Callers may pass ``extra_allowed`` to whitelist additional
+        tables or columns for special cases.
+        """
+
+        def _load_columns(conn: Any) -> dict[str, set[str]]:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT table_name, column_name "
+                "FROM information_schema.columns "
+                "WHERE table_schema = 'public'"
+            )
+            result: dict[str, set[str]] = {}
+            for table_name, column_name in cur.fetchall():
+                result.setdefault(table_name, set()).add(column_name)
+            return result
+
+        nova_columns = _load_columns(self.nova_conn)
+        agent_chat_columns: dict[str, set[str]] | None = None
+        if self.agent_chat_conn is not None:
+            agent_chat_columns = _load_columns(self.agent_chat_conn)
+
+        allowed = dict(extra_allowed or {})
+        # research is handled by the polymorphic resolver, not a real table.
+        allowed.setdefault("research", set()).add("research_polymorphic")
+
+        mismatches: list[dict[str, Any]] = []
+        for source_type, spec in SOURCE_SPECS.items():
+            if spec.is_file_anchor or spec.table is None:
+                continue
+            if source_type in allowed and spec.table in allowed[source_type]:
+                continue
+
+            # Pick the catalog that matches the spec's database.
+            if spec.db == "agent_chat":
+                if agent_chat_columns is None:
+                    continue
+                columns_by_table = agent_chat_columns
+            else:
+                columns_by_table = nova_columns
+
+            table_cols = columns_by_table.get(spec.table)
+            if table_cols is None:
+                mismatches.append(
+                    {
+                        "source_type": source_type,
+                        "table": spec.table,
+                        "kind": "missing_table",
+                    }
+                )
+                continue
+
+            for col in [spec.key_column, *spec.provenance_columns]:
+                if col not in table_cols:
+                    mismatches.append(
+                        {
+                            "source_type": source_type,
+                            "table": spec.table,
+                            "column": col,
+                            "kind": "missing_column",
+                        }
+                    )
+
+        return {
+            "ok": len(mismatches) == 0,
+            "mismatch_count": len(mismatches),
+            "mismatches": mismatches,
         }
 
 

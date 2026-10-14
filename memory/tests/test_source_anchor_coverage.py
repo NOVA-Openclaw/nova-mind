@@ -258,8 +258,9 @@ class TestPerSourceTypeResolution(unittest.TestCase):
     def test_library_maps_to_library_works(self):
         # Derivation: memory-maintenance.py comment (#259): source_type stays
         # 'library' after the table rename to library_works.
+        # Schema cross-check: library_works has added_at, not created_at.
         _, _, resolver = make_resolver({
-            "SELECT id, title, created_at FROM library_works WHERE id::text = %s LIMIT 1": [
+            "SELECT id, title, added_at FROM library_works WHERE id::text = %s LIMIT 1": [
                 (113, "The Library Book", "2026-01-01")
             ]
         })
@@ -290,6 +291,43 @@ class TestPerSourceTypeResolution(unittest.TestCase):
         })
         result = resolver.resolve("agent_domain", "Agent Architecture")
         self._assert_resolved(result)
+
+    def test_entity_relationship_uses_real_columns(self):
+        # QA round 4: entity_relationships has `relationship` and `since`,
+        # not `relationship_type` or `created_at`.
+        _, _, resolver = make_resolver({
+            "SELECT id, relationship, since FROM entity_relationships WHERE id::text = %s LIMIT 1": [
+                (42, "friend", "2025-01-01")
+            ]
+        })
+        result = resolver.resolve("entity_relationship", "42")
+        self._assert_resolved(result)
+        self.assertEqual(result["row"]["relationship"], "friend")
+        self.assertEqual(result["location"], "nova_memory.entity_relationships(id=42)")
+
+    def test_comms_digest_uses_real_columns(self):
+        # QA round 4: comms_digests has `generated_at`, not `created_at`.
+        _, _, resolver = make_resolver({
+            "SELECT id, generated_at FROM comms_digests WHERE id::text = %s LIMIT 1": [
+                (7, "2026-03-01T00:00:00+00:00")
+            ]
+        })
+        result = resolver.resolve("comms_digest", "7")
+        self._assert_resolved(result)
+        self.assertIn("generated_at", result["row"])
+        self.assertEqual(result["location"], "nova_memory.comms_digests(id=7)")
+
+    def test_gambling_log_uses_real_columns(self):
+        # QA round 4: gambling_logs has both `name` and `created_at`.
+        _, _, resolver = make_resolver({
+            "SELECT id, name, created_at FROM gambling_logs WHERE id::text = %s LIMIT 1": [
+                (99, "poker night", "2026-02-15")
+            ]
+        })
+        result = resolver.resolve("gambling_log", "99")
+        self._assert_resolved(result)
+        self.assertEqual(result["row"]["name"], "poker night")
+        self.assertEqual(result["location"], "nova_memory.gambling_logs(id=99)")
 
     def test_research_polymorphic_resolves_task(self):
         # Live sample: "research_task:9".

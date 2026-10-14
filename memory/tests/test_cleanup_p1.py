@@ -1201,11 +1201,13 @@ class TestNegative(CleanupP1TestCase):
     """Negative checks: no DML, no peer DB opens, CLI has no live write mode."""
 
     def test_source_module_has_no_dml_execute_calls(self) -> None:
-        """cleanup_708_703.py contains no executed INSERT/UPDATE/DELETE statements.
+        """cleanup_708_703.py contains no DML outside the removal helpers.
 
-        This is a static guard complementing the dynamic SELECT-only assertions.
-        We scan the source for .execute(...) calls and assert none begin with
-        INSERT, UPDATE, or DELETE.
+        Part 1 (identify/backup/export) is strictly read-only. Part 2 adds
+        removal helpers that issue DELETE statements; those are allowed only
+        inside functions whose names start with ``_delete_`` or
+        ``remove_misplaced_rows``. This static guard complements the dynamic
+        SELECT-only assertions for the read-only phases.
         """
         source_path = Path(cleanup_708_703.__file__)
         source = source_path.read_text(encoding="utf-8")
@@ -1218,12 +1220,34 @@ class TestNegative(CleanupP1TestCase):
             re.DOTALL | re.IGNORECASE,
         )
         dml_starts = ("insert", "update", "delete")
+
+        # Find the start of each function so we can attribute .execute calls.
+        func_pattern = re.compile(r"^(def\s+(\w+)\s*\()", re.MULTILINE)
+        func_starts = [
+            (m.start(), m.group(2))
+            for m in func_pattern.finditer(source)
+        ]
+
         for match in pattern.finditer(source):
             sql = match.group(1).strip().lower()
-            if sql.startswith(dml_starts):
-                self.fail(
-                    f"cleanup_708_703.py contains executable DML: {match.group(1)[:80]}"
-                )
+            if not sql.startswith(dml_starts):
+                continue
+
+            # Determine which function contains this .execute call.
+            pos = match.start()
+            containing_func = None
+            for start, name in sorted(func_starts):
+                if start > pos:
+                    break
+                containing_func = name
+
+            if containing_func in {"_delete_fact_dependencies", "_delete_transcript_ids", "_delete_session_cascade", "_delete_junk_rows", "remove_misplaced_rows"}:
+                continue
+
+            self.fail(
+                f"cleanup_708_703.py contains executable DML outside removal helpers: "
+                f"{match.group(1)[:80]} (in {containing_func})"
+            )
 
     def test_open_connection_uses_resolved_name(self) -> None:
         """_open_connection is called with the resolved database name, never hardcoded."""

@@ -614,13 +614,476 @@ def export_peer_rows(
 
 
 # ---------------------------------------------------------------------------
-# Peer-side import contract (#703 replay, no delete in part 1)
+# Removal (part 2) — NOVA side only, against NOVA's own resolved DB
 # ---------------------------------------------------------------------------
 
-# NOVA never writes into a peer database. The split/replay logic has been
-# moved to the peer-side script cleanup_peer_import.py. This module ends at
-# export; peers import their own export files as their own user against their
-# own resolved memory database.
+def _get_current_database(conn: Any) -> str:
+    """Return the name of the database ``conn`` is connected to."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT current_database()")
+        row = cur.fetchone()
+        if not row:
+            raise RuntimeError("[cleanup] Could not determine current database")
+        return row[0]
+
+
+def _owner_from_database(database: str) -> str:
+    """Return the agent that owns a ``<agent>_memory`` database name."""
+    if database.endswith("_memory"):
+        return database[:-7]
+    return database
+
+
+def _load_backup_manifest(path: Path) -> dict[str, Any]:
+    """Load and minimally validate a backup manifest JSON."""
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    required = {"created_at", "source_database", "sessions", "total_row_count", "aggregate_checksum"}
+    missing = required - set(manifest.keys())
+    if missing:
+        raise RuntimeError(
+            f"[cleanup] Backup manifest missing keys: {sorted(missing)}"
+        )
+    return manifest
+
+
+def _verify_file_checksum(path: Path, expected: str) -> None:
+    """Raise if the SHA-256 of ``path`` does not match ``expected``."""
+    actual = _sha256(path.read_bytes())
+    if actual != expected:
+        raise RuntimeError(
+            f"[cleanup] File checksum mismatch for {path}: "
+            f"expected {expected}, got {actual}"
+        )
+
+
+def _compute_aggregate_checksum(per_row_checksums: Iterable[str]) -> str:
+    """Recompute the aggregate checksum from a list of per-row checksums."""
+    hasher = hashlib.sha256()
+    for chk in per_row_checksums:
+        hasher.update(chk.encode("ascii"))
+    return hasher.hexdigest()
+
+
+def _verify_export_manifest(export_path: Path, manifest: dict[str, Any]) -> None:
+    """Recompute export file checksums and compare against the manifest.
+
+    Derivation: TEST-CASES-ISSUE-708.md TC-708-012c and TC-708-013 require
+    the export file on disk to match the manifest before removal proceeds.
+    """
+    _verify_file_checksum(export_path, manifest["file_checksum"])
+
+    per_row: list[str] = []
+    with export_path.open("r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            obj = json.loads(line)
+            if obj.get("type") == "channel_transcript":
+                per_row.append(_row_checksum(obj["row"]))
+
+    if per_row != manifest["per_row_checksums"]:
+        raise RuntimeError(
+            f"[cleanup] Per-row checksum mismatch in export {export_path}"
+        )
+
+    aggregate = _compute_aggregate_checksum(per_row)
+    if aggregate != manifest["aggregate_checksum"]:
+        raise RuntimeError(
+            f"[cleanup] Aggregate checksum mismatch in export {export_path}"
+        )
+
+
+def _verify_current_rows_against_checksums(
+    conn: Any,
+    session_id: int,
+    expected_checksums: list[str],
+    expected_count: int,
+    junk_senders: Optional[set[str]] = None,
+) -> list[dict[str, Any]]:
+    """Fetch current DB rows and verify they match expected checksums/count.
+
+    Returns the fetched rows so the caller can delete them.
+    """
+    # Derivation: TC-708-013/014 require the CURRENT database rows (not a
+    # stale read-only snapshot) to match the verified export/backup before
+    # deletion. Junk rows are fetched by sender name, full sessions by session_id.
+    with conn.cursor() as cur:
+        if junk_senders is not None:
+            rows = _fetch_junk_rows(cur, session_id, junk_senders)
+        else:
+            rows = _fetch_session_rows(cur, session_id)
+
+    if len(rows) != expected_count:
+        raise RuntimeError(
+            f"[cleanup] Row count mismatch for session {session_id}: "
+            f"expected {expected_count}, current {len(rows)}"
+        )
+
+    current_checksums = [_row_checksum(r) for r in rows]
+    if current_checksums != expected_checksums:
+        raise RuntimeError(
+            f"[cleanup] Row checksum mismatch for session {session_id}: "
+            f"current DB rows differ from the verified export/backup"
+        )
+
+    return rows
+
+
+def _delete_fact_dependencies(conn: Any, fact_ids: list[int]) -> None:
+    """Delete memory_embeddings and entity_fact_sources for ``fact_ids``."""
+    if not fact_ids:
+        return
+    placeholders = ",".join("%s" for _ in fact_ids)
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            DELETE FROM memory_embeddings
+            WHERE source_type = 'entity_fact'
+              AND source_id::bigint IN ({placeholders})
+            """,
+            tuple(fact_ids),
+        )
+        cur.execute(
+            f"DELETE FROM entity_fact_sources WHERE fact_id IN ({placeholders})",
+            tuple(fact_ids),
+        )
+        cur.execute(
+            f"DELETE FROM entity_facts WHERE id IN ({placeholders})",
+            tuple(fact_ids),
+        )
+
+
+def _delete_transcript_ids(conn: Any, transcript_ids: list[int]) -> None:
+    """Delete a list of transcript rows after clearing their fact dependents."""
+    if not transcript_ids:
+        return
+    with conn.cursor() as cur:
+        placeholders = ",".join("%s" for _ in transcript_ids)
+        cur.execute(
+            f"""
+            SELECT id FROM entity_facts
+            WHERE source_channel_transcript_id IN ({placeholders})
+            ORDER BY id
+            """,
+            tuple(transcript_ids),
+        )
+        fact_ids = [row[0] for row in cur.fetchall()]
+        _delete_fact_dependencies(conn, fact_ids)
+        cur.execute(
+            f"DELETE FROM channel_transcripts WHERE id IN ({placeholders})",
+            tuple(transcript_ids),
+        )
+
+
+def _delete_session_cascade(conn: Any, session_id: int) -> int:
+    """Delete a session and its dependent rows, returning transcript count.
+
+    Deletion order:
+      1. memory_embeddings anchored to entity_facts for this session.
+      2. entity_fact_sources for those facts (cascade would handle, but
+         explicit deletion is clearer and protects against stray FK refs).
+      3. entity_facts referencing this session or its transcripts.
+      4. Any remaining entity_fact_sources referencing the session directly.
+      5. channel_transcripts for the session.
+      6. channel_sessions row (ON DELETE CASCADE would also drop transcripts,
+         but we delete transcripts explicitly first to satisfy TC-708's
+         "transcripts before sessions" requirement).
+
+    Derivation: dt.sh shows entity_facts.source_channel_transcript_id and
+    source_channel_session_id FKs, and entity_fact_sources.source_session_id
+    FK, all without ON DELETE CASCADE; deleting sessions without clearing
+    these rows would raise a foreign-key violation.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT id FROM channel_transcripts WHERE session_id = %s ORDER BY id",
+            (session_id,),
+        )
+        transcript_ids = [row[0] for row in cur.fetchall()]
+
+        if transcript_ids:
+            placeholders = ",".join("%s" for _ in transcript_ids)
+            cur.execute(
+                f"""
+                SELECT id FROM entity_facts
+                WHERE source_channel_transcript_id IN ({placeholders})
+                   OR source_channel_session_id = %s
+                ORDER BY id
+                """,
+                (*transcript_ids, session_id),
+            )
+        else:
+            cur.execute(
+                "SELECT id FROM entity_facts WHERE source_channel_session_id = %s ORDER BY id",
+                (session_id,),
+            )
+        fact_ids = [row[0] for row in cur.fetchall()]
+
+        _delete_fact_dependencies(conn, fact_ids)
+
+        cur.execute(
+            "DELETE FROM entity_fact_sources WHERE source_session_id = %s",
+            (session_id,),
+        )
+        cur.execute(
+            "DELETE FROM channel_transcripts WHERE session_id = %s",
+            (session_id,),
+        )
+        cur.execute(
+            "DELETE FROM channel_sessions WHERE id = %s",
+            (session_id,),
+        )
+
+    return len(transcript_ids)
+
+
+def _delete_junk_rows(conn: Any, session_id: int, junk_senders: set[str]) -> int:
+    """Delete junk-sender transcript rows inside an otherwise correct session.
+
+    The parent session is preserved. Dependent entity_facts and their
+    embeddings/sources are cleared first, then the transcript rows themselves.
+    """
+    if not junk_senders:
+        return 0
+    with conn.cursor() as cur:
+        placeholders = ",".join("%s" for _ in junk_senders)
+        cur.execute(
+            f"""
+            SELECT id FROM channel_transcripts
+            WHERE session_id = %s AND sender_name IN ({placeholders})
+            ORDER BY id
+            """,
+            (session_id, *junk_senders),
+        )
+        transcript_ids = [row[0] for row in cur.fetchall()]
+        _delete_transcript_ids(conn, transcript_ids)
+    return len(transcript_ids)
+
+
+def remove_misplaced_rows(
+    conn: Any,
+    backup_manifest_path: Path,
+    export_dir: Path,
+    execute: bool = False,
+    confirm_checksum: Optional[str] = None,
+    junk_senders: Optional[set[str]] = None,
+    current_database: Optional[str] = None,
+) -> dict[str, Any]:
+    """Remove misplaced sessions/transcripts after verifying backup/export.
+
+    Parameters:
+      conn: open writable connection to NOVA's own memory database.
+      backup_manifest_path: path to the JSON manifest produced by
+        ``backup_misplaced_rows``.
+      export_dir: directory containing per-peer ``*_memory_export.jsonl`` and
+        ``*_memory_manifest.json`` files.
+      execute: if False (the default), perform a dry run that prints counts
+        and touches nothing.
+      confirm_checksum: required when ``execute`` is True; must equal the
+        backup manifest's aggregate checksum.
+      junk_senders: sender names considered junk inside a correct session.
+      current_database: optional database name; resolved from ``conn`` if not
+        supplied.
+
+    Returns a dict with dry_run flag, confirmation status, and per-group
+    results. Logs counts and session keys only.
+
+    Derivation: TEST-CASES-ISSUE-708.md TC-708-013, TC-708-014, TC-708-015;
+    QA round-7 design constraint that removal opens its own writable
+    transaction, re-identifies inside it, and commits per peer/group.
+    """
+    backup_manifest_path = Path(backup_manifest_path)
+    export_dir = Path(export_dir)
+    junk_senders = junk_senders or DEFAULT_JUNK_SENDERS
+
+    if current_database is None:
+        current_database = _get_current_database(conn)
+    owner = _owner_from_database(current_database)
+
+    backup_manifest = _load_backup_manifest(backup_manifest_path)
+    backup_sessions = {s["session_id"]: s for s in backup_manifest["sessions"]}
+    backup_aggregate = backup_manifest["aggregate_checksum"]
+
+    if execute:
+        if not confirm_checksum:
+            raise RuntimeError(
+                "[cleanup] --execute requires --confirm <manifest-aggregate-checksum>"
+            )
+        if confirm_checksum != backup_aggregate:
+            raise RuntimeError(
+                f"[cleanup] --confirm checksum {confirm_checksum} does not match "
+                f"backup manifest aggregate {backup_aggregate}"
+            )
+
+    # QA round-7: open our own writable transaction and re-identify inside it.
+    identification = identify_misplaced_sessions(conn, current_database, junk_senders=junk_senders)
+
+    target_sessions = (
+        identification.peer_misplaced
+        + identification.non_peer_wrong_place
+        + identification.junk_in_session
+    )
+    target_by_id = {s.session_id: s for s in target_sessions}
+
+    # Refuse if the identified set differs from the backup/export manifest.
+    backup_ids = set(backup_sessions.keys())
+    target_ids = set(target_by_id.keys())
+    if backup_ids != target_ids:
+        raise RuntimeError(
+            f"[cleanup] Identification set changed since backup: "
+            f"backup sessions={sorted(backup_ids)}, current sessions={sorted(target_ids)}"
+        )
+    for sid, session in target_by_id.items():
+        backup_session = backup_sessions[sid]
+        if session.row_count != backup_session["row_count"]:
+            raise RuntimeError(
+                f"[cleanup] Session {sid} row count changed since backup: "
+                f"backup {backup_session['row_count']}, current {session.row_count}"
+            )
+        if session.session_key != backup_session["session_key"]:
+            raise RuntimeError(
+                f"[cleanup] Session {sid} session_key changed since backup: "
+                f"backup {backup_session['session_key']}, current {session.session_key}"
+            )
+        if session.disposition != backup_session["disposition"]:
+            raise RuntimeError(
+                f"[cleanup] Session {sid} disposition changed since backup: "
+                f"backup {backup_session['disposition']}, current {session.disposition}"
+            )
+
+    # TC-708-015: explicit protected-session check. Whole sessions owned by
+    # the current database owner must never be deleted, even if passed in by
+    # mistake. Junk-sender rows inside an otherwise correct owner session are
+    # allowed to be removed (TC-708-014) because the session itself is preserved.
+    protected: list[str] = []
+    for sid, session in target_by_id.items():
+        agent = parse_agent_from_session_key(session.session_key)
+        if agent == owner and session.disposition != "junk_in_session":
+            protected.append(f"{session.session_key} (session {sid})")
+    if protected:
+        raise RuntimeError(
+            "[cleanup] Refusing to delete protected sessions belonging to "
+            f"owner '{owner}': {protected}"
+        )
+
+    peer_sessions = [s for s in target_sessions if s.disposition == "peer_misplaced"]
+    non_peer_sessions = [s for s in target_sessions if s.disposition != "peer_misplaced"]
+
+    result: dict[str, Any] = {
+        "dry_run": not execute,
+        "current_database": current_database,
+        "execute": execute,
+        "confirmed": execute and confirm_checksum == backup_aggregate,
+        "backup_aggregate_checksum": backup_aggregate,
+        "peer_groups": [],
+        "non_peer_group": None,
+    }
+
+    # TC-708-013: remove peer sessions one at a time, gated on verified export.
+    for session in peer_sessions:
+        agent = parse_agent_from_session_key(session.session_key)
+        if not agent:
+            raise RuntimeError(
+                f"[cleanup] Cannot parse agent from session_key {session.session_key}"
+            )
+
+        export_file = export_dir / f"{agent}_memory_export.jsonl"
+        manifest_file = export_dir / f"{agent}_memory_manifest.json"
+        if not export_file.exists():
+            raise RuntimeError(f"[cleanup] Missing export file for peer {agent}: {export_file}")
+        if not manifest_file.exists():
+            raise RuntimeError(f"[cleanup] Missing manifest file for peer {agent}: {manifest_file}")
+
+        manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
+        _verify_export_manifest(export_file, manifest)
+
+        # Verify the current DB still matches the verified export.
+        _verify_current_rows_against_checksums(
+            conn,
+            session.session_id,
+            manifest["per_row_checksums"],
+            manifest["row_count"],
+        )
+
+        if execute:
+            try:
+                deleted_rows = _delete_session_cascade(conn, session.session_id)
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+            result["peer_groups"].append({
+                "peer": agent,
+                "session_id": session.session_id,
+                "session_key": session.session_key,
+                "rows_deleted": deleted_rows,
+                "deleted": True,
+            })
+        else:
+            result["peer_groups"].append({
+                "peer": agent,
+                "session_id": session.session_id,
+                "session_key": session.session_key,
+                "rows_deleted": session.row_count,
+                "deleted": False,
+            })
+
+    # TC-708-014: remove non-peer/junk rows as one group, gated on verified backup.
+    if non_peer_sessions:
+        non_peer_details: list[dict[str, Any]] = []
+        for session in non_peer_sessions:
+            backup_session = backup_sessions[session.session_id]
+            backup_file = Path(backup_session["file"])
+            if not backup_file.exists():
+                raise RuntimeError(
+                    f"[cleanup] Missing backup file for session {session.session_id}: {backup_file}"
+                )
+
+            _verify_file_checksum(backup_file, backup_session["file_checksum"])
+
+            is_junk = session.disposition == "junk_in_session"
+            _verify_current_rows_against_checksums(
+                conn,
+                session.session_id,
+                backup_session["per_row_checksums"],
+                backup_session["row_count"],
+                junk_senders=junk_senders if is_junk else None,
+            )
+
+            non_peer_details.append({
+                "session_id": session.session_id,
+                "session_key": session.session_key,
+                "disposition": session.disposition,
+                "rows": session.row_count,
+            })
+
+        if execute:
+            try:
+                for session in non_peer_sessions:
+                    if session.disposition == "junk_in_session":
+                        _delete_junk_rows(
+                            conn, session.session_id, junk_senders
+                        )
+                    else:
+                        _delete_session_cascade(conn, session.session_id)
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+            result["non_peer_group"] = {
+                "sessions": non_peer_details,
+                "deleted": True,
+                "total_rows": sum(s["rows"] for s in non_peer_details),
+            }
+        else:
+            result["non_peer_group"] = {
+                "sessions": non_peer_details,
+                "deleted": False,
+                "total_rows": sum(s["rows"] for s in non_peer_details),
+            }
+
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -687,6 +1150,30 @@ def _main_backup_export(output_dir: str) -> None:
         conn.close()
 
 
+def _main_remove(
+    backup_dir: str,
+    export_dir: str,
+    execute: bool,
+    confirm_checksum: Optional[str],
+) -> None:
+    """CLI: remove misplaced rows after verifying backup and export."""
+    dbname = resolve_memory_database_name()
+    conn = _open_connection(dbname)
+    try:
+        # Writable transaction by default (psycopg2 autocommit=False).
+        result = remove_misplaced_rows(
+            conn,
+            backup_manifest_path=Path(backup_dir) / "backup_manifest.json",
+            export_dir=Path(export_dir),
+            execute=execute,
+            confirm_checksum=confirm_checksum,
+            current_database=dbname,
+        )
+        print(_canonical_json(result))
+    finally:
+        conn.close()
+
+
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="Cleanup tooling part 1 (#708/#703)")
@@ -694,10 +1181,28 @@ if __name__ == "__main__":
     sub.add_parser("identify", help="Identify misplaced sessions")
     p_backup = sub.add_parser("backup-export", help="Backup and export misplaced rows")
     p_backup.add_argument("--output-dir", required=True)
+    p_remove = sub.add_parser(
+        "remove",
+        help="Remove misplaced rows after backup/export verification (dry-run by default)",
+    )
+    p_remove.add_argument("--backup-dir", required=True, help="Directory containing backup_manifest.json")
+    p_remove.add_argument("--export-dir", required=True, help="Directory containing *_memory_export.jsonl and *_memory_manifest.json")
+    p_remove.add_argument(
+        "--execute",
+        action="store_true",
+        help="Actually delete rows (default is dry-run)",
+    )
+    p_remove.add_argument(
+        "--confirm",
+        required=False,
+        help="Backup manifest aggregate checksum; required with --execute",
+    )
     args = parser.parse_args()
     if args.command == "identify":
         _main_identify()
     elif args.command == "backup-export":
         _main_backup_export(args.output_dir)
+    elif args.command == "remove":
+        _main_remove(args.backup_dir, args.export_dir, args.execute, args.confirm)
     else:
         parser.print_help()

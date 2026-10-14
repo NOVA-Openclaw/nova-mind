@@ -42,9 +42,11 @@ export type AgentRow = {
   heartbeat_every?: string | null;
   heartbeat_target?: string | null;
   heartbeat_to?: string | null;
+  // #714 — propagate isolatedSession through agent-config-sync
+  heartbeat_isolated_session?: boolean | null;
 };
 
-type HeartbeatConfig = { every?: string; target?: string; to?: string };
+type HeartbeatConfig = { every?: string; target?: string; to?: string; isolatedSession?: boolean };
 
 /** Value shape for a single agent inside `agents.entries`. */
 export type AgentEntryConfig = {
@@ -90,7 +92,7 @@ const VALID_THINKING_DEFAULTS = new Set([
 // re-applies those filters defensively so adversarial fixtures cannot bypass them.
 const AGENTS_QUERY = `
   SELECT name, model, fallback_models, thinking, instance_type, is_default, allowed_subagents,
-         heartbeat_enabled, heartbeat_every, heartbeat_target, heartbeat_to
+         heartbeat_enabled, heartbeat_every, heartbeat_target, heartbeat_to, heartbeat_isolated_session
   FROM get_agent_export_rows();
 `;
 
@@ -217,7 +219,7 @@ export function buildAgentsList(rows: AgentRow[]): BuildAgentsListResult {
       entry.subagents = { allowAgents: [...row.allowed_subagents].sort() };
     }
 
-    // #262/#273 — Per-agent heartbeat config
+    // #262/#273/#714 — Per-agent heartbeat config
     // OpenClaw schema requires heartbeat to be an object, not a boolean.
     // heartbeat_enabled = true  → emit heartbeat object with non-NULL sub-fields only
     // heartbeat_enabled = false | NULL → omit key (inherits agents.defaults.heartbeat)
@@ -226,6 +228,7 @@ export function buildAgentsList(rows: AgentRow[]): BuildAgentsListResult {
       if (row.heartbeat_every != null) hb.every = row.heartbeat_every;
       if (row.heartbeat_target != null) hb.target = row.heartbeat_target;
       if (row.heartbeat_to != null) hb.to = row.heartbeat_to;
+      if (row.heartbeat_isolated_session === true) hb.isolatedSession = true;
       entry.heartbeat = hb;
     }
 

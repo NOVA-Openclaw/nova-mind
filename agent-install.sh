@@ -2405,6 +2405,53 @@ if [ -d "$AGENT_CONFIG_SYNC_SOURCE" ]; then
         else
             echo -e "  ${CHECK_MARK} maxSpawnDepth already set to $EXISTING_DEPTH"
         fi
+
+        # Configure agents.defaults.heartbeat so every heartbeat run/wake routes
+        # to #proactive-mode (Discord channel 1504054635231445112) and runs in
+        # an isolated session. Cadence defaults to 30m; TC-714-001 is pending so
+        # the live cadence is NOT changed to 20m yet (#714 Rev 2).
+        # Derivation: HEARTBEAT.md:66-67, motivation/README.md Configuration,
+        # OpenClaw 2026.9.6 HeartbeatSchema.isolatedSession (fork
+        # src/config/zod-schema.agent-runtime.ts:61).
+        EXISTING_HB_EVERY=$(jq -r '.agents.defaults.heartbeat.every // empty' "$OPENCLAW_CONFIG" 2>/dev/null)
+        if [ -z "$EXISTING_HB_EVERY" ]; then
+            jq '.agents.defaults.heartbeat.every = "30m"' "$OPENCLAW_CONFIG" >"$OPENCLAW_CONFIG.tmp" && \
+                mv "$OPENCLAW_CONFIG.tmp" "$OPENCLAW_CONFIG" && \
+                echo -e "  ${CHECK_MARK} Set agents.defaults.heartbeat.every = 30m" || \
+                echo -e "  ${WARNING} Could not set heartbeat cadence"
+        else
+            echo -e "  ${CHECK_MARK} agents.defaults.heartbeat.every already set to $EXISTING_HB_EVERY"
+        fi
+
+        EXISTING_HB_TARGET=$(jq -r '.agents.defaults.heartbeat.target // empty' "$OPENCLAW_CONFIG" 2>/dev/null)
+        if [ -z "$EXISTING_HB_TARGET" ]; then
+            jq '.agents.defaults.heartbeat.target = "discord"' "$OPENCLAW_CONFIG" >"$OPENCLAW_CONFIG.tmp" && \
+                mv "$OPENCLAW_CONFIG.tmp" "$OPENCLAW_CONFIG" && \
+                echo -e "  ${CHECK_MARK} Set agents.defaults.heartbeat.target = discord" || \
+                echo -e "  ${WARNING} Could not set heartbeat target"
+        else
+            echo -e "  ${CHECK_MARK} agents.defaults.heartbeat.target already set to $EXISTING_HB_TARGET"
+        fi
+
+        EXISTING_HB_TO=$(jq -r '.agents.defaults.heartbeat.to // empty' "$OPENCLAW_CONFIG" 2>/dev/null)
+        if [ -z "$EXISTING_HB_TO" ]; then
+            jq '.agents.defaults.heartbeat.to = "channel:1504054635231445112"' "$OPENCLAW_CONFIG" >"$OPENCLAW_CONFIG.tmp" && \
+                mv "$OPENCLAW_CONFIG.tmp" "$OPENCLAW_CONFIG" && \
+                echo -e "  ${CHECK_MARK} Set agents.defaults.heartbeat.to = channel:1504054635231445112 (#proactive-mode)" || \
+                echo -e "  ${WARNING} Could not set heartbeat destination"
+        else
+            echo -e "  ${CHECK_MARK} agents.defaults.heartbeat.to already set to $EXISTING_HB_TO"
+        fi
+
+        EXISTING_HB_ISO=$(jq -r '.agents.defaults.heartbeat.isolatedSession // empty' "$OPENCLAW_CONFIG" 2>/dev/null)
+        if [ -z "$EXISTING_HB_ISO" ]; then
+            jq '.agents.defaults.heartbeat.isolatedSession = true' "$OPENCLAW_CONFIG" >"$OPENCLAW_CONFIG.tmp" && \
+                mv "$OPENCLAW_CONFIG.tmp" "$OPENCLAW_CONFIG" && \
+                echo -e "  ${CHECK_MARK} Set agents.defaults.heartbeat.isolatedSession = true" || \
+                echo -e "  ${WARNING} Could not set heartbeat isolatedSession"
+        else
+            echo -e "  ${CHECK_MARK} agents.defaults.heartbeat.isolatedSession already set to $EXISTING_HB_ISO"
+        fi
     fi
 
     # Generate initial agents.json from DB
@@ -2443,7 +2490,8 @@ if [ -d "$AGENT_CONFIG_SYNC_SOURCE" ]; then
                     heartbeat_enabled,
                     heartbeat_every,
                     heartbeat_target,
-                    heartbeat_to
+                    heartbeat_to,
+                    heartbeat_isolated_session
                 FROM get_agent_export_rows()
             ) sub
         "
@@ -2497,6 +2545,7 @@ if [ -d "$AGENT_CONFIG_SYNC_SOURCE" ]; then
                                     if (row.heartbeat_every != null) hb.every = row.heartbeat_every;
                                     if (row.heartbeat_target != null) hb.target = row.heartbeat_target;
                                     if (row.heartbeat_to != null) hb.to = row.heartbeat_to;
+                                    if (row.heartbeat_isolated_session === true) hb.isolatedSession = true;
                                     entry.heartbeat = hb;
                                 }
 
@@ -2534,6 +2583,7 @@ if [ -d "$AGENT_CONFIG_SYNC_SOURCE" ]; then
                                         (if .heartbeat_every != null then {every: .heartbeat_every} else {} end)
                                         + (if .heartbeat_target != null then {target: .heartbeat_target} else {} end)
                                         + (if .heartbeat_to != null then {to: .heartbeat_to} else {} end)
+                                        + (if .heartbeat_isolated_session == true then {isolatedSession: true} else {} end)
                                     )}
                                     else {} end)
                             )

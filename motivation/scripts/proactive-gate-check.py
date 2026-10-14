@@ -225,33 +225,39 @@ def check_idle() -> dict:
             timeout=30,
         )
         if result.returncode != 0:
+            # #250/#714 — fail CLOSED: a broken data source must not be treated
+            # as "safe to proceed" (idle=true). Return idle=false plus error.
             return {
-                "idle": True,
-                "idle_minutes": float("inf"),
+                "idle": False,
+                "idle_minutes": 0.0,
                 "idle_threshold_minutes": IDLE_THRESHOLD_MINUTES,
-                "reason": f"openclaw sessions failed: {result.stderr.strip()[:200]} — defaulting to idle",
+                "error": f"openclaw sessions failed (rc={result.returncode}): {result.stderr.strip()[:200]}",
+                "reason": "openclaw sessions failed — defaulting to not-idle",
             }
         sessions = json.loads(result.stdout)
     except FileNotFoundError:
         return {
-            "idle": True,
-            "idle_minutes": float("inf"),
+            "idle": False,
+            "idle_minutes": 0.0,
             "idle_threshold_minutes": IDLE_THRESHOLD_MINUTES,
-            "reason": "openclaw CLI not found — defaulting to idle",
+            "error": "openclaw CLI not found",
+            "reason": "openclaw CLI not found — defaulting to not-idle",
         }
     except subprocess.TimeoutExpired:
         return {
-            "idle": True,
-            "idle_minutes": float("inf"),
+            "idle": False,
+            "idle_minutes": 0.0,
             "idle_threshold_minutes": IDLE_THRESHOLD_MINUTES,
-            "reason": "openclaw sessions timed out — defaulting to idle",
+            "error": "openclaw sessions timed out",
+            "reason": "openclaw sessions timed out — defaulting to not-idle",
         }
     except (json.JSONDecodeError, ValueError) as exc:
         return {
-            "idle": True,
-            "idle_minutes": float("inf"),
+            "idle": False,
+            "idle_minutes": 0.0,
             "idle_threshold_minutes": IDLE_THRESHOLD_MINUTES,
-            "reason": f"openclaw sessions output malformed: {exc} — defaulting to idle",
+            "error": f"openclaw sessions output malformed: {exc}",
+            "reason": "openclaw sessions output malformed — defaulting to not-idle",
         }
 
     latest_interaction_ms: int | None = None

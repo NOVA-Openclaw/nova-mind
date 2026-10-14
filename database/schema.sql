@@ -203,6 +203,7 @@ CREATE TABLE IF NOT EXISTS agents (
     heartbeat_every text,
     heartbeat_target text,
     heartbeat_to text,
+    heartbeat_isolated_session boolean DEFAULT false,
     model_locked boolean DEFAULT false NOT NULL,
     CONSTRAINT agents_pkey PRIMARY KEY (id),
     CONSTRAINT agents_name_key UNIQUE (name),
@@ -3968,7 +3969,7 @@ COMMENT ON FUNCTION get_agent_bootstrap(text) IS 'Bootstrap context: UNIVERSAL +
 --
 
 CREATE OR REPLACE FUNCTION get_agent_export_rows()
-RETURNS TABLE(name text, model text, fallback_models text[], thinking text, instance_type text, is_default boolean, allowed_subagents text[], heartbeat_enabled boolean, heartbeat_every text, heartbeat_target text, heartbeat_to text)
+RETURNS TABLE(name text, model text, fallback_models text[], thinking text, instance_type text, is_default boolean, allowed_subagents text[], heartbeat_enabled boolean, heartbeat_every text, heartbeat_target text, heartbeat_to text, heartbeat_isolated_session boolean)
 LANGUAGE sql
 STABLE
 AS $$
@@ -3983,7 +3984,8 @@ AS $$
     a.heartbeat_enabled,
     a.heartbeat_every,
     a.heartbeat_target,
-    a.heartbeat_to
+    a.heartbeat_to,
+    a.heartbeat_isolated_session
   FROM agents a
   WHERE a.name = session_user
     AND a.status = 'active'
@@ -4002,7 +4004,8 @@ AS $$
     a.heartbeat_enabled,
     a.heartbeat_every,
     a.heartbeat_target,
-    a.heartbeat_to
+    a.heartbeat_to,
+    a.heartbeat_isolated_session
   FROM agents a
   WHERE session_user = ANY (a.parent_agents)
     AND a.status = 'active'

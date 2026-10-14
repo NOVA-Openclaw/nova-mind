@@ -124,13 +124,17 @@ Conjecture, and Navier-Stokes Existence and Smoothness):
         "every": "30m",
         "target": "discord",
         "to": "channel:1504054635231445112",
-        "isolatedSession": true,
-        "skipWhenBusy": true
+        "isolatedSession": true
       }
     }
   }
 }
 ```
+
+> **Cadence (#714):** `every` defaults to `30m`. The 20m cadence requested in
+> #714 is intentionally parametrized but left pending per the Rev 2 test-case
+> decision; changing it requires an explicit scope choice between a nova-only
+> override and an `agents.defaults`-wide change.
 
 ### Bootstrap Context
 

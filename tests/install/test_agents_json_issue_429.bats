@@ -121,6 +121,7 @@ run_agents_json_logic() {
                                 if (row.heartbeat_every != null) hb.every = row.heartbeat_every;
                                 if (row.heartbeat_target != null) hb.target = row.heartbeat_target;
                                 if (row.heartbeat_to != null) hb.to = row.heartbeat_to;
+                                if (row.heartbeat_isolated_session === true) hb.isolatedSession = true;
                                 entry.heartbeat = hb;
                             }
 
@@ -265,6 +266,7 @@ run_agents_json_logic() {
                     if (row.heartbeat_every != null) hb.every = row.heartbeat_every;
                     if (row.heartbeat_target != null) hb.target = row.heartbeat_target;
                     if (row.heartbeat_to != null) hb.to = row.heartbeat_to;
+                    if (row.heartbeat_isolated_session === true) hb.isolatedSession = true;
                     entry.heartbeat = hb;
                 }
                 entries[row.name] = entry;
@@ -355,23 +357,26 @@ run_agents_json_logic() {
 
 @test "TC-429-P-05: Heartbeat shape parity" {
     local rows='[
-        {"name":"full","model":"m","fallback_models":null,"thinking":null,"instance_type":"subagent","is_default":false,"allowed_subagents":null,"heartbeat_enabled":true,"heartbeat_every":"5m","heartbeat_target":"discord","heartbeat_to":"channel:1234"},
-        {"name":"partial","model":"m","fallback_models":null,"thinking":null,"instance_type":"subagent","is_default":false,"allowed_subagents":null,"heartbeat_enabled":true,"heartbeat_every":"10m","heartbeat_target":null,"heartbeat_to":null},
-        {"name":"enabled_no_every","model":"m","fallback_models":null,"thinking":null,"instance_type":"subagent","is_default":false,"allowed_subagents":null,"heartbeat_enabled":true,"heartbeat_every":null,"heartbeat_target":"discord","heartbeat_to":"channel:1234"},
-        {"name":"disabled","model":"m","fallback_models":null,"thinking":null,"instance_type":"subagent","is_default":false,"allowed_subagents":null,"heartbeat_enabled":false,"heartbeat_every":"5m","heartbeat_target":"discord","heartbeat_to":"channel:1234"}
+        {"name":"full","model":"m","fallback_models":null,"thinking":null,"instance_type":"subagent","is_default":false,"allowed_subagents":null,"heartbeat_enabled":true,"heartbeat_every":"5m","heartbeat_target":"discord","heartbeat_to":"channel:1234","heartbeat_isolated_session":true},
+        {"name":"partial","model":"m","fallback_models":null,"thinking":null,"instance_type":"subagent","is_default":false,"allowed_subagents":null,"heartbeat_enabled":true,"heartbeat_every":"10m","heartbeat_target":null,"heartbeat_to":null,"heartbeat_isolated_session":false},
+        {"name":"enabled_no_every","model":"m","fallback_models":null,"thinking":null,"instance_type":"subagent","is_default":false,"allowed_subagents":null,"heartbeat_enabled":true,"heartbeat_every":null,"heartbeat_target":"discord","heartbeat_to":"channel:1234","heartbeat_isolated_session":null},
+        {"name":"disabled","model":"m","fallback_models":null,"thinking":null,"instance_type":"subagent","is_default":false,"allowed_subagents":null,"heartbeat_enabled":false,"heartbeat_every":"5m","heartbeat_target":"discord","heartbeat_to":"channel:1234","heartbeat_isolated_session":true}
     ]'
 
     run run_agents_json_logic 0 "$rows"
     [ "$status" -eq 0 ]
 
     run jq -c '.full.heartbeat' "$FAKE_AGENTS_JSON"
-    [ "$output" = '{"every":"5m","target":"discord","to":"channel:1234"}' ]
+    [ "$output" = '{"every":"5m","target":"discord","to":"channel:1234","isolatedSession":true}' ]
 
     run jq -c '.partial.heartbeat' "$FAKE_AGENTS_JSON"
     [ "$output" = '{"every":"10m"}' ]
 
     run jq -r '.enabled_no_every | has("heartbeat")' "$FAKE_AGENTS_JSON"
     [ "$output" = "true" ]
+
+    run jq -c '.enabled_no_every.heartbeat' "$FAKE_AGENTS_JSON"
+    [ "$output" = '{"target":"discord","to":"channel:1234"}' ]
 
     run jq -r '.disabled | has("heartbeat")' "$FAKE_AGENTS_JSON"
     [ "$output" = "false" ]

@@ -13,6 +13,7 @@ import importlib
 import importlib.util
 import json
 import os
+import subprocess
 import sys
 import time
 from datetime import datetime, timezone, timedelta
@@ -110,20 +111,43 @@ class TestIdleDetection:
             result = m.check_idle()
         assert result["idle"] is True
 
-    def test_missing_sessions_file_defaults_to_idle(self, m, tmp_path):
-        """openclaw CLI not installed / not on PATH → default to idle."""
+    def test_missing_sessions_file_fails_closed_not_idle(self, m, tmp_path):
+        """#250/#714: openclaw CLI missing → fail CLOSED (idle=false), never idle."""
         with patch("subprocess.run", side_effect=FileNotFoundError):
             result = m.check_idle()
-        assert result["idle"] is True
+        assert result["idle"] is False
+        assert "error" in result
         assert "reason" in result
 
-    def test_malformed_sessions_file_defaults_to_idle(self, m, tmp_path):
+    def test_malformed_sessions_file_fails_closed_not_idle(self, m, tmp_path):
+        """#714: malformed JSON from openclaw sessions → fail CLOSED (idle=false)."""
         result_mock = MagicMock()
         result_mock.returncode = 0
         result_mock.stdout = "{this is not valid json{{"
         with patch("subprocess.run", return_value=result_mock):
             result = m.check_idle()
-        assert result["idle"] is True
+        assert result["idle"] is False
+        assert "error" in result
+        assert "reason" in result
+
+    def test_sessions_cli_nonzero_fails_closed_not_idle(self, m, tmp_path):
+        """#714: nonzero exit from openclaw sessions → fail CLOSED (idle=false)."""
+        result_mock = MagicMock()
+        result_mock.returncode = 1
+        result_mock.stderr = "connection refused"
+        result_mock.stdout = ""
+        with patch("subprocess.run", return_value=result_mock):
+            result = m.check_idle()
+        assert result["idle"] is False
+        assert "error" in result
+        assert "reason" in result
+
+    def test_sessions_cli_timeout_fails_closed_not_idle(self, m, tmp_path):
+        """#714: timeout waiting for openclaw sessions → fail CLOSED (idle=false)."""
+        with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("openclaw sessions", 30)):
+            result = m.check_idle()
+        assert result["idle"] is False
+        assert "error" in result
         assert "reason" in result
 
     def test_bot_only_sessions_default_to_idle(self, m, tmp_path):

@@ -555,7 +555,9 @@ The memory maintenance script embeds journal entries along with other pending re
 Update `lastIntrospection` in `~/.openclaw/workspace/memory/heartbeat-state.json`:
 - `timestamp` — now, ISO UTC
 - `dailyLogLines` — `wc -l < ~/.openclaw/workspace/memory/$(date -u +%Y-%m-%d).md`
-- `sessionTranscriptBytes` — `find ~/.openclaw/agents/nova/sessions -name '*.jsonl' -printf '%s\n' | awk '{s+=$1} END {print s}'` (do NOT use a `du ...*.jsonl` shell glob — with thousands of session files it silently returns empty → writes 0 and corrupts the transcript-growth trigger; observed 2026-07-08)
+- `sessionTranscriptBytes` — output of `python3 ~/.openclaw/workspace/scripts/proactive-gate-check.py --transcript-bytes`. OpenClaw 2026.9.x no longer stores session transcripts under `~/.openclaw/agents/nova/sessions`, so the gate-check now measures transcript growth as `SUM(LENGTH(content))` over `nova_memory.channel_transcripts`; using the same command keeps the baseline units identical to the trigger.
+
+If the `--transcript-bytes` command exits non-zero or prints nothing, write `null` (not `0`) for `sessionTranscriptBytes` and note the failure in the daily-log entry. A null or 0 baseline is treated as "no comparison" by the gate.
 
 Preserve all other JSON fields. Keep any top-level mirror fields (`timestamp`, `dailyLogLines`, `sessionTranscriptBytes`) in sync with `lastIntrospection`.
 

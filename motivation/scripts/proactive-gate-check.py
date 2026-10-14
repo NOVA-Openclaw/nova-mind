@@ -55,9 +55,6 @@ except ImportError:
 # ---------------------------------------------------------------------------
 IDLE_THRESHOLD_MINUTES = int(os.environ.get("IDLE_THRESHOLD_MINUTES", "60"))
 
-SESSIONS_JSON = os.path.expanduser(
-    "~/.openclaw/agents/nova/sessions/sessions.json"
-)
 HEARTBEAT_STATE_JSON = os.path.expanduser(
     "~/.openclaw/workspace/memory/heartbeat-state.json"
 )
@@ -205,7 +202,11 @@ def _load_heartbeat_state(path: str) -> tuple[dict[str, Any] | None, datetime | 
 
 def check_idle() -> dict:
     """
-    Read sessions.json and determine if NOVA has been idle long enough.
+    Determine if NOVA has been idle long enough.
+
+    Uses `openclaw sessions --json` (2026.9.x) instead of reading OpenClaw's
+    private sessions.json file directly (#710). This keeps nova-mind out of
+    OpenClaw-owned session storage.
 
     Returns a dict with:
       idle: bool
@@ -217,22 +218,40 @@ def check_idle() -> dict:
     now_ms = int(time.time() * 1000)
 
     try:
-        with open(SESSIONS_JSON, "r") as fh:
-            raw = fh.read()
-        sessions = json.loads(raw)
+        result = subprocess.run(
+            ["openclaw", "sessions", "--json"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if result.returncode != 0:
+            return {
+                "idle": True,
+                "idle_minutes": float("inf"),
+                "idle_threshold_minutes": IDLE_THRESHOLD_MINUTES,
+                "reason": f"openclaw sessions failed: {result.stderr.strip()[:200]} — defaulting to idle",
+            }
+        sessions = json.loads(result.stdout)
     except FileNotFoundError:
         return {
             "idle": True,
             "idle_minutes": float("inf"),
             "idle_threshold_minutes": IDLE_THRESHOLD_MINUTES,
-            "reason": "sessions.json not found — defaulting to idle",
+            "reason": "openclaw CLI not found — defaulting to idle",
+        }
+    except subprocess.TimeoutExpired:
+        return {
+            "idle": True,
+            "idle_minutes": float("inf"),
+            "idle_threshold_minutes": IDLE_THRESHOLD_MINUTES,
+            "reason": "openclaw sessions timed out — defaulting to idle",
         }
     except (json.JSONDecodeError, ValueError) as exc:
         return {
             "idle": True,
             "idle_minutes": float("inf"),
             "idle_threshold_minutes": IDLE_THRESHOLD_MINUTES,
-            "reason": f"sessions.json malformed: {exc} — defaulting to idle",
+            "reason": f"openclaw sessions output malformed: {exc} — defaulting to idle",
         }
 
     latest_interaction_ms: int | None = None
@@ -307,76 +326,20 @@ def check_step1_agent_chat() -> dict:
         return _step_error(f"DB error: {exc}")
 
 
-def _last_conversational_role(session_file: str) -> str | None:
-    """Return the role ('user' or 'assistant') of the last conversational message in a session JSONL file.
-
-    Skips toolResult, system, and other non-conversational entries.
-    Returns None if no conversational message is found.
-    """
-    if not os.path.exists(session_file):
-        return None
-    try:
-        with open(session_file, "r") as fh:
-            lines = fh.readlines()
-    except OSError:
-        return None
-    # Walk backwards to find last user or assistant message
-    for line in reversed(lines):
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            entry = json.loads(line)
-        except (json.JSONDecodeError, ValueError):
-            continue
-        role = entry.get("message", {}).get("role")
-        if role in ("user", "assistant"):
-            return role
-    return None
-
-
 def check_step2_unanswered_sessions() -> dict:
     """
-    Step 2: Check for unanswered user messages in recent user-facing sessions.
-    Reads sessions.json and checks each session's JSONL file to see if the last
-    conversational message is from a user (i.e. unanswered).
+    Step 2: Unanswered user messages in recent user-facing sessions.
+
+    This step previously read OpenClaw session JSONL files directly. Per #710,
+    nova-mind no longer reads from OpenClaw-owned session storage. A replacement
+    implementation that derives the last conversational role without touching
+    session files is tracked separately; until then the step is intentionally
+    non-actionable.
     """
-    ONE_DAY_MS = 86_400_000
-    try:
-        with open(SESSIONS_JSON, "r") as fh:
-            sessions_data = json.load(fh)
-    except (OSError, json.JSONDecodeError) as exc:
-        return _step_error(f"Failed to read sessions.json: {exc}")
-
-    now_ms = int(time.time() * 1000)
-    unanswered: list[str] = []
-
-    for key, sess in sessions_data.items():
-        updated = sess.get("updatedAt", 0)
-        age_ms = now_ms - updated
-        if age_ms >= ONE_DAY_MS:
-            continue
-        if not any(pat in key for pat in USER_SESSION_PATTERNS):
-            continue
-        if any(exc_pat in key for exc_pat in EXCLUDE_PATTERNS):
-            continue
-
-        session_file = sess.get("sessionFile", "")
-        if not session_file:
-            continue
-
-        last_role = _last_conversational_role(session_file)
-        if last_role == "user":
-            unanswered.append(key)
-
-    count = len(unanswered)
-    if count > 0:
-        return {
-            "actionable": True,
-            "reason": f"{count} session(s) with unanswered user messages",
-            "data": {"count": count, "sessions": unanswered},
-        }
-    return {"actionable": False, "reason": "No unanswered user messages in recent sessions"}
+    return {
+        "actionable": False,
+        "reason": "Step retired per #710 — no longer reads OpenClaw session files",
+    }
 
 
 def check_step3_introspection() -> dict:
@@ -479,28 +442,9 @@ def check_step3_introspection() -> dict:
     except (subprocess.TimeoutExpired, ValueError, IndexError, FileNotFoundError):
         pass  # Non-fatal; skip this sub-check
 
-    # Check session transcript byte growth
-    sessions_dir = os.path.expanduser("~/.openclaw/agents/nova/sessions/")
-    try:
-        result = subprocess.run(
-            ["bash", "-c", f"du -sb {sessions_dir}*.jsonl 2>/dev/null | awk '{{s+=$1}} END{{print s+0}}'"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            current_bytes = int(result.stdout.strip())
-            data["current_session_bytes"] = current_bytes
-            if last_bytes is not None:
-                byte_growth = current_bytes - last_bytes
-                data["byte_growth"] = byte_growth
-                if byte_growth >= INTROSPECT_BYTE_THRESHOLD:
-                    reasons.append(
-                        f"{byte_growth:,} bytes of new session transcripts "
-                        f"(threshold {INTROSPECT_BYTE_THRESHOLD:,})"
-                    )
-    except (subprocess.TimeoutExpired, ValueError, FileNotFoundError):
-        pass
+    # Session transcript byte growth check removed per #710: nova-mind no
+    # longer reads OpenClaw session files. The daily log line and elapsed-time
+    # sub-checks remain.
 
     if reasons:
         return {

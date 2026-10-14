@@ -44,15 +44,16 @@ if str(SCRIPT_DIR) not in sys.path:
 def _open_private(path: Path) -> Any:
     """Open *path* for writing with owner-only permissions from the start.
 
-    Uses os.open(..., 0o600) so the file is created with mode 0600 even under
-    a permissive umask, then chmods to 0600 in case the file already existed
-    with wider permissions. The returned file object is text-mode with UTF-8
-    encoding.
+    Uses os.open(..., O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0o600) so the
+    file is created with mode 0600 even under a permissive umask, and a symlink
+    planted at the target path is refused (OSError/ELOOP). Then os.fchmod(fd,
+    0o600) tightens an existing file before any write, without a second path
+    lookup. The returned file object is text-mode with UTF-8 encoding.
     """
     path = Path(path)
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
     try:
-        os.chmod(path, 0o600)
+        os.fchmod(fd, 0o600)
         return os.fdopen(fd, "w", encoding="utf-8", closefd=True)
     except Exception:
         os.close(fd)
@@ -63,9 +64,13 @@ def _mkdir_private(path: Path) -> Path:
     """Create *path* as a directory with owner-only permissions.
 
     mkdir's mode argument is masked by the process umask, so we chmod to 0700
-    after creation to guarantee the permission regardless of umask.
+    after creation to guarantee the permission regardless of umask. If the
+    target path already exists and is a symlink, it is refused so we never
+    write into an attacker-chosen directory.
     """
     path = Path(path)
+    if path.is_symlink():
+        raise OSError(f"[cleanup] Refusing to create directory at symlink: {path}")
     path.mkdir(parents=True, exist_ok=True)
     os.chmod(path, 0o700)
     return path

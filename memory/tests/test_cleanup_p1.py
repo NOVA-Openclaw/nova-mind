@@ -1516,38 +1516,84 @@ class TestBackupExportPermissions(CleanupP1TestCase):
         finally:
             os.umask(old_umask)
 
-    def test_mutation_plain_open_fails(self) -> None:
-        """Patching _open_private back to plain open() yields non-0600 files.
-
-        This confirms the owner-only assertions above would fail if the
-        private-file helper were replaced with a normal open().
-        """
-        ident_conn = FakeConnection(_identification_handler(existing_dbs={"graybeard"}))
-        result = cleanup_708_703.identify_misplaced_sessions(
-            ident_conn, "nova_memory"
-        )
-        export_conn = FakeConnection(_backup_export_handler())
-
-        def _plain_open(path: Path) -> Any:
-            return path.open("w", encoding="utf-8")
-
+    def test_symlink_at_target_file_refused(self) -> None:
+        """A symlink at the target file path is refused; its target is unchanged."""
         old_umask = os.umask(0o022)
         try:
             with tempfile.TemporaryDirectory() as tmp:
-                out_dir = Path(tmp) / "export"
-                with patch.object(cleanup_708_703, "_open_private", _plain_open):
-                    cleanup_708_703.export_peer_rows(export_conn, result, out_dir)
-                bad_perms = [
-                    p
-                    for p in out_dir.iterdir()
-                    if stat.S_IMODE(p.stat().st_mode) != 0o600
-                ]
-                self.assertTrue(
-                    bad_perms,
-                    "Mutation check: plain open() should have produced non-0600 files",
+                tmp_path = Path(tmp)
+                real_file = tmp_path / "real_file.txt"
+                real_file.write_text("secret\n", encoding="utf-8")
+                os.chmod(real_file, 0o600)
+
+                symlink = tmp_path / "symlink_file.txt"
+                symlink.symlink_to(real_file)
+
+                with self.assertRaises(OSError):
+                    with cleanup_708_703._open_private(symlink):
+                        pass
+
+                self.assertEqual(
+                    real_file.read_text(encoding="utf-8"),
+                    "secret\n",
+                    "Symlink target must remain unchanged",
+                )
+                self.assertEqual(
+                    stat.S_IMODE(real_file.stat().st_mode),
+                    0o600,
+                    "Symlink target mode must remain unchanged",
                 )
         finally:
             os.umask(old_umask)
+
+    def test_symlinked_output_dir_refused(self) -> None:
+        """A symlinked output directory is refused."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            real_dir = tmp_path / "real_dir"
+            real_dir.mkdir()
+            symlink_dir = tmp_path / "symlink_dir"
+            symlink_dir.symlink_to(real_dir)
+
+            with self.assertRaises(OSError) as cm:
+                cleanup_708_703._mkdir_private(symlink_dir)
+
+            self.assertIn(str(symlink_dir), str(cm.exception))
+
+    def test_mutation_no_follow_refuses_symlink(self) -> None:
+        """Removing O_NOFOLLOW lets a symlink at the target file be followed.
+
+        This mutation check confirms the symlink refusal test above would fail
+        if _open_private did not pass O_NOFOLLOW to os.open.
+        """
+
+        def _open_without_nofollow(path: Path) -> Any:
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            try:
+                os.fchmod(fd, 0o600)
+                return os.fdopen(fd, "w", encoding="utf-8", closefd=True)
+            except Exception:
+                os.close(fd)
+                raise
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            real_file = tmp_path / "real_file.txt"
+            real_file.write_text("secret\n", encoding="utf-8")
+            os.chmod(real_file, 0o600)
+
+            symlink = tmp_path / "symlink_file.txt"
+            symlink.symlink_to(real_file)
+
+            with patch.object(cleanup_708_703, "_open_private", _open_without_nofollow):
+                with cleanup_708_703._open_private(symlink) as f:
+                    f.write("tampered\n")
+
+            self.assertNotEqual(
+                real_file.read_text(encoding="utf-8"),
+                "secret\n",
+                "Without O_NOFOLLOW the symlink target must be writable",
+            )
 
 
 # ---------------------------------------------------------------------------

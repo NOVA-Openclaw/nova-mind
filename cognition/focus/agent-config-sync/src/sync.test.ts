@@ -38,12 +38,12 @@
  * Run: npx tsx --test src/sync.test.ts
  */
 
-import { describe, it, before, after } from "node:test";
+import { describe, it, before, beforeEach, after } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { buildAgentsList, syncHeartbeatFiles, validateAgentsEntries, writeAgentsJsonAtomically } from "./sync.js";
+import { buildAgentsList, resetProviderPrefixWarnings, syncHeartbeatFiles, validateAgentsEntries, writeAgentsJsonAtomically } from "./sync.js";
 import type { AgentRow, HeartbeatRow, AgentEntryConfig } from "./sync.js";
 
 // ── Mock pg.Client helper ───────────────────────────────────────────────────
@@ -2251,6 +2251,8 @@ describe("TC-707-009: NULL model on active row is skipped, never emits model:nul
 // ── TC-707-010: unknown/malformed provider prefix ────────────────────────────
 
 describe("TC-707-010: unknown provider prefix does not crash the generator", () => {
+  beforeEach(() => resetProviderPrefixWarnings());
+
   it("passes through an unrecognized provider prefix", () => {
     const rows: AgentRow[] = [
       { name: "weird", model: "totally-unknown-provider/some-model", fallback_models: null, thinking: null, instance_type: "subagent", is_default: false, allowed_subagents: null, status: "active" },
@@ -2310,6 +2312,34 @@ describe("TC-707-010: unknown provider prefix does not crash the generator", () 
     assert.deepStrictEqual(model.fallbacks, ["unknown-provider/fallback", "google/gemini-flash"]);
     assert.strictEqual(warnings.length, 1);
     assert.ok(warnings[0]?.includes("unknown-provider"));
+  });
+
+  it("warns only once per (agent, prefix) across consecutive buildAgentsList calls", () => {
+    resetProviderPrefixWarnings();
+    const warnings: string[] = [];
+    const logger = { warn: (msg: string) => warnings.push(msg) };
+    const rowA: AgentRow = {
+      name: "dedup-a",
+      model: "unknown-dedup-provider/model-a",
+      fallback_models: null,
+      thinking: null,
+      instance_type: "subagent",
+      is_default: false,
+      allowed_subagents: null,
+      status: "active",
+    };
+
+    buildAgentsList([rowA], logger);
+    assert.strictEqual(warnings.length, 1);
+
+    // Same agent, same unknown prefix -> no new warning.
+    buildAgentsList([rowA], logger);
+    assert.strictEqual(warnings.length, 1);
+
+    // Different agent, same unknown prefix -> one more warning.
+    const rowB: AgentRow = { ...rowA, name: "dedup-b" };
+    buildAgentsList([rowB], logger);
+    assert.strictEqual(warnings.length, 2);
   });
 });
 

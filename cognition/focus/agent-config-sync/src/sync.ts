@@ -101,6 +101,14 @@ function loadKnownProviders(): Set<string> {
 
 const KNOWN_PROVIDERS = loadKnownProviders();
 
+// TC-707 dedup: warn once per (agentId, providerPrefix) per process lifetime.
+const warnedProviderPrefixes = new Set<string>();
+
+/** Test-only: reset the once-per-process provider-prefix warning set. */
+export function resetProviderPrefixWarnings(): void {
+  warnedProviderPrefixes.clear();
+}
+
 /** Minimal logger surface used by buildAgentsList for warnings. */
 export type BuildLogger = { warn: (msg: string) => void };
 
@@ -197,10 +205,16 @@ function warnIfUnknownProviderPrefix(
   if (KNOWN_PROVIDERS.size === 0) return;
   const prefix = extractProviderPrefix(model);
   if (prefix == null) {
+    const key = `${id}:<no-prefix>`;
+    if (warnedProviderPrefixes.has(key)) return;
+    warnedProviderPrefixes.add(key);
     log.warn(
       `agent_config_sync: agent '${id}' model '${model}' has no provider prefix`,
     );
   } else if (!KNOWN_PROVIDERS.has(prefix)) {
+    const key = `${id}:${prefix}`;
+    if (warnedProviderPrefixes.has(key)) return;
+    warnedProviderPrefixes.add(key);
     log.warn(
       `agent_config_sync: agent '${id}' model '${model}' has unrecognized provider prefix '${prefix}'`,
     );

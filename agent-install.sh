@@ -263,6 +263,103 @@ _configure_gateway_reload_mode() {
         echo -e "  ${WARNING} Could not set gateway.reload.mode"
 }
 
+# Helper: install a metacognition plugin
+install_metacognition_plugin() {
+    local plugin_name="$1"
+    local plugin_source="$2"
+    local plugin_target="$3"
+
+    if [ ! -d "$plugin_source" ]; then
+        echo -e "  ${INFO} $plugin_name source not found at $plugin_source (skipping)"
+        return 0
+    fi
+
+    echo "  Installing $plugin_name..."
+    mkdir -p "$plugin_target"
+
+    # Copy source and config files
+    for f in package.json package-lock.json openclaw.plugin.json tsconfig.json src; do
+        if [ -e "$plugin_source/$f" ]; then
+            if [ -d "$plugin_source/$f" ]; then
+                rm -rf "${plugin_target:?}/$f"
+                cp -r "$plugin_source/$f" "$plugin_target/$f"
+            else
+                cp "$plugin_source/$f" "$plugin_target/$f"
+            fi
+        fi
+    done
+    echo -e "    ${CHECK_MARK} Source files copied"
+
+    # Build TypeScript in the source directory so the target only receives
+    # runtime dependencies (#598, #724).
+    if [ -d "$plugin_source/src" ]; then
+        _install_plugin_build_dependencies "$plugin_source" "$plugin_name" || return 1
+
+        echo "    Building TypeScript..."
+        BUILD_LOG=$(mktemp "/tmp/build-${plugin_name}-XXXXXX.log")
+        TMPFILES+=("$BUILD_LOG")
+        mkdir -p "$plugin_target/dist"
+        if (cd "$plugin_source" && "$plugin_source/node_modules/.bin/tsc") >"$BUILD_LOG" 2>&1; then
+            cp -r "$plugin_source/dist/"* "$plugin_target/dist/"
+            echo -e "    ${CHECK_MARK} Build completed"
+            rm -f "$BUILD_LOG"
+        else
+            echo -e "    ${CROSS_MARK} Build failed"
+            tail -10 "$BUILD_LOG"
+            VERIFICATION_ERRORS=$((VERIFICATION_ERRORS + 1))
+            cd "$SCRIPT_DIR"
+            return 1
+        fi
+    fi
+
+    # Install runtime dependencies in the target directory (#598)
+    _install_runtime_dependencies "$plugin_target" "$plugin_name" || return 1
+    cd "$SCRIPT_DIR"
+
+    # Enable in OpenClaw config
+    if [ -f "$OPENCLAW_CONFIG" ] && command -v jq &>/dev/null; then
+        jq --arg path "$plugin_target" --arg name "$plugin_name" '
+            .plugins.load.paths = ((.plugins.load.paths // []) + [$path] | unique)
+            | .plugins.entries[$name] = (.plugins.entries[$name] // {}) * {
+                "enabled": true,
+                "hooks": {
+                  "allowConversationAccess": true
+                }
+              }
+        ' "$OPENCLAW_CONFIG" >"$OPENCLAW_CONFIG.tmp" && \
+            mv "$OPENCLAW_CONFIG.tmp" "$OPENCLAW_CONFIG" && \
+            echo -e "    ${CHECK_MARK} $plugin_name enabled in OpenClaw config" || \
+            echo -e "    ${WARNING} Could not enable $plugin_name in config"
+    fi
+
+    # Verify installation
+    if [ -f "$plugin_target/dist/index.js" ] && [ -f "$plugin_target/openclaw.plugin.json" ]; then
+        echo -e "  ${CHECK_MARK} $plugin_name installed to $plugin_target"
+    else
+        echo -e "  ${CROSS_MARK} $plugin_name installation incomplete"
+        VERIFICATION_ERRORS=$((VERIFICATION_ERRORS + 1))
+    fi
+
+    # Run any plugin migrations
+    local plugin_migrations="$plugin_source/database/migrations"
+    if [ -d "$plugin_migrations" ]; then
+        echo "    Running $plugin_name migrations..."
+        local mig_files=()
+        while IFS= read -r -d '' f; do
+            mig_files+=("$f")
+        done < <(find "$plugin_migrations" -maxdepth 1 -name "*.sql" -print0 | sort -z)
+
+        for sql_file in "${mig_files[@]}"; do
+            local mig_name
+            mig_name=$(basename "$sql_file")
+            if _superuser_psql "$DB_NAME" -f "$sql_file" >/dev/null 2>&1; then
+                echo -e "    ${CHECK_MARK} Migration: $mig_name"
+            else
+                echo -e "    ${WARNING} Migration failed: $mig_name"
+            fi
+        done
+    fi
+}
 # When the installer is sourced by unit tests, stop here so tests can call
 # the helper functions above without running the full installer.  This guard
 # is NOT used in normal execution.
@@ -2162,103 +2259,6 @@ _install_turn_context_plugin "$SCRIPT_DIR/memory/plugins/turn-context" "$OPENCLA
 echo ""
 echo "Metacognition plugins installation..."
 
-# Helper: install a metacognition plugin
-install_metacognition_plugin() {
-    local plugin_name="$1"
-    local plugin_source="$2"
-    local plugin_target="$3"
-
-    if [ ! -d "$plugin_source" ]; then
-        echo -e "  ${INFO} $plugin_name source not found at $plugin_source (skipping)"
-        return 0
-    fi
-
-    echo "  Installing $plugin_name..."
-    mkdir -p "$plugin_target"
-
-    # Copy source and config files
-    for f in package.json package-lock.json openclaw.plugin.json tsconfig.json src; do
-        if [ -e "$plugin_source/$f" ]; then
-            if [ -d "$plugin_source/$f" ]; then
-                rm -rf "${plugin_target:?}/$f"
-                cp -r "$plugin_source/$f" "$plugin_target/$f"
-            else
-                cp "$plugin_source/$f" "$plugin_target/$f"
-            fi
-        fi
-    done
-    echo -e "    ${CHECK_MARK} Source files copied"
-
-    # Build TypeScript in the source directory so the target only receives
-    # runtime dependencies (#598, #724).
-    if [ -d "$plugin_source/src" ]; then
-        _install_plugin_build_dependencies "$plugin_source" "$plugin_name" || return 1
-
-        echo "    Building TypeScript..."
-        BUILD_LOG=$(mktemp "/tmp/build-${plugin_name}-XXXXXX.log")
-        TMPFILES+=("$BUILD_LOG")
-        mkdir -p "$plugin_target/dist"
-        if (cd "$plugin_source" && "$plugin_source/node_modules/.bin/tsc") >"$BUILD_LOG" 2>&1; then
-            cp -r "$plugin_source/dist/"* "$plugin_target/dist/"
-            echo -e "    ${CHECK_MARK} Build completed"
-            rm -f "$BUILD_LOG"
-        else
-            echo -e "    ${CROSS_MARK} Build failed"
-            tail -10 "$BUILD_LOG"
-            VERIFICATION_ERRORS=$((VERIFICATION_ERRORS + 1))
-            cd "$SCRIPT_DIR"
-            return 1
-        fi
-    fi
-
-    # Install runtime dependencies in the target directory (#598)
-    _install_runtime_dependencies "$plugin_target" "$plugin_name" || return 1
-    cd "$SCRIPT_DIR"
-
-    # Enable in OpenClaw config
-    if [ -f "$OPENCLAW_CONFIG" ] && command -v jq &>/dev/null; then
-        jq --arg path "$plugin_target" --arg name "$plugin_name" '
-            .plugins.load.paths = ((.plugins.load.paths // []) + [$path] | unique)
-            | .plugins.entries[$name] = (.plugins.entries[$name] // {}) * {
-                "enabled": true,
-                "hooks": {
-                  "allowConversationAccess": true
-                }
-              }
-        ' "$OPENCLAW_CONFIG" >"$OPENCLAW_CONFIG.tmp" && \
-            mv "$OPENCLAW_CONFIG.tmp" "$OPENCLAW_CONFIG" && \
-            echo -e "    ${CHECK_MARK} $plugin_name enabled in OpenClaw config" || \
-            echo -e "    ${WARNING} Could not enable $plugin_name in config"
-    fi
-
-    # Verify installation
-    if [ -f "$plugin_target/dist/index.js" ] && [ -f "$plugin_target/openclaw.plugin.json" ]; then
-        echo -e "  ${CHECK_MARK} $plugin_name installed to $plugin_target"
-    else
-        echo -e "  ${CROSS_MARK} $plugin_name installation incomplete"
-        VERIFICATION_ERRORS=$((VERIFICATION_ERRORS + 1))
-    fi
-
-    # Run any plugin migrations
-    local plugin_migrations="$plugin_source/database/migrations"
-    if [ -d "$plugin_migrations" ]; then
-        echo "    Running $plugin_name migrations..."
-        local mig_files=()
-        while IFS= read -r -d '' f; do
-            mig_files+=("$f")
-        done < <(find "$plugin_migrations" -maxdepth 1 -name "*.sql" -print0 | sort -z)
-
-        for sql_file in "${mig_files[@]}"; do
-            local mig_name
-            mig_name=$(basename "$sql_file")
-            if _superuser_psql "$DB_NAME" -f "$sql_file" >/dev/null 2>&1; then
-                echo -e "    ${CHECK_MARK} Migration: $mig_name"
-            else
-                echo -e "    ${WARNING} Migration failed: $mig_name"
-            fi
-        done
-    fi
-}
 
 install_metacognition_plugin "self-awareness" \
     "$SCRIPT_DIR/cognition/metacognition/self-awareness" \

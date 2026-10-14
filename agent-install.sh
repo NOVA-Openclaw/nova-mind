@@ -2310,16 +2310,8 @@ if [ -d "$AGENT_CONFIG_SYNC_SOURCE" ]; then
                 echo -e "  ${WARNING} Could not set agents.list \$include directive"
         fi
 
-        # Ensure gateway.reload.mode is not "off"
-        EXISTING_MODE=$(jq -r '.gateway.reload.mode // empty' "$OPENCLAW_CONFIG" 2>/dev/null)
-        if [ -z "$EXISTING_MODE" ] || [ "$EXISTING_MODE" = "off" ]; then
-            jq '.gateway.reload.mode = "hot"' "$OPENCLAW_CONFIG" >"$OPENCLAW_CONFIG.tmp" && \
-                mv "$OPENCLAW_CONFIG.tmp" "$OPENCLAW_CONFIG" && \
-                echo -e "  ${CHECK_MARK} Set gateway.reload.mode = \"hot\"" || \
-                echo -e "  ${WARNING} Could not set gateway.reload.mode"
-        else
-            echo -e "  ${CHECK_MARK} gateway.reload.mode = \"$EXISTING_MODE\""
-        fi
+        # Keep gateway.reload.mode valid for OpenClaw 2026.9.x (#723)
+        _configure_gateway_reload_mode "$OPENCLAW_CONFIG"
 
         # Set maxSpawnDepth if missing
         EXISTING_DEPTH=$(jq -r '.agents.defaults.subagents.maxSpawnDepth // empty' "$OPENCLAW_CONFIG" 2>/dev/null)

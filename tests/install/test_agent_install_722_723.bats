@@ -86,3 +86,59 @@ source_installer_functions() {
     [ "$status" -eq 0 ]
 }
 
+# ─── #723 gateway.reload.mode ───────────────────────────────────────────────
+
+@test "TC-723-001: missing gateway.reload.mode is set to hybrid" {
+    source_installer_functions
+
+    local config
+    config="$(mktemp)"
+    printf '%s\n' '{}' >"$config"
+
+    run _configure_gateway_reload_mode "$config"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Set gateway.reload.mode = \"hybrid\""* ]]
+    [ "$(jq -r '.gateway.reload.mode' "$config")" = "hybrid" ]
+}
+
+@test "TC-723-002: existing 'off' is left unchanged" {
+    source_installer_functions
+
+    local config
+    config="$(mktemp)"
+    printf '%s\n' '{"gateway":{"reload":{"mode":"off"}}}' >"$config"
+
+    run _configure_gateway_reload_mode "$config"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"off"* ]]
+    [[ "$output" != *"Set gateway.reload.mode"* ]]
+    [ "$(jq -r '.gateway.reload.mode' "$config")" = "off" ]
+}
+
+@test "TC-723-003: existing 'hybrid' is left unchanged" {
+    source_installer_functions
+
+    local config
+    config="$(mktemp)"
+    printf '%s\n' '{"gateway":{"reload":{"mode":"hybrid"}}}' >"$config"
+
+    run _configure_gateway_reload_mode "$config"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"hybrid"* ]]
+    [[ "$output" != *"Set gateway.reload.mode"* ]]
+    [ "$(jq -r '.gateway.reload.mode' "$config")" = "hybrid" ]
+}
+
+@test "TC-723-004: obsolete 'hot' value is overwritten with hybrid" {
+    source_installer_functions
+
+    local config
+    config="$(mktemp)"
+    printf '%s\n' '{"gateway":{"reload":{"mode":"hot"}}}' >"$config"
+
+    run _configure_gateway_reload_mode "$config"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Set gateway.reload.mode = \"hybrid\""* ]]
+    [ "$(jq -r '.gateway.reload.mode' "$config")" = "hybrid" ]
+}
+

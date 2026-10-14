@@ -1718,6 +1718,106 @@ class TestOutputFormat:
 
 
 # ---------------------------------------------------------------------------
+# LOUD FAIL-CLOSED: main() must surface gate errors and exit distinctly (#714)
+# ---------------------------------------------------------------------------
+
+class TestMainErrorHandling:
+    """Exercise main() for the four check_idle() failure branches plus a missing
+    idle key. Every failure must produce valid JSON on stdout, idle=false, an
+    error field, and exit code 3.
+    """
+
+    def _run_main_captured(self, m, **subprocess_patches):
+        """Run main() capturing stdout/stderr/exit code.
+
+        subprocess_patches are passed to patch("subprocess.run", ...).
+        Returns (exit_code, stdout_text, stderr_text).
+        """
+        import io
+        from unittest.mock import patch
+
+        out = io.StringIO()
+        err = io.StringIO()
+
+        with patch("subprocess.run", **subprocess_patches), \
+             patch.object(sys, "stdout", out), \
+             patch.object(sys, "stderr", err):
+            try:
+                m.main()
+                code = 0
+            except SystemExit as exc:
+                code = exc.code if isinstance(exc.code, int) else 1
+
+        return code, out.getvalue(), err.getvalue()
+
+    def _assert_fail_closed_output(self, code: int, stdout: str, stderr: str):
+        assert code == 3, f"expected exit code 3, got {code}"
+        assert stderr == "", "stderr must be empty; errors belong in stdout JSON"
+        parsed = json.loads(stdout)
+        assert parsed["idle"] is False
+        assert "error" in parsed
+        assert parsed["error"] != ""
+        assert "idle_reason" in parsed
+        return parsed
+
+    def test_main_cli_nonzero_exit_fail_closed(self, m):
+        result_mock = MagicMock()
+        result_mock.returncode = 1
+        result_mock.stderr = "connection refused"
+        result_mock.stdout = ""
+        code, stdout, stderr = self._run_main_captured(m, return_value=result_mock)
+        self._assert_fail_closed_output(code, stdout, stderr)
+
+    def test_main_cli_timeout_fail_closed(self, m):
+        code, stdout, stderr = self._run_main_captured(
+            m, side_effect=subprocess.TimeoutExpired("openclaw sessions", 30),
+        )
+        self._assert_fail_closed_output(code, stdout, stderr)
+
+    def test_main_cli_not_found_fail_closed(self, m):
+        code, stdout, stderr = self._run_main_captured(
+            m, side_effect=FileNotFoundError,
+        )
+        self._assert_fail_closed_output(code, stdout, stderr)
+
+    def test_main_malformed_json_fail_closed(self, m):
+        result_mock = MagicMock()
+        result_mock.returncode = 0
+        result_mock.stdout = "{this is not valid json{{"
+        code, stdout, stderr = self._run_main_captured(m, return_value=result_mock)
+        self._assert_fail_closed_output(code, stdout, stderr)
+
+    def test_main_missing_idle_key_is_not_idle(self, m):
+        """A check_idle() result with no 'idle' key must default to not-idle."""
+        with patch.object(m, "check_idle", return_value={
+            "idle_minutes": 0.0,
+            "idle_threshold_minutes": 60,
+            "reason": "unexpected shape",
+            "error": "idle key missing",
+        }):
+            code, stdout, stderr = self._run_main_captured(m, side_effect=FileNotFoundError)
+        # The FileNotFoundError patch is irrelevant because check_idle is mocked;
+        # we only care that main() reads the missing idle as False.
+        parsed = json.loads(stdout)
+        assert parsed["idle"] is False
+        assert parsed.get("error") == "idle key missing"
+        assert code == 3
+
+    def test_main_error_scrubber_redacts_fake_token(self, m):
+        result_mock = MagicMock()
+        result_mock.returncode = 1
+        result_mock.stderr = "auth failed: Bearer sk-live-abc123def456, api_key=secretvalue123 and token=ff\"ff"
+        result_mock.stdout = ""
+        code, stdout, stderr = self._run_main_captured(m, return_value=result_mock)
+        parsed = self._assert_fail_closed_output(code, stdout, stderr)
+        err = parsed["error"]
+        assert "sk-live-abc123def456" not in err
+        assert "secretvalue123" not in err
+        assert "[redacted]" in err
+        assert "Bearer" not in err or "[redacted]" in err
+
+
+# ---------------------------------------------------------------------------
 # Boundary Value Analysis (BVA) — exact threshold values
 # ---------------------------------------------------------------------------
 

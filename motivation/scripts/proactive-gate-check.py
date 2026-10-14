@@ -12,6 +12,7 @@ See: nova-mind#324
 
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -173,6 +174,53 @@ def _step_error(msg: str) -> dict:
     return {"actionable": False, "error": msg}
 
 
+def _scrub_error(msg: str) -> str:
+    """Redact likely secrets and collapse noisy error strings.
+
+    - Cap at 200 characters.
+    - Collapse whitespace to single spaces.
+    - Redact common secret shapes:
+        * long base64/hex runs (>=20 chars)
+        * sk-... (OpenAI-style keys)
+        * Bearer ... tokens
+        * key=/token=/password= values
+    """
+    if not isinstance(msg, str):
+        msg = str(msg)
+    # Collapse whitespace first so regexes don't depend on exact layout.
+    scrubbed = " ".join(msg.split())
+    if len(scrubbed) > 200:
+        scrubbed = scrubbed[:200]
+
+    # Long base64/hex-like runs (>=20 chars)
+    scrubbed = re.sub(
+        r"[A-Za-z0-9+/]{20,}={0,2}",
+        "[redacted]",
+        scrubbed,
+    )
+    scrubbed = re.sub(
+        r"\b[0-9a-fA-F]{20,}\b",
+        "[redacted]",
+        scrubbed,
+    )
+
+    # sk-... API keys
+    scrubbed = re.sub(r"\bsk-[A-Za-z0-9_-]+\b", "[redacted]", scrubbed)
+
+    # Bearer tokens
+    scrubbed = re.sub(r"\bBearer\s+\S+", "[redacted]", scrubbed)
+
+    # key=/token=/password= values (including quoted values)
+    scrubbed = re.sub(
+        r"((?:\b|_)(?:key|token|password)\s*=\s*)['\"]?[^\s'\"]+['\"]?",
+        r"\1[redacted]",
+        scrubbed,
+        flags=re.IGNORECASE,
+    )
+
+    return scrubbed
+
+
 def _load_heartbeat_state(path: str) -> tuple[dict[str, Any] | None, datetime | None]:
     """
     Load heartbeat state from a single JSON file.
@@ -231,7 +279,9 @@ def check_idle() -> dict:
                 "idle": False,
                 "idle_minutes": 0.0,
                 "idle_threshold_minutes": IDLE_THRESHOLD_MINUTES,
-                "error": f"openclaw sessions failed (rc={result.returncode}): {result.stderr.strip()[:200]}",
+                "error": _scrub_error(
+                    f"openclaw sessions failed (rc={result.returncode}): {result.stderr}"
+                ),
                 "reason": "openclaw sessions failed — defaulting to not-idle",
             }
         sessions = json.loads(result.stdout)
@@ -240,7 +290,7 @@ def check_idle() -> dict:
             "idle": False,
             "idle_minutes": 0.0,
             "idle_threshold_minutes": IDLE_THRESHOLD_MINUTES,
-            "error": "openclaw CLI not found",
+            "error": _scrub_error("openclaw CLI not found"),
             "reason": "openclaw CLI not found — defaulting to not-idle",
         }
     except subprocess.TimeoutExpired:
@@ -248,7 +298,7 @@ def check_idle() -> dict:
             "idle": False,
             "idle_minutes": 0.0,
             "idle_threshold_minutes": IDLE_THRESHOLD_MINUTES,
-            "error": "openclaw sessions timed out",
+            "error": _scrub_error("openclaw sessions timed out"),
             "reason": "openclaw sessions timed out — defaulting to not-idle",
         }
     except (json.JSONDecodeError, ValueError) as exc:
@@ -256,7 +306,7 @@ def check_idle() -> dict:
             "idle": False,
             "idle_minutes": 0.0,
             "idle_threshold_minutes": IDLE_THRESHOLD_MINUTES,
-            "error": f"openclaw sessions output malformed: {exc}",
+            "error": _scrub_error(f"openclaw sessions output malformed: {exc}"),
             "reason": "openclaw sessions output malformed — defaulting to not-idle",
         }
 
@@ -1299,7 +1349,8 @@ def main() -> None:
 
     # 1. Idle detection — always runs first
     idle_result = check_idle()
-    is_idle = idle_result.get("idle", True)
+    # LOUD FAIL-CLOSED: a missing idle field must NOT be treated as idle (#714).
+    is_idle = idle_result.get("idle", False)
     idle_minutes = idle_result.get("idle_minutes", 0.0)
 
     base = {
@@ -1312,8 +1363,16 @@ def main() -> None:
     if idle_result.get("reason"):
         base["idle_reason"] = idle_result["reason"]
 
+    # Surface gate errors distinctly so callers can tell "not idle" from "gate broken".
+    gate_error = idle_result.get("error")
+    if gate_error is not None:
+        base["error"] = _scrub_error(gate_error)
+
     if not is_idle:
         print(json.dumps(base, indent=2))
+        # Exit 3 when the gate itself is broken — never silently treat failure as idle.
+        if gate_error is not None:
+            sys.exit(3)
         return
 
     # 2. Run all 11 gate checks

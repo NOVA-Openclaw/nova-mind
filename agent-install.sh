@@ -2612,7 +2612,13 @@ if [ -d "$AGENT_CONFIG_SYNC_SOURCE" ]; then
                                     if (row.heartbeat_every != null) hb.every = row.heartbeat_every;
                                     if (row.heartbeat_target != null) hb.target = row.heartbeat_target;
                                     if (row.heartbeat_to != null) hb.to = row.heartbeat_to;
-                                    if (row.heartbeat_isolated_session === true) hb.isolatedSession = true;
+                                    // #714 — isolatedSession must be explicit when the row has a value.
+                                    // true → true, false → false, null/undefined → omitted.
+                                    if (row.heartbeat_isolated_session === true) {
+                                        hb.isolatedSession = true;
+                                    } else if (row.heartbeat_isolated_session === false) {
+                                        hb.isolatedSession = false;
+                                    }
                                     entry.heartbeat = hb;
                                 }
 
@@ -2652,7 +2658,9 @@ if [ -d "$AGENT_CONFIG_SYNC_SOURCE" ]; then
                                         (if .heartbeat_every != null then {every: .heartbeat_every} else {} end)
                                         + (if .heartbeat_target != null then {target: .heartbeat_target} else {} end)
                                         + (if .heartbeat_to != null then {to: .heartbeat_to} else {} end)
-                                        + (if .heartbeat_isolated_session == true then {isolatedSession: true} else {} end)
+                                        + (if .heartbeat_isolated_session == true then {isolatedSession: true}
+                                   elif .heartbeat_isolated_session == false then {isolatedSession: false}
+                                   else {} end)
                                     )}
                                     else {} end)
                             )

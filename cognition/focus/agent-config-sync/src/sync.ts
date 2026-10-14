@@ -117,6 +117,15 @@ const AGENTS_QUERY = `
   FROM get_agent_export_rows();
 `;
 
+// Pre-088 tolerance: peers may run agent-config-sync before migration 088 adds
+// the heartbeat_isolated_session column. This fallback omits that column so the
+// sync never crashes on a pre-migration DB.
+const AGENTS_QUERY_WITHOUT_ISOLATED_SESSION = `
+  SELECT name, model, fallback_models, thinking, instance_type, is_default, allowed_subagents,
+         heartbeat_enabled, heartbeat_every, heartbeat_target, heartbeat_to
+  FROM get_agent_export_rows();
+`;
+
 // Queries HEARTBEAT records for all agents that have agent-scoped entries.
 const HEARTBEAT_QUERY = `
   SELECT agent_name, content
@@ -327,7 +336,13 @@ export function buildAgentsList(
       if (row.heartbeat_every != null) hb.every = row.heartbeat_every;
       if (row.heartbeat_target != null) hb.target = row.heartbeat_target;
       if (row.heartbeat_to != null) hb.to = row.heartbeat_to;
-      if (row.heartbeat_isolated_session === true) hb.isolatedSession = true;
+      // #714 — isolatedSession must be explicit when the row has a value.
+      // true → true, false → false, null/undefined → omitted.
+      if (row.heartbeat_isolated_session === true) {
+        hb.isolatedSession = true;
+      } else if (row.heartbeat_isolated_session === false) {
+        hb.isolatedSession = false;
+      }
       entry.heartbeat = hb;
     }
 
@@ -483,9 +498,26 @@ export function validateAgentsEntries(
 
 /**
  * Fetch agent rows from the database.
+ *
+ * Pre-088 tolerance: detects whether the `heartbeat_isolated_session` column
+ * exists and falls back to a query without it when it does not. This lets peers
+ * with their own <agent>_memory DB run agent-config-sync before migration 088
+ * without crashing.
  */
 export async function fetchAgentRows(client: pg.Client): Promise<AgentRow[]> {
-  const result = await client.query<AgentRow>(AGENTS_QUERY);
+  const colCheck = await client.query<{ exists: boolean }>(`
+    SELECT EXISTS (
+      SELECT 1 FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND table_name = 'agents'
+        AND column_name = 'heartbeat_isolated_session'
+    ) AS exists
+  `);
+  const hasIsolatedSessionCol = colCheck.rows[0]?.exists === true;
+  const query = hasIsolatedSessionCol
+    ? AGENTS_QUERY
+    : AGENTS_QUERY_WITHOUT_ISOLATED_SESSION;
+  const result = await client.query<AgentRow>(query);
   return result.rows;
 }
 

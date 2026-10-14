@@ -98,6 +98,32 @@ class TestTC714Local:
             effective_to = entry.get("heartbeat", {}).get("to", defaults.get("to"))
             assert effective_to == f"channel:{PROACTIVE_CHANNEL}", agent_id
 
+    def test_tc714_004b_audit_catches_webchat_per_agent_target(self, temp_openclaw):
+        """TC-714-004b: a per-agent heartbeat row targeting webchat is reported, not silently accepted."""
+        _apply_heartbeat_defaults(temp_openclaw / "openclaw.json")
+        agents_json = temp_openclaw / "agents.json"
+        agents_json.write_text(json.dumps({
+            "nova": {
+                "model": "anthropic/claude-opus-4",
+                "heartbeat": {"to": f"channel:{PROACTIVE_CHANNEL}"},
+            },
+            "coder": {
+                "model": "anthropic/claude-sonnet-4",
+                "heartbeat": {"to": "channel:webchat-channel"},
+            },
+        }))
+        cfg = json.loads((temp_openclaw / "openclaw.json").read_text())
+        defaults = cfg["agents"]["defaults"]["heartbeat"]
+        entries = json.loads(agents_json.read_text())
+
+        bad_targets = []
+        for agent_id, entry in entries.items():
+            effective_to = entry.get("heartbeat", {}).get("to", defaults.get("to"))
+            if effective_to != f"channel:{PROACTIVE_CHANNEL}":
+                bad_targets.append((agent_id, effective_to))
+
+        assert bad_targets == [("coder", "channel:webchat-channel")]
+
     def test_tc714_010_isolated_session_survives_merge(self, temp_openclaw):
         """TC-714-010: a merge that omits isolatedSession does not clobber defaults."""
         _apply_heartbeat_defaults(temp_openclaw / "openclaw.json")

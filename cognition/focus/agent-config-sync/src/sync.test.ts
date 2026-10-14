@@ -1533,6 +1533,125 @@ describe("TC-273-U-10: BVA — partial heartbeat objects (each sub-field in isol
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// TC-714-U-01..04: Per-agent isolatedSession propagation and pre-088 tolerance
+// ─────────────────────────────────────────────────────────────────────────────
+
+function makeAgentRowWithHeartbeat(
+  name: string,
+  heartbeatEnabled: boolean,
+  extras?: Partial<AgentRow>,
+): AgentRow {
+  return {
+    name,
+    model: "anthropic/claude-sonnet-4",
+    fallback_models: null,
+    thinking: null,
+    instance_type: "subagent",
+    is_default: false,
+    allowed_subagents: null,
+    heartbeat_enabled: heartbeatEnabled,
+    heartbeat_every: "30m",
+    heartbeat_target: "discord",
+    heartbeat_to: "channel:1504054635231445112",
+    ...extras,
+  };
+}
+
+describe("TC-714-U-01: heartbeat_isolated_session=true → isolatedSession: true", () => {
+  const rows: AgentRow[] = [
+    makeAgentRowWithHeartbeat("nova", true, { heartbeat_isolated_session: true }),
+  ];
+  const { entries: result } = buildAgentsList(rows);
+
+  it("emits isolatedSession: true", () => {
+    assert.strictEqual(result["nova"]?.heartbeat?.isolatedSession, true);
+  });
+});
+
+describe("TC-714-U-02: heartbeat_isolated_session=false → isolatedSession: false", () => {
+  const rows: AgentRow[] = [
+    makeAgentRowWithHeartbeat("nova", true, { heartbeat_isolated_session: false }),
+  ];
+  const { entries: result } = buildAgentsList(rows);
+
+  it("emits isolatedSession: false", () => {
+    assert.strictEqual(result["nova"]?.heartbeat?.isolatedSession, false);
+  });
+});
+
+describe("TC-714-U-03: heartbeat_isolated_session=null → isolatedSession omitted", () => {
+  const rows: AgentRow[] = [
+    makeAgentRowWithHeartbeat("nova", true, { heartbeat_isolated_session: null }),
+  ];
+  const { entries: result } = buildAgentsList(rows);
+
+  it("omits isolatedSession key", () => {
+    const hb = result["nova"]?.heartbeat;
+    assert.ok(hb !== undefined);
+    assert.ok(
+      !Object.prototype.hasOwnProperty.call(hb, "isolatedSession"),
+      "isolatedSession must be absent when the DB row is null",
+    );
+  });
+});
+
+describe("TC-714-U-04: fetchAgentRows tolerates missing heartbeat_isolated_session column (pre-088)", () => {
+  it("falls back to the query without the column when information_schema reports it missing", async () => {
+    let executedQuery = "";
+    const mockClient = {
+      query: async (sql: string | { text: string }) => {
+        const sqlText = typeof sql === "string" ? sql : sql.text;
+        if (sqlText.includes("information_schema.columns")) {
+          return { rows: [{ exists: false }] };
+        }
+        executedQuery = sqlText;
+        return { rows: [] };
+      },
+    } as unknown as import("pg").Client;
+
+    const rows = await (async () => {
+      const { fetchAgentRows } = await import("./sync.js");
+      return fetchAgentRows(mockClient);
+    })();
+
+    assert.strictEqual(rows.length, 0);
+    assert.ok(
+      !executedQuery.includes("heartbeat_isolated_session"),
+      "fallback query must not reference heartbeat_isolated_session",
+    );
+    assert.ok(
+      executedQuery.includes("FROM get_agent_export_rows()"),
+      "fallback query must still use role-scoped function",
+    );
+  });
+
+  it("uses the full query when the column exists", async () => {
+    let executedQuery = "";
+    const mockClient = {
+      query: async (sql: string | { text: string }) => {
+        const sqlText = typeof sql === "string" ? sql : sql.text;
+        if (sqlText.includes("information_schema.columns")) {
+          return { rows: [{ exists: true }] };
+        }
+        executedQuery = sqlText;
+        return { rows: [] };
+      },
+    } as unknown as import("pg").Client;
+
+    const rows = await (async () => {
+      const { fetchAgentRows } = await import("./sync.js");
+      return fetchAgentRows(mockClient);
+    })();
+
+    assert.strictEqual(rows.length, 0);
+    assert.ok(
+      executedQuery.includes("heartbeat_isolated_session"),
+      "full query must select heartbeat_isolated_session",
+    );
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // TC-660-U-01..18: thinking → thinkingDefault mapping (#660)
 // ─────────────────────────────────────────────────────────────────────────────
 

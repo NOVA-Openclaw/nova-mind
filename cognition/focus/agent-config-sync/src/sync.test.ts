@@ -2142,6 +2142,90 @@ describe("TC-707-010: unknown provider prefix does not crash the generator", () 
     assert.strictEqual(result["bare"]?.model, "some-model-name");
     assert.doesNotThrow(() => validateAgentsEntries(result));
   });
+
+  it("logs exactly one warning for an unknown provider prefix and emits the entry unchanged", () => {
+    const warnings: string[] = [];
+    const logger = { warn: (msg: string) => warnings.push(msg) };
+    const rows: AgentRow[] = [
+      { name: "known", model: "anthropic/claude-sonnet-4", fallback_models: null, thinking: null, instance_type: "subagent", is_default: false, allowed_subagents: null, status: "active" },
+      { name: "weird", model: "totally-unknown-provider/some-model", fallback_models: null, thinking: null, instance_type: "subagent", is_default: false, allowed_subagents: null, status: "active" },
+    ];
+    const { entries: result } = buildAgentsList(rows, logger);
+    assert.strictEqual(result["weird"]?.model, "totally-unknown-provider/some-model");
+    assert.strictEqual(warnings.length, 1);
+    assert.ok(warnings[0]?.includes("weird"));
+    assert.ok(warnings[0]?.includes("totally-unknown-provider"));
+  });
+
+  it("warns for a bare model name with no provider prefix", () => {
+    const warnings: string[] = [];
+    const logger = { warn: (msg: string) => warnings.push(msg) };
+    const rows: AgentRow[] = [
+      { name: "bare", model: "some-model-name", fallback_models: null, thinking: null, instance_type: "subagent", is_default: false, allowed_subagents: null, status: "active" },
+    ];
+    const { entries: result } = buildAgentsList(rows, logger);
+    assert.strictEqual(result["bare"]?.model, "some-model-name");
+    assert.strictEqual(warnings.length, 1);
+    assert.ok(warnings[0]?.includes("bare"));
+    assert.ok(warnings[0]?.includes("no provider prefix"));
+  });
+
+  it("warns for unknown prefixes in fallback models", () => {
+    const warnings: string[] = [];
+    const logger = { warn: (msg: string) => warnings.push(msg) };
+    const rows: AgentRow[] = [
+      {
+        name: "multi",
+        model: "anthropic/claude-sonnet-4",
+        fallback_models: ["unknown-provider/fallback", "google/gemini-flash"],
+        thinking: null,
+        instance_type: "subagent",
+        is_default: false,
+        allowed_subagents: null,
+        status: "active",
+      },
+    ];
+    const { entries: result } = buildAgentsList(rows, logger);
+    const model = result["multi"]?.model;
+    assert.ok(typeof model === "object" && "fallbacks" in model);
+    assert.deepStrictEqual(model.fallbacks, ["unknown-provider/fallback", "google/gemini-flash"]);
+    assert.strictEqual(warnings.length, 1);
+    assert.ok(warnings[0]?.includes("unknown-provider"));
+  });
+});
+
+// ── TC-707-014: duplicate raw agent names are a hard error ───────────────────
+
+describe("TC-707-014: duplicate raw agent names block the build", () => {
+  it("throws when two raw rows share the same name", () => {
+    const rows: AgentRow[] = [
+      { name: "dupe", model: "anthropic/claude-sonnet-4", fallback_models: null, thinking: null, instance_type: "subagent", is_default: false, allowed_subagents: null, status: "active" },
+      { name: "dupe", model: "google/gemini-flash", fallback_models: null, thinking: null, instance_type: "subagent", is_default: false, allowed_subagents: null, status: "active" },
+    ];
+    assert.throws(
+      () => buildAgentsList(rows),
+      /Duplicate agent name 'dupe'/,
+    );
+  });
+
+  it("throws even when the duplicate would otherwise be skipped", () => {
+    const rows: AgentRow[] = [
+      { name: "dupe", model: "anthropic/claude-sonnet-4", fallback_models: null, thinking: null, instance_type: "subagent", is_default: false, allowed_subagents: null, status: "active" },
+      { name: "dupe", model: "google/gemini-flash", fallback_models: null, thinking: null, instance_type: "subagent", is_default: false, allowed_subagents: null, status: "retired" },
+    ];
+    assert.throws(
+      () => buildAgentsList(rows),
+      /Duplicate agent name 'dupe'/,
+    );
+  });
+
+  it("does not throw when names are distinct", () => {
+    const rows: AgentRow[] = [
+      { name: "alpha", model: "anthropic/claude-sonnet-4", fallback_models: null, thinking: null, instance_type: "subagent", is_default: false, allowed_subagents: null, status: "active" },
+      { name: "beta", model: "google/gemini-flash", fallback_models: null, thinking: null, instance_type: "subagent", is_default: false, allowed_subagents: null, status: "active" },
+    ];
+    assert.doesNotThrow(() => buildAgentsList(rows));
+  });
 });
 
 // ── TC-707-011: non-active fixture rows use real, distinguishable content ────

@@ -83,6 +83,27 @@ const VALID_THINKING_DEFAULTS = new Set([
   "ultra",
 ]);
 
+// TC-707-010: known provider prefixes are projected from the shared registry.
+// We only ever store the keys; provider blocks containing secrets are never
+// logged or returned.
+const PROVIDER_REGISTRY_PATH = "/opt/agents/shared-config/models-providers.json";
+
+function loadKnownProviders(): Set<string> {
+  try {
+    const raw = fs.readFileSync(PROVIDER_REGISTRY_PATH, "utf-8");
+    const data = JSON.parse(raw) as Record<string, unknown>;
+    return new Set(Object.keys(data));
+  } catch {
+    // Registry unreadable — skip warnings rather than failing.
+    return new Set();
+  }
+}
+
+const KNOWN_PROVIDERS = loadKnownProviders();
+
+/** Minimal logger surface used by buildAgentsList for warnings. */
+export type BuildLogger = { warn: (msg: string) => void };
+
 // ── SQL ─────────────────────────────────────────────────────────────────────
 
 // Queries get_agent_export_rows(), which scopes results to the connecting role
@@ -141,6 +162,61 @@ function normalizeFallbackModels(
   return undefined;
 }
 
+// ── Provider-prefix helpers ────────────────────────────────────────────────
+
+/**
+ * Extract the provider prefix from a model string (the part before the first
+ * '/'). Returns `null` when the string contains no slash.
+ */
+function extractProviderPrefix(model: string): string | null {
+  const idx = model.indexOf("/");
+  if (idx === -1) return null;
+  return model.slice(0, idx);
+}
+
+/**
+ * TC-707-010: warn once per unrecognized provider prefix on a model string.
+ * The model value itself is still emitted unchanged; this is only a warning.
+ * When the registry is unreadable, KNOWN_PROVIDERS is empty and we skip
+ * warnings entirely rather than failing.
+ */
+function warnIfUnknownProviderPrefix(
+  id: string,
+  model: string,
+  log: BuildLogger,
+): void {
+  if (KNOWN_PROVIDERS.size === 0) return;
+  const prefix = extractProviderPrefix(model);
+  if (prefix == null) {
+    log.warn(
+      `agent_config_sync: agent '${id}' model '${model}' has no provider prefix`,
+    );
+  } else if (!KNOWN_PROVIDERS.has(prefix)) {
+    log.warn(
+      `agent_config_sync: agent '${id}' model '${model}' has unrecognized provider prefix '${prefix}'`,
+    );
+  }
+}
+
+/**
+ * TC-707-010: check all model strings in an entry (primary + fallbacks) and
+ * warn for unknown/missing provider prefixes.
+ */
+function warnIfUnknownProviderPrefixes(
+  id: string,
+  model: AgentEntryConfig["model"],
+  log: BuildLogger,
+): void {
+  if (typeof model === "string") {
+    warnIfUnknownProviderPrefix(id, model, log);
+    return;
+  }
+  warnIfUnknownProviderPrefix(id, model.primary, log);
+  for (const fallback of model.fallbacks) {
+    warnIfUnknownProviderPrefix(id, fallback, log);
+  }
+}
+
 // ── Build ───────────────────────────────────────────────────────────────────
 
 /**
@@ -157,10 +233,33 @@ function normalizeFallbackModels(
  *   schema enum value; key omitted when null, empty, or unknown
  * - subagents.allowAgents included when allowed_subagents is non-empty, sorted
  * - Output keys sorted by agent name (id)
+ * - Duplicate raw names are treated as a hard error BEFORE any entry is emitted
+ * - Unknown/malformed provider prefixes are warned but still emitted (TC-707-010)
  */
-export function buildAgentsList(rows: AgentRow[]): BuildAgentsListResult {
+export function buildAgentsList(
+  rows: AgentRow[],
+  logger?: BuildLogger,
+): BuildAgentsListResult {
+  const log = logger ?? console;
   const entries: Record<string, AgentEntryConfig> = {};
   const skipped: Array<{ name: string; reason: string }> = [];
+
+  // Duplicate-name guard: two rows with the same literal name would silently
+  // collapse in the keyed output. Detect this on raw input BEFORE building the
+  // entries object and fail loudly, reporting both occurrences.
+  const seenNames = new Map<string, number>();
+  for (let i = 0; i < rows.length; i++) {
+    const name = rows[i]?.name;
+    if (typeof name !== "string") continue;
+    if (seenNames.has(name)) {
+      const firstIdx = seenNames.get(name)!;
+      throw new Error(
+        `Duplicate agent name '${name}' at rows ${firstIdx} and ${i}; ` +
+          `each agent id must appear exactly once`,
+      );
+    }
+    seenNames.set(name, i);
+  }
 
   for (const row of rows) {
     const rowName = row.name ?? "(unnamed)";
@@ -231,6 +330,10 @@ export function buildAgentsList(rows: AgentRow[]): BuildAgentsListResult {
       if (row.heartbeat_isolated_session === true) hb.isolatedSession = true;
       entry.heartbeat = hb;
     }
+
+    // TC-707-010: unknown/malformed provider prefixes are allowed by the host
+    // schema, but we warn once per occurrence so operators can spot typos.
+    warnIfUnknownProviderPrefixes(row.name, entry.model, log);
 
     entries[row.name] = entry;
   }
@@ -492,9 +595,10 @@ export async function syncHeartbeatFiles(
 export async function syncAgentsConfig(
   client: pg.Client,
   outputPath: string,
+  logger?: BuildLogger,
 ): Promise<boolean> {
   const rows = await fetchAgentRows(client);
-  const { entries } = buildAgentsList(rows);
+  const { entries } = buildAgentsList(rows, logger);
   const newContent = JSON.stringify(entries, null, 2) + "\n";
 
   // Check if file already matches (avoid unnecessary writes / watcher triggers)

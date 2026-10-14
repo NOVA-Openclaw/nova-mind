@@ -2498,22 +2498,89 @@ if [ -d "$AGENT_CONFIG_SYNC_SOURCE" ]; then
         local AGENTS_DATA
         if AGENTS_DATA=$(psql -U "$DB_USER" -d "$DB_NAME" -tAc "$INITIAL_SYNC_QUERY" 2>/dev/null); then
             if [ -n "$AGENTS_DATA" ] && [ "$AGENTS_DATA" != "null" ] && [ "$AGENTS_DATA" != "" ]; then
+                # Duplicate-name guard: two rows with the same literal name would
+                # silently collapse in the keyed output. Detect this on raw DB
+                # data before serialization and fail loudly.
+                local DUP_NAMES
+                DUP_NAMES=$(echo "$AGENTS_DATA" | jq -r '
+                    [group_by(.name)[] | select(length > 1 and .[0].name != null) | .[0].name]
+                    | join(", ")
+                ' 2>/dev/null)
+                if [ -n "$DUP_NAMES" ]; then
+                    echo -e "  ${WARNING} Duplicate agent names detected: $DUP_NAMES — not writing agents.json"
+                    rm -f "$AGENTS_JSON_TMP"
+                    return 1
+                fi
+
                 local FORMAT_OK=0
                 if command -v node &>/dev/null; then
                     # Preferred: byte-match the plugin's JSON.stringify(data, null, 2) + "\n"
                     # Build a keyed object, omitting the id from each value, applying
                     # the same thinkingDefault validation and heartbeat shape as sync.ts.
+                    # shellcheck disable=SC2154,SC2086,SC2016
                     if echo "$AGENTS_DATA" | node -e '
                         let input = "";
                         process.stdin.setEncoding("utf8");
                         process.stdin.on("data", c => input += c);
                         process.stdin.on("end", () => {
+                            const fs = require("fs");
                             const VALID_THINKING_DEFAULTS = new Set([
                                 "off", "minimal", "low", "medium", "high",
                                 "xhigh", "adaptive", "max", "ultra",
                             ]);
                             const AGENT_ID_REGEX = /^[a-z0-9_][a-z0-9_-]{0,63}$/i;
+                            const PROVIDER_REGISTRY_PATH = "/opt/agents/shared-config/models-providers.json";
+
+                            function loadKnownProviders() {
+                                try {
+                                    const data = JSON.parse(fs.readFileSync(PROVIDER_REGISTRY_PATH, "utf8"));
+                                    return new Set(Object.keys(data));
+                                } catch {
+                                    return new Set();
+                                }
+                            }
+                            const KNOWN_PROVIDERS = loadKnownProviders();
+
+                            function extractProviderPrefix(model) {
+                                const idx = model.indexOf("/");
+                                if (idx === -1) return null;
+                                return model.slice(0, idx);
+                            }
+
+                            function warnIfUnknownProviderPrefix(id, model) {
+                                if (KNOWN_PROVIDERS.size === 0) return;
+                                const prefix = extractProviderPrefix(model);
+                                if (prefix == null) {
+                                    console.warn(`agent_config_sync: agent '${id}' model '${model}' has no provider prefix`);
+                                } else if (!KNOWN_PROVIDERS.has(prefix)) {
+                                    console.warn(`agent_config_sync: agent '${id}' model '${model}' has unrecognized provider prefix '${prefix}'`);
+                                }
+                            }
+
+                            function warnIfUnknownProviderPrefixes(id, model) {
+                                if (typeof model === "string") {
+                                    warnIfUnknownProviderPrefix(id, model);
+                                } else {
+                                    warnIfUnknownProviderPrefix(id, model.primary);
+                                    for (const fallback of model.fallbacks) {
+                                        warnIfUnknownProviderPrefix(id, fallback);
+                                    }
+                                }
+                            }
+
                             const rows = JSON.parse(input);
+
+                            // Duplicate-name guard (defensive, also checked in bash above).
+                            const seen = new Map();
+                            for (let i = 0; i < rows.length; i++) {
+                                const name = rows[i].name;
+                                if (typeof name !== "string") continue;
+                                if (seen.has(name)) {
+                                    throw new Error(`Duplicate agent name '${name}' at rows ${seen.get(name)} and ${i}; each agent id must appear exactly once`);
+                                }
+                                seen.set(name, i);
+                            }
+
                             const entries = {};
                             for (const row of rows) {
                                 // Defensive: get_agent_export_rows() already filters
@@ -2549,6 +2616,8 @@ if [ -d "$AGENT_CONFIG_SYNC_SOURCE" ]; then
                                     entry.heartbeat = hb;
                                 }
 
+                                warnIfUnknownProviderPrefixes(row.name, entry.model);
+
                                 entries[row.name] = entry;
                             }
                             const sorted = {};
@@ -2557,7 +2626,7 @@ if [ -d "$AGENT_CONFIG_SYNC_SOURCE" ]; then
                             }
                             process.stdout.write(JSON.stringify(sorted, null, 2) + "\n");
                         });
-                    ' >"$AGENTS_JSON_TMP" 2>/dev/null; then
+                    ' >"$AGENTS_JSON_TMP"; then
                         FORMAT_OK=1
                     fi
                 else

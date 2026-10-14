@@ -83,17 +83,83 @@ run_agents_json_logic() {
         local AGENTS_DATA
         if AGENTS_DATA=$(psql -U "$DB_USER" -d "$DB_NAME" -tAc "dummy" 2>/dev/null); then
             if [ -n "$AGENTS_DATA" ] && [ "$AGENTS_DATA" != "null" ] && [ "$AGENTS_DATA" != "" ]; then
+                # Duplicate-name guard: two rows with the same literal name would
+                # silently collapse in the keyed output. Detect this on raw DB
+                # data before serialization and fail loudly.
+                local DUP_NAMES
+                DUP_NAMES=$(echo "$AGENTS_DATA" | jq -r '
+                    [group_by(.name)[] | select(length > 1 and .[0].name != null) | .[0].name]
+                    | join(", ")
+                ' 2>/dev/null)
+                if [ -n "$DUP_NAMES" ]; then
+                    echo -e "  ${warning} Duplicate agent names detected: $DUP_NAMES — not writing agents.json"
+                    rm -f "$AGENTS_JSON_TMP"
+                    return 1
+                fi
+
                 if echo "$AGENTS_DATA" | node -e '
                     let input = "";
                     process.stdin.setEncoding("utf8");
                     process.stdin.on("data", c => input += c);
                     process.stdin.on("end", () => {
+                        const fs = require("fs");
                         const VALID_THINKING_DEFAULTS = new Set([
                             "off", "minimal", "low", "medium", "high",
                             "xhigh", "adaptive", "max", "ultra",
                         ]);
                         const AGENT_ID_REGEX = /^[a-z0-9_][a-z0-9_-]{0,63}$/i;
+                        const PROVIDER_REGISTRY_PATH = "/opt/agents/shared-config/models-providers.json";
+
+                        function loadKnownProviders() {
+                            try {
+                                const data = JSON.parse(fs.readFileSync(PROVIDER_REGISTRY_PATH, "utf8"));
+                                return new Set(Object.keys(data));
+                            } catch {
+                                return new Set();
+                            }
+                        }
+                        const KNOWN_PROVIDERS = loadKnownProviders();
+
+                        function extractProviderPrefix(model) {
+                            const idx = model.indexOf("/");
+                            if (idx === -1) return null;
+                            return model.slice(0, idx);
+                        }
+
+                        function warnIfUnknownProviderPrefix(id, model) {
+                            if (KNOWN_PROVIDERS.size === 0) return;
+                            const prefix = extractProviderPrefix(model);
+                            if (prefix == null) {
+                                console.warn(`agent_config_sync: agent '${id}' model '${model}' has no provider prefix`);
+                            } else if (!KNOWN_PROVIDERS.has(prefix)) {
+                                console.warn(`agent_config_sync: agent '${id}' model '${model}' has unrecognized provider prefix '${prefix}'`);
+                            }
+                        }
+
+                        function warnIfUnknownProviderPrefixes(id, model) {
+                            if (typeof model === "string") {
+                                warnIfUnknownProviderPrefix(id, model);
+                            } else {
+                                warnIfUnknownProviderPrefix(id, model.primary);
+                                for (const fallback of model.fallbacks) {
+                                    warnIfUnknownProviderPrefix(id, fallback);
+                                }
+                            }
+                        }
+
                         const rows = JSON.parse(input);
+
+                        // Duplicate-name guard (defensive, also checked above).
+                        const seen = new Map();
+                        for (let i = 0; i < rows.length; i++) {
+                            const name = rows[i].name;
+                            if (typeof name !== "string") continue;
+                            if (seen.has(name)) {
+                                throw new Error(`Duplicate agent name '${name}' at rows ${seen.get(name)} and ${i}; each agent id must appear exactly once`);
+                            }
+                            seen.set(name, i);
+                        }
+
                         const entries = {};
                         for (const row of rows) {
                             if (row.status != null && row.status !== "active") continue;
@@ -125,6 +191,8 @@ run_agents_json_logic() {
                                 entry.heartbeat = hb;
                             }
 
+                            warnIfUnknownProviderPrefixes(row.name, entry.model);
+
                             entries[row.name] = entry;
                         }
                         const sorted = {};
@@ -133,7 +201,7 @@ run_agents_json_logic() {
                         }
                         process.stdout.write(JSON.stringify(sorted, null, 2) + "\n");
                     });
-                ' >"$AGENTS_JSON_TMP" 2>/dev/null; then
+                ' >"$AGENTS_JSON_TMP"; then
                     if mv "$AGENTS_JSON_TMP" "$AGENTS_JSON"; then
                         echo -e "  ${check_mark} Generated agents.json from DB"
                         return 0
@@ -505,4 +573,60 @@ run_agents_json_logic() {
 
     run run_agents_json_logic 0 "{INVALID JSON"
     [ "$status" -ne 0 ]
+}
+
+# ─── TC-707-010: unknown/malformed provider prefix warning ───────────────────
+
+@test "TC-707-010: unknown provider prefix emits exactly one warning and passes through" {
+    local rows='[
+        {"name":"weird","model":"totally-unknown-provider/some-model","fallback_models":null,"thinking":null,"instance_type":"subagent","is_default":false,"allowed_subagents":null,"heartbeat_enabled":false,"heartbeat_every":null,"heartbeat_target":null,"heartbeat_to":null}
+    ]'
+
+    run run_agents_json_logic 0 "$rows"
+    [ "$status" -eq 0 ]
+    [ -f "$FAKE_AGENTS_JSON" ]
+
+    # Capture warnings before subsequent `run` overwrites $output.
+    local run_output="$output"
+
+    # Entry is emitted unchanged.
+    run jq -r '.weird.model' "$FAKE_AGENTS_JSON"
+    [ "$output" = "totally-unknown-provider/some-model" ]
+
+    # Exactly one warning is logged.
+    local warn_count
+    warn_count=$(echo "$run_output" | grep -c "unrecognized provider prefix" || true)
+    [ "$warn_count" -eq 1 ]
+}
+
+@test "TC-707-010: bare model name with no slash emits a warning and passes through" {
+    local rows='[
+        {"name":"bare","model":"some-model-name","fallback_models":null,"thinking":null,"instance_type":"subagent","is_default":false,"allowed_subagents":null,"heartbeat_enabled":false,"heartbeat_every":null,"heartbeat_target":null,"heartbeat_to":null}
+    ]'
+
+    run run_agents_json_logic 0 "$rows"
+    [ "$status" -eq 0 ]
+    [ -f "$FAKE_AGENTS_JSON" ]
+
+    # Capture warnings before subsequent `run` overwrites $output.
+    local run_output="$output"
+
+    run jq -r '.bare.model' "$FAKE_AGENTS_JSON"
+    [ "$output" = "some-model-name" ]
+
+    [[ "$run_output" == *"no provider prefix"* ]]
+}
+
+# ─── TC-707-014: duplicate raw agent names are a hard error ──────────────────
+
+@test "TC-707-014: duplicate raw agent names block the write" {
+    local rows='[
+        {"name":"dupe","model":"anthropic/claude-sonnet-4","fallback_models":null,"thinking":null,"instance_type":"subagent","is_default":false,"allowed_subagents":null,"heartbeat_enabled":false,"heartbeat_every":null,"heartbeat_target":null,"heartbeat_to":null},
+        {"name":"dupe","model":"google/gemini-flash","fallback_models":null,"thinking":null,"instance_type":"subagent","is_default":false,"allowed_subagents":null,"heartbeat_enabled":false,"heartbeat_every":null,"heartbeat_target":null,"heartbeat_to":null}
+    ]'
+
+    run run_agents_json_logic 0 "$rows"
+    [ "$status" -ne 0 ]
+    [ ! -f "$FAKE_AGENTS_JSON" ]
+    [[ "$output" == *"Duplicate agent names detected: dupe"* ]]
 }

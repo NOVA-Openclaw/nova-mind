@@ -1241,7 +1241,7 @@ class TestNegative(CleanupP1TestCase):
                     break
                 containing_func = name
 
-            if containing_func in {"_delete_fact_dependencies", "_delete_transcript_ids", "_delete_session_cascade", "_delete_junk_rows", "remove_misplaced_rows"}:
+            if containing_func in cleanup_708_703.DML_ALLOWED_FUNCTION_NAMES:
                 continue
 
             self.fail(

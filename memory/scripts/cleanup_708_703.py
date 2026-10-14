@@ -97,6 +97,81 @@ TRANSCRIPT_EXPORT_COLUMNS = [
     "created_at",
 ]
 
+# Columns exported for derived entity_facts. Derivation: dt.sh schema for
+# entity_facts (source_channel_transcript_id / source_channel_session_id link
+# the fact to the channel rows being removed).
+DERIVED_FACT_EXPORT_COLUMNS = [
+    "id",
+    "entity_id",
+    "key",
+    "value",
+    "data",
+    "confidence",
+    "learned_at",
+    "updated_at",
+    "visibility",
+    "privacy_scope",
+    "visibility_reason",
+    "last_confirmed_at",
+    "decay_rate",
+    "source_channel_transcript_id",
+    "source_channel_session_id",
+    "extraction_count",
+    "expires",
+    "durability",
+    "category",
+    "assertion_intent",
+    "mutability_class",
+]
+
+# Columns exported for entity_fact_sources. Derivation: dt.sh schema for
+# entity_fact_sources; source_session_id links a fact to a channel session.
+DERIVED_FACT_SOURCE_EXPORT_COLUMNS = [
+    "id",
+    "fact_id",
+    "source_entity_id",
+    "source_citation",
+    "attribution_count",
+    "first_seen",
+    "last_seen",
+    "source_url",
+    "reporting_distance",
+    "verification_quality",
+    "source_session_id",
+]
+
+# Columns exported for memory_embeddings tied to entity_facts. Derivation:
+# dt.sh schema for memory_embeddings; source_type='entity_fact' and
+# source_id::bigint references entity_facts.id.
+DERIVED_EMBEDDING_EXPORT_COLUMNS = [
+    "id",
+    "source_type",
+    "source_id",
+    "content",
+    "created_at",
+    "updated_at",
+    "confidence",
+    "last_confirmed_at",
+    "embedding",
+]
+
+# Functions that are permitted to execute DML in this module. Part 1
+# (identify/backup/export) is read-only; part 2 removal helpers are the only
+# DML emitters. Kept as a module-level constant so tests can import it and
+# new delete helpers must be explicitly listed.
+DML_ALLOWED_FUNCTION_NAMES = {
+    "_delete_fact_dependencies",
+    "_delete_transcript_ids",
+    "_delete_session_cascade",
+    "_delete_junk_rows",
+    "_delete_fact_embeddings",
+    "_delete_fact_source_links",
+    "_nullify_fact_channel_columns",
+    "_delete_facts",
+    "_execute_group_deletes",
+    "remove_misplaced_rows",
+}
+
 # Stable JSON serialization for checksums. Derivation: JSONL export must be
 # byte-reproducible so manifest checksums verify; sort_keys=True removes dict
 # ordering differences, ensure_ascii=False keeps unicode stable, default=str
@@ -454,6 +529,205 @@ def _fetch_session_context(cur: Any, session_id: int) -> dict[str, Any]:
     return dict(zip(SESSION_EXPORT_COLUMNS, row))
 
 
+def _compute_target_transcript_ids(
+    cur: Any,
+    sessions: list[MisplacedSession],
+    junk_senders: set[str],
+) -> set[int]:
+    """Return the set of channel_transcripts ids that removal will delete.
+
+    Full sessions remove every transcript; junk-in-session removes only
+    transcripts whose sender_name is in ``junk_senders``.
+    """
+    target_transcript_ids: set[int] = set()
+    full_session_ids = [
+        s.session_id for s in sessions if s.disposition != "junk_in_session"
+    ]
+    if full_session_ids:
+        placeholders = ",".join("%s" for _ in full_session_ids)
+        cur.execute(
+            f"""
+            SELECT id FROM channel_transcripts
+            WHERE session_id IN ({placeholders})
+            ORDER BY id
+            """,
+            tuple(full_session_ids),
+        )
+        target_transcript_ids.update(row[0] for row in cur.fetchall())
+
+    junk_sessions = [s for s in sessions if s.disposition == "junk_in_session"]
+    if junk_sessions and junk_senders:
+        sender_placeholders = ",".join("%s" for _ in junk_senders)
+        for session in junk_sessions:
+            cur.execute(
+                f"""
+                SELECT id FROM channel_transcripts
+                WHERE session_id = %s AND sender_name IN ({sender_placeholders})
+                ORDER BY id
+                """,
+                (session.session_id, *junk_senders),
+            )
+            target_transcript_ids.update(row[0] for row in cur.fetchall())
+
+    return target_transcript_ids
+
+
+def _fetch_derived_facts_for_targets(
+    cur: Any,
+    target_session_ids: set[int],
+    target_transcript_ids: set[int],
+) -> list[dict[str, Any]]:
+    """Fetch every entity_fact tied to the removal set.
+
+    A fact is tied if its direct source_channel_* column points at a removed
+    row, or if any entity_fact_sources row for the fact points at a removed
+    session.
+    """
+    if not target_session_ids and not target_transcript_ids:
+        return []
+    session_placeholders = ",".join("%s" for _ in target_session_ids) if target_session_ids else "NULL"
+    transcript_placeholders = ",".join("%s" for _ in target_transcript_ids) if target_transcript_ids else "NULL"
+    cur.execute(
+        f"""
+        SELECT {', '.join(DERIVED_FACT_EXPORT_COLUMNS)}
+        FROM entity_facts
+        WHERE source_channel_session_id IN ({session_placeholders})
+           OR source_channel_transcript_id IN ({transcript_placeholders})
+           OR id IN (
+               SELECT fact_id FROM entity_fact_sources
+               WHERE source_session_id IN ({session_placeholders})
+           )
+        ORDER BY id
+        """,
+        tuple(
+            list(target_session_ids)
+            + list(target_transcript_ids)
+            + list(target_session_ids)
+        ),
+    )
+    return [dict(zip(DERIVED_FACT_EXPORT_COLUMNS, row)) for row in cur.fetchall()]
+
+
+def _fetch_derived_fact_sources(
+    cur: Any,
+    fact_ids: set[int],
+) -> list[dict[str, Any]]:
+    """Fetch every entity_fact_sources row for ``fact_ids``."""
+    if not fact_ids:
+        return []
+    placeholders = ",".join("%s" for _ in fact_ids)
+    cur.execute(
+        f"""
+        SELECT {', '.join(DERIVED_FACT_SOURCE_EXPORT_COLUMNS)}
+        FROM entity_fact_sources
+        WHERE fact_id IN ({placeholders})
+        ORDER BY id
+        """,
+        tuple(fact_ids),
+    )
+    return [
+        dict(zip(DERIVED_FACT_SOURCE_EXPORT_COLUMNS, row))
+        for row in cur.fetchall()
+    ]
+
+
+def _fetch_derived_fact_embeddings(
+    cur: Any,
+    fact_ids: set[int],
+) -> list[dict[str, Any]]:
+    """Fetch memory_embeddings for source_type='entity_fact' and ``fact_ids``."""
+    if not fact_ids:
+        return []
+    placeholders = ",".join("%s" for _ in fact_ids)
+    cur.execute(
+        f"""
+        SELECT {', '.join(DERIVED_EMBEDDING_EXPORT_COLUMNS)}
+        FROM memory_embeddings
+        WHERE source_type = 'entity_fact'
+          AND source_id::bigint IN ({placeholders})
+        ORDER BY id
+        """,
+        tuple(fact_ids),
+    )
+    return [
+        dict(zip(DERIVED_EMBEDDING_EXPORT_COLUMNS, row))
+        for row in cur.fetchall()
+    ]
+
+
+def _backup_derived_rows(
+    cur: Any,
+    sessions: list[MisplacedSession],
+    junk_senders: set[str],
+    output_dir: Path,
+) -> dict[str, Any]:
+    """Back up every derived row that removal would delete.
+
+    Returns a manifest entry describing the backup file, counts, and
+    checksums. Embedding vectors may be large, so they are stored in the
+    backup and covered by the same per-row/aggregate checksums used for
+    sessions/transcripts.
+    """
+    target_session_ids = {s.session_id for s in sessions}
+    target_transcript_ids = _compute_target_transcript_ids(
+        cur, sessions, junk_senders
+    )
+
+    fact_rows = _fetch_derived_facts_for_targets(
+        cur, target_session_ids, target_transcript_ids
+    )
+    fact_ids = {row["id"] for row in fact_rows}
+    source_rows = _fetch_derived_fact_sources(cur, fact_ids)
+    embedding_rows = _fetch_derived_fact_embeddings(cur, fact_ids)
+
+    derived_file = output_dir / "derived_backup.jsonl"
+    per_row_checksums: list[str] = []
+    with derived_file.open("w", encoding="utf-8") as f:
+        f.write(
+            _canonical_json({"type": "facts_header", "columns": DERIVED_FACT_EXPORT_COLUMNS})
+            + "\n"
+        )
+        for row in fact_rows:
+            chk = _row_checksum(row)
+            per_row_checksums.append(chk)
+            f.write(
+                _canonical_json({"type": "entity_fact", "row": row, "checksum": chk})
+                + "\n"
+            )
+        for row in source_rows:
+            chk = _row_checksum(row)
+            per_row_checksums.append(chk)
+            f.write(
+                _canonical_json(
+                    {"type": "entity_fact_source", "row": row, "checksum": chk}
+                )
+                + "\n"
+            )
+        for row in embedding_rows:
+            chk = _row_checksum(row)
+            per_row_checksums.append(chk)
+            f.write(
+                _canonical_json(
+                    {"type": "memory_embedding", "row": row, "checksum": chk}
+                )
+                + "\n"
+            )
+
+    file_bytes = derived_file.read_bytes()
+    file_checksum = _sha256(file_bytes)
+    aggregate_checksum = _compute_aggregate_checksum(per_row_checksums)
+
+    return {
+        "derived_backup_file": str(derived_file),
+        "derived_file_checksum": file_checksum,
+        "derived_fact_count": len(fact_rows),
+        "derived_source_count": len(source_rows),
+        "derived_embedding_count": len(embedding_rows),
+        "derived_per_row_checksums": per_row_checksums,
+        "derived_aggregate_checksum": aggregate_checksum,
+    }
+
+
 def backup_misplaced_rows(
     conn: Any,
     identification: IdentificationResult,
@@ -517,6 +791,13 @@ def backup_misplaced_rows(
             )
 
     aggregate_checksum = aggregate_hasher.hexdigest()
+    # Also capture every derived row that removal would delete: facts linked
+    # by source_channel_*, their entity_fact_sources rows, and their embeddings.
+    # This runs inside the same REPEATABLE READ READ ONLY snapshot as the
+    # session/transcript backup, so the derived backup is consistent with it.
+    derived_backup = _backup_derived_rows(cur, targets, junk_senders, output_dir)
+
+    aggregate_checksum = aggregate_hasher.hexdigest()
     manifest = BackupManifest(
         created_at=timestamp,
         source_database=identification.current_database,
@@ -525,9 +806,12 @@ def backup_misplaced_rows(
         aggregate_checksum=aggregate_checksum,
     )
 
+    manifest_data: dict[str, Any] = {**asdict(manifest), "schema": "cleanup-backup-v1"}
+    manifest_data.update(derived_backup)
+
     manifest_path = output_dir / "backup_manifest.json"
     manifest_path.write_text(
-        _canonical_json({**asdict(manifest), "schema": "cleanup-backup-v1"}) + "\n",
+        _canonical_json(manifest_data) + "\n",
         encoding="utf-8",
     )
     return manifest
@@ -730,8 +1014,157 @@ def _verify_current_rows_against_checksums(
     return rows
 
 
-def _delete_fact_dependencies(conn: Any, fact_ids: list[int]) -> None:
-    """Delete memory_embeddings and entity_fact_sources for ``fact_ids``."""
+def _verify_derived_rows_against_checksums(
+    conn: Any,
+    backup_manifest: dict[str, Any],
+    target_session_ids: set[int],
+    target_transcript_ids: set[int],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    """Fetch current derived rows and verify them against the backup manifest.
+
+    Returns the fetched (facts, sources, embeddings) so the caller can
+    classify and delete them. Refuses the group if the set or checksums
+    differ from the backup, exactly as for transcripts.
+    """
+    expected_fact_count = backup_manifest.get("derived_fact_count", 0)
+    expected_source_count = backup_manifest.get("derived_source_count", 0)
+    expected_embedding_count = backup_manifest.get("derived_embedding_count", 0)
+    expected_checksums = backup_manifest.get("derived_per_row_checksums", [])
+
+    # Verify the derived backup file on disk matches the manifest first.
+    derived_backup_file = backup_manifest.get("derived_backup_file")
+    if derived_backup_file:
+        _verify_file_checksum(
+            Path(derived_backup_file),
+            backup_manifest.get("derived_file_checksum", ""),
+        )
+
+    with conn.cursor() as cur:
+        fact_rows = _fetch_derived_facts_for_targets(
+            cur, target_session_ids, target_transcript_ids
+        )
+        fact_ids = {row["id"] for row in fact_rows}
+        source_rows = _fetch_derived_fact_sources(cur, fact_ids)
+        embedding_rows = _fetch_derived_fact_embeddings(cur, fact_ids)
+
+    actual_counts = (len(fact_rows), len(source_rows), len(embedding_rows))
+    expected_counts = (expected_fact_count, expected_source_count, expected_embedding_count)
+    if actual_counts != expected_counts:
+        raise RuntimeError(
+            f"[cleanup] Derived row count mismatch: "
+            f"current (facts={actual_counts[0]}, sources={actual_counts[1]}, embeddings={actual_counts[2]}), "
+            f"backup (facts={expected_counts[0]}, sources={expected_counts[1]}, embeddings={expected_counts[2]})"
+        )
+
+    ordered_rows: list[dict[str, Any]] = []
+    ordered_rows.extend(fact_rows)
+    ordered_rows.extend(source_rows)
+    ordered_rows.extend(embedding_rows)
+    current_checksums = [_row_checksum(r) for r in ordered_rows]
+
+    if current_checksums != expected_checksums:
+        raise RuntimeError(
+            "[cleanup] Derived row checksum mismatch: current DB derived rows "
+            "differ from the verified backup"
+        )
+
+    return fact_rows, source_rows, embedding_rows
+
+
+def _classify_facts_for_removal(
+    fact_rows: list[dict[str, Any]],
+    source_rows: list[dict[str, Any]],
+    sessions_being_deleted: set[int],
+    target_transcript_ids: set[int],
+) -> tuple[set[int], dict[int, dict[str, Any]], dict[int, set[int]], dict[int, set[int]]]:
+    """Classify facts as delete or keep under the multi-source rule.
+
+    Multi-source rule: a fact is deleted only when every one of its sources
+    is in the removal set. Sources are:
+      * direct source_channel_transcript_id / source_channel_session_id columns
+      * entity_fact_sources rows (source_session_id is a channel source;
+        source_session_id IS NULL is a non-channel source and is legitimate).
+
+    ``sessions_being_deleted`` are the sessions that will be removed entirely
+    (peer sessions and non-peer wrong-place sessions). Junk-in-session rows
+    are removed only at the transcript level; the parent session is preserved,
+    so a source_session_id pointing at a junk session is legitimate.
+
+    If a fact has any legitimate source, it is kept and only the misplaced
+    source links are removed. Direct columns pointing at removed rows are
+    nulled out (the schema allows NULL for both columns). Source links whose
+    source_session_id is in ``sessions_being_deleted`` are deleted.
+
+    Returns:
+      * fact_ids_to_delete
+      * fact_rows_to_keep (fact_id -> row)
+      * source_links_to_delete_by_session (for kept facts, by source_session_id)
+      * delete_fact_source_links_by_session (for deleted facts, by source_session_id)
+    """
+    sources_by_fact: dict[int, list[dict[str, Any]]] = {}
+    for src in source_rows:
+        sources_by_fact.setdefault(src["fact_id"], []).append(src)
+
+    facts_to_delete: set[int] = set()
+    facts_to_keep: dict[int, dict[str, Any]] = {}
+    source_links_to_delete_by_session: dict[int, set[int]] = {
+        sid: set() for sid in sessions_being_deleted
+    }
+    delete_fact_source_links_by_session: dict[int, set[int]] = {
+        sid: set() for sid in sessions_being_deleted
+    }
+
+    for fact in fact_rows:
+        fact_id = fact["id"]
+        has_legitimate_source = False
+
+        # Direct channel sources.
+        direct_transcript_id = fact.get("source_channel_transcript_id")
+        direct_session_id = fact.get("source_channel_session_id")
+        # A transcript being removed (including junk transcripts) makes the
+        # direct transcript source removable.
+        if direct_transcript_id is not None and direct_transcript_id not in target_transcript_ids:
+            has_legitimate_source = True
+        # A session being deleted entirely makes the direct session source
+        # removable. Junk sessions are preserved, so source_channel_session_id
+        # pointing at a junk session is still legitimate.
+        if direct_session_id is not None and direct_session_id not in sessions_being_deleted:
+            has_legitimate_source = True
+
+        # entity_fact_sources channel sources.
+        for src in sources_by_fact.get(fact_id, []):
+            src_session_id = src.get("source_session_id")
+            if src_session_id is None:
+                # Non-channel source is always legitimate.
+                has_legitimate_source = True
+            elif src_session_id not in sessions_being_deleted:
+                # Points to a session that is not being deleted entirely
+                # (including junk sessions whose parent is preserved).
+                has_legitimate_source = True
+
+        if has_legitimate_source:
+            facts_to_keep[fact_id] = fact
+            for src in sources_by_fact.get(fact_id, []):
+                src_session_id = src.get("source_session_id")
+                if src_session_id is not None and src_session_id in sessions_being_deleted:
+                    source_links_to_delete_by_session[src_session_id].add(src["id"])
+        else:
+            facts_to_delete.add(fact_id)
+            for src in sources_by_fact.get(fact_id, []):
+                src_session_id = src.get("source_session_id")
+                if src_session_id is not None and src_session_id in sessions_being_deleted:
+                    delete_fact_source_links_by_session[src_session_id].add(src["id"])
+
+    return (
+        facts_to_delete,
+        facts_to_keep,
+        source_links_to_delete_by_session,
+        delete_fact_source_links_by_session,
+    )
+
+
+def _delete_fact_embeddings(conn: Any, fact_ids: list[int]) -> None:
+    """Delete memory_embeddings rows for ``fact_ids``."""
     if not fact_ids:
         return
     placeholders = ",".join("%s" for _ in fact_ids)
@@ -744,32 +1177,130 @@ def _delete_fact_dependencies(conn: Any, fact_ids: list[int]) -> None:
             """,
             tuple(fact_ids),
         )
+
+
+def _delete_fact_source_links(conn: Any, source_link_ids: list[int]) -> None:
+    """Delete specific entity_fact_sources rows by id."""
+    if not source_link_ids:
+        return
+    placeholders = ",".join("%s" for _ in source_link_ids)
+    with conn.cursor() as cur:
         cur.execute(
-            f"DELETE FROM entity_fact_sources WHERE fact_id IN ({placeholders})",
-            tuple(fact_ids),
+            f"DELETE FROM entity_fact_sources WHERE id IN ({placeholders})",
+            tuple(source_link_ids),
         )
+
+
+def _nullify_fact_channel_columns(
+    conn: Any,
+    facts_to_keep: dict[int, dict[str, Any]],
+    target_session_ids: set[int],
+    target_transcript_ids: set[int],
+) -> None:
+    """NULL out direct channel source columns that point at removed rows.
+
+    The dt.sh schema shows both source_channel_transcript_id and
+    source_channel_session_id are nullable, so we can clear dangling
+    references. If the schema ever became NOT NULL, this would need to
+    report the fact and keep it without nulling; for now we null and keep.
+    """
+    if not facts_to_keep:
+        return
+
+    keep_fact_ids = list(facts_to_keep.keys())
+    placeholders = ",".join("%s" for _ in keep_fact_ids)
+
+    transcript_ids_to_null: list[int] = []
+    for fact in facts_to_keep.values():
+        tid = fact.get("source_channel_transcript_id")
+        if tid is not None and tid in target_transcript_ids:
+            transcript_ids_to_null.append(tid)
+
+    session_ids_to_null: list[int] = []
+    for fact in facts_to_keep.values():
+        sid = fact.get("source_channel_session_id")
+        if sid is not None and sid in target_session_ids:
+            session_ids_to_null.append(sid)
+
+    with conn.cursor() as cur:
+        if transcript_ids_to_null:
+            cur.execute(
+                f"""
+                UPDATE entity_facts
+                SET source_channel_transcript_id = NULL
+                WHERE id IN ({placeholders})
+                  AND source_channel_transcript_id = ANY(%s)
+                """,
+                (*keep_fact_ids, transcript_ids_to_null),
+            )
+        if session_ids_to_null:
+            cur.execute(
+                f"""
+                UPDATE entity_facts
+                SET source_channel_session_id = NULL
+                WHERE id IN ({placeholders})
+                  AND source_channel_session_id = ANY(%s)
+                """,
+                (*keep_fact_ids, session_ids_to_null),
+            )
+
+
+def _delete_facts(conn: Any, fact_ids: list[int]) -> None:
+    """Delete entity_facts rows by id.
+
+    Dependent entity_fact_sources rows are removed by ON DELETE CASCADE.
+    Callers must delete embeddings separately first.
+    """
+    if not fact_ids:
+        return
+    placeholders = ",".join("%s" for _ in fact_ids)
+    with conn.cursor() as cur:
         cur.execute(
             f"DELETE FROM entity_facts WHERE id IN ({placeholders})",
             tuple(fact_ids),
         )
 
 
+def _execute_group_deletes(
+    conn: Any,
+    facts_to_delete: set[int],
+    facts_to_keep: dict[int, dict[str, Any]],
+    source_links_to_delete: set[int],
+    target_session_ids: set[int],
+    target_transcript_ids: set[int],
+) -> None:
+    """Apply fact-related DML for a removal group.
+
+    Order:
+      1. Delete embeddings for facts that are being deleted entirely.
+      2. Delete misplaced source links for kept facts.
+      3. NULL dangling direct columns on kept facts.
+      4. Delete the facts themselves (cascade removes their sources).
+    """
+    if facts_to_delete:
+        _delete_fact_embeddings(conn, list(facts_to_delete))
+        _delete_facts(conn, list(facts_to_delete))
+    if source_links_to_delete:
+        _delete_fact_source_links(conn, list(source_links_to_delete))
+    if facts_to_keep:
+        _nullify_fact_channel_columns(
+            conn,
+            facts_to_keep,
+            target_session_ids,
+            target_transcript_ids,
+        )
+
+
 def _delete_transcript_ids(conn: Any, transcript_ids: list[int]) -> None:
-    """Delete a list of transcript rows after clearing their fact dependents."""
+    """Delete a list of transcript rows by id.
+
+    Fact-related cleanup is handled separately by the multi-source rule in
+    ``remove_misplaced_rows`` so this helper only deletes transcript rows.
+    """
     if not transcript_ids:
         return
+    placeholders = ",".join("%s" for _ in transcript_ids)
     with conn.cursor() as cur:
-        placeholders = ",".join("%s" for _ in transcript_ids)
-        cur.execute(
-            f"""
-            SELECT id FROM entity_facts
-            WHERE source_channel_transcript_id IN ({placeholders})
-            ORDER BY id
-            """,
-            tuple(transcript_ids),
-        )
-        fact_ids = [row[0] for row in cur.fetchall()]
-        _delete_fact_dependencies(conn, fact_ids)
         cur.execute(
             f"DELETE FROM channel_transcripts WHERE id IN ({placeholders})",
             tuple(transcript_ids),
@@ -777,23 +1308,11 @@ def _delete_transcript_ids(conn: Any, transcript_ids: list[int]) -> None:
 
 
 def _delete_session_cascade(conn: Any, session_id: int) -> int:
-    """Delete a session and its dependent rows, returning transcript count.
+    """Delete a session and its transcripts, returning transcript count.
 
-    Deletion order:
-      1. memory_embeddings anchored to entity_facts for this session.
-      2. entity_fact_sources for those facts (cascade would handle, but
-         explicit deletion is clearer and protects against stray FK refs).
-      3. entity_facts referencing this session or its transcripts.
-      4. Any remaining entity_fact_sources referencing the session directly.
-      5. channel_transcripts for the session.
-      6. channel_sessions row (ON DELETE CASCADE would also drop transcripts,
-         but we delete transcripts explicitly first to satisfy TC-708's
-         "transcripts before sessions" requirement).
-
-    Derivation: dt.sh shows entity_facts.source_channel_transcript_id and
-    source_channel_session_id FKs, and entity_fact_sources.source_session_id
-    FK, all without ON DELETE CASCADE; deleting sessions without clearing
-    these rows would raise a foreign-key violation.
+    Fact-related cleanup is handled separately by the multi-source rule in
+    ``remove_misplaced_rows``. Transcripts are deleted before the session to
+    satisfy TC-708's ordering requirement.
     """
     with conn.cursor() as cur:
         cur.execute(
@@ -801,31 +1320,6 @@ def _delete_session_cascade(conn: Any, session_id: int) -> int:
             (session_id,),
         )
         transcript_ids = [row[0] for row in cur.fetchall()]
-
-        if transcript_ids:
-            placeholders = ",".join("%s" for _ in transcript_ids)
-            cur.execute(
-                f"""
-                SELECT id FROM entity_facts
-                WHERE source_channel_transcript_id IN ({placeholders})
-                   OR source_channel_session_id = %s
-                ORDER BY id
-                """,
-                (*transcript_ids, session_id),
-            )
-        else:
-            cur.execute(
-                "SELECT id FROM entity_facts WHERE source_channel_session_id = %s ORDER BY id",
-                (session_id,),
-            )
-        fact_ids = [row[0] for row in cur.fetchall()]
-
-        _delete_fact_dependencies(conn, fact_ids)
-
-        cur.execute(
-            "DELETE FROM entity_fact_sources WHERE source_session_id = %s",
-            (session_id,),
-        )
         cur.execute(
             "DELETE FROM channel_transcripts WHERE session_id = %s",
             (session_id,),
@@ -834,15 +1328,14 @@ def _delete_session_cascade(conn: Any, session_id: int) -> int:
             "DELETE FROM channel_sessions WHERE id = %s",
             (session_id,),
         )
-
     return len(transcript_ids)
 
 
 def _delete_junk_rows(conn: Any, session_id: int, junk_senders: set[str]) -> int:
     """Delete junk-sender transcript rows inside an otherwise correct session.
 
-    The parent session is preserved. Dependent entity_facts and their
-    embeddings/sources are cleared first, then the transcript rows themselves.
+    The parent session is preserved. Fact-related cleanup is handled
+    separately by the multi-source rule.
     """
     if not junk_senders:
         return 0
@@ -859,6 +1352,116 @@ def _delete_junk_rows(conn: Any, session_id: int, junk_senders: set[str]) -> int
         transcript_ids = [row[0] for row in cur.fetchall()]
         _delete_transcript_ids(conn, transcript_ids)
     return len(transcript_ids)
+
+
+def _facts_in_group(
+    fact_rows: list[dict[str, Any]],
+    group_session_ids: set[int],
+    group_transcript_ids: set[int],
+) -> dict[int, dict[str, Any]]:
+    """Return facts whose direct channel source belongs to the group."""
+    return {
+        f["id"]: f
+        for f in fact_rows
+        if f.get("source_channel_session_id") in group_session_ids
+        or f.get("source_channel_transcript_id") in group_transcript_ids
+    }
+
+
+def _compute_group_counts(
+    fact_rows: list[dict[str, Any]],
+    facts_to_delete: set[int],
+    facts_to_keep: dict[int, dict[str, Any]],
+    source_links_to_delete_by_session: dict[int, set[int]],
+    delete_fact_source_links_by_session: dict[int, set[int]],
+    group_session_ids: set[int],
+    group_transcript_ids: set[int],
+) -> dict[str, int]:
+    """Compute dry-run/execute counts for a removal group.
+
+    Counts:
+      transcripts: number of transcript rows removed in the group.
+      sessions: number of sessions removed in the group.
+      facts_deleted: facts whose direct source is in the group and that have
+        no legitimate source.
+      facts_kept: facts whose direct source is in the group and that have at
+        least one legitimate source.
+      source_links_removed: entity_fact_sources rows removed because their
+        source_session_id is in the group (both kept and deleted facts).
+      embeddings_deleted: embeddings for facts_deleted.
+    """
+    group_facts = _facts_in_group(
+        fact_rows, group_session_ids, group_transcript_ids
+    )
+    facts_deleted = {
+        fid for fid in group_facts if fid in facts_to_delete
+    }
+    facts_kept = {
+        fid for fid in group_facts if fid in facts_to_keep
+    }
+    source_links_removed: set[int] = set()
+    for sid in group_session_ids:
+        source_links_removed.update(source_links_to_delete_by_session.get(sid, set()))
+        source_links_removed.update(delete_fact_source_links_by_session.get(sid, set()))
+
+    return {
+        "transcripts": len(group_transcript_ids),
+        "sessions": len(group_session_ids),
+        "facts_deleted": len(facts_deleted),
+        "facts_kept": len(facts_kept),
+        "source_links_removed": len(source_links_removed),
+        "embeddings_deleted": len(facts_deleted),
+    }
+
+
+def _apply_fact_changes_for_group(
+    conn: Any,
+    fact_rows: list[dict[str, Any]],
+    facts_to_delete: set[int],
+    facts_to_keep: dict[int, dict[str, Any]],
+    source_links_to_delete_by_session: dict[int, set[int]],
+    group_session_ids: set[int],
+    group_transcript_ids: set[int],
+    already_deleted_facts: set[int],
+) -> None:
+    """Apply fact-related DML for one removal group.
+
+    Delete facts whose direct source is in the group and that are classified
+    for deletion, remove misplaced source links for kept facts whose source
+    session is in the group, and NULL dangling direct columns on kept facts.
+    """
+    group_facts = _facts_in_group(
+        fact_rows, group_session_ids, group_transcript_ids
+    )
+
+    facts_to_delete_now = [
+        fid
+        for fid in group_facts
+        if fid in facts_to_delete and fid not in already_deleted_facts
+    ]
+    if facts_to_delete_now:
+        _delete_fact_embeddings(conn, facts_to_delete_now)
+        _delete_facts(conn, facts_to_delete_now)
+        already_deleted_facts.update(facts_to_delete_now)
+
+    source_links_in_group: set[int] = set()
+    for sid in group_session_ids:
+        source_links_in_group.update(
+            source_links_to_delete_by_session.get(sid, set())
+        )
+    if source_links_in_group:
+        _delete_fact_source_links(conn, list(source_links_in_group))
+
+    keep_facts_in_group = {
+        fid: facts_to_keep[fid] for fid in group_facts if fid in facts_to_keep
+    }
+    if keep_facts_in_group:
+        _nullify_fact_channel_columns(
+            conn,
+            keep_facts_in_group,
+            group_session_ids,
+            group_transcript_ids,
+        )
 
 
 def remove_misplaced_rows(
@@ -970,6 +1573,43 @@ def remove_misplaced_rows(
     peer_sessions = [s for s in target_sessions if s.disposition == "peer_misplaced"]
     non_peer_sessions = [s for s in target_sessions if s.disposition != "peer_misplaced"]
 
+    # Global removal sets and derived-row verification. The removal set is
+    # every session being removed plus every transcript row that will be
+    # deleted (all transcripts for full sessions, junk-sender transcripts for
+    # junk-in-session removals). Sessions being deleted entirely are peer
+    # sessions plus non-peer wrong-place sessions; junk-in-session parent
+    # sessions are preserved.
+    target_session_ids = {s.session_id for s in target_sessions}
+    sessions_being_deleted = {
+        s.session_id
+        for s in target_sessions
+        if s.disposition != "junk_in_session"
+    }
+    with conn.cursor() as cur:
+        target_transcript_ids = _compute_target_transcript_ids(
+            cur, target_sessions, junk_senders
+        )
+
+    # Verify that the derived rows (facts, sources, embeddings) match the
+    # backup before any delete is issued. This guards against rows added or
+    # changed between backup and removal.
+    fact_rows, source_rows, embedding_rows = _verify_derived_rows_against_checksums(
+        conn,
+        backup_manifest,
+        target_session_ids,
+        target_transcript_ids,
+    )
+
+    # Classify facts under the multi-source rule.
+    (
+        facts_to_delete,
+        facts_to_keep,
+        source_links_to_delete_by_session,
+        delete_fact_source_links_by_session,
+    ) = _classify_facts_for_removal(
+        fact_rows, source_rows, sessions_being_deleted, target_transcript_ids
+    )
+
     result: dict[str, Any] = {
         "dry_run": not execute,
         "current_database": current_database,
@@ -979,6 +1619,8 @@ def remove_misplaced_rows(
         "peer_groups": [],
         "non_peer_group": None,
     }
+
+    already_deleted_facts: set[int] = set()
 
     # TC-708-013: remove peer sessions one at a time, gated on verified export.
     for session in peer_sessions:
@@ -1006,8 +1648,36 @@ def remove_misplaced_rows(
             manifest["row_count"],
         )
 
+        group_session_ids = {session.session_id}
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id FROM channel_transcripts WHERE session_id = %s ORDER BY id",
+                (session.session_id,),
+            )
+            group_transcript_ids = {row[0] for row in cur.fetchall()}
+
+        counts = _compute_group_counts(
+            fact_rows,
+            facts_to_delete,
+            facts_to_keep,
+            source_links_to_delete_by_session,
+            delete_fact_source_links_by_session,
+            group_session_ids,
+            group_transcript_ids,
+        )
+
         if execute:
             try:
+                _apply_fact_changes_for_group(
+                    conn,
+                    fact_rows,
+                    facts_to_delete,
+                    facts_to_keep,
+                    source_links_to_delete_by_session,
+                    group_session_ids,
+                    group_transcript_ids,
+                    already_deleted_facts,
+                )
                 deleted_rows = _delete_session_cascade(conn, session.session_id)
                 conn.commit()
             except Exception:
@@ -1019,6 +1689,7 @@ def remove_misplaced_rows(
                 "session_key": session.session_key,
                 "rows_deleted": deleted_rows,
                 "deleted": True,
+                "counts": counts,
             })
         else:
             result["peer_groups"].append({
@@ -1027,11 +1698,14 @@ def remove_misplaced_rows(
                 "session_key": session.session_key,
                 "rows_deleted": session.row_count,
                 "deleted": False,
+                "counts": counts,
             })
 
     # TC-708-014: remove non-peer/junk rows as one group, gated on verified backup.
     if non_peer_sessions:
         non_peer_details: list[dict[str, Any]] = []
+        non_peer_session_ids: set[int] = set()
+        non_peer_transcript_ids: set[int] = set()
         for session in non_peer_sessions:
             backup_session = backup_sessions[session.session_id]
             backup_file = Path(backup_session["file"])
@@ -1058,8 +1732,48 @@ def remove_misplaced_rows(
                 "rows": session.row_count,
             })
 
+            if not is_junk:
+                non_peer_session_ids.add(session.session_id)
+            with conn.cursor() as cur:
+                if is_junk:
+                    sender_placeholders = ",".join("%s" for _ in junk_senders)
+                    cur.execute(
+                        f"""
+                        SELECT id FROM channel_transcripts
+                        WHERE session_id = %s AND sender_name IN ({sender_placeholders})
+                        ORDER BY id
+                        """,
+                        (session.session_id, *junk_senders),
+                    )
+                else:
+                    cur.execute(
+                        "SELECT id FROM channel_transcripts WHERE session_id = %s ORDER BY id",
+                        (session.session_id,),
+                    )
+                non_peer_transcript_ids.update(row[0] for row in cur.fetchall())
+
+        counts = _compute_group_counts(
+            fact_rows,
+            facts_to_delete,
+            facts_to_keep,
+            source_links_to_delete_by_session,
+            delete_fact_source_links_by_session,
+            non_peer_session_ids,
+            non_peer_transcript_ids,
+        )
+
         if execute:
             try:
+                _apply_fact_changes_for_group(
+                    conn,
+                    fact_rows,
+                    facts_to_delete,
+                    facts_to_keep,
+                    source_links_to_delete_by_session,
+                    non_peer_session_ids,
+                    non_peer_transcript_ids,
+                    already_deleted_facts,
+                )
                 for session in non_peer_sessions:
                     if session.disposition == "junk_in_session":
                         _delete_junk_rows(
@@ -1075,12 +1789,14 @@ def remove_misplaced_rows(
                 "sessions": non_peer_details,
                 "deleted": True,
                 "total_rows": sum(s["rows"] for s in non_peer_details),
+                "counts": counts,
             }
         else:
             result["non_peer_group"] = {
                 "sessions": non_peer_details,
                 "deleted": False,
                 "total_rows": sum(s["rows"] for s in non_peer_details),
+                "counts": counts,
             }
 
     return result

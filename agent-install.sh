@@ -110,6 +110,47 @@ _install_runtime_dependencies() {
     return 1
 }
 
+# Helper: install build dependencies (devDependencies) for a plugin in its
+# source directory.  We build in the source tree and then copy dist/ to the
+# deployed target so that the target only contains runtime dependencies (#598,
+# #724).
+_install_plugin_build_dependencies() {
+    local source_dir="$1"
+    local label="$2"
+    local npm_log
+    npm_log=$(mktemp /tmp/agent-install-build-deps-XXXXXX.log)
+    TMPFILES+=("$npm_log")
+
+    # Idempotency: skip when the installed tree already satisfies the lockfile.
+    if [ "${FORCE_INSTALL:-0}" -eq 0 ] && \
+       [ -d "$source_dir/node_modules" ] && \
+       [ -f "$source_dir/package-lock.json" ] && \
+       [ "$source_dir/node_modules" -nt "$source_dir/package-lock.json" ]; then
+        echo -e "  ${CHECK_MARK} $label build dependencies already installed (use --force to reinstall)"
+        return 0
+    fi
+
+    echo "  Installing $label build dependencies..."
+    if [ -f "$source_dir/package-lock.json" ]; then
+        if (cd "$source_dir" && npm ci --legacy-peer-deps) >"$npm_log" 2>&1; then
+            echo -e "  ${CHECK_MARK} $label build dependencies installed"
+            return 0
+        fi
+    else
+        if (cd "$source_dir" && npm install --legacy-peer-deps) >"$npm_log" 2>&1; then
+            echo -e "  ${CHECK_MARK} $label build dependencies installed"
+            return 0
+        fi
+    fi
+
+    echo -e "  ${CROSS_MARK} Failed to install $label build dependencies"
+    echo "  npm output:"
+    sed 's/^/    /' "$npm_log" >&2
+    echo "  Hint: the installer already uses --legacy-peer-deps." >&2
+    echo "        Check the npm output above for the underlying cause." >&2
+    return 1
+}
+
 # Helper: install the turn-context plugin.  Accepts optional source and
 # target directories so bats tests can run the install section into a
 # scratch HOME (#598).
@@ -162,7 +203,7 @@ _install_turn_context_plugin() {
             local BUILD_LOG
             BUILD_LOG=$(mktemp /tmp/turn-context-build-XXXXXX.log)
             TMPFILES+=("$BUILD_LOG")
-            if (cd "$TURN_CONTEXT_SOURCE" && npx tsc) >"$BUILD_LOG" 2>&1; then
+            if (cd "$TURN_CONTEXT_SOURCE" && "$TURN_CONTEXT_SOURCE/node_modules/.bin/tsc") >"$BUILD_LOG" 2>&1; then
                 # Copy built dist to target
                 cp -r "$TURN_CONTEXT_SOURCE/dist/"* "$TURN_CONTEXT_TARGET/dist/"
                 echo -e "  ${CHECK_MARK} Plugin built and installed"
@@ -2148,15 +2189,17 @@ install_metacognition_plugin() {
     done
     echo -e "    ${CHECK_MARK} Source files copied"
 
-    # Install runtime dependencies in the target directory (#598)
-    _install_runtime_dependencies "$plugin_target" "$plugin_name" || return 1
+    # Build TypeScript in the source directory so the target only receives
+    # runtime dependencies (#598, #724).
+    if [ -d "$plugin_source/src" ]; then
+        _install_plugin_build_dependencies "$plugin_source" "$plugin_name" || return 1
 
-    # Build TypeScript
-    if [ -d "$plugin_target/src" ]; then
         echo "    Building TypeScript..."
         BUILD_LOG=$(mktemp "/tmp/build-${plugin_name}-XXXXXX.log")
         TMPFILES+=("$BUILD_LOG")
-        if npx tsc >"$BUILD_LOG" 2>&1; then
+        mkdir -p "$plugin_target/dist"
+        if (cd "$plugin_source" && "$plugin_source/node_modules/.bin/tsc") >"$BUILD_LOG" 2>&1; then
+            cp -r "$plugin_source/dist/"* "$plugin_target/dist/"
             echo -e "    ${CHECK_MARK} Build completed"
             rm -f "$BUILD_LOG"
         else
@@ -2167,6 +2210,9 @@ install_metacognition_plugin() {
             return 1
         fi
     fi
+
+    # Install runtime dependencies in the target directory (#598)
+    _install_runtime_dependencies "$plugin_target" "$plugin_name" || return 1
     cd "$SCRIPT_DIR"
 
     # Enable in OpenClaw config
@@ -2275,20 +2321,24 @@ if [ -d "$AGENT_CONFIG_SYNC_SOURCE" ]; then
     mkdir -p "$AGENT_CONFIG_SYNC_TARGET"
     sync_directory "$AGENT_CONFIG_SYNC_SOURCE" "$AGENT_CONFIG_SYNC_TARGET" "agent-config-sync files"
 
+    # Build in the source directory and copy dist/ to the target so the target
+    # only contains runtime dependencies (#598, #724).
     echo "  Building agent_config_sync TypeScript..."
-    cd "$AGENT_CONFIG_SYNC_TARGET"
-
-    # Install runtime dependencies in the target directory (#598)
-    _install_runtime_dependencies "$AGENT_CONFIG_SYNC_TARGET" "agent_config_sync" || true
+    _install_plugin_build_dependencies "$AGENT_CONFIG_SYNC_SOURCE" "agent_config_sync" || true
 
     NPM_BUILD_LOG="${TMPDIR:-/tmp}/npm-build-config-sync-$$.log"
-    if npm run build >"$NPM_BUILD_LOG" 2>&1; then
+    if (cd "$AGENT_CONFIG_SYNC_SOURCE" && "$AGENT_CONFIG_SYNC_SOURCE/node_modules/.bin/tsc") >"$NPM_BUILD_LOG" 2>&1; then
+        mkdir -p "$AGENT_CONFIG_SYNC_TARGET/dist"
+        cp -r "$AGENT_CONFIG_SYNC_SOURCE/dist/"* "$AGENT_CONFIG_SYNC_TARGET/dist/"
         echo -e "  ${CHECK_MARK} agent_config_sync build completed"
         rm -f "$NPM_BUILD_LOG"
     else
         echo -e "  ${CROSS_MARK} agent_config_sync build failed"
         tail -20 "$NPM_BUILD_LOG"
     fi
+
+    # Install runtime dependencies in the target directory (#598)
+    _install_runtime_dependencies "$AGENT_CONFIG_SYNC_TARGET" "agent_config_sync" || true
 
     cd "$SCRIPT_DIR"
 

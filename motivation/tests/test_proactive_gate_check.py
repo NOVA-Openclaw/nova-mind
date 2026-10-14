@@ -2247,3 +2247,61 @@ class TestBoundaryValues:
         with patch.object(m, "FS_AUDIT_MARKER", str(marker)):
             result = m.check_step10_filesystem_hygiene()
         assert result["actionable"] is True
+
+
+# ---------------------------------------------------------------------------
+# --transcript-bytes flag handling (argparse regression #1231)
+# ---------------------------------------------------------------------------
+
+class TestTranscriptBytesFlag:
+    """Exercise the --transcript-bytes CLI path without argparse."""
+
+    def _run_main_captured(self, m, monkeypatch, argv):
+        """Run main() capturing stdout/stderr/exit code."""
+        import io
+        from unittest.mock import patch
+
+        out = io.StringIO()
+        err = io.StringIO()
+        monkeypatch.setattr(sys, "argv", argv)
+        with patch.object(sys, "stdout", out), patch.object(sys, "stderr", err):
+            try:
+                m.main()
+                code = 0
+            except SystemExit as exc:
+                code = exc.code if isinstance(exc.code, int) else 1
+        return code, out.getvalue(), err.getvalue()
+
+    def test_transcript_bytes_flag_success(self, m, monkeypatch):
+        with patch.object(m, "_fetch_transcript_content_bytes", return_value=12_345):
+            code, stdout, stderr = self._run_main_captured(
+                m, monkeypatch, ["proactive-gate-check.py", "--transcript-bytes"]
+            )
+        assert code == 0
+        assert stdout == "12345\n"
+        assert stderr == ""
+
+    def test_transcript_bytes_flag_failure(self, m, monkeypatch):
+        with patch.object(m, "_fetch_transcript_content_bytes", return_value=None):
+            code, stdout, stderr = self._run_main_captured(
+                m, monkeypatch, ["proactive-gate-check.py", "--transcript-bytes"]
+            )
+        assert code == 3
+        assert stdout == ""
+        assert "Could not query transcript content bytes" in stderr
+
+    def test_main_under_pytest_argv_is_unaffected(self, m, monkeypatch):
+        """When pytest invokes main() in-process, its own argv must not be rejected."""
+        with patch.object(m, "_fetch_transcript_content_bytes", return_value=None), \
+             patch("subprocess.run", side_effect=FileNotFoundError):
+            code, stdout, stderr = self._run_main_captured(
+                m,
+                monkeypatch,
+                ["/path/to/pytest", "-v", "motivation/tests/test_proactive_gate_check.py"],
+            )
+        # argparse previously exited 2 here; the gate now runs and fails closed.
+        assert code != 2
+        assert code == 3
+        parsed = json.loads(stdout)
+        assert parsed["idle"] is False
+        assert "error" in parsed

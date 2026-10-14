@@ -10,7 +10,6 @@ Exit code is always 0. Per-step errors are embedded in JSON output.
 See: nova-mind#324
 """
 
-import argparse
 import json
 import os
 import re
@@ -1507,41 +1506,20 @@ def check_step11_d100(prior_actionable_count: int) -> dict:
 # Main
 # ---------------------------------------------------------------------------
 
-def _print_transcript_bytes() -> int:
-    """Print the current SUM(LENGTH(content)) over channel_transcripts and exit.
-
-    Returns 0 on success, 1 on failure. Output is empty on failure so callers
-    can treat empty output + non-zero exit as "no measurement available".
-    """
-    try:
-        conn = _db_connect()
-        try:
-            with conn:
-                with conn.cursor() as cur:
-                    cur.execute("SELECT COALESCE(SUM(LENGTH(content)), 0) FROM channel_transcripts")
-                    row = cur.fetchone()
-                    print(int(row[0]) if row else 0)
-            return 0
-        finally:
-            conn.close()
-    except Exception as exc:
-        print(f"Error measuring transcript bytes: {exc}", file=sys.stderr)
-        return 1
-
-
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Deterministic gate checker for NOVA's proactive cascade."
-    )
-    parser.add_argument(
-        "--transcript-bytes",
-        action="store_true",
-        help="Print the current channel_transcripts content byte count and exit.",
-    )
-    args = parser.parse_args()
-
-    if args.transcript_bytes:
-        sys.exit(_print_transcript_bytes())
+    # --transcript-bytes: single-source-of-truth readout for the introspect
+    # SKILL's sessionTranscriptBytes baseline. Runs no other checks and
+    # writes no state.
+    if "--transcript-bytes" in sys.argv[1:]:
+        bytes_ = _fetch_transcript_content_bytes()
+        if bytes_ is None:
+            print(
+                "Could not query transcript content bytes from nova_memory.channel_transcripts",
+                file=sys.stderr,
+            )
+            sys.exit(3)
+        print(bytes_)
+        sys.exit(0)
 
     timestamp = _iso_now()
 

@@ -67,14 +67,39 @@ MEMORY_MAINTENANCE_JSON = os.path.expanduser(
 )
 FS_AUDIT_MARKER = os.path.expanduser("~/.openclaw/workspace/.last-fs-audit")
 
+def _resolve_main_key() -> str:
+    """Resolve the configured session mainKey from OpenClaw config.
+
+    Reads ONLY the `session.mainKey` field from the config file pointed to by
+    OPENCLAW_CONFIG_PATH, falling back to ~/.openclaw/openclaw.json. The rest
+    of the file is never logged or returned because it may contain secrets.
+
+    Defaults to 'main' when the file or key is missing, unreadable, or invalid.
+    """
+    config_path = os.environ.get("OPENCLAW_CONFIG_PATH")
+    if not config_path:
+        config_path = os.path.expanduser("~/.openclaw/openclaw.json")
+    try:
+        with open(config_path, "r") as fh:
+            config = json.load(fh)
+        main_key = config.get("session", {}).get("mainKey")
+        if isinstance(main_key, str) and main_key:
+            return main_key
+    except (FileNotFoundError, json.JSONDecodeError, OSError, TypeError):
+        pass
+    return "main"
+
+
 # Session key substrings that indicate a user-facing session.
 # - :discord:channel: = public guild channels.
-# - agent:<agentId>:main = the agent's main session. With the default
+# - agent:<agentId>:<mainKey> = the agent's main session. With the default
 #   dmScope="main", EVERY direct message (Discord, Signal, Telegram, webchat)
 #   lands here; see session-key.ts buildSessionKey and resolve-route.ts.
+#   The mainKey value is configurable in OpenClaw 2026.9.6+ via session.mainKey
+#   (default 'main'); see resolve-route.ts buildAgentSessionKey.
 # - :direct: = per-peer / per-channel-peer / per-account-channel-peer DMs.
 # - signal:/telegram: are kept for backward compatibility / non-main group
-#   sessions. Under dmScope=main, Signal/Telegram DMs show up as :main.
+#   sessions. Under dmScope=main, Signal/Telegram DMs show up as :mainKey.
 USER_SESSION_PATTERNS = (
     ":discord:channel:",
     ":direct:",
@@ -82,9 +107,13 @@ USER_SESSION_PATTERNS = (
     "telegram:",
 )
 
+# Resolved at import time so all callers see the same value without re-reading
+# secrets on every check. The value is escaped before being embedded in regex.
+_MAIN_KEY = _resolve_main_key()
+
 # Matches the agent main session key exactly, e.g. agent:nova:main.
 # Must NOT match agent:nova:main:heartbeat or agent:nova:mainframe.
-_MAIN_SESSION_RE = re.compile(r"^agent:[^:]+:main$")
+_MAIN_SESSION_RE = re.compile(rf"^agent:[^:]+:{re.escape(_MAIN_KEY)}$")
 
 # Session key substrings that indicate bot/system sessions to exclude.
 EXCLUDE_PATTERNS = (
@@ -141,7 +170,7 @@ def _user_session_sql_conditions(table_alias: str = "cs") -> tuple[str, list[str
     Must stay in sync with _is_user_session_key().
     """
     conditions = [f"{table_alias}.session_key ~ %s"]
-    params: list[str] = [r"^agent:[^:]+:main$"]
+    params: list[str] = [rf"^agent:[^:]+:{re.escape(_MAIN_KEY)}$"]
     for pat in USER_SESSION_PATTERNS:
         conditions.append(f"{table_alias}.session_key LIKE %s")
         params.append(f"%{pat}%")
@@ -449,6 +478,11 @@ def check_idle() -> dict:
         # Use lastInteractionAt only — user-originated activity. lastActivityAt
         # also includes assistant/heartbeat/system writes; see
         # nova-openclaw-production/src/shared/session-activity-timestamp.ts.
+        # Orchestrator trace: src/auto-reply/reply/session.ts:944 keeps
+        # lastInteractionAt unchanged for system events
+        # (`isSystemEvent ? baseEntry?.lastInteractionAt : now`), and heartbeats
+        # run in the isolated `:heartbeat` session, so non-human events don't
+        # fake activity on agent:<id>:<mainKey>.
         ts = session.get("lastInteractionAt")
         if ts is not None:
             try:

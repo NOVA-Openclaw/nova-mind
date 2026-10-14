@@ -39,6 +39,23 @@ def _load_module() -> ModuleType:
     return mod
 
 
+def _load_module_fresh(env: dict[str, str] | None = None) -> ModuleType:
+    """Load a fresh copy of the module with optional env overrides."""
+    spec = importlib.util.spec_from_file_location(
+        f"proactive_gate_check_{id(env)}", _SCRIPT_PATH
+    )
+    mod = importlib.util.module_from_spec(spec)
+    old_environ = os.environ.copy()
+    if env:
+        os.environ.update(env)
+    try:
+        spec.loader.exec_module(mod)  # type: ignore[union-attr]
+    finally:
+        os.environ.clear()
+        os.environ.update(old_environ)
+    return mod
+
+
 @pytest.fixture(scope="module")
 def m() -> ModuleType:
     """Loaded module, shared across the test session."""
@@ -428,28 +445,62 @@ class TestIdleDetection:
         assert result["idle"] is True
         assert "No user-facing sessions" in result.get("reason", "")
 
-    def test_dm_main_session_fails_without_main_direct_patterns(self, m, tmp_path):
-        """Mutation check: without main/direct patterns, the DM test fails (idle=true)."""
+    def test_non_default_main_key_counts_home_not_main(self, tmp_path):
+        """OpenClaw 2026.9.6 session.mainKey='home': agent:nova:home counts, agent:nova:main does not."""
+        config = tmp_path / "openclaw.json"
+        config.write_text(json.dumps({"session": {"mainKey": "home"}}))
+        mod = _load_module_fresh({"OPENCLAW_CONFIG_PATH": str(config)})
+
         sessions = [
-            {
-                "key": "agent:nova:main",
-                "lastInteractionAt": _ms(2.0),
-                "updatedAt": _ms(2.0),
-                "kind": "direct",
-                "agentId": "nova",
-            }
+            {"key": "agent:nova:home", "lastInteractionAt": _ms(2.0), "kind": "direct", "agentId": "nova"},
+            {"key": "agent:nova:main", "lastInteractionAt": _ms(2.0), "kind": "direct", "agentId": "nova"},
         ]
-        original_patterns = m.USER_SESSION_PATTERNS
-        original_main_re = m._MAIN_SESSION_RE
-        try:
-            m.USER_SESSION_PATTERNS = (":discord:channel:", "signal:", "telegram:")
-            m._MAIN_SESSION_RE = re.compile(r"^$")
-            with _mock_openclaw_sessions(sessions), patch.object(m, "IDLE_THRESHOLD_MINUTES", 60):
-                result = m.check_idle()
-            assert result["idle"] is True
-        finally:
-            m.USER_SESSION_PATTERNS = original_patterns
-            m._MAIN_SESSION_RE = original_main_re
+        with _mock_openclaw_sessions(sessions), patch.object(mod, "IDLE_THRESHOLD_MINUTES", 60):
+            result = mod.check_idle()
+        assert result["idle"] is False
+        assert result["idle_minutes"] < 60
+
+        # Swap: only the legacy default main key is present -> no user-facing sessions.
+        sessions = [
+            {"key": "agent:nova:main", "lastInteractionAt": _ms(2.0), "kind": "direct", "agentId": "nova"},
+        ]
+        with _mock_openclaw_sessions(sessions), patch.object(mod, "IDLE_THRESHOLD_MINUTES", 60):
+            result = mod.check_idle()
+        assert result["idle"] is True
+        assert "No user-facing sessions" in result.get("reason", "")
+
+    def test_missing_config_defaults_main_key(self, tmp_path):
+        """When the config file is absent, mainKey defaults to 'main'."""
+        missing_config = tmp_path / "does-not-exist.json"
+        mod = _load_module_fresh({"OPENCLAW_CONFIG_PATH": str(missing_config)})
+
+        assert mod._MAIN_KEY == "main"
+        assert mod._MAIN_SESSION_RE.match("agent:nova:main")
+        assert not mod._MAIN_SESSION_RE.match("agent:nova:home")
+
+        sessions = [
+            {"key": "agent:nova:main", "lastInteractionAt": _ms(2.0), "kind": "direct", "agentId": "nova"},
+        ]
+        with _mock_openclaw_sessions(sessions), patch.object(mod, "IDLE_THRESHOLD_MINUTES", 60):
+            result = mod.check_idle()
+        assert result["idle"] is False
+
+    def test_regex_special_main_key_is_escaped(self, tmp_path):
+        """A mainKey containing regex metacharacters is escaped, not interpreted."""
+        config = tmp_path / "openclaw.json"
+        config.write_text(json.dumps({"session": {"mainKey": "main+home"}}))
+        mod = _load_module_fresh({"OPENCLAW_CONFIG_PATH": str(config)})
+
+        assert mod._MAIN_KEY == "main+home"
+        # Must match the literal plus, not treat it as a quantifier.
+        assert mod._MAIN_SESSION_RE.match("agent:nova:main+home")
+        assert not mod._MAIN_SESSION_RE.match("agent:nova:mainhome")
+        assert not mod._MAIN_SESSION_RE.match("agent:nova:mainnnhome")
+
+        # SQL param is also escaped (the SQL itself uses a placeholder).
+        sql, params = mod._user_session_sql_conditions("cs")
+        assert params[0] == r"^agent:[^:]+:main\+home$"
+        assert "cs.session_key ~ %s" in sql
 
 
 # ---------------------------------------------------------------------------

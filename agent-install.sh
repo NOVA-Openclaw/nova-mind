@@ -374,6 +374,420 @@ _configure_gateway_reload_mode() {
         echo -e "  ${WARNING} Could not set gateway.reload.mode"
 }
 
+# Helper: convert a pre-#707 agents.json array into the OpenClaw 2026.9.x
+# keyed object shape.  Each element must have an .id field; the id becomes
+# the object key and is removed from the value.
+_convert_legacy_agents_array() {
+    local input_file="$1"
+    local output_file="$2"
+    jq '
+        if type != "array" then error("not an array") else
+            map(select(.id != null))
+            | map({ key: .id, value: del(.id) })
+            | sort_by(.key)
+            | from_entries
+        end
+    ' "$input_file" >"$output_file" 2>/dev/null
+}
+
+# Helper: timestamped backup of agents.json with mode 600.
+_backup_agents_json() {
+    local src="$1"
+    local bak
+    bak="${src}.bak-$(date +%Y%m%d-%H%M%S)"
+    if cp "$src" "$bak" && chmod 600 "$bak"; then
+        printf '%s\n' "$bak"
+    fi
+}
+
+# Helper: generate agents.json from DB into $AGENTS_JSON.
+# Output matches the agent_config_sync plugin's JSON.stringify(data, null, 2) + "\n".
+_generate_agents_json() {
+    # Query get_agent_export_rows(), which scopes results to the connecting
+    # role (own row + subagents that list session_user in parent_agents) and
+    # filters to active, modeled agents. Shape logic mirrors sync.ts's
+    # buildAgentsList(); final serialization uses the same
+    # JSON.stringify(data, null, 2) + "\n" the agent_config_sync plugin uses.
+    #
+    # Output is the OpenClaw 2026.9.x agents.entries shape: a keyed object
+    # { "<id>": { model, default?, thinkingDefault?, subagents?, heartbeat? } }
+    # with the id itself as the object key, NOT a field inside the value.
+    local INITIAL_SYNC_QUERY="
+        SELECT COALESCE(json_agg(row_to_json(sub)), NULL)::text
+        FROM (
+            SELECT
+                name,
+                model,
+                fallback_models,
+                thinking,
+                instance_type,
+                is_default,
+                allowed_subagents,
+                heartbeat_enabled,
+                heartbeat_every,
+                heartbeat_target,
+                heartbeat_to,
+                heartbeat_isolated_session
+            FROM get_agent_export_rows()
+        ) sub
+    "
+    local AGENTS_DATA
+    if AGENTS_DATA=$(psql -U "$DB_USER" -d "$DB_NAME" -tAc "$INITIAL_SYNC_QUERY" 2>/dev/null); then
+        if [ -n "$AGENTS_DATA" ] && [ "$AGENTS_DATA" != "null" ] && [ "$AGENTS_DATA" != "" ]; then
+            # Duplicate-name guard: two rows with the same literal name would
+            # silently collapse in the keyed output. Detect this on raw DB
+            # data before serialization and fail loudly.
+            local DUP_NAMES
+            DUP_NAMES=$(echo "$AGENTS_DATA" | jq -r '
+                [group_by(.name)[] | select(length > 1 and .[0].name != null) | .[0].name]
+                | join(", ")
+            ' 2>/dev/null)
+            if [ -n "$DUP_NAMES" ]; then
+                echo -e "  ${WARNING} Duplicate agent names detected: $DUP_NAMES — not writing agents.json"
+                rm -f "$AGENTS_JSON_TMP"
+                return 1
+            fi
+
+            local FORMAT_OK=0
+            if command -v node &>/dev/null; then
+                # Preferred: byte-match the plugin's JSON.stringify(data, null, 2) + "\n"
+                # Build a keyed object, omitting the id from each value, applying
+                # the same thinkingDefault validation and heartbeat shape as sync.ts.
+                # shellcheck disable=SC2154,SC2086,SC2016
+                if echo "$AGENTS_DATA" | node -e '
+                    let input = "";
+                    process.stdin.setEncoding("utf8");
+                    process.stdin.on("data", c => input += c);
+                    process.stdin.on("end", () => {
+                        const fs = require("fs");
+                        const VALID_THINKING_DEFAULTS = new Set([
+                            "off", "minimal", "low", "medium", "high",
+                            "xhigh", "adaptive", "max", "ultra",
+                        ]);
+                        const AGENT_ID_REGEX = /^[a-z0-9_][a-z0-9_-]{0,63}$/i;
+                        const PROVIDER_REGISTRY_PATH = "/opt/agents/shared-config/models-providers.json";
+
+                        function loadKnownProviders() {
+                            try {
+                                const data = JSON.parse(fs.readFileSync(PROVIDER_REGISTRY_PATH, "utf8"));
+                                return new Set(Object.keys(data));
+                            } catch {
+                                return new Set();
+                            }
+                        }
+                        const KNOWN_PROVIDERS = loadKnownProviders();
+
+                        function extractProviderPrefix(model) {
+                            const idx = model.indexOf("/");
+                            if (idx === -1) return null;
+                            return model.slice(0, idx);
+                        }
+
+                        function warnIfUnknownProviderPrefix(id, model) {
+                            if (KNOWN_PROVIDERS.size === 0) return;
+                            const prefix = extractProviderPrefix(model);
+                            if (prefix == null) {
+                                console.warn("agent_config_sync: agent '" + id + "' model '" + model + "' has no provider prefix");
+                            } else if (!KNOWN_PROVIDERS.has(prefix)) {
+                                console.warn("agent_config_sync: agent '" + id + "' model '" + model + "' has unrecognized provider prefix '" + prefix + "'");
+                            }
+                        }
+
+                        function warnIfUnknownProviderPrefixes(id, model) {
+                            if (typeof model === "string") {
+                                warnIfUnknownProviderPrefix(id, model);
+                            } else {
+                                warnIfUnknownProviderPrefix(id, model.primary);
+                                for (const fallback of model.fallbacks) {
+                                    warnIfUnknownProviderPrefix(id, fallback);
+                                }
+                            }
+                        }
+
+                        const rows = JSON.parse(input);
+
+                        // Duplicate-name guard (defensive, also checked in bash above).
+                        const seen = new Map();
+                        for (let i = 0; i < rows.length; i++) {
+                            const name = rows[i].name;
+                            if (typeof name !== "string") continue;
+                            if (seen.has(name)) {
+                                throw new Error("Duplicate agent name '" + name + "' at rows " + seen.get(name) + " and " + i + "; each agent id must appear exactly once");
+                            }
+                            seen.set(name, i);
+                        }
+
+                        const entries = {};
+                        for (const row of rows) {
+                            // Defensive: get_agent_export_rows() already filters
+                            // status=active and model IS NOT NULL, but we re-apply
+                            // here so a fixture or future function change cannot emit
+                            // invalid entries.
+                            if (row.status != null && row.status !== "active") continue;
+                            if (row.model == null) continue;
+                            if (typeof row.name !== "string" || !AGENT_ID_REGEX.test(row.name)) continue;
+
+                            const hasFallbacks = Array.isArray(row.fallback_models) && row.fallback_models.length > 0;
+                            const entry = { model: hasFallbacks
+                                ? { primary: row.model, fallbacks: [...row.fallback_models] }
+                                : row.model };
+
+                            if (row.is_default === true) entry.default = true;
+
+                            if (typeof row.thinking === "string" && row.thinking.length > 0 &&
+                                VALID_THINKING_DEFAULTS.has(row.thinking)) {
+                                entry.thinkingDefault = row.thinking;
+                            }
+
+                            if (Array.isArray(row.allowed_subagents) && row.allowed_subagents.length > 0) {
+                                entry.subagents = { allowAgents: [...row.allowed_subagents].sort() };
+                            }
+
+                            if (row.heartbeat_enabled === true) {
+                                const hb = {};
+                                if (row.heartbeat_every != null) hb.every = row.heartbeat_every;
+                                if (row.heartbeat_target != null) hb.target = row.heartbeat_target;
+                                if (row.heartbeat_to != null) hb.to = row.heartbeat_to;
+                                // #714 — isolatedSession must be explicit when the row has a value.
+                                // true → true, false → false, null/undefined → omitted.
+                                if (row.heartbeat_isolated_session === true) {
+                                    hb.isolatedSession = true;
+                                } else if (row.heartbeat_isolated_session === false) {
+                                    hb.isolatedSession = false;
+                                }
+                                entry.heartbeat = hb;
+                            }
+
+                            warnIfUnknownProviderPrefixes(row.name, entry.model);
+
+                            entries[row.name] = entry;
+                        }
+                        const sorted = {};
+                        for (const key of Object.keys(entries).sort((a, b) => a.localeCompare(b))) {
+                            sorted[key] = entries[key];
+                        }
+                        process.stdout.write(JSON.stringify(sorted, null, 2) + "\n");
+                    });
+                ' >"$AGENTS_JSON_TMP"; then
+                    FORMAT_OK=1
+                fi
+            else
+                # Fallback if node is unavailable: best-effort keyed object via jq.
+                # thinkingDefault is not validated here (node is preferred);
+                # the resulting file is still structurally a keyed object.
+                if echo "$AGENTS_DATA" | jq '
+                    map({
+                        key: .name,
+                        value: (
+                            {model: (
+                                if (.fallback_models | type) == "array" and (.fallback_models | length) > 0
+                                then {primary: .model, fallbacks: .fallback_models}
+                                else .model
+                                end
+                            )}
+                            + (if .is_default == true then {default: true} else {} end)
+                            + (if (.allowed_subagents | type) == "array" and (.allowed_subagents | length) > 0
+                                then {subagents: {allowAgents: (.allowed_subagents | sort)}}
+                                else {} end)
+                            + (if .heartbeat_enabled == true
+                                then {heartbeat: (
+                                    (if .heartbeat_every != null then {every: .heartbeat_every} else {} end)
+                                    + (if .heartbeat_target != null then {target: .heartbeat_target} else {} end)
+                                    + (if .heartbeat_to != null then {to: .heartbeat_to} else {} end)
+                                    + (if .heartbeat_isolated_session == true then {isolatedSession: true}
+                               elif .heartbeat_isolated_session == false then {isolatedSession: false}
+                               else {} end)
+                                )}
+                                else {} end)
+                        )
+                    })
+                    | sort_by(.key)
+                    | from_entries
+                ' >"$AGENTS_JSON_TMP" 2>/dev/null; then
+                    if [ -s "$AGENTS_JSON_TMP" ] && [ "$(tail -c 1 "$AGENTS_JSON_TMP" | wc -l)" -eq 0 ]; then
+                        echo >> "$AGENTS_JSON_TMP"
+                    fi
+                    FORMAT_OK=1
+                fi
+            fi
+
+            if [ "$FORMAT_OK" -eq 1 ]; then
+                if mv "$AGENTS_JSON_TMP" "$AGENTS_JSON"; then
+                    echo -e "  ${CHECK_MARK} Generated agents.json from DB"
+                    return 0
+                else
+                    echo -e "  ${WARNING} Could not write agents.json"
+                    rm -f "$AGENTS_JSON_TMP"
+                    return 1
+                fi
+            else
+                echo -e "  ${WARNING} Could not serialize agents.json from DB data — not writing"
+                rm -f "$AGENTS_JSON_TMP"
+                return 1
+            fi
+        else
+            # DB returned NULL or empty — no agents in scope, but psql succeeded.
+            # Write a valid placeholder so the openclaw.json agents.entries $include
+            # stays valid and the gateway can boot; agent_config_sync will populate
+            # real data on startup. Failure paths (psql error / non-JSON) still write nothing.
+            printf '{"main": {}}\n' > "$AGENTS_JSON_TMP"
+            if mv "$AGENTS_JSON_TMP" "$AGENTS_JSON"; then
+                echo -e "  ${INFO} no agents in scope — wrote placeholder agents.json; agent_config_sync will populate on startup"
+                return 0
+            else
+                echo -e "  ${WARNING} Could not write empty agents.json placeholder"
+                rm -f "$AGENTS_JSON_TMP"
+                return 1
+            fi
+        fi
+    else
+        # psql failed — NEVER write placeholder
+        echo -e "  ${WARNING} Could not query DB for agents.json — agents.json not written"
+        echo -e "  ${INFO} agent_config_sync will generate agents.json when gateway starts"
+        rm -f "$AGENTS_JSON_TMP"
+        return 1
+    fi
+}
+
+# Helper: ensure agents.json is a valid non-empty keyed object, then switch
+# agents.entries to { "$include": "./agents.json" } (#707, #1231 r7).
+# Never switches to $include unless agents.json passes final validation.
+# Honors --regenerate-agents-json.  Preserves inline keyed agents.entries so
+# the agent set never shrinks.
+_configure_agents_entries_include() {
+    local OPENCLAW_CONFIG="${1:-$OPENCLAW_DIR/openclaw.json}"
+    local AGENTS_JSON="$OPENCLAW_DIR/agents.json"
+    local AGENTS_JSON_TMP="${AGENTS_JSON}.tmp.$$"
+
+    if [ ! -f "$OPENCLAW_CONFIG" ]; then
+        echo -e "  ${WARNING} OpenClaw config not found; cannot configure agents.entries"
+        VERIFICATION_ERRORS=$((VERIFICATION_ERRORS + 1))
+        return 1
+    fi
+
+    TMPFILES+=("$AGENTS_JSON_TMP")
+
+    _ensure_agents_json_valid() {
+        # Already a valid non-empty keyed object and not forcing regeneration.
+        if [ "$REGENERATE_AGENTS_JSON" -eq 0 ] && [ -f "$AGENTS_JSON" ] && \
+           jq -e 'type == "object" and length > 0' "$AGENTS_JSON" >/dev/null 2>&1; then
+            echo -e "  ${CHECK_MARK} agents.json is valid (keyed object)"
+            return 0
+        fi
+
+        # Not valid (or forced regeneration). Backup existing file if any.
+        local AGENTS_JSON_BAK=""
+        if [ -f "$AGENTS_JSON" ]; then
+            AGENTS_JSON_BAK=$(_backup_agents_json "$AGENTS_JSON")
+            if [ -n "$AGENTS_JSON_BAK" ]; then
+                echo -e "  ${INFO} Backed up existing agents.json to $AGENTS_JSON_BAK"
+            fi
+            rm -f "$AGENTS_JSON"
+        fi
+
+        # (a) Prefer DB generation.
+        local DB_GENERATED=0
+        if _generate_agents_json; then
+            DB_GENERATED=1
+        fi
+
+        # If DB produced only the placeholder, prefer legacy array conversion.
+        if [ "$DB_GENERATED" -eq 1 ] && \
+           jq -e 'type == "object" and length == 1 and has("main") and .main == {}' "$AGENTS_JSON" >/dev/null 2>&1; then
+            if [ -n "$AGENTS_JSON_BAK" ] && \
+               jq -e 'type == "array" and length > 0' "$AGENTS_JSON_BAK" >/dev/null 2>&1; then
+                if _convert_legacy_agents_array "$AGENTS_JSON_BAK" "$AGENTS_JSON_TMP"; then
+                    if jq -e 'type == "object" and length > 0' "$AGENTS_JSON_TMP" >/dev/null 2>&1; then
+                        mv "$AGENTS_JSON_TMP" "$AGENTS_JSON"
+                        echo -e "  ${CHECK_MARK} Converted legacy agents.json array to keyed object"
+                    fi
+                fi
+            fi
+        fi
+
+        # If DB failed or we still only have the placeholder, use inline entries.
+        if { [ "$DB_GENERATED" -eq 0 ] || \
+             jq -e 'type == "object" and length == 1 and has("main") and .main == {}' "$AGENTS_JSON" >/dev/null 2>&1; } && \
+           [ -n "$INLINE_AGENTS_ENTRIES" ]; then
+            printf '%s\n' "$INLINE_AGENTS_ENTRIES" > "$AGENTS_JSON_TMP" && \
+                mv "$AGENTS_JSON_TMP" "$AGENTS_JSON"
+        fi
+
+        # If still not a valid non-empty object, write placeholder.
+        if ! jq -e 'type == "object" and length > 0' "$AGENTS_JSON" >/dev/null 2>&1; then
+            printf '{"main": {}}\n' > "$AGENTS_JSON_TMP"
+            if mv "$AGENTS_JSON_TMP" "$AGENTS_JSON"; then
+                echo -e "  ${INFO} Wrote placeholder agents.json"
+            fi
+        fi
+
+        # Final sanity check.
+        if jq -e 'type == "object" and length > 0' "$AGENTS_JSON" >/dev/null 2>&1; then
+            return 0
+        fi
+        return 1
+    }
+
+    # Capture inline keyed agents.entries before we overwrite it (production case).
+    local INLINE_AGENTS_ENTRIES=""
+    if jq -e '(.agents.entries | type == "object") and (.agents.entries | has("$include") | not) and (.agents.entries | length > 0)' "$OPENCLAW_CONFIG" >/dev/null 2>&1; then
+        INLINE_AGENTS_ENTRIES=$(jq '.agents.entries' "$OPENCLAW_CONFIG")
+    fi
+
+    echo "  Checking agents.json status..."
+    if _ensure_agents_json_valid; then
+        # Merge inline entries back so the agent set does not shrink.
+        if [ -n "$INLINE_AGENTS_ENTRIES" ]; then
+            local BEFORE_KEYS=""
+            local AFTER_KEYS=""
+            BEFORE_KEYS=$(jq -r 'keys | .[]' "$AGENTS_JSON" 2>/dev/null | sort | tr '\n' ' ' || true)
+            if jq -s '.[0] * .[1]' "$AGENTS_JSON" <(printf '%s\n' "$INLINE_AGENTS_ENTRIES") >"$AGENTS_JSON_TMP" 2>/dev/null && \
+               mv "$AGENTS_JSON_TMP" "$AGENTS_JSON"; then
+                AFTER_KEYS=$(jq -r 'keys | .[]' "$AGENTS_JSON" 2>/dev/null | sort | tr '\n' ' ' || true)
+                if [ "$BEFORE_KEYS" != "$AFTER_KEYS" ]; then
+                    echo -e "  ${CHECK_MARK} Merged inline agents.entries to preserve agent set"
+                fi
+            fi
+        fi
+
+        # Final validation before touching agents.entries.
+        if jq -e 'type == "object" and length > 0' "$AGENTS_JSON" >/dev/null 2>&1; then
+            # No-shrink assertion for the production inline-object case.
+            if [ -n "$INLINE_AGENTS_ENTRIES" ]; then
+                local MISSING=""
+                MISSING=$(jq -s '.[1] - .[0] | keys | .[]' "$AGENTS_JSON" <(printf '%s\n' "$INLINE_AGENTS_ENTRIES") 2>/dev/null || true)
+                if [ -n "$MISSING" ]; then
+                    echo -e "  ${CROSS_MARK} Agent set shrunk after migration; missing: $MISSING"
+                    VERIFICATION_ERRORS=$((VERIFICATION_ERRORS + 1))
+                else
+                    echo -e "  ${CHECK_MARK} Agent set preserved (no shrinkage)"
+                fi
+            fi
+
+            local EXISTING_ENTRIES_INCLUDE
+            EXISTING_ENTRIES_INCLUDE=$(jq -r '.agents.entries["$include"] // empty' "$OPENCLAW_CONFIG" 2>/dev/null || true)
+            if [ -n "$EXISTING_ENTRIES_INCLUDE" ]; then
+                echo -e "  ${CHECK_MARK} agents.entries already uses \$include: $EXISTING_ENTRIES_INCLUDE"
+            else
+                if jq 'del(.agents.list) | .agents.entries = { "$include": "./agents.json" }' "$OPENCLAW_CONFIG" >"$OPENCLAW_CONFIG.tmp" && \
+                   mv "$OPENCLAW_CONFIG.tmp" "$OPENCLAW_CONFIG"; then
+                    echo -e "  ${CHECK_MARK} Set agents.entries = { \"\$include\": \"./agents.json\" }"
+                else
+                    echo -e "  ${WARNING} Could not set agents.entries \$include directive"
+                    VERIFICATION_ERRORS=$((VERIFICATION_ERRORS + 1))
+                fi
+            fi
+        else
+            echo -e "  ${WARNING} agents.json final validation failed; leaving agents.entries unchanged"
+            VERIFICATION_ERRORS=$((VERIFICATION_ERRORS + 1))
+        fi
+    else
+        echo -e "  ${WARNING} Could not make agents.json valid; leaving agents.entries unchanged"
+        VERIFICATION_ERRORS=$((VERIFICATION_ERRORS + 1))
+    fi
+}
+
+
 # Helper: install a metacognition plugin
 install_metacognition_plugin() {
     local plugin_name="$1"
@@ -2526,19 +2940,11 @@ if [ -d "$AGENT_CONFIG_SYNC_SOURCE" ]; then
                 echo -e "  ${WARNING} Could not remove agent-config-db hook from config"
         fi
 
-        # Set agents.entries to { "$include": "./agents.json" } (#707)
-        # OpenClaw 2026.9.x uses keyed agents.entries (z.record) rather than the
-        # legacy agents.list array. The included agents.json is a keyed object.
-        EXISTING_ENTRIES_INCLUDE=$(jq -r '.agents.entries["$include"] // empty' "$OPENCLAW_CONFIG" 2>/dev/null || true)
-        if [ -n "$EXISTING_ENTRIES_INCLUDE" ]; then
-            echo -e "  ${CHECK_MARK} agents.entries already uses \$include: $EXISTING_ENTRIES_INCLUDE"
-        else
-            # Remove legacy agents.list if present so it does not shadow entries.
-            jq 'del(.agents.list) | .agents.entries = { "$include": "./agents.json" }' "$OPENCLAW_CONFIG" >"$OPENCLAW_CONFIG.tmp" && \
-                mv "$OPENCLAW_CONFIG.tmp" "$OPENCLAW_CONFIG" && \
-                echo -e "  ${CHECK_MARK} Set agents.entries = { \"\$include\": \"./agents.json\" }" || \
-                echo -e "  ${WARNING} Could not set agents.entries \$include directive"
-        fi
+        # Ensure agents.json is a valid keyed object BEFORE switching
+        # agents.entries to $include (#1231 r7). The gateway schema rejects
+        # arrays and empty objects, and retiring agent_config_sync before it
+        # can rewrite a stale array leaves the gateway unbootable.
+        _configure_agents_entries_include "$OPENCLAW_CONFIG"
 
         # Keep gateway.reload.mode valid for OpenClaw 2026.9.x (#723)
         _configure_gateway_reload_mode "$OPENCLAW_CONFIG"
@@ -2602,298 +3008,6 @@ if [ -d "$AGENT_CONFIG_SYNC_SOURCE" ]; then
         fi
     fi
 
-    # Generate initial agents.json from DB
-    # Safety rules (#252):
-    #   - If agents.json exists and is valid JSON → skip write (agent_config_sync keeps it in sync)
-    #   - If agents.json exists but is INVALID JSON → skip and warn (require --regenerate-agents-json to fix)
-    #   - If agents.json does not exist → generate from DB
-    #   - --regenerate-agents-json: backup existing file, then regenerate from DB regardless
-    #   - NEVER write '[]' on psql failure
-    AGENTS_JSON="$OPENCLAW_DIR/agents.json"
-    AGENTS_JSON_TMP="${AGENTS_JSON}.tmp.$$"
-    TMPFILES+=("$AGENTS_JSON_TMP")
-
-    # Helper: generate agents.json from DB into $AGENTS_JSON
-    _generate_agents_json() {
-        # Query get_agent_export_rows(), which scopes results to the connecting
-        # role (own row + subagents that list session_user in parent_agents) and
-        # filters to active, modeled agents. Shape logic mirrors sync.ts's
-        # buildAgentsList(); final serialization uses the same
-        # JSON.stringify(data, null, 2) + "\n" the agent_config_sync plugin uses.
-        #
-        # Output is the OpenClaw 2026.9.x agents.entries shape: a keyed object
-        # { "<id>": { model, default?, thinkingDefault?, subagents?, heartbeat? } }
-        # with the id itself as the object key, NOT a field inside the value.
-        local INITIAL_SYNC_QUERY="
-            SELECT COALESCE(json_agg(row_to_json(sub)), NULL)::text
-            FROM (
-                SELECT
-                    name,
-                    model,
-                    fallback_models,
-                    thinking,
-                    instance_type,
-                    is_default,
-                    allowed_subagents,
-                    heartbeat_enabled,
-                    heartbeat_every,
-                    heartbeat_target,
-                    heartbeat_to,
-                    heartbeat_isolated_session
-                FROM get_agent_export_rows()
-            ) sub
-        "
-        local AGENTS_DATA
-        if AGENTS_DATA=$(psql -U "$DB_USER" -d "$DB_NAME" -tAc "$INITIAL_SYNC_QUERY" 2>/dev/null); then
-            if [ -n "$AGENTS_DATA" ] && [ "$AGENTS_DATA" != "null" ] && [ "$AGENTS_DATA" != "" ]; then
-                # Duplicate-name guard: two rows with the same literal name would
-                # silently collapse in the keyed output. Detect this on raw DB
-                # data before serialization and fail loudly.
-                local DUP_NAMES
-                DUP_NAMES=$(echo "$AGENTS_DATA" | jq -r '
-                    [group_by(.name)[] | select(length > 1 and .[0].name != null) | .[0].name]
-                    | join(", ")
-                ' 2>/dev/null)
-                if [ -n "$DUP_NAMES" ]; then
-                    echo -e "  ${WARNING} Duplicate agent names detected: $DUP_NAMES — not writing agents.json"
-                    rm -f "$AGENTS_JSON_TMP"
-                    return 1
-                fi
-
-                local FORMAT_OK=0
-                if command -v node &>/dev/null; then
-                    # Preferred: byte-match the plugin's JSON.stringify(data, null, 2) + "\n"
-                    # Build a keyed object, omitting the id from each value, applying
-                    # the same thinkingDefault validation and heartbeat shape as sync.ts.
-                    # shellcheck disable=SC2154,SC2086,SC2016
-                    if echo "$AGENTS_DATA" | node -e '
-                        let input = "";
-                        process.stdin.setEncoding("utf8");
-                        process.stdin.on("data", c => input += c);
-                        process.stdin.on("end", () => {
-                            const fs = require("fs");
-                            const VALID_THINKING_DEFAULTS = new Set([
-                                "off", "minimal", "low", "medium", "high",
-                                "xhigh", "adaptive", "max", "ultra",
-                            ]);
-                            const AGENT_ID_REGEX = /^[a-z0-9_][a-z0-9_-]{0,63}$/i;
-                            const PROVIDER_REGISTRY_PATH = "/opt/agents/shared-config/models-providers.json";
-
-                            function loadKnownProviders() {
-                                try {
-                                    const data = JSON.parse(fs.readFileSync(PROVIDER_REGISTRY_PATH, "utf8"));
-                                    return new Set(Object.keys(data));
-                                } catch {
-                                    return new Set();
-                                }
-                            }
-                            const KNOWN_PROVIDERS = loadKnownProviders();
-
-                            function extractProviderPrefix(model) {
-                                const idx = model.indexOf("/");
-                                if (idx === -1) return null;
-                                return model.slice(0, idx);
-                            }
-
-                            function warnIfUnknownProviderPrefix(id, model) {
-                                if (KNOWN_PROVIDERS.size === 0) return;
-                                const prefix = extractProviderPrefix(model);
-                                if (prefix == null) {
-                                    console.warn(`agent_config_sync: agent '${id}' model '${model}' has no provider prefix`);
-                                } else if (!KNOWN_PROVIDERS.has(prefix)) {
-                                    console.warn(`agent_config_sync: agent '${id}' model '${model}' has unrecognized provider prefix '${prefix}'`);
-                                }
-                            }
-
-                            function warnIfUnknownProviderPrefixes(id, model) {
-                                if (typeof model === "string") {
-                                    warnIfUnknownProviderPrefix(id, model);
-                                } else {
-                                    warnIfUnknownProviderPrefix(id, model.primary);
-                                    for (const fallback of model.fallbacks) {
-                                        warnIfUnknownProviderPrefix(id, fallback);
-                                    }
-                                }
-                            }
-
-                            const rows = JSON.parse(input);
-
-                            // Duplicate-name guard (defensive, also checked in bash above).
-                            const seen = new Map();
-                            for (let i = 0; i < rows.length; i++) {
-                                const name = rows[i].name;
-                                if (typeof name !== "string") continue;
-                                if (seen.has(name)) {
-                                    throw new Error(`Duplicate agent name '${name}' at rows ${seen.get(name)} and ${i}; each agent id must appear exactly once`);
-                                }
-                                seen.set(name, i);
-                            }
-
-                            const entries = {};
-                            for (const row of rows) {
-                                // Defensive: get_agent_export_rows() already filters
-                                // status=active and model IS NOT NULL, but we re-apply
-                                // here so a fixture or future function change cannot emit
-                                // invalid entries.
-                                if (row.status != null && row.status !== "active") continue;
-                                if (row.model == null) continue;
-                                if (typeof row.name !== "string" || !AGENT_ID_REGEX.test(row.name)) continue;
-
-                                const hasFallbacks = Array.isArray(row.fallback_models) && row.fallback_models.length > 0;
-                                const entry = { model: hasFallbacks
-                                    ? { primary: row.model, fallbacks: [...row.fallback_models] }
-                                    : row.model };
-
-                                if (row.is_default === true) entry.default = true;
-
-                                if (typeof row.thinking === "string" && row.thinking.length > 0 &&
-                                    VALID_THINKING_DEFAULTS.has(row.thinking)) {
-                                    entry.thinkingDefault = row.thinking;
-                                }
-
-                                if (Array.isArray(row.allowed_subagents) && row.allowed_subagents.length > 0) {
-                                    entry.subagents = { allowAgents: [...row.allowed_subagents].sort() };
-                                }
-
-                                if (row.heartbeat_enabled === true) {
-                                    const hb = {};
-                                    if (row.heartbeat_every != null) hb.every = row.heartbeat_every;
-                                    if (row.heartbeat_target != null) hb.target = row.heartbeat_target;
-                                    if (row.heartbeat_to != null) hb.to = row.heartbeat_to;
-                                    // #714 — isolatedSession must be explicit when the row has a value.
-                                    // true → true, false → false, null/undefined → omitted.
-                                    if (row.heartbeat_isolated_session === true) {
-                                        hb.isolatedSession = true;
-                                    } else if (row.heartbeat_isolated_session === false) {
-                                        hb.isolatedSession = false;
-                                    }
-                                    entry.heartbeat = hb;
-                                }
-
-                                warnIfUnknownProviderPrefixes(row.name, entry.model);
-
-                                entries[row.name] = entry;
-                            }
-                            const sorted = {};
-                            for (const key of Object.keys(entries).sort((a, b) => a.localeCompare(b))) {
-                                sorted[key] = entries[key];
-                            }
-                            process.stdout.write(JSON.stringify(sorted, null, 2) + "\n");
-                        });
-                    ' >"$AGENTS_JSON_TMP"; then
-                        FORMAT_OK=1
-                    fi
-                else
-                    # Fallback if node is unavailable: best-effort keyed object via jq.
-                    # thinkingDefault is not validated here (node is preferred);
-                    # the resulting file is still structurally a keyed object.
-                    if echo "$AGENTS_DATA" | jq '
-                        map({
-                            key: .name,
-                            value: (
-                                {model: (
-                                    if (.fallback_models | type) == "array" and (.fallback_models | length) > 0
-                                    then {primary: .model, fallbacks: .fallback_models}
-                                    else .model
-                                    end
-                                )}
-                                + (if .is_default == true then {default: true} else {} end)
-                                + (if (.allowed_subagents | type) == "array" and (.allowed_subagents | length) > 0
-                                    then {subagents: {allowAgents: (.allowed_subagents | sort)}}
-                                    else {} end)
-                                + (if .heartbeat_enabled == true
-                                    then {heartbeat: (
-                                        (if .heartbeat_every != null then {every: .heartbeat_every} else {} end)
-                                        + (if .heartbeat_target != null then {target: .heartbeat_target} else {} end)
-                                        + (if .heartbeat_to != null then {to: .heartbeat_to} else {} end)
-                                        + (if .heartbeat_isolated_session == true then {isolatedSession: true}
-                                   elif .heartbeat_isolated_session == false then {isolatedSession: false}
-                                   else {} end)
-                                    )}
-                                    else {} end)
-                            )
-                        })
-                        | sort_by(.key)
-                        | from_entries
-                    ' >"$AGENTS_JSON_TMP" 2>/dev/null; then
-                        if [ -s "$AGENTS_JSON_TMP" ] && [ "$(tail -c 1 "$AGENTS_JSON_TMP" | wc -l)" -eq 0 ]; then
-                            echo >> "$AGENTS_JSON_TMP"
-                        fi
-                        FORMAT_OK=1
-                    fi
-                fi
-
-                if [ "$FORMAT_OK" -eq 1 ]; then
-                    if mv "$AGENTS_JSON_TMP" "$AGENTS_JSON"; then
-                        echo -e "  ${CHECK_MARK} Generated agents.json from DB"
-                        return 0
-                    else
-                        echo -e "  ${WARNING} Could not write agents.json"
-                        rm -f "$AGENTS_JSON_TMP"
-                        return 1
-                    fi
-                else
-                    echo -e "  ${WARNING} Could not serialize agents.json from DB data — not writing"
-                    rm -f "$AGENTS_JSON_TMP"
-                    return 1
-                fi
-            else
-                # DB returned NULL or empty — no agents in scope, but psql succeeded.
-                # Write a valid placeholder so the openclaw.json agents.entries $include
-                # stays valid and the gateway can boot; agent_config_sync will populate
-                # real data on startup. Failure paths (psql error / non-JSON) still write nothing.
-                printf '{"main": {}}\n' > "$AGENTS_JSON_TMP"
-                if mv "$AGENTS_JSON_TMP" "$AGENTS_JSON"; then
-                    echo -e "  ${INFO} no agents in scope — wrote placeholder agents.json; agent_config_sync will populate on startup"
-                    return 0
-                else
-                    echo -e "  ${WARNING} Could not write empty agents.json placeholder"
-                    rm -f "$AGENTS_JSON_TMP"
-                    return 1
-                fi
-            fi
-        else
-            # psql failed — NEVER write placeholder
-            echo -e "  ${WARNING} Could not query DB for agents.json — agents.json not written"
-            echo -e "  ${INFO} agent_config_sync will generate agents.json when gateway starts"
-            rm -f "$AGENTS_JSON_TMP"
-            return 1
-        fi
-    }
-
-    echo "  Checking agents.json status..."
-    if [ -f "$AGENTS_JSON" ]; then
-        if jq '.' "$AGENTS_JSON" >/dev/null 2>&1; then
-            # File exists and is valid JSON
-            if [ "$REGENERATE_AGENTS_JSON" -eq 1 ]; then
-                # --regenerate-agents-json: backup and regenerate
-                AGENTS_JSON_BAK="${AGENTS_JSON}.bak-$(date +%Y%m%d-%H%M%S)"
-                cp "$AGENTS_JSON" "$AGENTS_JSON_BAK" && \
-                    echo -e "  ${INFO} Backed up existing agents.json to $AGENTS_JSON_BAK"
-                echo "  Regenerating agents.json from database..."
-                _generate_agents_json
-            else
-                echo -e "  ${CHECK_MARK} agents.json present and valid; agent_config_sync will keep it in sync"
-            fi
-        else
-            # File exists but is INVALID JSON
-            if [ "$REGENERATE_AGENTS_JSON" -eq 1 ]; then
-                # --regenerate-agents-json: backup corrupt file and regenerate
-                AGENTS_JSON_BAK="${AGENTS_JSON}.bak-$(date +%Y%m%d-%H%M%S)"
-                cp "$AGENTS_JSON" "$AGENTS_JSON_BAK" && \
-                    echo -e "  ${WARNING} Backed up corrupt agents.json to $AGENTS_JSON_BAK"
-                echo "  Regenerating agents.json from database..."
-                _generate_agents_json
-            else
-                echo -e "  ${WARNING} agents.json exists but contains invalid JSON — skipping write."
-                echo -e "  ${INFO} Pass --regenerate-agents-json to fix it."
-            fi
-        fi
-    else
-        # File does not exist — generate from DB
-        echo "  Generating initial agents.json from database..."
-        _generate_agents_json
-    fi
 else
     echo -e "  ${WARNING} cognition/focus/agent-config-sync not found (skipping)"
 fi

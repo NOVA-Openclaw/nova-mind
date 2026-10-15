@@ -248,6 +248,15 @@ JSON
     run_config_helper
     [ "$status" -eq 0 ]
 
+    # Ordering proof: the $include switch message must come AFTER the
+    # "Checking agents.json status..." validation marker in the helper output.
+    local check_pos switch_pos
+    check_pos=$(printf '%s' "$output" | grep -ob 'Checking agents.json status' | head -1 | cut -d: -f1)
+    switch_pos=$(printf '%s' "$output" | grep -ob 'Set agents.entries' | head -1 | cut -d: -f1)
+    [ -n "$check_pos" ]
+    [ -n "$switch_pos" ]
+    [ "$check_pos" -lt "$switch_pos" ]
+
     run jq -r 'type' "$FAKE_OPENCLAW/agents.json"
     [ "$output" = "object" ]
 

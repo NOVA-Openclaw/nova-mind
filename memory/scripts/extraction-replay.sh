@@ -47,6 +47,29 @@ EXTRACT_SCRIPT="${EXTRACTION_SCRIPT_PATH_OVERRIDE:-${HOME}/.openclaw/scripts/ext
 # NOTE: $(id -un) is used instead of $USER because $USER is unset in cron
 # environments. This keeps interpreter resolution cron-safe and matches the
 # syscall-based resolution used by handler.ts (os.userInfo().username).
+
+# Load extraction config once for context-window settings (#611).
+EXTRACTION_CONFIG_FILE="${HOME}/.openclaw/scripts/memory-extraction-config.json"
+
+is_context_window_enabled() {
+    local val
+    val=$(jq -r '.context_window_enabled // true' "$EXTRACTION_CONFIG_FILE" 2>/dev/null || echo 'true')
+    case "$(echo "$val" | tr '[:upper:]' '[:lower:]')" in
+        false|0|off|no|disabled) return 1 ;;
+        *) return 0 ;;
+    esac
+}
+
+max_prior_messages() {
+    local val
+    val=$(jq -r '.max_prior_messages // 10' "$EXTRACTION_CONFIG_FILE" 2>/dev/null || echo '10')
+    if [[ "$val" =~ ^[0-9]+$ ]]; then
+        echo "$val"
+    else
+        echo '10'
+    fi
+}
+
 resolve_python_cmd() {
     if [ -n "${EXTRACTION_PYTHON_CMD_OVERRIDE:-}" ]; then
         printf '%s' "$EXTRACTION_PYTHON_CMD_OVERRIDE"
@@ -96,6 +119,38 @@ DB="${PGDATABASE:-nova_memory}"
 # Helper: run psql with the configured database.
 psql_run() {
     psql "$DB" -t -A -c "$1"
+}
+
+# Fetch prior same-session messages for context (#611).
+# Returns a JSON array (newest-first internally, reversed to chronological).
+load_prior_context() {
+    local session_id="$1"
+    local transcript_id="$2"
+    local max_messages="$3"
+
+    if [[ -z "$session_id" || "$session_id" == 'NULL' || "$max_messages" -le 0 ]]; then
+        echo '[]'
+        return
+    fi
+
+    local rows
+    rows=$(psql_run "
+        SELECT json_agg(t ORDER BY t.timestamp ASC)
+        FROM (
+            SELECT role, content, timestamp, sender_name
+            FROM channel_transcripts
+            WHERE session_id = ${session_id}
+              AND id <> ${transcript_id}
+            ORDER BY timestamp DESC
+            LIMIT ${max_messages}
+        ) t;
+    " 2>/dev/null || true)
+
+    if [[ -z "$rows" || "$rows" == 'NULL' ]]; then
+        echo '[]'
+    else
+        echo "$rows"
+    fi
 }
 
 # Fetch the next batch of pending rows as newline-delimited JSON.
@@ -181,17 +236,42 @@ while IFS= read -r line; do
     session_key_esc="${session_key:-}"
     timestamp_iso=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
+    # Assemble prior conversation context when enabled and a transcript FK exists (#611).
+    context_json=""
+    if is_context_window_enabled && [ -n "$session_db_id" ]; then
+        max_prior=$(max_prior_messages)
+        if [ "$max_prior" -gt 0 ]; then
+            context_json=$(load_prior_context "$session_db_id" "${channel_transcript_id:-0}" "$max_prior")
+            if [ "$(echo "$context_json" | jq 'length')" -gt 0 ]; then
+                echo "[extraction-replay] Loaded $(echo "$context_json" | jq 'length') prior context message(s) for row id=$id"
+            fi
+        fi
+    fi
+
     # Feed extract_memories.py via stdin; do NOT pass body as a shell arg.
     exit_code=0
-    printf '%s' "$body" | \
-        SENDER_NAME="$sender_name_esc" \
-        SENDER_ID="$sender_id_esc" \
-        IS_GROUP="false" \
-        SOURCE_SESSION_ID="$session_key_esc" \
-        SOURCE_TIMESTAMP="$timestamp_iso" \
-        SOURCE_CHANNEL_TRANSCRIPT_ID="${channel_transcript_id:-}" \
-        SOURCE_CHANNEL_SESSION_ID="${session_db_id:-}" \
-        "$PYTHON_CMD" "$EXTRACT_SCRIPT" >/dev/null 2>&1 || exit_code=$?
+    if [ -n "$context_json" ]; then
+        printf '%s' "$body" | \
+            SENDER_NAME="$sender_name_esc" \
+            SENDER_ID="$sender_id_esc" \
+            IS_GROUP="false" \
+            SOURCE_SESSION_ID="$session_key_esc" \
+            SOURCE_TIMESTAMP="$timestamp_iso" \
+            SOURCE_CHANNEL_TRANSCRIPT_ID="${channel_transcript_id:-}" \
+            SOURCE_CHANNEL_SESSION_ID="${session_db_id:-}" \
+            EXTRACTION_CONTEXT_JSON="$context_json" \
+            "$PYTHON_CMD" "$EXTRACT_SCRIPT" >/dev/null 2>&1 || exit_code=$?
+    else
+        printf '%s' "$body" | \
+            SENDER_NAME="$sender_name_esc" \
+            SENDER_ID="$sender_id_esc" \
+            IS_GROUP="false" \
+            SOURCE_SESSION_ID="$session_key_esc" \
+            SOURCE_TIMESTAMP="$timestamp_iso" \
+            SOURCE_CHANNEL_TRANSCRIPT_ID="${channel_transcript_id:-}" \
+            SOURCE_CHANNEL_SESSION_ID="${session_db_id:-}" \
+            "$PYTHON_CMD" "$EXTRACT_SCRIPT" >/dev/null 2>&1 || exit_code=$?
+    fi
 
     if [ "$exit_code" -eq 0 ]; then
         echo "[extraction-replay] Row id=$id replay succeeded"

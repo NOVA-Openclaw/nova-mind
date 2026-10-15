@@ -1,0 +1,44 @@
+{
+  "description": "2026-08-17 #blockhenge NOPASSWD regression replay fixture (TC-611-C4).",
+  "issue": "nova-mind#611",
+  "tc": "TC-611-C4",
+  "session": {
+    "session_key": "discord:channel:blockhenge",
+    "provider": "discord",
+    "external_chat_id": "channel:blockhenge",
+    "chat_type": "group"
+  },
+  "messages": [
+    {
+      "role": "user",
+      "sender_name": "Zonkism",
+      "timestamp": "2026-08-17T20:10:00Z",
+      "content": "Setting up the new Blockhenge sarsen host today."
+    },
+    {
+      "role": "user",
+      "sender_name": "Zonkism",
+      "timestamp": "2026-08-17T20:11:00Z",
+      "content": "Need to add NOVA's user to sudoers with NOPASSWD on blockhenge-sarsen-2."
+    },
+    {
+      "role": "user",
+      "sender_name": "Zonkism",
+      "timestamp": "2026-08-17T20:12:00Z",
+      "content": "The sudoers file is at /etc/sudoers.d/nova on that host."
+    },
+    {
+      "role": "user",
+      "sender_name": "Zonkism",
+      "timestamp": "2026-08-17T20:13:00Z",
+      "content": "nopassword was added to soudoers"
+    }
+  ],
+  "current_message_index": 3,
+  "expected": {
+    "summary": "The extracted event should describe a NOPASSWD sudoers directive change on blockhenge-sarsen-2, NOT a user named 'nopassword'.",
+    "event_description_must_contain_one_or_more": ["NOPASSWD", "sudoers", "sarsen", "blockhenge"],
+    "event_description_must_not_contain": ["user nopassword was added", "nopassword joined", "phantom user"],
+    "environment": "blockhenge-sarsen-2"
+  }
+}

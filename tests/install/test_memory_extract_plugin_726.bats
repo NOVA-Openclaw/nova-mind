@@ -96,6 +96,10 @@ teardown() {
     # session-init must be untouched.
     run jq -e '.hooks.internal.entries["session-init"].enabled == true' "$SCRATCH/.openclaw/openclaw.json"
     [ "$status" -eq 0 ]
+
+    # The parent hooks.internal object and its enabled flag must survive.
+    run jq -e '.hooks.internal.enabled == true' "$SCRATCH/.openclaw/openclaw.json"
+    [ "$status" -eq 0 ]
 }
 
 # ─── idempotency test ────────────────────────────────────────────────────────
@@ -219,4 +223,103 @@ teardown() {
 
     [ "$status" -eq 0 ]
     [[ "$output" == *"Legacy memory-extract hook directory still present"* ]]
+}
+
+# ─── SE #1231 regression tests ──────────────────────────────────────────────
+
+@test "TC-1231-001: memory-extract install tolerates OPENCLAW_CONFIG being unset under set -u" {
+    # The r4 config exists but OPENCLAW_CONFIG is not exported. Mutation proof:
+    # reverting _install_memory_extract_plugin to read bare $OPENCLAW_CONFIG
+    # makes this fail with "unbound variable" under set -u.
+    printf '{"plugins":{"entries":{},"load":{"paths":[]}},"hooks":{"internal":{"enabled":true,"entries":{"session-init":{"enabled":true}}}},"agents":{"defaults":{}}}' > "$SCRATCH/.openclaw/openclaw.json"
+
+    env -i \
+        HOME="$SCRATCH" \
+        PATH="/usr/bin:/bin" \
+        AGENT_INSTALL_TEST_MODE=1 \
+        SCRIPT_DIR="$FAKE_REPO" \
+        OPENCLAW_DIR="$SCRATCH/.openclaw" \
+        FORCE_INSTALL=0 \
+        bash -c '
+            set -eu
+            source "$SCRIPT_DIR/agent-install.sh"
+            _install_memory_extract_plugin "'"$SOURCE"'" "'"$TARGET"'"
+        '
+
+    [ -f "$TARGET/dist/index.js" ]
+    [ -f "$TARGET/openclaw.plugin.json" ]
+
+    # The default config path is used when OPENCLAW_CONFIG is unset.
+    run jq -e '.plugins.entries."memory-extract".enabled == true' "$SCRATCH/.openclaw/openclaw.json"
+    [ "$status" -eq 0 ]
+}
+
+@test "TC-1231-002: config write failure leaves legacy hook directory and entries untouched" {
+    # Mutation proof: if the legacy hook directory is removed before the
+    # plugin config is committed, corrupt JSON here would still delete it.
+    mkdir -p "$SCRATCH/.openclaw/hooks/memory-extract"
+    touch "$SCRATCH/.openclaw/hooks/memory-extract/handler.ts"
+    printf '{"plugins":{"entries":{},"load":{"paths":[]}},"hooks":{"internal":{"enabled":true,"entries":{"memory-extract":{"enabled":true},"session-init":{"enabled":true}}}},"agents":{"defaults":{}}}' > "$SCRATCH/.openclaw/openclaw.json"
+
+    # Corrupt the config so the jq enable step fails.
+    printf 'not-json{{' >> "$SCRATCH/.openclaw/openclaw.json"
+
+    run env -i \
+        HOME="$SCRATCH" \
+        PATH="/usr/bin:/bin" \
+        AGENT_INSTALL_TEST_MODE=1 \
+        SCRIPT_DIR="$FAKE_REPO" \
+        OPENCLAW_DIR="$SCRATCH/.openclaw" \
+        OPENCLAW_CONFIG="$SCRATCH/.openclaw/openclaw.json" \
+        FORCE_INSTALL=0 \
+        bash -c '
+            set -e
+            source "$SCRIPT_DIR/agent-install.sh"
+            _install_memory_extract_plugin "'"$SOURCE"'" "'"$TARGET"'"
+        '
+
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Could not enable memory-extract plugin in config"* ]]
+
+    # Legacy hook directory must survive the abort.
+    [ -d "$SCRATCH/.openclaw/hooks/memory-extract" ]
+
+    # Legacy hook config entry must survive the abort. The file is corrupt,
+    # so verify by raw text instead of jq.
+    grep -q '"memory-extract"' "$SCRATCH/.openclaw/openclaw.json"
+    grep -q '"enabled":true' "$SCRATCH/.openclaw/openclaw.json"
+
+    # Plugin entry must NOT have been written.
+    run jq -e '.plugins.entries."memory-extract"' "$SCRATCH/.openclaw/openclaw.json"
+    [ "$status" -ne 0 ]
+}
+
+@test "TC-1231-003: second run is idempotent and leaves no legacy remnants" {
+    printf '{"plugins":{"entries":{},"load":{"paths":[]}},"hooks":{"internal":{"enabled":true,"entries":{"session-init":{"enabled":true}}}},"agents":{"defaults":{}}}' > "$SCRATCH/.openclaw/openclaw.json"
+
+    for i in 1 2; do
+        env -i \
+            HOME="$SCRATCH" \
+            PATH="/usr/bin:/bin" \
+            AGENT_INSTALL_TEST_MODE=1 \
+            SCRIPT_DIR="$FAKE_REPO" \
+            OPENCLAW_DIR="$SCRATCH/.openclaw" \
+            OPENCLAW_CONFIG="$SCRATCH/.openclaw/openclaw.json" \
+            FORCE_INSTALL=0 \
+            bash -c '
+                set -e
+                source "$SCRIPT_DIR/agent-install.sh"
+                _install_memory_extract_plugin "'"$SOURCE"'" "'"$TARGET"'"
+            '
+    done
+
+    run jq '[.plugins.entries | keys[] | select(. == "memory-extract")] | length' "$SCRATCH/.openclaw/openclaw.json"
+    [ "$status" -eq 0 ]
+    [ "$output" -eq 1 ]
+
+    run jq -e '.hooks.internal.entries["memory-extract"]' "$SCRATCH/.openclaw/openclaw.json"
+    [ "$status" -ne 0 ]
+    run jq -e '.hooks.internal["memory-extract"]' "$SCRATCH/.openclaw/openclaw.json"
+    [ "$status" -ne 0 ]
+    [ ! -d "$SCRATCH/.openclaw/hooks/memory-extract" ]
 }

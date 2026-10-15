@@ -52,6 +52,7 @@ trap cleanup_tmp EXIT
 _install_memory_extract_plugin() {
     local MEMORY_EXTRACT_SOURCE="${1:-$SCRIPT_DIR/memory/plugins/memory-extract}"
     local MEMORY_EXTRACT_TARGET="${2:-$EXTENSIONS_DIR/memory-extract}"
+    local cfg="${OPENCLAW_CONFIG:-$OPENCLAW_DIR/openclaw.json}"
 
     if [ ! -d "$MEMORY_EXTRACT_SOURCE" ]; then
         echo -e "  ${CROSS_MARK} memory-extract plugin source not found at $MEMORY_EXTRACT_SOURCE"
@@ -95,15 +96,15 @@ _install_memory_extract_plugin() {
     _install_runtime_dependencies "$MEMORY_EXTRACT_TARGET" "memory-extract" || return 1
     cd "$SCRIPT_DIR"
 
-    # Remove legacy memory-extract hook directory if present (#726)
-    if [ -d "$OPENCLAW_DIR/hooks/memory-extract" ]; then
-        rm -rf "$OPENCLAW_DIR/hooks/memory-extract"
-        echo -e "  ${CHECK_MARK} Removed legacy memory-extract hook directory"
-    fi
+    # Enable plugin in openclaw.json. Do this BEFORE removing the legacy hook
+    # directory or config entries so a failure here cannot leave the system
+    # with zero memory-extract (#1231).
+    if [ -f "$cfg" ] && command -v jq &>/dev/null; then
+        local cfg_tmp
+        cfg_tmp=$(mktemp "${cfg}.tmp.XXXXXX")
+        TMPFILES+=("$cfg_tmp")
 
-    # Enable plugin in openclaw.json
-    if [ -f "$OPENCLAW_CONFIG" ] && command -v jq &>/dev/null; then
-        jq --arg path "$MEMORY_EXTRACT_TARGET" '
+        if jq --arg path "$MEMORY_EXTRACT_TARGET" '
             .plugins.load.paths = ((.plugins.load.paths // []) + [$path] | unique)
             | .plugins.entries."memory-extract" = (.plugins.entries."memory-extract" // {}) * {
                 "enabled": true,
@@ -111,18 +112,39 @@ _install_memory_extract_plugin() {
                   "allowConversationAccess": true
                 }
               }
-        ' "$OPENCLAW_CONFIG" >"$OPENCLAW_CONFIG.tmp" && \
-            mv "$OPENCLAW_CONFIG.tmp" "$OPENCLAW_CONFIG" && \
-            echo -e "  ${CHECK_MARK} memory-extract plugin enabled in OpenClaw config" || \
-            echo -e "  ${WARNING} Could not enable memory-extract plugin in config"
-
-        # Remove legacy internal hook config entry if present (#726)
-        if jq -e '.hooks.internal.entries["memory-extract"]' "$OPENCLAW_CONFIG" &>/dev/null; then
-            jq 'del(.hooks.internal.entries["memory-extract"])' "$OPENCLAW_CONFIG" >"$OPENCLAW_CONFIG.tmp" && \
-                mv "$OPENCLAW_CONFIG.tmp" "$OPENCLAW_CONFIG" && \
-                echo -e "  ${CHECK_MARK} Removed memory-extract hook from config" || \
-                echo -e "  ${WARNING} Could not remove memory-extract hook from config"
+        ' "$cfg" >"$cfg_tmp" && \
+            jq -e '(.plugins.entries."memory-extract".enabled == true) and ((.plugins.load.paths // []) | index($path) != null)' --arg path "$MEMORY_EXTRACT_TARGET" "$cfg_tmp" >/dev/null 2>&1 && \
+            mv "$cfg_tmp" "$cfg"; then
+            echo -e "  ${CHECK_MARK} memory-extract plugin enabled in OpenClaw config"
+        else
+            echo -e "  ${CROSS_MARK} Could not enable memory-extract plugin in config"
+            VERIFICATION_ERRORS=$((VERIFICATION_ERRORS + 1))
+            rm -f "$cfg_tmp"
+            return 1
         fi
+
+        # Remove the legacy internal hook config entry if present. The r4
+        # installer and the restored staging config both use
+        # .hooks.internal.entries["memory-extract"].enabled. Delete the whole
+        # object, but only after the plugin entry has been verified (#1231).
+        if jq -e '.hooks.internal.entries["memory-extract"]' "$cfg" &>/dev/null; then
+            if jq 'del(.hooks.internal.entries["memory-extract"])' "$cfg" >"$cfg_tmp" && mv "$cfg_tmp" "$cfg"; then
+                echo -e "  ${CHECK_MARK} Removed memory-extract hook entry from config"
+            else
+                echo -e "  ${CROSS_MARK} Could not remove memory-extract hook entry from config"
+                VERIFICATION_ERRORS=$((VERIFICATION_ERRORS + 1))
+                rm -f "$cfg_tmp"
+                return 1
+            fi
+        fi
+        rm -f "$cfg_tmp"
+    fi
+
+    # Remove legacy memory-extract hook directory ONLY after the plugin config
+    # edit has been verified (#1231).
+    if [ -d "$OPENCLAW_DIR/hooks/memory-extract" ]; then
+        rm -rf "$OPENCLAW_DIR/hooks/memory-extract"
+        echo -e "  ${CHECK_MARK} Removed legacy memory-extract hook directory"
     fi
 
     # Verify installation
@@ -478,7 +500,8 @@ verify_config() {
                 VERIFICATION_WARNINGS=$((VERIFICATION_WARNINGS + 1))
             fi
 
-            # Legacy hook config entry must not remain.
+            # Legacy hook config entry must not remain. The r4 installer uses
+            # .hooks.internal.entries["memory-extract"].enabled (#1231).
             if jq -e '.hooks.internal.entries["memory-extract"]' "$OPENCLAW_CONFIG" &>/dev/null; then
                 echo -e "  ${WARNING} Legacy memory-extract hook entry still present in OpenClaw config"
                 VERIFICATION_WARNINGS=$((VERIFICATION_WARNINGS + 1))
@@ -568,6 +591,7 @@ PGPASS_FILE="${HOME}/.pgpass"
 
 WORKSPACE="${OPENCLAW_WORKSPACE:-$HOME/.openclaw/workspace-coder}"
 OPENCLAW_DIR="$HOME/.openclaw"
+OPENCLAW_CONFIG="${OPENCLAW_CONFIG:-$OPENCLAW_DIR/openclaw.json}"
 # shellcheck disable=SC2034
 OPENCLAW_PROJECTS="$OPENCLAW_DIR/projects"
 EXTENSIONS_DIR="$OPENCLAW_DIR/extensions"

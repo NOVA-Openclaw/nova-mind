@@ -2587,7 +2587,7 @@ else
                                 if [ "$GRANT_COUNT" -gt 0 ] 2>/dev/null; then
                                     GRANT_PSQL_ERR=$(mktemp "$PGSCHEMA_SCRATCH_DIR/grants-psqlerr-XXXXXX")
                                     TMPFILES+=("$GRANT_PSQL_ERR")
-                                    if _superuser_psql "$DB_NAME" -v ON_ERROR_STOP=1 -f "$GRANT_FILTERED_FILE" >/dev/null 2>"$GRANT_PSQL_ERR"; then
+                                    if _superuser_psql "$DB_NAME" -v ON_ERROR_STOP=1 -f - <"$GRANT_FILTERED_FILE" >/dev/null 2>"$GRANT_PSQL_ERR"; then
                                         echo -e "  ${CHECK_MARK} Applied $GRANT_COUNT explicit grant/revoke statement(s)"
                                     else
                                         echo -e "  ${CROSS_MARK} Grant reconciliation failed"

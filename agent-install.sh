@@ -2356,9 +2356,20 @@ else
         "--plan-user" "$PG_SUPERUSER"
     )
 
-    # Pin cwd so database/.pgschemaignore is discovered deterministically.
-    # pgschema v1.7.2 reads .pgschemaignore from cwd, not from --ignore-file.
-    pushd "$SCRIPT_DIR" >/dev/null || exit 1
+    # Detect federation-peer bootstrap-context shape (nova-mind#608).
+    # On peers, agent_bootstrap_context is a VIEW over agent_bootstrap_context_local
+    # plus the foreign table nova_bootstrap_context. schema.sql declares a TABLE,
+    # so pgschema would otherwise plan CREATE TABLE / CREATE TRIGGER and fail with
+    # SQLSTATE 42809. When the view is present, swap in a peer-only ignore set.
+    BOOTSTRAP_CONTEXT_RELKIND=$(psql -U "$DB_USER" -d "$DB_NAME" -tAc \
+        "SELECT c.relkind FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relname = 'agent_bootstrap_context';" 2>/dev/null | tr -d '[:space:]')
+    if [ "$BOOTSTRAP_CONTEXT_RELKIND" = "v" ]; then
+        PGSCHEMA_PEER_MODE=1
+        PGSCHEMA_IGNORE_FILE="$SCRIPT_DIR/database/.pgschemaignore-peer"
+    else
+        PGSCHEMA_PEER_MODE=0
+        PGSCHEMA_IGNORE_FILE="$SCRIPT_DIR/database/.pgschemaignore"
+    fi
 
     # Use a dedicated non-sticky scratch directory for the plan/reorder/apply
     # cycle (nova-mind#664). /tmp has the sticky bit (1777), which blocks the
@@ -2368,6 +2379,14 @@ else
     PGSCHEMA_SCRATCH_DIR=$(mktemp -d /tmp/pgschema-scratch-XXXXXX)
     TMPDIRS+=("$PGSCHEMA_SCRATCH_DIR")
     chmod 777 "$PGSCHEMA_SCRATCH_DIR"
+
+    # pgschema discovers .pgschemaignore from cwd, so copy the selected ignore
+    # file into the scratch directory and plan from there. This also fixes the
+    # prior discovery gap where the file lived in database/ but planning ran
+    # from the repo root.
+    cp "$PGSCHEMA_IGNORE_FILE" "$PGSCHEMA_SCRATCH_DIR/.pgschemaignore"
+    chmod 644 "$PGSCHEMA_SCRATCH_DIR/.pgschemaignore"
+    pushd "$PGSCHEMA_SCRATCH_DIR" >/dev/null || exit 1
 
     # PLAN_FILE is written by pgschema running as the superuser, so do not
     # pre-create it; let the superuser create the inode fresh.
@@ -2419,9 +2438,16 @@ else
             FILTERED_PLAN_FILE="$PGSCHEMA_SCRATCH_DIR/filtered.json"
             echo "  Stripping destructive operations from plan..."
             STRIP_EXIT=0
-            DESTRUCTIVE_COUNT=$("$VENV_PYTHON" "$SCRIPT_DIR/database/strip_destructive.py" \
-                --plan "$PLAN_FILE" \
-                --output "$FILTERED_PLAN_FILE" 2>&1) || STRIP_EXIT=$?
+            STRIP_ARGS=(
+                --plan "$PLAN_FILE"
+                --output "$FILTERED_PLAN_FILE"
+            )
+            if [ "$PGSCHEMA_PEER_MODE" -eq 1 ]; then
+                # pgschema v1.7.2 does not honour [triggers] for type="table.trigger"
+                # steps, so strip triggers on the peer FDW view explicitly (#608).
+                STRIP_ARGS+=(--ignore-table-triggers agent_bootstrap_context)
+            fi
+            DESTRUCTIVE_COUNT=$("$VENV_PYTHON" "$SCRIPT_DIR/database/strip_destructive.py" "${STRIP_ARGS[@]}" 2>&1) || STRIP_EXIT=$?
 
             if [ $STRIP_EXIT -ne 0 ]; then
                 echo -e "  ${CROSS_MARK} Failed to strip destructive operations from plan"

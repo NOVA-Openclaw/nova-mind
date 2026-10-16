@@ -13,6 +13,12 @@ Design constraints (nova-mind#498):
   non-DROP operations pass through unchanged; pgschema normally expresses
   destructive changes as DROP steps, so this matches the installer's previous
   hazard-detection scope.
+* An optional ``--ignore-table-triggers`` argument removes ``table.trigger``
+  steps on a named table. This closes the peer-FDW bootstrap-context gap
+  (nova-mind#608): pgschema v1.7.2 does not honour the ``[triggers]`` ignore
+  section for ``type="table.trigger"`` steps, so the installer strips them
+  explicitly after the plan is generated. Only used when the target DB has
+  ``agent_bootstrap_context`` as a federation VIEW.
 * A missing or ``null`` ``groups`` is normalized to an empty array.
 * The script reports the number of removed steps on stderr so the installer
   can log what was stripped.
@@ -27,6 +33,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -64,9 +71,18 @@ def _validate_plan(data: Any) -> None:
             )
 
 
-def strip_destructive(plan: dict[str, Any]) -> tuple[dict[str, Any], int]:
+def strip_destructive(
+    plan: dict[str, Any],
+    ignored_trigger_tables: list[str] | None = None,
+) -> tuple[dict[str, Any], int]:
     """Return a new plan with all DROP steps removed and the count removed."""
     _validate_plan(plan)
+
+    ignored_trigger_tables = ignored_trigger_tables or []
+    trigger_patterns = [
+        re.compile(rf"^public\.{re.escape(table)}\.[^.]+$")
+        for table in ignored_trigger_tables
+    ]
 
     new_groups: list[dict[str, Any]] = []
     stripped = 0
@@ -75,6 +91,12 @@ def strip_destructive(plan: dict[str, Any]) -> tuple[dict[str, Any], int]:
         kept_steps: list[dict[str, Any]] = []
         for step in group.get("steps", []):
             if step.get("operation") == "drop":
+                stripped += 1
+                continue
+            if (
+                step.get("type") == "table.trigger"
+                and any(p.match(step.get("path", "")) for p in trigger_patterns)
+            ):
                 stripped += 1
                 continue
             kept_steps.append(step)
@@ -95,6 +117,13 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--plan", required=True, help="Input pgschema plan JSON")
     parser.add_argument("--output", required=True, help="Output filtered plan JSON")
+    parser.add_argument(
+        "--ignore-table-triggers",
+        action="append",
+        default=[],
+        metavar="TABLE",
+        help="Strip table.trigger steps on TABLE (may be given multiple times)",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -107,7 +136,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     try:
-        new_plan, stripped = strip_destructive(plan)
+        new_plan, stripped = strip_destructive(plan, args.ignore_table_triggers)
     except ValueError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2

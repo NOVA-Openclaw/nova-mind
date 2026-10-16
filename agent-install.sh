@@ -877,7 +877,7 @@ install_metacognition_plugin() {
         for sql_file in "${mig_files[@]}"; do
             local mig_name
             mig_name=$(basename "$sql_file")
-            if _superuser_psql "$DB_NAME" -f "$sql_file" >/dev/null 2>&1; then
+            if _superuser_psql "$DB_NAME" -v ON_ERROR_STOP=1 -f - <"$sql_file" >/dev/null 2>&1; then
                 echo -e "    ${CHECK_MARK} Migration: $mig_name"
             else
                 echo -e "    ${WARNING} Migration failed: $mig_name"
@@ -2493,6 +2493,7 @@ else
         DO_APPLY=1
         if [ $REORDER_EXIT -eq 0 ]; then
             mv "$REORDERED_PLAN_FILE" "$PLAN_FILE"
+            chmod 644 "$PLAN_FILE"
             echo -e "  ${CHECK_MARK} Plan reordered by dependencies"
         else
             echo -e "  ${CROSS_MARK} Plan reorder failed (exit $REORDER_EXIT) — schema apply skipped"
@@ -2526,6 +2527,7 @@ else
                 SCHEMA_DIFF_SKIPPED=1
             else
                 mv "$FILTERED_PLAN_FILE" "$PLAN_FILE"
+                chmod 644 "$PLAN_FILE"
                 if [ "${DESTRUCTIVE_COUNT:-0}" -gt 0 ] 2>/dev/null; then
                     echo -e "  ${INFO} Stripped $DESTRUCTIVE_COUNT destructive operation(s) (DROP skipped; #498)"
                 fi
@@ -2587,13 +2589,13 @@ else
                                 if [ "$GRANT_COUNT" -gt 0 ] 2>/dev/null; then
                                     GRANT_PSQL_ERR=$(mktemp "$PGSCHEMA_SCRATCH_DIR/grants-psqlerr-XXXXXX")
                                     TMPFILES+=("$GRANT_PSQL_ERR")
-                                    if _superuser_psql "$DB_NAME" -v ON_ERROR_STOP=1 -f "$GRANT_FILTERED_FILE" >/dev/null 2>"$GRANT_PSQL_ERR"; then
+                                    if _superuser_psql "$DB_NAME" -v ON_ERROR_STOP=1 -f - >/dev/null 2>"$GRANT_PSQL_ERR" <"$GRANT_FILTERED_FILE"; then
                                         echo -e "  ${CHECK_MARK} Applied $GRANT_COUNT explicit grant/revoke statement(s)"
                                     else
                                         echo -e "  ${CROSS_MARK} Grant reconciliation failed"
                                         if [ -s "$GRANT_PSQL_ERR" ]; then
-                                            echo "  psql errors (first ~20 lines):"
-                                            head -20 "$GRANT_PSQL_ERR" | sed 's/^/    /'
+                                            echo "  psql errors (first ~20 ERROR lines):"
+                                            grep -E '^ERROR:' "$GRANT_PSQL_ERR" | head -20 | sed 's/^/    /'
                                         fi
                                         SCHEMA_DIFF_SKIPPED=1
                                     fi

@@ -13,12 +13,15 @@ Design constraints (nova-mind#498):
   non-DROP operations pass through unchanged; pgschema normally expresses
   destructive changes as DROP steps, so this matches the installer's previous
   hazard-detection scope.
-* An optional ``--ignore-table-triggers`` argument removes ``table.trigger``
-  steps on a named table. This closes the peer-FDW bootstrap-context gap
-  (nova-mind#608): pgschema v1.7.2 does not honour the ``[triggers]`` ignore
-  section for ``type="table.trigger"`` steps, so the installer strips them
-  explicitly after the plan is generated. Only used when the target DB has
-  ``agent_bootstrap_context`` as a federation VIEW.
+* An optional ``--ignore-table-triggers`` argument removes every plan step
+  that refers to a named table or its default ``<table>_id_seq`` sequence.
+  This closes the peer-FDW bootstrap-context gap (nova-mind#608):
+  pgschema v1.7.2 does not honour the ``[triggers]`` ignore section for
+  ``type="table.trigger"`` steps, and privilege steps for the peer VIEW /
+  foreign-table stack are owned by the FDW setup (#520) rather than
+  ``schema.sql``. The installer uses this flag in peer mode so that the whole
+  ``agent_bootstrap_context`` object (table/view, sequence, triggers, and
+  privileges) is left untouched.
 * A missing or ``null`` ``groups`` is normalized to an empty array.
 * The script reports the number of removed steps on stderr so the installer
   can log what was stripped.
@@ -71,6 +74,34 @@ def _validate_plan(data: Any) -> None:
             )
 
 
+def _compile_ignore_patterns(
+    ignored_tables: list[str],
+) -> list[re.Pattern[str]]:
+    """Compile path-component regexes for a table and its id sequence.
+
+    The path in a pgschema step uses ``.`` as a delimiter, e.g.
+    ``public.table.column``, ``privileges.TABLE.table.role``, or
+    ``privileges.SEQUENCE.table_id_seq.role``.  We match the bare object name
+    as a full path component so that ``agent_bootstrap_context`` does NOT
+    accidentally match ``agent_bootstrap_context_local``.
+    """
+    patterns: list[re.Pattern[str]] = []
+    for table in ignored_tables:
+        for obj in (table, f"{table}_id_seq"):
+            patterns.append(
+                re.compile(rf"(?:^|\.){re.escape(obj)}(?:\.|$)")
+            )
+    return patterns
+
+
+def _step_matches_ignored(
+    step: dict[str, Any],
+    ignore_patterns: list[re.Pattern[str]],
+) -> bool:
+    path = step.get("path", "")
+    return any(p.search(path) for p in ignore_patterns)
+
+
 def strip_destructive(
     plan: dict[str, Any],
     ignored_trigger_tables: list[str] | None = None,
@@ -78,11 +109,7 @@ def strip_destructive(
     """Return a new plan with all DROP steps removed and the count removed."""
     _validate_plan(plan)
 
-    ignored_trigger_tables = ignored_trigger_tables or []
-    trigger_patterns = [
-        re.compile(rf"^public\.{re.escape(table)}\.[^.]+$")
-        for table in ignored_trigger_tables
-    ]
+    ignore_patterns = _compile_ignore_patterns(ignored_trigger_tables or [])
 
     new_groups: list[dict[str, Any]] = []
     stripped = 0
@@ -93,10 +120,7 @@ def strip_destructive(
             if step.get("operation") == "drop":
                 stripped += 1
                 continue
-            if (
-                step.get("type") == "table.trigger"
-                and any(p.match(step.get("path", "")) for p in trigger_patterns)
-            ):
+            if _step_matches_ignored(step, ignore_patterns):
                 stripped += 1
                 continue
             kept_steps.append(step)
@@ -122,7 +146,10 @@ def main(argv: list[str] | None = None) -> int:
         action="append",
         default=[],
         metavar="TABLE",
-        help="Strip table.trigger steps on TABLE (may be given multiple times)",
+        help=(
+            "Strip every step that refers to TABLE or its default "
+            "<table>_id_seq sequence (may be given multiple times)"
+        ),
     )
     args = parser.parse_args(argv)
 

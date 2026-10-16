@@ -159,6 +159,28 @@ PY
     [ -z "$output" ]
 }
 
+# Assert that no step (of any type) references agent_bootstrap_context excluding
+# the _local table, nor agent_bootstrap_context_id_seq.
+_assert_no_bootstrap_refs() {
+    local FILTERED="$1"
+    run "$VENV_PYTHON" - <<PY
+import json, re
+with open('$FILTERED') as f:
+    p = json.load(f)
+steps = [s for g in (p.get('groups') or []) for s in g.get('steps', [])]
+violations = []
+for s in steps:
+    path = s.get('path', '')
+    if re.search(r'(?<!\w)agent_bootstrap_context_id_seq(?!\w)', path):
+        violations.append(path)
+    elif re.search(r'(?<!\w)agent_bootstrap_context(?!\w)', path) and '_local' not in path:
+        violations.append(path)
+print('\n'.join(violations))
+PY
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+}
+
 @test "TC-608a-newhart: plain peer VIEW (no functions/triggers) excludes FDW ops" {
     if [ ! -x "$VENV_PYTHON" ]; then skip "venv python not available at $VENV_PYTHON"; fi
     if ! "$VENV_PYTHON" -c "import pglast" 2>/dev/null; then skip "pglast not installed"; fi
@@ -309,6 +331,69 @@ print('\n'.join(violations))
 PY
     [ "$status" -eq 0 ]
     [ -n "$output" ]
+
+    rm -f "$PLAN" "$FILTERED"
+    _drop_test_db "$DB"
+}
+
+@test "TC-608d: peer mode filtered plan contains zero agent_bootstrap_context refs (excluding _local) and zero id_seq refs" {
+    if [ ! -x "$VENV_PYTHON" ]; then skip "venv python not available at $VENV_PYTHON"; fi
+    if ! "$VENV_PYTHON" -c "import pglast" 2>/dev/null; then skip "pglast not installed"; fi
+    if ! _pg_available; then skip "live PostgreSQL/pgschema not available"; fi
+
+    DB=$(_make_test_db)
+    PLAN=$(mktemp)
+    FILTERED=$(mktemp)
+
+    # Peer fixture (victoria shape: functions + INSTEAD OF triggers).
+    _seed_peer_fixture "$DB" 1 1
+
+    # With the full peer pipeline there must be no references at all.
+    _run_installer_filter_pipeline "$DB" 1 "$PLAN" "$FILTERED"
+    [ "$status" -eq 0 ]
+    _assert_no_bootstrap_refs "$FILTERED"
+
+    # Mutation: use the base ignore file (no peer patterns) and drop the
+    # post-plan object filter. The resulting plan must contain at least one
+    # bootstrap-context or bootstrap-context_id_seq reference (otherwise the
+    # test is not checking anything real).
+    SCRATCH=$(mktemp -d /tmp/pgschema-608-mut2-XXXXXX)
+    cp "$REPO_ROOT/database/.pgschemaignore" "$SCRATCH/.pgschemaignore"
+    cp "$REPO_ROOT/database/schema.sql" "$SCRATCH/schema.sql"
+    (
+        cd "$SCRATCH" || exit 1
+        pgschema plan \
+            --host /var/run/postgresql \
+            --user nova \
+            --db "$DB" \
+            --schema public \
+            --file schema.sql \
+            --plan-host /var/run/postgresql \
+            --plan-db nova_memory \
+            --plan-user nova \
+            --output-json "$PLAN" \
+            --no-color >/dev/null 2>&1
+    )
+    run "$VENV_PYTHON" "$STRIPPER" --plan "$PLAN" --output "$FILTERED"
+    rm -rf "$SCRATCH"
+    [ "$status" -eq 0 ]
+
+    run "$VENV_PYTHON" - <<PY
+import json, re
+with open('$FILTERED') as f:
+    p = json.load(f)
+steps = [s for g in (p.get('groups') or []) for s in g.get('steps', [])]
+refs = []
+for s in steps:
+    path = s.get('path', '')
+    if re.search(r'(?<!\w)agent_bootstrap_context_id_seq(?!\w)', path):
+        refs.append(path)
+    elif re.search(r'(?<!\w)agent_bootstrap_context(?!\w)', path) and '_local' not in path:
+        refs.append(path)
+print(len(refs))
+PY
+    [ "$status" -eq 0 ]
+    [ "$output" -gt 0 ]
 
     rm -f "$PLAN" "$FILTERED"
     _drop_test_db "$DB"

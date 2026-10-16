@@ -2443,8 +2443,9 @@ else
                 --output "$FILTERED_PLAN_FILE"
             )
             if [ "$PGSCHEMA_PEER_MODE" -eq 1 ]; then
-                # pgschema v1.7.2 does not honour [triggers] for type="table.trigger"
-                # steps, so strip triggers on the peer FDW view explicitly (#608).
+                # Peer FDW bootstrap-context stack (VIEW + foreign table + sequence +
+                # triggers + privileges) is owned by the FDW setup (#520), not
+                # schema.sql. Strip every plan step that refers to it (#608).
                 STRIP_ARGS+=(--ignore-table-triggers agent_bootstrap_context)
             fi
             DESTRUCTIVE_COUNT=$("$VENV_PYTHON" "$SCRIPT_DIR/database/strip_destructive.py" "${STRIP_ARGS[@]}" 2>&1) || STRIP_EXIT=$?

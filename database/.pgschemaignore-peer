@@ -11,6 +11,11 @@
 # The additional peer-only patterns below prevent pgschema from planning
 # DROP VIEW / CREATE TABLE / CREATE TRIGGER on the FDW bootstrap stack.
 #
+# Peer-side grants on agent_bootstrap_context (the VIEW) and its foreign
+# table nova_bootstrap_context are owned by the FDW setup (#520), not by
+# schema.sql; they are stripped from the peer-mode plan by the installer's
+# post-plan filter (database/strip_destructive.py --ignore-table-triggers).
+#
 # NOTE: pgschema v1.7.2 does not honor the [triggers] section for
 # type="table.trigger" steps, so the installer also strips those steps
 # explicitly when peer mode is active. The [triggers] entries remain here

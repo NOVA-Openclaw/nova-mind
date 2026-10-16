@@ -508,6 +508,6 @@ JSON
 @test "agent-install.sh pins cwd for pgschema invocation" {
     # pgschema discovers .pgschemaignore from cwd. The installer copies the
     # selected ignore file into the scratch directory and plans from there
-    # (nova-mind#608); before that it pinned cwd to SCRIPT_DIR.
-    grep -qE 'pushd "[$]PGSCHEMA_SCRATCH_DIR"|pushd "[$]SCRIPT_DIR"' "$INSTALLER"
+    # (nova-mind#608).
+    grep -qE 'pushd "[$]PGSCHEMA_SCRATCH_DIR"' "$INSTALLER"
 }

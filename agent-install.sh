@@ -958,6 +958,63 @@ verify_config() {
     fi
 }
 
+# Detect peer-shadowed relations for the target database and configure the
+# pgschema ignore base file / peer mode accordingly.
+# Sets globals: PGSCHEMA_PEER_MODE, PGSCHEMA_IGNORE_BASE,
+# PEER_SHADOWED_NAMES, PEER_SHADOWED_RELKINDS, PEER_SHADOWED_KINDS.
+# Fails closed: returns non-zero when detection cannot be queried, so the
+# caller skips the schema-apply stage instead of planning with zero exclusions.
+_resolve_peer_shadowed_relations() {
+    local shadowed_json detect_rc stderr_tmp
+    stderr_tmp=$(mktemp /tmp/peer-shadowed-stderr-XXXXXX)
+    TMPFILES+=("$stderr_tmp")
+    detect_rc=0
+    shadowed_json=$("$VENV_PYTHON" "$SCRIPT_DIR/database/detect_peer_shadowed.py" \
+        --schema-file "$SCHEMA_FILE" \
+        --dsn "host=/var/run/postgresql port=${PGPORT:-5432} dbname=$DB_NAME user=$DB_USER" 2>"$stderr_tmp") || detect_rc=$?
+
+    if [ "$detect_rc" -ne 0 ]; then
+        echo -e "  ${CROSS_MARK} Peer-shadowed relation detection failed (exit $detect_rc) — schema apply skipped"
+        if [ -s "$stderr_tmp" ]; then
+            cat "$stderr_tmp" >&2
+        fi
+        if [ -n "$shadowed_json" ]; then
+            printf '%s\n' "$shadowed_json" >&2
+        fi
+        return "$detect_rc"
+    fi
+
+    # Log informational stderr (detection summary) on success.
+    if [ -s "$stderr_tmp" ]; then
+        cat "$stderr_tmp" >&2
+    fi
+
+    PEER_SHADOWED_NAMES=()
+    PEER_SHADOWED_RELKINDS=()
+    PEER_SHADOWED_KINDS=()
+    while IFS= read -r line; do
+        local name relkind kind
+        name=$(printf '%s' "$line" | jq -r '.name // empty')
+        relkind=$(printf '%s' "$line" | jq -r '.relkind // empty')
+        kind=$(printf '%s' "$line" | jq -r '.kind // empty')
+        if [ -n "$name" ]; then
+            PEER_SHADOWED_NAMES+=("$name")
+            PEER_SHADOWED_RELKINDS+=("$relkind")
+            PEER_SHADOWED_KINDS+=("$name ($kind)")
+        fi
+    done <<< "$shadowed_json"
+
+    if [ "${#PEER_SHADOWED_NAMES[@]}" -gt 0 ]; then
+        PGSCHEMA_PEER_MODE=1
+        PGSCHEMA_IGNORE_BASE="$SCRIPT_DIR/database/.pgschemaignore-peer"
+        echo -e "  ${INFO} Peer-shadowed relations detected: ${PEER_SHADOWED_KINDS[*]}"
+    else
+        PGSCHEMA_PEER_MODE=0
+        PGSCHEMA_IGNORE_BASE="$SCRIPT_DIR/database/.pgschemaignore"
+    fi
+    return 0
+}
+
 # When the installer is sourced by unit tests, stop here so tests can call
 # the helper functions above without running the full installer.  This guard
 # is NOT used in normal execution.
@@ -2337,6 +2394,21 @@ else
     echo -e "  ${INFO} No renames.json found — skipping Step 1.5"
 fi
 
+# Peer-shadowed relation detection must run before pgschema plans; it queries
+# the target DB to find foreign tables/views that shadow tables declared by
+# schema.sql. On failure the installer fails closed and skips the apply stage.
+PEER_SHADOWED_NAMES=()
+PEER_SHADOWED_RELKINDS=()
+PEER_SHADOWED_KINDS=()
+PGSCHEMA_PEER_MODE=0
+PGSCHEMA_IGNORE_BASE="$SCRIPT_DIR/database/.pgschemaignore"
+
+if [ "$SCHEMA_DIFF_SKIPPED" -eq 0 ]; then
+    if ! _resolve_peer_shadowed_relations; then
+        SCHEMA_DIFF_SKIPPED=1
+    fi
+fi
+
 if [ "$SCHEMA_DIFF_SKIPPED" -eq 1 ]; then
     echo -e "  ${WARNING} Skipping pgschema plan/apply (pre-schema step failed above)"
 else
@@ -2355,38 +2427,6 @@ else
         "--plan-db" "$DB_NAME"
         "--plan-user" "$PG_SUPERUSER"
     )
-
-    # Detect peer-shadowed relations (nova-mind#1231).
-    # On federation peers some tables declared by schema.sql exist as foreign
-    # tables or views (e.g. agent_bootstrap_context as a VIEW, ai_models as a
-    # FOREIGN TABLE).  Query the target DB for public relations with
-    # relkind IN ('f','v') whose names match a table that schema.sql CREATEs.
-    PEER_SHADOWED_JSON=$("$VENV_PYTHON" "$SCRIPT_DIR/database/detect_peer_shadowed.py" \
-        --schema-file "$SCHEMA_FILE" \
-        --dsn "host=/var/run/postgresql port=${PGPORT:-5432} dbname=$DB_NAME user=$DB_USER" 2>/dev/null) \
-        || PEER_SHADOWED_JSON=""
-    PEER_SHADOWED_NAMES=()
-    PEER_SHADOWED_RELKINDS=()
-    PEER_SHADOWED_KINDS=()
-    while IFS= read -r line; do
-        name=$(printf '%s' "$line" | jq -r '.name // empty')
-        relkind=$(printf '%s' "$line" | jq -r '.relkind // empty')
-        kind=$(printf '%s' "$line" | jq -r '.kind // empty')
-        if [ -n "$name" ]; then
-            PEER_SHADOWED_NAMES+=("$name")
-            PEER_SHADOWED_RELKINDS+=("$relkind")
-            PEER_SHADOWED_KINDS+=("$name ($kind)")
-        fi
-    done <<< "$PEER_SHADOWED_JSON"
-
-    if [ "${#PEER_SHADOWED_NAMES[@]}" -gt 0 ]; then
-        PGSCHEMA_PEER_MODE=1
-        PGSCHEMA_IGNORE_BASE="$SCRIPT_DIR/database/.pgschemaignore-peer"
-        echo -e "  ${INFO} Peer-shadowed relations detected: ${PEER_SHADOWED_KINDS[*]}"
-    else
-        PGSCHEMA_PEER_MODE=0
-        PGSCHEMA_IGNORE_BASE="$SCRIPT_DIR/database/.pgschemaignore"
-    fi
 
     # Use a dedicated non-sticky scratch directory for the plan/reorder/apply
     # cycle (nova-mind#664). /tmp has the sticky bit (1777), which blocks the
@@ -2408,7 +2448,6 @@ else
     cp "$PGSCHEMA_IGNORE_BASE" "$PGSCHEMA_SCRATCH_DIR/.pgschemaignore"
     chmod 644 "$PGSCHEMA_SCRATCH_DIR/.pgschemaignore"
     if [ "${#PEER_SHADOWED_NAMES[@]}" -gt 0 ]; then
-        local names_csv relkinds_csv
         names_csv=$(IFS=,; echo "${PEER_SHADOWED_NAMES[*]}")
         relkinds_csv=$(IFS=,; echo "${PEER_SHADOWED_RELKINDS[*]}")
         "$VENV_PYTHON" "$SCRIPT_DIR/database/inject_peer_shadowed_ignores.py" \
@@ -2477,7 +2516,6 @@ else
                 # triggers + privileges + comments + constraints + indexes) are
                 # owned by the FDW setup (#520), not schema.sql. Strip every plan
                 # step that refers to them (#608 / #1231).
-                local ignored_csv
                 ignored_csv=$(IFS=,; echo "${PEER_SHADOWED_NAMES[*]}")
                 STRIP_ARGS+=(--ignore-objects "$ignored_csv" --log-exclusions)
             fi

@@ -12,7 +12,7 @@ There are two related but distinct paths into nova-memory:
 
 ```
 Real-time path (per-message):
-Incoming message → memory-extract hook → extract_memories.py → PostgreSQL
+Incoming message → memory-extract plugin → extract_memories.py → PostgreSQL
                                               ↓
                                         Claude API extraction
                                         (LLM judges durability/category/confidence per fact)
@@ -38,11 +38,11 @@ Session JSONL → memory-catchup.sh → channel_sessions/transcripts (DB)
 
 ## Components
 
-### 1. `memory-extract` hook + `extract_memories.py` — Real-Time Extraction
+### 1. `memory-extract` plugin + `extract_memories.py` — Real-Time Extraction
 
 **Purpose:** Extracts structured data (entities, facts, events, vocabulary) from a single incoming message as it arrives, using sender metadata passed via environment variables.
 
-**Location:** `memory/scripts/extract_memories.py` (source), deployed via the `memory-extract` hook
+**Location:** `memory/scripts/extract_memories.py` (source), deployed via the `memory-extract` plugin (`memory/plugins/memory-extract/`, migrated from a legacy internal hook under #726)
 
 **Env vars consumed (see the script's module docstring for the full/current list):** `SENDER_NAME`, `SENDER_ID`, `IS_GROUP`, `SOURCE_SESSION_ID`, and related sender/session metadata.
 
@@ -62,7 +62,7 @@ Facts about identifiers (phone, email, Discord/GitHub handle, Signal UUID) are e
 
 **Configuration file: `memory-extraction-config.json` (#497)**
 
-Both the hook (`handler.ts`) and `extract_memories.py` read `~/.openclaw/scripts/memory-extraction-config.json` for extraction settings. The file is optional — any missing/unreadable/malformed field falls back to a hardcoded default, so the extraction pipeline never hard-fails on a bad config file.
+Both the plugin (`extraction.ts`) and `extract_memories.py` read `~/.openclaw/scripts/memory-extraction-config.json` for extraction settings. The file is optional — any missing/unreadable/malformed field falls back to a hardcoded default, so the extraction pipeline never hard-fails on a bad config file.
 
 | Field | Consumed by | Default if absent | Notes |
 |-------|-------------|--------------------|-------|
@@ -70,8 +70,8 @@ Both the hook (`handler.ts`) and `extract_memories.py` read `~/.openclaw/scripts
 | `model` | `extract_memories.py` (`DEFAULT_MODEL`) | `deepseek/deepseek-v4-flash` | Overridden per-call by the `MEMORY_EXTRACTION_MODEL` env var if set |
 | `api_url` | `extract_memories.py` (`OPENROUTER_API_URL`) | `https://openrouter.ai/api/v1/chat/completions` | |
 | `max_tokens` | `extract_memories.py` (`CONFIG_MAX_TOKENS`) | `2048` | |
-| `extraction_timeout_ms` | `handler.ts` (`loadExtractionTimeoutMs()`) | `90000` (90s) | See precedence and rationale below |
-| `python_cmd` | `handler.ts` (`resolvePythonCmd()`) / `extraction-replay.sh` (`resolve_python_cmd()`) | none — resolution falls through to venv detection when absent | Optional. See "Interpreter resolution" below |
+| `extraction_timeout_ms` | `extraction.ts` (`loadExtractionTimeoutMs()`) | `90000` (90s) | See precedence and rationale below |
+| `python_cmd` | `extraction.ts` (`resolvePythonCmd()`) / `extraction-replay.sh` (`resolve_python_cmd()`) | none — resolution falls through to venv detection when absent | Optional. See "Interpreter resolution" below |
 
 Example (current deployed shape):
 ```json
@@ -86,18 +86,18 @@ Example (current deployed shape):
 
 **Timeout precedence (highest to lowest):** `EXTRACTION_TIMEOUT_MS_OVERRIDE` env var (test-only escape hatch) → `extraction_timeout_ms` in the config file → hardcoded `DEFAULT_EXTRACTION_TIMEOUT_MS` (90000ms). A non-numeric or `<= 0` value at any layer is treated as absent and falls through to the next layer.
 
-**Hot-reload:** `handler.ts`'s `loadExtractionTimeoutMs()` does a fresh `readFileSync` + `JSON.parse` on **every** hook invocation — there is no caching. Editing `memory-extraction-config.json` takes effect on the very next incoming message; no gateway or hook restart is required.
+**Hot-reload:** `extraction.ts`'s `loadExtractionTimeoutMs()` does a fresh `readFileSync` + `JSON.parse` on **every** plugin invocation — there is no caching. Editing `memory-extraction-config.json` takes effect on the very next incoming message; no gateway or hook restart is required.
 
-**Interpreter resolution (#554, #555):** Both spawn paths — `handler.ts`'s `resolvePythonCmd()` and `extraction-replay.sh`'s `resolve_python_cmd()` — resolve the Python interpreter used to invoke `extract_memories.py` via the same first-match-wins order:
+**Interpreter resolution (#554, #555):** Both spawn paths — `extraction.ts`'s `resolvePythonCmd()` and `extraction-replay.sh`'s `resolve_python_cmd()` — resolve the Python interpreter used to invoke `extract_memories.py` via the same first-match-wins order:
 
 1. `EXTRACTION_PYTHON_CMD_OVERRIDE` env var (test-only escape hatch)
 2. `python_cmd` key in `memory-extraction-config.json` (read fresh each event, same hot-reload behavior as `extraction_timeout_ms`)
 3. Agent venv python at `~/.local/share/<user>/venv/bin/python3`, if present
 4. Bare `python3` from `PATH`
 
-`handler.ts` logs the resolved interpreter once per invocation as `[memory-extract] Resolved extraction interpreter { pythonCmd: ... }` — grep gateway logs for this string to confirm which interpreter is actually selected in production. `extraction-replay.sh` logs the equivalent `[extraction-replay] Resolved extraction interpreter: ...` line to its own log output.
+`extraction.ts` logs the resolved interpreter once per invocation as `[memory-extract] Resolved extraction interpreter { pythonCmd: ... }` — grep gateway logs for this string to confirm which interpreter is actually selected in production. `extraction-replay.sh` logs the equivalent `[extraction-replay] Resolved extraction interpreter: ...` line to its own log output.
 
-The replay script derives the venv path with `$(id -un)` rather than `$USER` — `$USER` is unset in cron environments, which previously collapsed the venv path to a malformed `//venv/bin/python3` and silently fell through to bare `python3` under cron (nova-mind#555), reintroducing the system-python failure class the interpreter-resolution work was meant to close. `$(id -un)` is syscall-backed and cron-safe, matching `os.userInfo().username` already used on the `handler.ts` side.
+The replay script derives the venv path with `$(id -un)` rather than `$USER` — `$USER` is unset in cron environments, which previously collapsed the venv path to a malformed `//venv/bin/python3` and silently fell through to bare `python3` under cron (nova-mind#555), reintroducing the system-python failure class the interpreter-resolution work was meant to close. `$(id -un)` is syscall-backed and cron-safe, matching `os.userInfo().username` already used on the `extraction.ts` side.
 
 **Why 90s, not 30s:** The inner HTTP request in `extract_memories.py`'s `call_llm()` uses a hardcoded `requests.post(..., timeout=60)` (60-second `requests` timeout). The outer hook timeout must exceed this so that a slow LLM call fails cleanly inside the Python process (raising a normal `RuntimeError` that exits 1) rather than being killed mid-request by the hook's `SIGTERM` — which would discard the in-flight HTTP call's own error context. 90s gives a 30s buffer above the 60s inner ceiling. This was raised from an original fixed 30s constant (#485) after nova-mind#497 found deepseek-v4-flash's p95 extraction latency regularly exceeded 30s, producing a ~15% first-attempt timeout rate (all resolved on replay, confirming the constant was too tight rather than indicating a real hang).
 
@@ -106,9 +106,9 @@ The replay script derives the venv path with `$(id -un)` rather than `$USER` —
 | Problem | Symptoms | Solution |
 |---------|----------|----------|
 | API timeouts | Extraction hangs or times out | Check `OPENROUTER_API_KEY` and network connectivity; also confirm `extraction_timeout_ms` in `memory-extraction-config.json` (default 90000ms) isn't set too low for the current model's latency |
-| No extraction happening | No new `entity_facts`/`events` rows despite active chat | Verify the `memory-extract` hook is enabled: `openclaw hooks list` |
-| Missing context | Poor reference resolution ("that", "yes", "do it" not extracted) | Check the rolling context window the hook passes in (see hook config) |
-| Rate limiting | HTTP 429 errors | Add/adjust delay handling in the hook or extraction call |
+| No extraction happening | No new `entity_facts`/`events` rows despite active chat | Verify the `memory-extract` plugin is enabled: `openclaw plugins list` |
+| Missing context | Poor reference resolution ("that", "yes", "do it" not extracted) | Check the rolling context window the plugin passes in (see plugin config) |
+| Rate limiting | HTTP 429 errors | Add/adjust delay handling in the plugin or extraction call |
 | `ModuleNotFoundError` in extraction logs, or resolved interpreter is bare `python3` on a venv-only host | Extractions fail or `json_repair` degradation warning appears even though the venv has the dependency installed | Interpreter resolution picked the wrong python (#554/#555) — grep gateway logs for `Resolved extraction interpreter` (hook) or check `extraction-replay.sh`'s own log for `Resolved extraction interpreter:` (replay path) to see which interpreter was actually selected, then check `python_cmd` in `memory-extraction-config.json` and confirm the venv path exists at `~/.local/share/<user>/venv/bin/python3` |
 
 ### 1a. Failure Handling: `extraction_failures` Dead-Letter Table + Replay (#485)
@@ -118,9 +118,9 @@ The replay script derives the venv path with `$(id -un)` rather than `$USER` —
 **What changed:**
 
 - **Stderr/stdout capture.** The hook now attaches a tail-buffer reader (`attachTailBuffer()`) to the child's `stderr`/`stdout` streams, retaining only the **last 16384 bytes** (`PIPE_TAIL_CAP_BYTES`) of each. This also prevents the latent hang risk noted in #447 — an unread pipe stalls a child writing more than the OS pipe buffer (~64KB), and continuously draining the stream (even while discarding old bytes) keeps the child unblocked.
-- **Child-process timeout.** Extraction has a per-event timeout, default **90 seconds** (`DEFAULT_EXTRACTION_TIMEOUT_MS`), config-driven and hot-reloadable as of nova-mind#497 — see the "Configuration file" subsection above for the full precedence rules and rationale. On timeout, the hook sends `SIGTERM`, then `SIGKILL` after a **5-second grace period** (`KILL_GRACE_MS`) if the child hasn't exited. (Originally a fixed 30-second constant under #485; raised and made configurable under #497 after the fixed value produced a ~15% first-attempt timeout rate against slower LLM models.)
-- **`extraction_failures` dead-letter table** (migration `085_extraction_failures.sql`, taxonomy extended by migration `086_extraction_failures_json_parse_failure.sql` — see below). On nonzero exit, timeout, spawn error, or JSON-parse failure, the hook inserts a row capturing the message body (or a `channel_transcript_id` FK when available), sender/session metadata, the captured stderr/stdout tails, exit code, and a `failure_reason`.
-- **Failure-reason taxonomy** (`failure_reason` CHECK constraint): `nonzero_exit`, `timeout`, `spawn_error`, `unreplayable`, `json_parse_failure` (nova-mind#497 — see "JSON Repair and Parse-Failure Handling" below; `unreplayable` is set only by the replay script, never by the hook).
+- **Child-process timeout.** Extraction has a per-event timeout, default **90 seconds** (`DEFAULT_EXTRACTION_TIMEOUT_MS`), config-driven and hot-reloadable as of nova-mind#497 — see the "Configuration file" subsection above for the full precedence rules and rationale. On timeout, the plugin sends `SIGTERM`, then `SIGKILL` after a **5-second grace period** (`KILL_GRACE_MS`) if the child hasn't exited. (Originally a fixed 30-second constant under #485; raised and made configurable under #497 after the fixed value produced a ~15% first-attempt timeout rate against slower LLM models.)
+- **`extraction_failures` dead-letter table** (migration `085_extraction_failures.sql`, taxonomy extended by migration `086_extraction_failures_json_parse_failure.sql` — see below). On nonzero exit, timeout, spawn error, or JSON-parse failure, the plugin inserts a row capturing the message body (or a `channel_transcript_id` FK when available), sender/session metadata, the captured stderr/stdout tails, exit code, and a `failure_reason`.
+- **Failure-reason taxonomy** (`failure_reason` CHECK constraint): `nonzero_exit`, `timeout`, `spawn_error`, `unreplayable`, `json_parse_failure` (nova-mind#497 — see "JSON Repair and Parse-Failure Handling" below; `unreplayable` is set only by the replay script, never by the plugin).
 - **Logged `psql` catches.** The two `channel_sessions`/`channel_transcripts` upsert calls that previously swallowed errors via `.catch(() => ({stdout: ''}))` now log the error message (via `logPsqlError()`) before returning the same empty-stdout fallback — behavior is unchanged, but failures are no longer silent.
 - **Replay script** (`memory/scripts/extraction-replay.sh`, installed to `~/.openclaw/scripts/` by the standard scripts-copy step in `agent-install.sh` — no special-cased install logic was needed since it's just another `.sh` file in `memory/scripts/`). See below for details.
 
@@ -171,13 +171,13 @@ Named indexes: `idx_extraction_failures_status` (eligibility filter), `idx_extra
 
 **Exit-code contract (`extract_memories.py` / `handler.ts`):**
 
-| Exit code | Meaning | Hook `failure_reason` |
+| Exit code | Meaning | `failure_reason` |
 |-----------|---------|------------------------|
 | `0` | Success (including empty/no-op extraction) | — (no dead-letter row) |
 | `1` | Generic error (HTTP failure, DB connection failure, missing `OPENROUTER_API_KEY`, unhandled exception) | `nonzero_exit` |
 | `2` | `JsonParseFailure` — LLM response could not be parsed to a supported JSON shape even after one repair attempt | `json_parse_failure` |
 
-In `handler.ts`'s `child.on('close', ...)` handler, timeout detection takes precedence over exit-code inspection: if the child was killed for exceeding the timeout, `failure_reason` is always `'timeout'` regardless of the exit code the killed process happened to report. Exit code `2` only maps to `json_parse_failure` when the child exited on its own (no timeout).
+In `extraction.ts`'s `child.on('close', ...)` handler, timeout detection takes precedence over exit-code inspection: if the child was killed for exceeding the timeout, `failure_reason` is always `'timeout'` regardless of the exit code the killed process happened to report. Exit code `2` only maps to `json_parse_failure` when the child exited on its own (no timeout).
 
 **Dependency:** `json_repair` is a new runtime dependency of `extract_memories.py` (imported as `json_repair`, installed via the `json_repair` PyPI package — no `PACKAGE_MODULE_MAP` entry needed since the import name matches the package name). Added to `REQUIRED_PACKAGES` in the repo-root `agent-install.sh`'s Python venv setup.
 
@@ -189,7 +189,7 @@ Following the `memory-catchup.sh` cron-script pattern (and per `GLOBAL/CRON_DESI
 2. Sources `~/.openclaw/lib/env-loader.sh` (API keys) and `~/.openclaw/lib/pg-env.sh` (PostgreSQL env vars), same as other cron scripts in this repo.
 3. Fetches up to `EXTRACTION_REPLAY_BATCH_LIMIT` (default **10**) pending rows via `SELECT row_to_json(t) FROM (...) t`, ordered `status, retry_count ASC, created_at ASC, id ASC` (same ordering as the replay-order index). Rows are parsed with `jq` — **`row_to_json` + `jq` was a QA-driven fix (BUG-1)**: an earlier pipe-delimited (`-A`) parse broke on message bodies containing embedded pipe characters or newlines; `row_to_json` safely escapes both.
 4. For each row: reconstructs the message body from `channel_transcripts.content` (when `channel_transcript_id` is set) or the row's own `content` fallback. **If neither is available, the row is marked `unreplayable` immediately** — this is a terminal state; the script does not retry these rows on future runs.
-5. Feeds the reconstructed body to `extract_memories.py` via **stdin** (never as a shell argument — same untrusted-input rule as the hook itself, #155), passing the same `SENDER_NAME`/`SENDER_ID`/`SOURCE_*` environment variables the hook would have set.
+5. Feeds the reconstructed body to `extract_memories.py` via **stdin** (never as a shell argument — same untrusted-input rule as the plugin itself, #155), passing the same `SENDER_NAME`/`SENDER_ID`/`SOURCE_*` environment variables the hook would have set.
 6. On success: `status='resolved'`, `resolved_at=NOW()`.
 7. On failure: `retry_count` is incremented and `last_attempt_at=NOW()`. If the new `retry_count >= EXTRACTION_REPLAY_MAX_RETRIES` (default **5**), status becomes `retry_exhausted` (another terminal state — no further automatic retries). Otherwise the row stays `pending` for the next run.
 
@@ -199,8 +199,8 @@ Following the `memory-catchup.sh` cron-script pattern (and per `GLOBAL/CRON_DESI
 |----------|---------|---------|
 | `EXTRACTION_REPLAY_BATCH_LIMIT` | `10` | Max rows processed per invocation |
 | `EXTRACTION_REPLAY_MAX_RETRIES` | `5` | Retry ceiling before `retry_exhausted` |
-| `EXTRACTION_SCRIPT_PATH_OVERRIDE` | `~/.openclaw/scripts/extract_memories.py` | Same override var the hook uses — lets tests point at a mock script |
-| `PGDATABASE` | `nova_memory` | **Hardcoded fallback default, not user/host-dynamic** — tracked as known debt under #487 (umbrella) / #481, same class of issue as the hook's own `PGDATABASE` fallback below. Documenting current behavior; no new issue needed. |
+| `EXTRACTION_SCRIPT_PATH_OVERRIDE` | `~/.openclaw/scripts/extract_memories.py` | Same override var the plugin uses — lets tests point at a mock script |
+| `PGDATABASE` | `nova_memory` | **Hardcoded fallback default, not user/host-dynamic** — tracked as known debt under #487 (umbrella) / #481, same class of issue as the plugin's own `PGDATABASE` fallback below. Documenting current behavior; no new issue needed. |
 
 **Manually triggering a replay run:**
 
@@ -228,7 +228,7 @@ FROM extraction_failures
 WHERE status = 'unreplayable';
 ```
 
-**Known tracked debt:** Both the hook (`handler.ts`) and `extraction-replay.sh` fall back to a hardcoded `PGDATABASE` default of `nova_memory` rather than deriving it from the current OS user the way the rest of the installer does (see `memory/INSTALLATION.md`'s dynamic-DB-naming section). This is tracked by issue **#487** (umbrella, Tier 1) and **#481** — no new issue is needed; this doc describes current (as-shipped) behavior only.
+**Known tracked debt:** Both the plugin (`extraction.ts`) and `extraction-replay.sh` fall back to a hardcoded `PGDATABASE` default of `nova_memory` rather than deriving it from the current OS user the way the rest of the installer does (see `memory/INSTALLATION.md`'s dynamic-DB-naming section). This is tracked by issue **#487** (umbrella, Tier 1) and **#481** — no new issue is needed; this doc describes current (as-shipped) behavior only.
 
 **Setting up automatic replay (cron):** As of this writing, `extraction-replay.sh` is deployed to `~/.openclaw/scripts/` by the installer's generic scripts-copy step, but **no cron entry installs it automatically** (unlike `generate-daily-log.py`, which gets a dedicated installer step — see `memory/INSTALLATION.md`). Add a crontab entry manually if you want scheduled replay, e.g.:
 
@@ -284,7 +284,7 @@ Imports `get_initial_confidence` from `confidence_helper.py` to set a starting c
 
 ## Context Window System
 
-Real-time extraction context resolution happens per-message via the hook's own context passing (not a separate cache file for that path). `memory-catchup.sh` separately maintains its own rolling cache at `~/.openclaw/memory-message-cache.json` for its ingestion path.
+Real-time extraction context resolution happens per-message via the plugin's own context passing (not a separate cache file for that path). `memory-catchup.sh` separately maintains its own rolling cache at `~/.openclaw/memory-message-cache.json` for its ingestion path.
 
 ### Cache Structure
 
@@ -328,7 +328,7 @@ crontab -l | grep memory-catchup
 
 ### Manual Testing
 
-There is no standalone CLI to manually trigger real-time extraction for a single message — it runs via the `memory-extract` hook as part of live message handling. To test the transcript-ingestion path:
+There is no standalone CLI to manually trigger real-time extraction for a single message — it runs via the `memory-extract` plugin as part of live message handling. To test the transcript-ingestion path:
 
 ```bash
 # Process recent session transcripts (one-time run)
@@ -353,8 +353,8 @@ grep CRON /var/log/syslog | grep memory-catchup
 ### Health Checks
 
 ```bash
-# 1. Verify the memory-extract hook is enabled
-openclaw hooks list
+# 1. Verify the memory-extract plugin is enabled
+openclaw plugins list
 
 # 2. Verify cron job
 ps aux | grep memory-catchup
@@ -388,12 +388,12 @@ SELECT 'facts', COUNT(*) FROM entity_facts WHERE created_at > NOW() - INTERVAL '
 
 **Symptoms:**
 - No new database records despite active chat
-- State file timestamp not updating (for the catchup path) or no hook activity (for the real-time path)
+- State file timestamp not updating (for the catchup path) or no plugin activity (for the real-time path)
 
 **Diagnosis:**
 ```bash
-# Real-time path: verify hook is enabled
-openclaw hooks list
+# Real-time path: verify plugin is enabled
+openclaw plugins list
 
 # Catchup path: check cron and recent logs
 crontab -l | grep memory-catchup
@@ -405,7 +405,7 @@ tail -50 ~/.openclaw/logs/memory-catchup.log
 2. **Script permissions:** `chmod +x memory/scripts/*.sh memory/scripts/*.py`
 3. **Path issues:** Use absolute paths in crontab
 4. **PostgreSQL down:** `sudo systemctl start postgresql`
-5. **Hook not enabled:** `openclaw hooks enable memory-extract`
+5. **Plugin not enabled:** `openclaw plugins enable memory-extract`
 
 ### Issue: Extraction Fails Silently (Historical — Fixed by #485)
 

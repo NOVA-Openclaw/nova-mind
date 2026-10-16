@@ -49,9 +49,11 @@ re-evaluate them manually.
 
 ## Idle Detection
 
-Idle state is determined **deterministically by the gate check script**. It reads
-`~/.openclaw/agents/nova/sessions/sessions.json` and finds the most recent interaction
-timestamp across all user-facing channels (Discord, Signal, Telegram), excluding heartbeat
+Idle state is determined **deterministically by the gate check script**. It calls
+`openclaw sessions --json` (2026.9.x CLI envelope) rather than reading OpenClaw's private
+`sessions.json` file directly (#710/#714), and finds the most recent interaction timestamp
+(`lastInteractionAt`) across all user-facing channels (Discord, Signal, Telegram) plus the
+DM/main session (keyed off the configurable `session.mainKey`, #714), excluding heartbeat
 and system sessions.
 
 If the most recent activity is older than `IDLE_THRESHOLD_MINUTES` (default: 60 minutes) →
@@ -60,6 +62,12 @@ idle. If less → not idle.
 > **Note:** The script replaces the previous manual approach of calling `sessions_list`,
 > reading channel messages, and comparing timestamps by LLM reasoning. Idle detection is now
 > script-owned and LLM-free.
+
+> **Fail-closed (#714):** If the `openclaw sessions --json` call fails, times out, or returns
+> an envelope the script doesn't recognize, the gate check fails **closed and loud**: it exits
+> with code `3` and emits a JSON `"error"` field with a scrubbed (secret-redacted, 200-char-capped)
+> message instead of silently defaulting to "not idle". Treat a nonzero/exit-3 gate-check run as
+> a signal to investigate, not as "no work to do".
 
 ## Proactive Mode (idle ≥ 1 hour)
 

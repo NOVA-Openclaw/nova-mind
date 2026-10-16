@@ -16,10 +16,11 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "pg": "^8.11.0"
+  },
+  "devDependencies": {
     "@types/node": "^20.0.0",
     "@types/pg": "^8.0.0",
-    "pg": "^8.11.0",
     "typescript": "^5.9.3"
-  },
-  "devDependencies": {}
+  }
 }

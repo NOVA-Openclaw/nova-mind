@@ -284,7 +284,7 @@ const RECALL_SCRIPT = path.join(SCRIPTS_DIR, "proactive-recall.py");
 This allows the repo to be installed anywhere, not just at `~/.openclaw/workspace/`.
 
 **Files Updated:**
-- `hooks/memory-extract/handler.ts` - now uses relative path for `process-input.sh`
+- `memory/plugins/memory-extract` - plugin that replaces the legacy hook; calls `extract_memories.py` directly
 - `hooks/session-init/handler.ts` - now uses relative path for `generate-session-context.sh`
 - `hooks/semantic-recall/handler.ts` - now uses relative path for `proactive-recall.py`
 

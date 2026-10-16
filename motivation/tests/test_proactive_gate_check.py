@@ -13,6 +13,8 @@ import importlib
 import importlib.util
 import json
 import os
+import re
+import subprocess
 import sys
 import time
 from datetime import datetime, timezone, timedelta
@@ -34,6 +36,23 @@ def _load_module() -> ModuleType:
     spec = importlib.util.spec_from_file_location("proactive_gate_check", _SCRIPT_PATH)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)  # type: ignore[union-attr]
+    return mod
+
+
+def _load_module_fresh(env: dict[str, str] | None = None) -> ModuleType:
+    """Load a fresh copy of the module with optional env overrides."""
+    spec = importlib.util.spec_from_file_location(
+        f"proactive_gate_check_{id(env)}", _SCRIPT_PATH
+    )
+    mod = importlib.util.module_from_spec(spec)
+    old_environ = os.environ.copy()
+    if env:
+        os.environ.update(env)
+    try:
+        spec.loader.exec_module(mod)  # type: ignore[union-attr]
+    finally:
+        os.environ.clear()
+        os.environ.update(old_environ)
     return mod
 
 
@@ -65,10 +84,50 @@ def _iso(hours_ago: float = 0.0) -> str:
     return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _make_sessions(entries: dict[str, int]) -> str:
-    """Build a minimal sessions.json payload from {key: lastInteractionAt_ms}."""
-    data = {k: {"lastInteractionAt": v, "chatType": "channel"} for k, v in entries.items()}
+def _make_sessions(
+    entries: dict[str, int] | list[dict[str, Any]],
+    has_more: bool = False,
+    limit_applied: int | None = None,
+) -> str:
+    """Build a real 2026.9.x sessions.json payload.
+
+    `entries` may be either:
+      - dict[str, int]: mapping session key -> lastInteractionAt_ms
+      - list[dict]: pre-built session objects (must include 'key' and 'lastInteractionAt')
+
+    Top-level fields match the real CLI output: activeMinutes, count, hasMore,
+    limitApplied, path, sessions, totalCount.
+    """
+    if isinstance(entries, dict):
+        sessions = [
+            {"key": k, "lastInteractionAt": v, "chatType": "channel"}
+            for k, v in entries.items()
+        ]
+    else:
+        sessions = entries
+    data: dict[str, Any] = {
+        "activeMinutes": 0,
+        "count": len(sessions),
+        "hasMore": has_more,
+        "limitApplied": limit_applied,
+        "path": "/tmp/openclaw/sessions.sqlite",
+        "sessions": sessions,
+        "totalCount": len(sessions),
+    }
     return json.dumps(data)
+
+
+def _mock_openclaw_sessions(entries: dict[str, int] | list[dict[str, Any]], **kwargs):
+    """Patch subprocess.run so `openclaw sessions --json` returns the given sessions."""
+    result = MagicMock()
+    result.returncode = 0
+    result.stdout = _make_sessions(entries, **kwargs)
+    return patch("subprocess.run", return_value=result)
+
+
+def _mock_transcript_bytes(m, current_bytes: int):
+    """Patch _fetch_transcript_content_bytes to return a fixed byte total."""
+    return patch.object(m, "_fetch_transcript_content_bytes", return_value=current_bytes)
 
 
 # ---------------------------------------------------------------------------
@@ -77,22 +136,14 @@ def _make_sessions(entries: dict[str, int]) -> str:
 
 class TestIdleDetection:
     def test_active_under_threshold(self, m, tmp_path):
-        sessions_file = tmp_path / "sessions.json"
-        sessions_file.write_text(
-            _make_sessions({"agent:nova:discord:channel:123": _ms(30)})
-        )
-        with patch.object(m, "SESSIONS_JSON", str(sessions_file)), \
+        with _mock_openclaw_sessions({"agent:nova:discord:channel:123": _ms(30)}), \
              patch.object(m, "IDLE_THRESHOLD_MINUTES", 60):
             result = m.check_idle()
         assert result["idle"] is False
         assert result["idle_minutes"] < 60
 
     def test_idle_over_threshold(self, m, tmp_path):
-        sessions_file = tmp_path / "sessions.json"
-        sessions_file.write_text(
-            _make_sessions({"agent:nova:discord:channel:123": _ms(90)})
-        )
-        with patch.object(m, "SESSIONS_JSON", str(sessions_file)), \
+        with _mock_openclaw_sessions({"agent:nova:discord:channel:123": _ms(90)}), \
              patch.object(m, "IDLE_THRESHOLD_MINUTES", 60):
             result = m.check_idle()
         assert result["idle"] is True
@@ -100,42 +151,57 @@ class TestIdleDetection:
 
     def test_boundary_exactly_at_threshold(self, m, tmp_path):
         """elapsed >= threshold → idle (inclusive boundary)."""
-        sessions_file = tmp_path / "sessions.json"
-        sessions_file.write_text(
-            _make_sessions({"agent:nova:discord:channel:123": _ms(60)})
-        )
-        with patch.object(m, "SESSIONS_JSON", str(sessions_file)), \
+        with _mock_openclaw_sessions({"agent:nova:discord:channel:123": _ms(60)}), \
              patch.object(m, "IDLE_THRESHOLD_MINUTES", 60):
             result = m.check_idle()
         assert result["idle"] is True
 
-    def test_missing_sessions_file_defaults_to_idle(self, m, tmp_path):
-        missing = str(tmp_path / "nonexistent.json")
-        with patch.object(m, "SESSIONS_JSON", missing):
+    def test_missing_sessions_file_fails_closed_not_idle(self, m, tmp_path):
+        """#250/#714: openclaw CLI missing → fail CLOSED (idle=false), never idle."""
+        with patch("subprocess.run", side_effect=FileNotFoundError):
             result = m.check_idle()
-        assert result["idle"] is True
+        assert result["idle"] is False
+        assert "error" in result
         assert "reason" in result
 
-    def test_malformed_sessions_file_defaults_to_idle(self, m, tmp_path):
-        sessions_file = tmp_path / "sessions.json"
-        sessions_file.write_text("{this is not valid json{{")
-        with patch.object(m, "SESSIONS_JSON", str(sessions_file)):
+    def test_malformed_sessions_file_fails_closed_not_idle(self, m, tmp_path):
+        """#714: malformed JSON from openclaw sessions → fail CLOSED (idle=false)."""
+        result_mock = MagicMock()
+        result_mock.returncode = 0
+        result_mock.stdout = "{this is not valid json{{"
+        with patch("subprocess.run", return_value=result_mock):
             result = m.check_idle()
-        assert result["idle"] is True
+        assert result["idle"] is False
+        assert "error" in result
+        assert "reason" in result
+
+    def test_sessions_cli_nonzero_fails_closed_not_idle(self, m, tmp_path):
+        """#714: nonzero exit from openclaw sessions → fail CLOSED (idle=false)."""
+        result_mock = MagicMock()
+        result_mock.returncode = 1
+        result_mock.stderr = "connection refused"
+        result_mock.stdout = ""
+        with patch("subprocess.run", return_value=result_mock):
+            result = m.check_idle()
+        assert result["idle"] is False
+        assert "error" in result
+        assert "reason" in result
+
+    def test_sessions_cli_timeout_fails_closed_not_idle(self, m, tmp_path):
+        """#714: timeout waiting for openclaw sessions → fail CLOSED (idle=false)."""
+        with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("openclaw sessions", 30)):
+            result = m.check_idle()
+        assert result["idle"] is False
+        assert "error" in result
         assert "reason" in result
 
     def test_bot_only_sessions_default_to_idle(self, m, tmp_path):
         """Sessions that are all heartbeat/cron/subagent should default to idle."""
-        sessions_file = tmp_path / "sessions.json"
-        sessions_file.write_text(
-            _make_sessions({
-                "agent:nova:main:heartbeat": _ms(1),
-                "agent:nova:cron:abc123": _ms(1),
-                "agent:nova:subagent:xyz": _ms(1),
-            })
-        )
-        with patch.object(m, "SESSIONS_JSON", str(sessions_file)), \
-             patch.object(m, "IDLE_THRESHOLD_MINUTES", 60):
+        with _mock_openclaw_sessions({
+            "agent:nova:main:heartbeat": _ms(1),
+            "agent:nova:cron:abc123": _ms(1),
+            "agent:nova:subagent:xyz": _ms(1),
+        }), patch.object(m, "IDLE_THRESHOLD_MINUTES", 60):
             result = m.check_idle()
         assert result["idle"] is True
         assert "reason" in result
@@ -150,55 +216,291 @@ class TestIdleDetection:
         USER_SESSION_PATTERNS guard — the vacuous-exclude bug reproduced with
         keys like agent:nova:main:heartbeat which never reach the exclude check.
         """
-        sessions_file = tmp_path / "sessions.json"
-        sessions_file.write_text(
-            _make_sessions({
-                # Matches discord:channel (user-facing) AND heartbeat (exclude) —
-                # should be dropped by EXCLUDE_PATTERNS, not counted.
-                "agent:nova:discord:channel:123:heartbeat": _ms(1),
-            })
-        )
-        with patch.object(m, "SESSIONS_JSON", str(sessions_file)), \
-             patch.object(m, "IDLE_THRESHOLD_MINUTES", 60):
+        with _mock_openclaw_sessions({
+            # Matches discord:channel (user-facing) AND heartbeat (exclude) —
+            # should be dropped by EXCLUDE_PATTERNS, not counted.
+            "agent:nova:discord:channel:123:heartbeat": _ms(1),
+        }), patch.object(m, "IDLE_THRESHOLD_MINUTES", 60):
             result = m.check_idle()
         assert result["idle"] is True
         assert "reason" in result
 
     def test_custom_threshold_via_env(self, m, tmp_path):
-        sessions_file = tmp_path / "sessions.json"
-        sessions_file.write_text(
-            _make_sessions({"agent:nova:discord:channel:123": _ms(10)})
-        )
-        with patch.object(m, "SESSIONS_JSON", str(sessions_file)), \
+        with _mock_openclaw_sessions({"agent:nova:discord:channel:123": _ms(10)}), \
              patch.object(m, "IDLE_THRESHOLD_MINUTES", 5):
             result = m.check_idle()
         assert result["idle"] is True
         assert result["idle_threshold_minutes"] == 5
 
     def test_multiple_sessions_picks_most_recent(self, m, tmp_path):
-        sessions_file = tmp_path / "sessions.json"
-        sessions_file.write_text(
-            _make_sessions({
-                "agent:nova:discord:channel:111": _ms(120),  # old
-                "agent:nova:discord:channel:222": _ms(10),   # recent
-            })
-        )
-        with patch.object(m, "SESSIONS_JSON", str(sessions_file)), \
-             patch.object(m, "IDLE_THRESHOLD_MINUTES", 60):
+        with _mock_openclaw_sessions({
+            "agent:nova:discord:channel:111": _ms(120),  # old
+            "agent:nova:discord:channel:222": _ms(10),   # recent
+        }), patch.object(m, "IDLE_THRESHOLD_MINUTES", 60):
             result = m.check_idle()
         assert result["idle"] is False  # most recent was 10 min ago
 
     def test_result_contains_required_fields(self, m, tmp_path):
-        sessions_file = tmp_path / "sessions.json"
-        sessions_file.write_text(
-            _make_sessions({"agent:nova:signal:user:abc": _ms(30)})
-        )
-        with patch.object(m, "SESSIONS_JSON", str(sessions_file)), \
+        with _mock_openclaw_sessions({"agent:nova:signal:user:abc": _ms(30)}), \
              patch.object(m, "IDLE_THRESHOLD_MINUTES", 60):
             result = m.check_idle()
         assert "idle" in result
         assert "idle_minutes" in result
         assert "idle_threshold_minutes" in result
+
+    def test_real_shape_active_discord_session_two_minutes_ago(self, m, tmp_path):
+        """Real 2026.9.x CLI shape: active discord session 2 minutes ago -> not idle."""
+        sessions = [
+            {
+                "key": "agent:nova:discord:channel:1504704418551959685",
+                "lastInteractionAt": _ms(2.0),
+                "updatedAt": _ms(2.0),
+                "kind": "channel",
+                "agentId": "nova",
+            }
+        ]
+        with _mock_openclaw_sessions(sessions), patch.object(m, "IDLE_THRESHOLD_MINUTES", 60):
+            result = m.check_idle()
+        assert result["idle"] is False
+        assert result["idle_minutes"] < 60
+
+    def test_real_shape_newest_discord_session_ninety_minutes_ago(self, m, tmp_path):
+        """Real 2026.9.x CLI shape: newest user-facing session at 90 minutes -> idle."""
+        sessions = [
+            {
+                "key": "agent:nova:discord:channel:111",
+                "lastInteractionAt": _ms(120.0),
+                "updatedAt": _ms(120.0),
+                "kind": "channel",
+                "agentId": "nova",
+            },
+            {
+                "key": "agent:nova:discord:channel:222",
+                "lastInteractionAt": _ms(90.0),
+                "updatedAt": _ms(90.0),
+                "kind": "channel",
+                "agentId": "nova",
+            },
+        ]
+        with _mock_openclaw_sessions(sessions), patch.object(m, "IDLE_THRESHOLD_MINUTES", 60):
+            result = m.check_idle()
+        assert result["idle"] is True
+        assert result["idle_minutes"] >= 60
+
+    def test_real_shape_missing_sessions_list_fails_closed(self, m, tmp_path):
+        """Unexpected top-level shape (no 'sessions' list) -> fail closed, exit 3 via main."""
+        bad_payload = json.dumps({
+            "activeMinutes": 0,
+            "count": 0,
+            "hasMore": False,
+            "path": "/tmp/openclaw/sessions.sqlite",
+            "totalCount": 0,
+        })
+        result_mock = MagicMock()
+        result_mock.returncode = 0
+        result_mock.stdout = bad_payload
+        with patch("subprocess.run", return_value=result_mock), \
+             patch.object(m, "IDLE_THRESHOLD_MINUTES", 60):
+            result = m.check_idle()
+        assert result["idle"] is False
+        assert "error" in result
+        assert "shape" in result["error"].lower() or "sessions" in result["error"].lower()
+
+    def test_real_shape_sessions_not_list_fails_closed(self, m, tmp_path):
+        """Top-level 'sessions' key present but not a list -> fail closed."""
+        bad_payload = json.dumps({
+            "activeMinutes": 0,
+            "count": 1,
+            "hasMore": False,
+            "path": "/tmp/openclaw/sessions.sqlite",
+            "sessions": "not-a-list",
+            "totalCount": 1,
+        })
+        result_mock = MagicMock()
+        result_mock.returncode = 0
+        result_mock.stdout = bad_payload
+        with patch("subprocess.run", return_value=result_mock), \
+             patch.object(m, "IDLE_THRESHOLD_MINUTES", 60):
+            result = m.check_idle()
+        assert result["idle"] is False
+        assert "error" in result
+
+    def test_real_shape_has_more_re_fetches_with_limit_all(self, m, tmp_path):
+        """When hasMore=true, the code re-fetches with --limit all and uses that list."""
+        truncated = _make_sessions(
+            [{"key": "agent:nova:discord:channel:old", "lastInteractionAt": _ms(120.0), "kind": "channel", "agentId": "nova"}],
+            has_more=True,
+            limit_applied=100,
+        )
+        unlimited = _make_sessions(
+            [{"key": "agent:nova:discord:channel:new", "lastInteractionAt": _ms(5.0), "kind": "channel", "agentId": "nova"}]
+        )
+
+        def fake_run(cmd, **kwargs):
+            r = MagicMock()
+            r.returncode = 0
+            if "--limit" in cmd and "all" in cmd:
+                r.stdout = unlimited
+            else:
+                r.stdout = truncated
+            return r
+
+        with patch("subprocess.run", side_effect=fake_run), \
+             patch.object(m, "IDLE_THRESHOLD_MINUTES", 60):
+            result = m.check_idle()
+        assert result["idle"] is False
+        assert result["idle_minutes"] < 60
+
+    def test_legacy_dict_shape_still_works(self, m, tmp_path):
+        """Tolerate the legacy dict-of-key->session shape used by pre-2026.9.6 mocks."""
+        legacy = json.dumps({
+            "agent:nova:discord:channel:123": {"lastInteractionAt": _ms(30), "chatType": "channel"}
+        })
+        result_mock = MagicMock()
+        result_mock.returncode = 0
+        result_mock.stdout = legacy
+        with patch("subprocess.run", return_value=result_mock), \
+             patch.object(m, "IDLE_THRESHOLD_MINUTES", 60):
+            result = m.check_idle()
+        assert result["idle"] is False
+        assert result["idle_minutes"] < 60
+
+    def test_dm_only_main_session_not_idle(self, m, tmp_path):
+        """DM under default dmScope=main lands in agent:nova:main -> not idle."""
+        sessions = [
+            {
+                "key": "agent:nova:main",
+                "lastInteractionAt": _ms(2.0),
+                "updatedAt": _ms(2.0),
+                "kind": "direct",
+                "agentId": "nova",
+            }
+        ]
+        with _mock_openclaw_sessions(sessions), patch.object(m, "IDLE_THRESHOLD_MINUTES", 60):
+            result = m.check_idle()
+        assert result["idle"] is False
+        assert result["idle_minutes"] < 60
+
+    def test_per_peer_direct_session_not_idle(self, m, tmp_path):
+        """Per-peer DM scope -> agent:<id>:direct:<peer> -> not idle."""
+        sessions = [
+            {
+                "key": "agent:nova:direct:peer123",
+                "lastInteractionAt": _ms(2.0),
+                "updatedAt": _ms(2.0),
+                "kind": "direct",
+                "agentId": "nova",
+            }
+        ]
+        with _mock_openclaw_sessions(sessions), patch.object(m, "IDLE_THRESHOLD_MINUTES", 60):
+            result = m.check_idle()
+        assert result["idle"] is False
+        assert result["idle_minutes"] < 60
+
+    def test_per_channel_peer_direct_session_not_idle(self, m, tmp_path):
+        """Per-channel-peer DM scope -> agent:<id>:<channel>:direct:<peer> -> not idle."""
+        sessions = [
+            {
+                "key": "agent:nova:discord:direct:peer123",
+                "lastInteractionAt": _ms(2.0),
+                "updatedAt": _ms(2.0),
+                "kind": "direct",
+                "agentId": "nova",
+            }
+        ]
+        with _mock_openclaw_sessions(sessions), patch.object(m, "IDLE_THRESHOLD_MINUTES", 60):
+            result = m.check_idle()
+        assert result["idle"] is False
+        assert result["idle_minutes"] < 60
+
+    def test_main_session_heartbeat_still_idle(self, m, tmp_path):
+        """agent:nova:main:heartbeat matches main but is excluded -> still idle."""
+        sessions = [
+            {
+                "key": "agent:nova:main:heartbeat",
+                "lastInteractionAt": _ms(2.0),
+                "updatedAt": _ms(2.0),
+                "kind": "direct",
+                "agentId": "nova",
+            }
+        ]
+        with _mock_openclaw_sessions(sessions), patch.object(m, "IDLE_THRESHOLD_MINUTES", 60):
+            result = m.check_idle()
+        assert result["idle"] is True
+        assert "reason" in result
+
+    def test_mainframe_does_not_match_main(self, m, tmp_path):
+        """A key like agent:nova:mainframe must NOT be treated as the main session."""
+        sessions = [
+            {
+                "key": "agent:nova:mainframe",
+                "lastInteractionAt": _ms(2.0),
+                "updatedAt": _ms(2.0),
+                "kind": "channel",
+                "agentId": "nova",
+            }
+        ]
+        with _mock_openclaw_sessions(sessions), patch.object(m, "IDLE_THRESHOLD_MINUTES", 60):
+            result = m.check_idle()
+        assert result["idle"] is True
+        assert "No user-facing sessions" in result.get("reason", "")
+
+    def test_non_default_main_key_counts_home_not_main(self, tmp_path):
+        """OpenClaw 2026.9.6 session.mainKey='home': agent:nova:home counts, agent:nova:main does not."""
+        config = tmp_path / "openclaw.json"
+        config.write_text(json.dumps({"session": {"mainKey": "home"}}))
+        mod = _load_module_fresh({"OPENCLAW_CONFIG_PATH": str(config)})
+
+        sessions = [
+            {"key": "agent:nova:home", "lastInteractionAt": _ms(2.0), "kind": "direct", "agentId": "nova"},
+            {"key": "agent:nova:main", "lastInteractionAt": _ms(2.0), "kind": "direct", "agentId": "nova"},
+        ]
+        with _mock_openclaw_sessions(sessions), patch.object(mod, "IDLE_THRESHOLD_MINUTES", 60):
+            result = mod.check_idle()
+        assert result["idle"] is False
+        assert result["idle_minutes"] < 60
+
+        # Swap: only the legacy default main key is present -> no user-facing sessions.
+        sessions = [
+            {"key": "agent:nova:main", "lastInteractionAt": _ms(2.0), "kind": "direct", "agentId": "nova"},
+        ]
+        with _mock_openclaw_sessions(sessions), patch.object(mod, "IDLE_THRESHOLD_MINUTES", 60):
+            result = mod.check_idle()
+        assert result["idle"] is True
+        assert "No user-facing sessions" in result.get("reason", "")
+
+    def test_missing_config_defaults_main_key(self, tmp_path):
+        """When the config file is absent, mainKey defaults to 'main'."""
+        missing_config = tmp_path / "does-not-exist.json"
+        mod = _load_module_fresh({"OPENCLAW_CONFIG_PATH": str(missing_config)})
+
+        assert mod._MAIN_KEY == "main"
+        assert mod._MAIN_SESSION_RE.match("agent:nova:main")
+        assert not mod._MAIN_SESSION_RE.match("agent:nova:home")
+
+        sessions = [
+            {"key": "agent:nova:main", "lastInteractionAt": _ms(2.0), "kind": "direct", "agentId": "nova"},
+        ]
+        with _mock_openclaw_sessions(sessions), patch.object(mod, "IDLE_THRESHOLD_MINUTES", 60):
+            result = mod.check_idle()
+        assert result["idle"] is False
+
+    def test_regex_special_main_key_is_escaped(self, tmp_path):
+        """A mainKey containing regex metacharacters is escaped, not interpreted."""
+        config = tmp_path / "openclaw.json"
+        config.write_text(json.dumps({"session": {"mainKey": "main+home"}}))
+        mod = _load_module_fresh({"OPENCLAW_CONFIG_PATH": str(config)})
+
+        assert mod._MAIN_KEY == "main+home"
+        # Must match the literal plus, not treat it as a quantifier.
+        assert mod._MAIN_SESSION_RE.match("agent:nova:main+home")
+        assert not mod._MAIN_SESSION_RE.match("agent:nova:mainhome")
+        assert not mod._MAIN_SESSION_RE.match("agent:nova:mainnnhome")
+
+        # SQL param is also escaped (the SQL itself uses a placeholder).
+        sql, params = mod._user_session_sql_conditions("cs")
+        assert params[0] == r"^agent:[^:]+:main\+home$"
+        assert "cs.session_key ~ %s" in sql
 
 
 # ---------------------------------------------------------------------------
@@ -247,97 +549,98 @@ class TestStep1AgentChat:
 # ---------------------------------------------------------------------------
 
 class TestStep2UnansweredSessions:
-    """check_step2_unanswered_sessions() reads SESSIONS_JSON directly and, for
-    each recent user-facing session, inspects the last conversational role in
-    its JSONL session file via _last_conversational_role()."""
+    """check_step2_unanswered_sessions() queries nova_memory channel_transcripts
+    via _db_connect() and counts user-facing sessions whose latest transcript
+    row is a user turn within the last 24 hours."""
 
-    def _write_sessions_json(self, tmp_path, entries: dict[str, dict]) -> str:
-        path = tmp_path / "sessions.json"
-        path.write_text(json.dumps(entries))
-        return str(path)
-
-    def _write_session_file(self, tmp_path, name: str, roles: list[str]) -> str:
-        """Write a minimal JSONL session file; last entry in `roles` is the
-        last conversational message role."""
-        path = tmp_path / name
-        lines = [json.dumps({"message": {"role": role}}) for role in roles]
-        path.write_text("\n".join(lines) + "\n")
-        return str(path)
+    def _mock_db_for_unanswered(self, m, rows: list[tuple[str, datetime]]):
+        """Rows are (session_key, last_user_timestamp) returned by the DB query."""
+        mock_cur = MagicMock()
+        mock_cur.__enter__ = MagicMock(return_value=mock_cur)
+        mock_cur.__exit__ = MagicMock(return_value=False)
+        mock_cur.fetchall.return_value = rows
+        mock_conn = MagicMock()
+        mock_conn.__enter__ = MagicMock(return_value=mock_conn)
+        mock_conn.__exit__ = MagicMock(return_value=False)
+        mock_conn.cursor.return_value = mock_cur
+        return patch.object(m, "_db_connect", return_value=mock_conn)
 
     def test_recent_user_sessions_found(self, m, tmp_path):
-        now_ms = int(time.time() * 1000)
-        sf1 = self._write_session_file(tmp_path, "s1.jsonl", ["assistant", "user"])
-        sf2 = self._write_session_file(tmp_path, "s2.jsonl", ["assistant", "user"])
-        sessions_json = self._write_sessions_json(tmp_path, {
-            "agent:nova:discord:channel:123": {"updatedAt": now_ms - 1000, "sessionFile": sf1},
-            "agent:nova:discord:channel:456": {"updatedAt": now_ms - 2000, "sessionFile": sf2},
-        })
-        with patch.object(m, "SESSIONS_JSON", sessions_json):
+        now = datetime.now(timezone.utc)
+        with self._mock_db_for_unanswered(m, [
+            ("agent:nova:discord:channel:123", now - timedelta(minutes=5)),
+            ("agent:nova:discord:channel:456", now - timedelta(minutes=10)),
+        ]):
             result = m.check_step2_unanswered_sessions()
         assert result["actionable"] is True
         assert result["data"]["count"] == 2
 
     def test_no_recent_user_sessions(self, m, tmp_path):
-        now_ms = int(time.time() * 1000)
-        sf1 = self._write_session_file(tmp_path, "s1.jsonl", ["user", "assistant"])
-        sessions_json = self._write_sessions_json(tmp_path, {
-            "agent:nova:discord:channel:123": {"updatedAt": now_ms - 90_000_000, "sessionFile": sf1},
-        })
-        with patch.object(m, "SESSIONS_JSON", sessions_json):
+        """DB returns no rows → no unanswered sessions."""
+        with self._mock_db_for_unanswered(m, []):
             result = m.check_step2_unanswered_sessions()
         assert result["actionable"] is False
 
     def test_answered_session_not_actionable(self, m, tmp_path):
-        """Last conversational message is from the assistant -> not unanswered."""
-        now_ms = int(time.time() * 1000)
-        sf1 = self._write_session_file(tmp_path, "s1.jsonl", ["user", "assistant"])
-        sessions_json = self._write_sessions_json(tmp_path, {
-            "agent:nova:discord:channel:123": {"updatedAt": now_ms - 1000, "sessionFile": sf1},
-        })
-        with patch.object(m, "SESSIONS_JSON", sessions_json):
+        """Latest transcript role is assistant → DB query returns no user rows."""
+        with self._mock_db_for_unanswered(m, []):
             result = m.check_step2_unanswered_sessions()
         assert result["actionable"] is False
 
     def test_excludes_bot_sessions(self, m, tmp_path):
-        now_ms = int(time.time() * 1000)
-        sf1 = self._write_session_file(tmp_path, "s1.jsonl", ["assistant", "user"])
-        sf2 = self._write_session_file(tmp_path, "s2.jsonl", ["assistant", "user"])
-        sf3 = self._write_session_file(tmp_path, "s3.jsonl", ["assistant", "user"])
-        sessions_json = self._write_sessions_json(tmp_path, {
-            "agent:nova:discord:channel:123": {"updatedAt": now_ms - 1000, "sessionFile": sf1},
-            "agent:nova:main:heartbeat": {"updatedAt": now_ms - 500, "sessionFile": sf2},
-            "agent:nova:cron:abc": {"updatedAt": now_ms - 300, "sessionFile": sf3},
-        })
-        with patch.object(m, "SESSIONS_JSON", sessions_json):
+        """Rows matching user-facing patterns but containing exclude patterns
+        are filtered out in Python, matching the original sessions.json logic."""
+        now = datetime.now(timezone.utc)
+        with self._mock_db_for_unanswered(m, [
+            ("agent:nova:discord:channel:123", now - timedelta(minutes=5)),
+            ("agent:nova:discord:channel:456:heartbeat", now - timedelta(minutes=1)),
+        ]):
             result = m.check_step2_unanswered_sessions()
-        # Only the discord channel should count
+        # Only the plain discord channel should count
         assert result["data"]["count"] == 1
+        assert "agent:nova:discord:channel:123" in result["data"]["sessions"]
 
     def test_sessions_json_missing(self, m, tmp_path):
-        missing = str(tmp_path / "no-such-sessions.json")
-        with patch.object(m, "SESSIONS_JSON", missing):
+        """DB connection failure → safe error default, matching the old missing-file path."""
+        with patch.object(m, "_db_connect", side_effect=Exception("connection refused")):
             result = m.check_step2_unanswered_sessions()
         assert result["actionable"] is False
         assert "error" in result
 
     def test_sessions_json_malformed(self, m, tmp_path):
-        path = tmp_path / "sessions.json"
-        path.write_text("not json")
-        with patch.object(m, "SESSIONS_JSON", str(path)):
+        """DB cursor failure → safe error default, matching the old malformed-file path."""
+        with patch.object(m, "_db_connect", side_effect=Exception("cursor error")):
             result = m.check_step2_unanswered_sessions()
         assert result["actionable"] is False
         assert "error" in result
 
     def test_missing_session_file_skipped(self, m, tmp_path):
-        """A session entry with no sessionFile on disk should be skipped, not error."""
-        now_ms = int(time.time() * 1000)
-        missing_file = str(tmp_path / "does-not-exist.jsonl")
-        sessions_json = self._write_sessions_json(tmp_path, {
-            "agent:nova:discord:channel:123": {"updatedAt": now_ms - 1000, "sessionFile": missing_file},
-        })
-        with patch.object(m, "SESSIONS_JSON", sessions_json):
+        """A session whose latest transcript is not a user turn is skipped."""
+        with self._mock_db_for_unanswered(m, []):
             result = m.check_step2_unanswered_sessions()
         assert result["actionable"] is False
+
+    def test_main_session_unanswered_counts(self, m, tmp_path):
+        """The same user-facing patterns apply to step 2: main session counts."""
+        now = datetime.now(timezone.utc)
+        with self._mock_db_for_unanswered(m, [
+            ("agent:nova:main", now - timedelta(minutes=5)),
+        ]):
+            result = m.check_step2_unanswered_sessions()
+        assert result["actionable"] is True
+        assert result["data"]["count"] == 1
+        assert "agent:nova:main" in result["data"]["sessions"]
+
+    def test_direct_session_unanswered_counts(self, m, tmp_path):
+        """The same user-facing patterns apply to step 2: direct sessions count."""
+        now = datetime.now(timezone.utc)
+        with self._mock_db_for_unanswered(m, [
+            ("agent:nova:direct:peer123", now - timedelta(minutes=5)),
+            ("agent:nova:discord:direct:peer123", now - timedelta(minutes=10)),
+        ]):
+            result = m.check_step2_unanswered_sessions()
+        assert result["actionable"] is True
+        assert result["data"]["count"] == 2
 
 
 # ---------------------------------------------------------------------------
@@ -362,17 +665,12 @@ class TestStep3Introspection:
         mock_wc.returncode = 0
         mock_wc.stdout = "102 /path/to/log"  # only 2 lines growth
 
-        mock_du = MagicMock()
-        mock_du.returncode = 0
-        mock_du.stdout = "1050000"  # 50KB growth (< 100KB threshold)
-
         def fake_run(cmd, **kwargs):
-            if "wc" in cmd[0] if isinstance(cmd, list) else cmd:
-                return mock_wc
-            return mock_du
+            return mock_wc
 
         with patch.object(m, "HEARTBEAT_STATE_JSON", str(state_file)), \
-             patch("subprocess.run", side_effect=fake_run):
+             patch("subprocess.run", side_effect=fake_run), \
+             _mock_transcript_bytes(m, 1_050_000):
             result = m.check_step3_introspection()
         assert result["actionable"] is False
 
@@ -381,13 +679,13 @@ class TestStep3Introspection:
         state_file.write_text(self._make_heartbeat_state(100, 1_000_000, 10.0))  # 10h ago
 
         mock_wc = MagicMock(); mock_wc.returncode = 0; mock_wc.stdout = "102 /path"
-        mock_du = MagicMock(); mock_du.returncode = 0; mock_du.stdout = "1001000"
 
         def fake_run(cmd, **kwargs):
-            return mock_wc if isinstance(cmd, list) and cmd[0] == "wc" else mock_du
+            return mock_wc
 
         with patch.object(m, "HEARTBEAT_STATE_JSON", str(state_file)), \
-             patch("subprocess.run", side_effect=fake_run):
+             patch("subprocess.run", side_effect=fake_run), \
+             _mock_transcript_bytes(m, 1_001_000):
             result = m.check_step3_introspection()
         assert result["actionable"] is True
         assert "10.0h" in result["reason"]
@@ -398,13 +696,13 @@ class TestStep3Introspection:
 
         mock_wc = MagicMock(); mock_wc.returncode = 0
         mock_wc.stdout = "160 /path"   # 60 lines growth (> 50 threshold)
-        mock_du = MagicMock(); mock_du.returncode = 0; mock_du.stdout = "1001000"
 
         def fake_run(cmd, **kwargs):
-            return mock_wc if isinstance(cmd, list) and cmd[0] == "wc" else mock_du
+            return mock_wc
 
         with patch.object(m, "HEARTBEAT_STATE_JSON", str(state_file)), \
-             patch("subprocess.run", side_effect=fake_run):
+             patch("subprocess.run", side_effect=fake_run), \
+             _mock_transcript_bytes(m, 1_001_000):
             result = m.check_step3_introspection()
         assert result["actionable"] is True
         assert "60 new daily log lines" in result["reason"]
@@ -414,14 +712,13 @@ class TestStep3Introspection:
         state_file.write_text(self._make_heartbeat_state(100, 1_000_000, 2.0))
 
         mock_wc = MagicMock(); mock_wc.returncode = 0; mock_wc.stdout = "102 /path"
-        mock_du = MagicMock(); mock_du.returncode = 0
-        mock_du.stdout = "1200000"  # 200KB growth (> 100KB threshold)
 
         def fake_run(cmd, **kwargs):
-            return mock_wc if isinstance(cmd, list) and cmd[0] == "wc" else mock_du
+            return mock_wc
 
         with patch.object(m, "HEARTBEAT_STATE_JSON", str(state_file)), \
-             patch("subprocess.run", side_effect=fake_run):
+             patch("subprocess.run", side_effect=fake_run), \
+             _mock_transcript_bytes(m, 1_200_000):
             result = m.check_step3_introspection()
         assert result["actionable"] is True
         assert "bytes" in result["reason"]
@@ -455,13 +752,13 @@ class TestStep3Introspection:
         state_file.write_text(self._make_heartbeat_state(100, 1_000_000, 2.5))
 
         mock_wc = MagicMock(); mock_wc.returncode = 0; mock_wc.stdout = "102 /path"
-        mock_du = MagicMock(); mock_du.returncode = 0; mock_du.stdout = "1050000"
 
         def fake_run(cmd, **kwargs):
-            return mock_wc if isinstance(cmd, list) and cmd[0] == "wc" else mock_du
+            return mock_wc
 
         with patch.object(m, "HEARTBEAT_STATE_JSON", str(state_file)), \
-             patch("subprocess.run", side_effect=fake_run):
+             patch("subprocess.run", side_effect=fake_run), \
+             _mock_transcript_bytes(m, 1_050_000):
             result = m.check_step3_introspection()
         assert result["actionable"] is False
         assert "Cooldown active" not in result["reason"]
@@ -480,14 +777,14 @@ class TestStep3Introspection:
         }))
 
         mock_wc = MagicMock(); mock_wc.returncode = 0; mock_wc.stdout = "102 /path"
-        mock_du = MagicMock(); mock_du.returncode = 0; mock_du.stdout = "1050000"
 
         def fake_run(cmd, **kwargs):
-            return mock_wc if isinstance(cmd, list) and cmd[0] == "wc" else mock_du
+            return mock_wc
 
         with patch.object(m, "HEARTBEAT_STATE_JSON", str(state_file)), \
              patch.object(m, "_now_utc", return_value=fixed_now), \
-             patch("subprocess.run", side_effect=fake_run):
+             patch("subprocess.run", side_effect=fake_run), \
+             _mock_transcript_bytes(m, 1_050_000):
             result = m.check_step3_introspection()
         assert result["actionable"] is False
         assert "Cooldown active" not in result["reason"]
@@ -498,13 +795,13 @@ class TestStep3Introspection:
         state_file.write_text(self._make_heartbeat_state(100, 1_000_000, 9.0))
 
         mock_wc = MagicMock(); mock_wc.returncode = 0; mock_wc.stdout = "102 /path"
-        mock_du = MagicMock(); mock_du.returncode = 0; mock_du.stdout = "1001000"
 
         def fake_run(cmd, **kwargs):
-            return mock_wc if isinstance(cmd, list) and cmd[0] == "wc" else mock_du
+            return mock_wc
 
         with patch.object(m, "HEARTBEAT_STATE_JSON", str(state_file)), \
-             patch("subprocess.run", side_effect=fake_run):
+             patch("subprocess.run", side_effect=fake_run), \
+             _mock_transcript_bytes(m, 1_001_000):
             result = m.check_step3_introspection()
         assert result["actionable"] is True
         assert "h since last introspection" in result["reason"]
@@ -520,13 +817,13 @@ class TestStep3Introspection:
         }))
 
         mock_wc = MagicMock(); mock_wc.returncode = 0; mock_wc.stdout = "102 /path"
-        mock_du = MagicMock(); mock_du.returncode = 0; mock_du.stdout = "1050000"
 
         def fake_run(cmd, **kwargs):
-            return mock_wc if isinstance(cmd, list) and cmd[0] == "wc" else mock_du
+            return mock_wc
 
         with patch.object(m, "HEARTBEAT_STATE_JSON", str(state_file)), \
-             patch("subprocess.run", side_effect=fake_run):
+             patch("subprocess.run", side_effect=fake_run), \
+             _mock_transcript_bytes(m, 1_050_000):
             result = m.check_step3_introspection()
         assert result["actionable"] is False
         assert result["reason"] == "No introspection threshold exceeded"
@@ -542,13 +839,13 @@ class TestStep3Introspection:
         }))
 
         mock_wc = MagicMock(); mock_wc.returncode = 0; mock_wc.stdout = "102 /path"
-        mock_du = MagicMock(); mock_du.returncode = 0; mock_du.stdout = "1050000"
 
         def fake_run(cmd, **kwargs):
-            return mock_wc if isinstance(cmd, list) and cmd[0] == "wc" else mock_du
+            return mock_wc
 
         with patch.object(m, "HEARTBEAT_STATE_JSON", str(state_file)), \
-             patch("subprocess.run", side_effect=fake_run):
+             patch("subprocess.run", side_effect=fake_run), \
+             _mock_transcript_bytes(m, 1_050_000):
             result = m.check_step3_introspection()
         assert result["actionable"] is False
         assert "elapsed_error" in result["data"]
@@ -608,7 +905,8 @@ class TestStep3IntrospectionDualMirror:
 
         with patch.object(m, "HEARTBEAT_STATE_JSON", str(primary_file)), \
              patch.object(m, "HEARTBEAT_STATE_JSON_ALT", str(alt_file)), \
-             patch("subprocess.run", side_effect=self._fake_run(mock_wc, mock_du)):
+             patch("subprocess.run", side_effect=self._fake_run(mock_wc, mock_du)), \
+             _mock_transcript_bytes(m, 1_050_000):
             result = m.check_step3_introspection()
         assert result["actionable"] is False
 
@@ -622,7 +920,8 @@ class TestStep3IntrospectionDualMirror:
 
         with patch.object(m, "HEARTBEAT_STATE_JSON", str(primary_file)), \
              patch.object(m, "HEARTBEAT_STATE_JSON_ALT", str(alt_file)), \
-             patch("subprocess.run", side_effect=self._fake_run(mock_wc, mock_du)):
+             patch("subprocess.run", side_effect=self._fake_run(mock_wc, mock_du)), \
+             _mock_transcript_bytes(m, 1_050_000):
             result = m.check_step3_introspection()
         assert result["actionable"] is False
 
@@ -636,7 +935,8 @@ class TestStep3IntrospectionDualMirror:
 
         with patch.object(m, "HEARTBEAT_STATE_JSON", str(primary_file)), \
              patch.object(m, "HEARTBEAT_STATE_JSON_ALT", str(alt_file)), \
-             patch("subprocess.run", side_effect=self._fake_run(mock_wc, mock_du)):
+             patch("subprocess.run", side_effect=self._fake_run(mock_wc, mock_du)), \
+             _mock_transcript_bytes(m, 1_050_000):
             result = m.check_step3_introspection()
         assert result["actionable"] is False
 
@@ -650,7 +950,8 @@ class TestStep3IntrospectionDualMirror:
 
         with patch.object(m, "HEARTBEAT_STATE_JSON", str(primary_file)), \
              patch.object(m, "HEARTBEAT_STATE_JSON_ALT", str(alt_file)), \
-             patch("subprocess.run", side_effect=self._fake_run(mock_wc, mock_du)):
+             patch("subprocess.run", side_effect=self._fake_run(mock_wc, mock_du)), \
+             _mock_transcript_bytes(m, 1_050_000):
             result = m.check_step3_introspection()
         assert result["actionable"] is False
 
@@ -675,7 +976,8 @@ class TestStep3IntrospectionDualMirror:
 
         with patch.object(m, "HEARTBEAT_STATE_JSON", str(primary_file)), \
              patch.object(m, "HEARTBEAT_STATE_JSON_ALT", str(alt_file)), \
-             patch("subprocess.run", side_effect=self._fake_run(mock_wc, mock_du)):
+             patch("subprocess.run", side_effect=self._fake_run(mock_wc, mock_du)), \
+             _mock_transcript_bytes(m, 1_050_000):
             result = m.check_step3_introspection()
         assert result["actionable"] is False
 
@@ -689,7 +991,8 @@ class TestStep3IntrospectionDualMirror:
 
         with patch.object(m, "HEARTBEAT_STATE_JSON", str(primary_file)), \
              patch.object(m, "HEARTBEAT_STATE_JSON_ALT", str(alt_file)), \
-             patch("subprocess.run", side_effect=self._fake_run(mock_wc, mock_du)):
+             patch("subprocess.run", side_effect=self._fake_run(mock_wc, mock_du)), \
+             _mock_transcript_bytes(m, 1_050_000):
             result = m.check_step3_introspection()
         assert result["actionable"] is False
 
@@ -719,7 +1022,8 @@ class TestStep3IntrospectionDualMirror:
 
         with patch.object(m, "HEARTBEAT_STATE_JSON", str(primary_file)), \
              patch.object(m, "HEARTBEAT_STATE_JSON_ALT", str(alt_file)), \
-             patch("subprocess.run", side_effect=self._fake_run(mock_wc, mock_du)):
+             patch("subprocess.run", side_effect=self._fake_run(mock_wc, mock_du)), \
+             _mock_transcript_bytes(m, 1_050_000):
             result = m.check_step3_introspection()
         # Primary wins tie, so it uses baseline 100/1M → no thresholds exceeded.
         assert result["actionable"] is False
@@ -753,7 +1057,8 @@ class TestStep3IntrospectionDualMirror:
 
         with patch.object(m, "HEARTBEAT_STATE_JSON", str(primary_file)), \
              patch.object(m, "HEARTBEAT_STATE_JSON_ALT", str(alt_file)), \
-             patch("subprocess.run", side_effect=self._fake_run(mock_wc, mock_du)):
+             patch("subprocess.run", side_effect=self._fake_run(mock_wc, mock_du)), \
+             _mock_transcript_bytes(m, 1_050_000):
             result = m.check_step3_introspection()
         assert result["actionable"] is False
         synced = json.loads(primary_file.read_text())
@@ -770,7 +1075,8 @@ class TestStep3IntrospectionDualMirror:
 
         with patch.object(m, "HEARTBEAT_STATE_JSON", str(primary_file)), \
              patch.object(m, "HEARTBEAT_STATE_JSON_ALT", str(alt_file)), \
-             patch("subprocess.run", side_effect=self._fake_run(mock_wc, mock_du)):
+             patch("subprocess.run", side_effect=self._fake_run(mock_wc, mock_du)), \
+             _mock_transcript_bytes(m, 1_050_000):
             result = m.check_step3_introspection()
         assert result["actionable"] is False
         assert not primary_file.exists()
@@ -1733,6 +2039,106 @@ class TestOutputFormat:
 
 
 # ---------------------------------------------------------------------------
+# LOUD FAIL-CLOSED: main() must surface gate errors and exit distinctly (#714)
+# ---------------------------------------------------------------------------
+
+class TestMainErrorHandling:
+    """Exercise main() for the four check_idle() failure branches plus a missing
+    idle key. Every failure must produce valid JSON on stdout, idle=false, an
+    error field, and exit code 3.
+    """
+
+    def _run_main_captured(self, m, **subprocess_patches):
+        """Run main() capturing stdout/stderr/exit code.
+
+        subprocess_patches are passed to patch("subprocess.run", ...).
+        Returns (exit_code, stdout_text, stderr_text).
+        """
+        import io
+        from unittest.mock import patch
+
+        out = io.StringIO()
+        err = io.StringIO()
+
+        with patch("subprocess.run", **subprocess_patches), \
+             patch.object(sys, "stdout", out), \
+             patch.object(sys, "stderr", err):
+            try:
+                m.main()
+                code = 0
+            except SystemExit as exc:
+                code = exc.code if isinstance(exc.code, int) else 1
+
+        return code, out.getvalue(), err.getvalue()
+
+    def _assert_fail_closed_output(self, code: int, stdout: str, stderr: str):
+        assert code == 3, f"expected exit code 3, got {code}"
+        assert stderr == "", "stderr must be empty; errors belong in stdout JSON"
+        parsed = json.loads(stdout)
+        assert parsed["idle"] is False
+        assert "error" in parsed
+        assert parsed["error"] != ""
+        assert "idle_reason" in parsed
+        return parsed
+
+    def test_main_cli_nonzero_exit_fail_closed(self, m):
+        result_mock = MagicMock()
+        result_mock.returncode = 1
+        result_mock.stderr = "connection refused"
+        result_mock.stdout = ""
+        code, stdout, stderr = self._run_main_captured(m, return_value=result_mock)
+        self._assert_fail_closed_output(code, stdout, stderr)
+
+    def test_main_cli_timeout_fail_closed(self, m):
+        code, stdout, stderr = self._run_main_captured(
+            m, side_effect=subprocess.TimeoutExpired("openclaw sessions", 30),
+        )
+        self._assert_fail_closed_output(code, stdout, stderr)
+
+    def test_main_cli_not_found_fail_closed(self, m):
+        code, stdout, stderr = self._run_main_captured(
+            m, side_effect=FileNotFoundError,
+        )
+        self._assert_fail_closed_output(code, stdout, stderr)
+
+    def test_main_malformed_json_fail_closed(self, m):
+        result_mock = MagicMock()
+        result_mock.returncode = 0
+        result_mock.stdout = "{this is not valid json{{"
+        code, stdout, stderr = self._run_main_captured(m, return_value=result_mock)
+        self._assert_fail_closed_output(code, stdout, stderr)
+
+    def test_main_missing_idle_key_is_not_idle(self, m):
+        """A check_idle() result with no 'idle' key must default to not-idle."""
+        with patch.object(m, "check_idle", return_value={
+            "idle_minutes": 0.0,
+            "idle_threshold_minutes": 60,
+            "reason": "unexpected shape",
+            "error": "idle key missing",
+        }):
+            code, stdout, stderr = self._run_main_captured(m, side_effect=FileNotFoundError)
+        # The FileNotFoundError patch is irrelevant because check_idle is mocked;
+        # we only care that main() reads the missing idle as False.
+        parsed = json.loads(stdout)
+        assert parsed["idle"] is False
+        assert parsed.get("error") == "idle key missing"
+        assert code == 3
+
+    def test_main_error_scrubber_redacts_fake_token(self, m):
+        result_mock = MagicMock()
+        result_mock.returncode = 1
+        result_mock.stderr = "auth failed: Bearer sk-live-abc123def456, api_key=secretvalue123 and token=ff\"ff"
+        result_mock.stdout = ""
+        code, stdout, stderr = self._run_main_captured(m, return_value=result_mock)
+        parsed = self._assert_fail_closed_output(code, stdout, stderr)
+        err = parsed["error"]
+        assert "sk-live-abc123def456" not in err
+        assert "secretvalue123" not in err
+        assert "[redacted]" in err
+        assert "Bearer" not in err or "[redacted]" in err
+
+
+# ---------------------------------------------------------------------------
 # Boundary Value Analysis (BVA) — exact threshold values
 # ---------------------------------------------------------------------------
 
@@ -1759,15 +2165,13 @@ class TestBoundaryValues:
         mock_wc = MagicMock()
         mock_wc.returncode = 0
         mock_wc.stdout = "150 /path"   # baseline=100, current=150 → growth=50
-        mock_du = MagicMock()
-        mock_du.returncode = 0
-        mock_du.stdout = "1000000"     # 0 byte growth
 
         def fake_run(cmd, **kwargs):
-            return mock_wc if isinstance(cmd, list) and cmd[0] == "wc" else mock_du
+            return mock_wc
 
         with patch.object(m, "HEARTBEAT_STATE_JSON", str(state_file)), \
-             patch("subprocess.run", side_effect=fake_run):
+             patch("subprocess.run", side_effect=fake_run), \
+             _mock_transcript_bytes(m, 1_000_000):
             result = m.check_step3_introspection()
         assert result["actionable"] is True
         assert "50 new daily log lines" in result["reason"]
@@ -1782,15 +2186,13 @@ class TestBoundaryValues:
         mock_wc = MagicMock()
         mock_wc.returncode = 0
         mock_wc.stdout = "100 /path"   # 0 line growth
-        mock_du = MagicMock()
-        mock_du.returncode = 0
-        mock_du.stdout = str(1_000_000 + 102_400)  # exactly 102400 byte growth
 
         def fake_run(cmd, **kwargs):
-            return mock_wc if isinstance(cmd, list) and cmd[0] == "wc" else mock_du
+            return mock_wc
 
         with patch.object(m, "HEARTBEAT_STATE_JSON", str(state_file)), \
-             patch("subprocess.run", side_effect=fake_run):
+             patch("subprocess.run", side_effect=fake_run), \
+             _mock_transcript_bytes(m, 1_102_400):
             result = m.check_step3_introspection()
         assert result["actionable"] is True
         assert "bytes" in result["reason"]
@@ -1809,15 +2211,13 @@ class TestBoundaryValues:
         mock_wc = MagicMock()
         mock_wc.returncode = 0
         mock_wc.stdout = "100 /path"   # 0 line growth
-        mock_du = MagicMock()
-        mock_du.returncode = 0
-        mock_du.stdout = "1000000"     # 0 byte growth
 
         def fake_run(cmd, **kwargs):
-            return mock_wc if isinstance(cmd, list) and cmd[0] == "wc" else mock_du
+            return mock_wc
 
         with patch.object(m, "HEARTBEAT_STATE_JSON", str(state_file)), \
-             patch("subprocess.run", side_effect=fake_run):
+             patch("subprocess.run", side_effect=fake_run), \
+             _mock_transcript_bytes(m, 1_000_000):
             result = m.check_step3_introspection()
         assert result["actionable"] is True
         assert "h since last introspection" in result["reason"]
@@ -1847,3 +2247,61 @@ class TestBoundaryValues:
         with patch.object(m, "FS_AUDIT_MARKER", str(marker)):
             result = m.check_step10_filesystem_hygiene()
         assert result["actionable"] is True
+
+
+# ---------------------------------------------------------------------------
+# --transcript-bytes flag handling (argparse regression #1231)
+# ---------------------------------------------------------------------------
+
+class TestTranscriptBytesFlag:
+    """Exercise the --transcript-bytes CLI path without argparse."""
+
+    def _run_main_captured(self, m, monkeypatch, argv):
+        """Run main() capturing stdout/stderr/exit code."""
+        import io
+        from unittest.mock import patch
+
+        out = io.StringIO()
+        err = io.StringIO()
+        monkeypatch.setattr(sys, "argv", argv)
+        with patch.object(sys, "stdout", out), patch.object(sys, "stderr", err):
+            try:
+                m.main()
+                code = 0
+            except SystemExit as exc:
+                code = exc.code if isinstance(exc.code, int) else 1
+        return code, out.getvalue(), err.getvalue()
+
+    def test_transcript_bytes_flag_success(self, m, monkeypatch):
+        with patch.object(m, "_fetch_transcript_content_bytes", return_value=12_345):
+            code, stdout, stderr = self._run_main_captured(
+                m, monkeypatch, ["proactive-gate-check.py", "--transcript-bytes"]
+            )
+        assert code == 0
+        assert stdout == "12345\n"
+        assert stderr == ""
+
+    def test_transcript_bytes_flag_failure(self, m, monkeypatch):
+        with patch.object(m, "_fetch_transcript_content_bytes", return_value=None):
+            code, stdout, stderr = self._run_main_captured(
+                m, monkeypatch, ["proactive-gate-check.py", "--transcript-bytes"]
+            )
+        assert code == 3
+        assert stdout == ""
+        assert "Could not query transcript content bytes" in stderr
+
+    def test_main_under_pytest_argv_is_unaffected(self, m, monkeypatch):
+        """When pytest invokes main() in-process, its own argv must not be rejected."""
+        with patch.object(m, "_fetch_transcript_content_bytes", return_value=None), \
+             patch("subprocess.run", side_effect=FileNotFoundError):
+            code, stdout, stderr = self._run_main_captured(
+                m,
+                monkeypatch,
+                ["/path/to/pytest", "-v", "motivation/tests/test_proactive_gate_check.py"],
+            )
+        # argparse previously exited 2 here; the gate now runs and fails closed.
+        assert code != 2
+        assert code == 3
+        parsed = json.loads(stdout)
+        assert parsed["idle"] is False
+        assert "error" in parsed

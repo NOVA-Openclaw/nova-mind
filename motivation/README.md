@@ -41,6 +41,24 @@ OpenClaw heartbeat (every 30m)
 See `motivation/ARCHITECTURE.md` for full step details, gate-check design, and the
 Blocker Outreach cascade/channel/reassignment rules.
 
+## Gate-check output and failure semantics
+
+`motivation/scripts/proactive-gate-check.py` prints a single JSON object to
+stdout and exits as follows:
+
+| Situation | Exit code | `idle` | `error` field |
+|---|---|---|---|
+| NOVA is idle ≥ threshold | `0` | `true` | absent |
+| NOVA is not idle | `0` | `false` | absent |
+| Gate data source is broken (CLI missing, nonzero exit, timeout, malformed JSON) | `3` | `false` | present, scrubbed |
+| `check_idle()` returns no `idle` key | `3` | `false` | present if the result carried one |
+
+Exit code `3` means **the gate itself is broken** — callers must treat it as
+`not idle` and must not proceed with proactive work. The `error` field is a
+short, redacted string: long base64/hex runs, `sk-...`, `Bearer ...`, and
+`key=`/`token=`/`password=` values are replaced with `[redacted]` so that CLI
+stderr (which may contain secrets) is safe to log.
+
 ## Database Schema
 
 ### Core Tables
@@ -124,13 +142,17 @@ Conjecture, and Navier-Stokes Existence and Smoothness):
         "every": "30m",
         "target": "discord",
         "to": "channel:1504054635231445112",
-        "isolatedSession": true,
-        "skipWhenBusy": true
+        "isolatedSession": true
       }
     }
   }
 }
 ```
+
+> **Cadence (#714):** `every` defaults to `30m`. The 20m cadence requested in
+> #714 is intentionally parametrized but left pending per the Rev 2 test-case
+> decision; changing it requires an explicit scope choice between a nova-only
+> override and an `agents.defaults`-wide change.
 
 ### Bootstrap Context
 

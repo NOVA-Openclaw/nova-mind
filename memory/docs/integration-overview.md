@@ -288,9 +288,10 @@ cd nova-cognition
 echo "NOVA_MEMORY_DB=postgresql://${USER}@localhost/${USER//-/_}_memory" >> ~/.bashrc
 
 # 4. Install integration hooks
-cp nova-memory/hooks/memory-extract ~/.openclaw/workspace/hooks/
+cp -r nova-memory/memory/plugins/memory-extract ~/.openclaw/workspace/extensions/memory-extract
 cp nova-cognition/hooks/job-system ~/.openclaw/workspace/hooks/
-openclaw hooks enable memory-extract job-system
+openclaw plugins enable memory-extract
+openclaw hooks enable job-system
 
 # 5. Populate agent registry
 psql -d "${USER//-/_}_memory" -f integration/seed-agents.sql

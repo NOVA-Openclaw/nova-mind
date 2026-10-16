@@ -150,7 +150,7 @@ User Message
     ↓
 OpenClaw Gateway (message:received event)
     ↓
-memory-extract hook → Claude extraction → entities/facts/opinions → PostgreSQL
+memory-extract plugin → Claude extraction → entities/facts/opinions → PostgreSQL
 turn-context plugin → entity resolution + semantic recall + turn reminders (parallel)
     ↓
 Agent Processes Message (with enriched context)

@@ -29,10 +29,18 @@ export interface ClassifierResult {
 
 // ── Configuration ─────────────────────────────────────────────────────────────
 
-const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || "http://localhost:11434";
-const OLLAMA_CLASSIFY_MODEL =
-  process.env.OLLAMA_CLASSIFY_MODEL || "phi4-mini:latest";
-const OLLAMA_TIMEOUT_MS = 2000;
+function getOllamaBaseUrl(): string {
+  return process.env.OLLAMA_BASE_URL || "http://localhost:11434";
+}
+
+function getOllamaClassifyModel(): string {
+  return process.env.OLLAMA_CLASSIFY_MODEL || "phi4-mini:latest";
+}
+
+export function getOllamaTimeoutMs(): number {
+  const parsed = parseInt(process.env.OLLAMA_TIMEOUT_MS || "2000", 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 2000;
+}
 
 // ── Rule sets ─────────────────────────────────────────────────────────────────
 
@@ -161,7 +169,7 @@ Respond with ONLY valid JSON (no markdown):
 {"type": "<one of the 5 types>", "domainHints": ["<relevant domain keywords, omit if none>"]}`;
 
   const body = JSON.stringify({
-    model: OLLAMA_CLASSIFY_MODEL,
+    model: getOllamaClassifyModel(),
     prompt,
     stream: false,
     format: "json",
@@ -170,14 +178,15 @@ Respond with ONLY valid JSON (no markdown):
 
   return new Promise((resolve, reject) => {
     let req: http.ClientRequest;
+    const timeoutMs = getOllamaTimeoutMs();
 
     const timeout = setTimeout(() => {
       req?.destroy();
-      reject(new Error(`Ollama classify timeout after ${OLLAMA_TIMEOUT_MS}ms`));
-    }, OLLAMA_TIMEOUT_MS);
+      reject(new Error(`Ollama classify timeout after ${timeoutMs}ms`));
+    }, timeoutMs);
 
     try {
-      const url = new URL(`${OLLAMA_BASE_URL}/api/generate`);
+      const url = new URL(`${getOllamaBaseUrl()}/api/generate`);
       const options: http.RequestOptions = {
         hostname: url.hostname,
         port: parseInt(url.port || "80", 10),
@@ -196,6 +205,29 @@ Respond with ONLY valid JSON (no markdown):
         });
         res.on("end", () => {
           clearTimeout(timeout);
+
+          // Surface 404 / model-not-found distinctly before attempting parse.
+          if (res.statusCode === 404) {
+            let detail = "";
+            try {
+              const errResp = JSON.parse(data);
+              detail = errResp.error ? `: ${errResp.error}` : "";
+            } catch {
+              detail = data ? `: ${data.substring(0, 200)}` : "";
+            }
+            reject(new Error(`Ollama classify model not found${detail}`));
+            return;
+          }
+
+          if (res.statusCode && res.statusCode >= 400) {
+            reject(
+              new Error(
+                `Ollama classify HTTP ${res.statusCode}: ${data.substring(0, 200)}`
+              )
+            );
+            return;
+          }
+
           try {
             const ollamaResp = JSON.parse(data);
             const respText: string = ollamaResp.response || "{}";
@@ -260,9 +292,27 @@ export async function classifyMessage(content: string): Promise<ClassifierResult
     const ollamaResult = await callOllamaClassify(content);
     return ollamaResult;
   } catch (err) {
+    const raw = err instanceof Error ? err : new Error(String(err));
+    const message = raw.message;
+
+    // Distinct, greppable reason tokens for the four known failure classes.
+    // Order matters: specific tokens are checked before generic substring matches.
+    let reason: string;
+    if (message.includes("model not found")) {
+      reason = "model_not_found";
+    } else if (message.includes("timeout after")) {
+      reason = "timeout";
+    } else if ((err as NodeJS.ErrnoException)?.code === "ECONNREFUSED" || message.includes("ECONNREFUSED")) {
+      reason = "connection_refused";
+    } else if (message.includes("parse error")) {
+      reason = "parse_error";
+    } else {
+      reason = "classifier_error";
+    }
+
     console.warn(
-      "[turn-context] Classifier Ollama fallback failed:",
-      err instanceof Error ? err.message : String(err)
+      `[turn-context] Classifier Ollama fallback failed: reason=${reason}`,
+      message
     );
     return { type: "conversation", method: "default" };
   }

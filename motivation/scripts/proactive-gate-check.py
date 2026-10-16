@@ -12,6 +12,7 @@ See: nova-mind#324
 
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -55,9 +56,6 @@ except ImportError:
 # ---------------------------------------------------------------------------
 IDLE_THRESHOLD_MINUTES = int(os.environ.get("IDLE_THRESHOLD_MINUTES", "60"))
 
-SESSIONS_JSON = os.path.expanduser(
-    "~/.openclaw/agents/nova/sessions/sessions.json"
-)
 HEARTBEAT_STATE_JSON = os.path.expanduser(
     "~/.openclaw/workspace/memory/heartbeat-state.json"
 )
@@ -69,8 +67,53 @@ MEMORY_MAINTENANCE_JSON = os.path.expanduser(
 )
 FS_AUDIT_MARKER = os.path.expanduser("~/.openclaw/workspace/.last-fs-audit")
 
+def _resolve_main_key() -> str:
+    """Resolve the configured session mainKey from OpenClaw config.
+
+    Reads ONLY the `session.mainKey` field from the config file pointed to by
+    OPENCLAW_CONFIG_PATH, falling back to ~/.openclaw/openclaw.json. The rest
+    of the file is never logged or returned because it may contain secrets.
+
+    Defaults to 'main' when the file or key is missing, unreadable, or invalid.
+    """
+    config_path = os.environ.get("OPENCLAW_CONFIG_PATH")
+    if not config_path:
+        config_path = os.path.expanduser("~/.openclaw/openclaw.json")
+    try:
+        with open(config_path, "r") as fh:
+            config = json.load(fh)
+        main_key = config.get("session", {}).get("mainKey")
+        if isinstance(main_key, str) and main_key:
+            return main_key
+    except (FileNotFoundError, json.JSONDecodeError, OSError, TypeError):
+        pass
+    return "main"
+
+
 # Session key substrings that indicate a user-facing session.
-USER_SESSION_PATTERNS = ("discord:channel", "signal:", "telegram:")
+# - :discord:channel: = public guild channels.
+# - agent:<agentId>:<mainKey> = the agent's main session. With the default
+#   dmScope="main", EVERY direct message (Discord, Signal, Telegram, webchat)
+#   lands here; see session-key.ts buildSessionKey and resolve-route.ts.
+#   The mainKey value is configurable in OpenClaw 2026.9.6+ via session.mainKey
+#   (default 'main'); see resolve-route.ts buildAgentSessionKey.
+# - :direct: = per-peer / per-channel-peer / per-account-channel-peer DMs.
+# - signal:/telegram: are kept for backward compatibility / non-main group
+#   sessions. Under dmScope=main, Signal/Telegram DMs show up as :mainKey.
+USER_SESSION_PATTERNS = (
+    ":discord:channel:",
+    ":direct:",
+    "signal:",
+    "telegram:",
+)
+
+# Resolved at import time so all callers see the same value without re-reading
+# secrets on every check. The value is escaped before being embedded in regex.
+_MAIN_KEY = _resolve_main_key()
+
+# Matches the agent main session key exactly, e.g. agent:nova:main.
+# Must NOT match agent:nova:main:heartbeat or agent:nova:mainframe.
+_MAIN_SESSION_RE = re.compile(rf"^agent:[^:]+:{re.escape(_MAIN_KEY)}$")
 
 # Session key substrings that indicate bot/system sessions to exclude.
 EXCLUDE_PATTERNS = (
@@ -104,6 +147,35 @@ BLOCKERS_PER_MESSAGE = 3
 
 # D100 forced-roll threshold (issue #358)
 D100_FORCED_COOLDOWN_H = 12
+
+
+def _is_user_session_key(key: str) -> bool:
+    """Return True if `key` represents a user-facing session.
+
+    Mirrors the SQL produced by _user_session_sql_conditions().
+    """
+    if _MAIN_SESSION_RE.match(key):
+        return True
+    return any(pat in key for pat in USER_SESSION_PATTERNS)
+
+
+def _is_excluded_session_key(key: str) -> bool:
+    """Return True if `key` is a bot/system session that should be ignored."""
+    return any(exc in key for exc in EXCLUDE_PATTERNS)
+
+
+def _user_session_sql_conditions(table_alias: str = "cs") -> tuple[str, list[str]]:
+    """Return (sql_fragment, params) matching user-facing session keys.
+
+    Must stay in sync with _is_user_session_key().
+    """
+    conditions = [f"{table_alias}.session_key ~ %s"]
+    params: list[str] = [rf"^agent:[^:]+:{re.escape(_MAIN_KEY)}$"]
+    for pat in USER_SESSION_PATTERNS:
+        conditions.append(f"{table_alias}.session_key LIKE %s")
+        params.append(f"%{pat}%")
+    return " OR ".join(conditions), params
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -176,6 +248,53 @@ def _step_error(msg: str) -> dict:
     return {"actionable": False, "error": msg}
 
 
+def _scrub_error(msg: str) -> str:
+    """Redact likely secrets and collapse noisy error strings.
+
+    - Cap at 200 characters.
+    - Collapse whitespace to single spaces.
+    - Redact common secret shapes:
+        * long base64/hex runs (>=20 chars)
+        * sk-... (OpenAI-style keys)
+        * Bearer ... tokens
+        * key=/token=/password= values
+    """
+    if not isinstance(msg, str):
+        msg = str(msg)
+    # Collapse whitespace first so regexes don't depend on exact layout.
+    scrubbed = " ".join(msg.split())
+    if len(scrubbed) > 200:
+        scrubbed = scrubbed[:200]
+
+    # Long base64/hex-like runs (>=20 chars)
+    scrubbed = re.sub(
+        r"[A-Za-z0-9+/]{20,}={0,2}",
+        "[redacted]",
+        scrubbed,
+    )
+    scrubbed = re.sub(
+        r"\b[0-9a-fA-F]{20,}\b",
+        "[redacted]",
+        scrubbed,
+    )
+
+    # sk-... API keys
+    scrubbed = re.sub(r"\bsk-[A-Za-z0-9_-]+\b", "[redacted]", scrubbed)
+
+    # Bearer tokens
+    scrubbed = re.sub(r"\bBearer\s+\S+", "[redacted]", scrubbed)
+
+    # key=/token=/password= values (including quoted values)
+    scrubbed = re.sub(
+        r"((?:\b|_)(?:key|token|password)\s*=\s*)['\"]?[^\s'\"]+['\"]?",
+        r"\1[redacted]",
+        scrubbed,
+        flags=re.IGNORECASE,
+    )
+
+    return scrubbed
+
+
 def _load_heartbeat_state(path: str) -> tuple[dict[str, Any] | None, datetime | None]:
     """
     Load heartbeat state from a single JSON file.
@@ -205,7 +324,11 @@ def _load_heartbeat_state(path: str) -> tuple[dict[str, Any] | None, datetime | 
 
 def check_idle() -> dict:
     """
-    Read sessions.json and determine if NOVA has been idle long enough.
+    Determine if NOVA has been idle long enough.
+
+    Uses `openclaw sessions --json` (2026.9.x) instead of reading OpenClaw's
+    private sessions.json file directly (#710). This keeps nova-mind out of
+    OpenClaw-owned session storage.
 
     Returns a dict with:
       idle: bool
@@ -217,34 +340,149 @@ def check_idle() -> dict:
     now_ms = int(time.time() * 1000)
 
     try:
-        with open(SESSIONS_JSON, "r") as fh:
-            raw = fh.read()
-        sessions = json.loads(raw)
+        result = subprocess.run(
+            ["openclaw", "sessions", "--json"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if result.returncode != 0:
+            # #250/#714 — fail CLOSED: a broken data source must not be treated
+            # as "safe to proceed" (idle=true). Return idle=false plus error.
+            return {
+                "idle": False,
+                "idle_minutes": 0.0,
+                "idle_threshold_minutes": IDLE_THRESHOLD_MINUTES,
+                "error": _scrub_error(
+                    f"openclaw sessions failed (rc={result.returncode}): {result.stderr}"
+                ),
+                "reason": "openclaw sessions failed — defaulting to not-idle",
+            }
+        sessions = json.loads(result.stdout)
     except FileNotFoundError:
         return {
-            "idle": True,
-            "idle_minutes": float("inf"),
+            "idle": False,
+            "idle_minutes": 0.0,
             "idle_threshold_minutes": IDLE_THRESHOLD_MINUTES,
-            "reason": "sessions.json not found — defaulting to idle",
+            "error": _scrub_error("openclaw CLI not found"),
+            "reason": "openclaw CLI not found — defaulting to not-idle",
+        }
+    except subprocess.TimeoutExpired:
+        return {
+            "idle": False,
+            "idle_minutes": 0.0,
+            "idle_threshold_minutes": IDLE_THRESHOLD_MINUTES,
+            "error": _scrub_error("openclaw sessions timed out"),
+            "reason": "openclaw sessions timed out — defaulting to not-idle",
         }
     except (json.JSONDecodeError, ValueError) as exc:
         return {
-            "idle": True,
-            "idle_minutes": float("inf"),
+            "idle": False,
+            "idle_minutes": 0.0,
             "idle_threshold_minutes": IDLE_THRESHOLD_MINUTES,
-            "reason": f"sessions.json malformed: {exc} — defaulting to idle",
+            "error": _scrub_error(f"openclaw sessions output malformed: {exc}"),
+            "reason": "openclaw sessions output malformed — defaulting to not-idle",
         }
+
+    # Parse the 2026.9.x real CLI shape. The top level is an object whose
+    # "sessions" key is an array of session objects; each session object has
+    # a string "key" (e.g. "agent:nova:discord:channel:...") and an integer
+    # "lastInteractionAt" (epoch ms). Legacy callers may still hand us a
+    # dict-of-key->session; tolerate that only as a transparent fallback.
+    sessions_list: list[dict[str, Any]]
+    if isinstance(sessions, dict):
+        if "sessions" in sessions and isinstance(sessions["sessions"], list):
+            sessions_list = sessions["sessions"]
+        elif "sessions" in sessions:
+            # `sessions` key exists but is not a list -> unexpected shape.
+            return {
+                "idle": False,
+                "idle_minutes": 0.0,
+                "idle_threshold_minutes": IDLE_THRESHOLD_MINUTES,
+                "error": _scrub_error(
+                    "openclaw sessions top-level 'sessions' is not a list"
+                ),
+                "reason": "openclaw sessions shape unexpected — defaulting to not-idle",
+            }
+        elif any(k in sessions for k in ("activeMinutes", "count", "hasMore", "limitApplied", "path", "totalCount")):
+            # Looks like the real top-level envelope but is missing the
+            # `sessions` array entirely. Fail closed rather than treating it as
+            # the legacy dict-of-sessions shape.
+            return {
+                "idle": False,
+                "idle_minutes": 0.0,
+                "idle_threshold_minutes": IDLE_THRESHOLD_MINUTES,
+                "error": _scrub_error(
+                    "openclaw sessions top-level object is missing 'sessions' array"
+                ),
+                "reason": "openclaw sessions shape unexpected — defaulting to not-idle",
+            }
+        else:
+            # Legacy dict-of-key->session shape.
+            sessions_list = [
+                {"key": key, **session}
+                for key, session in sessions.items()
+                if isinstance(session, dict)
+            ]
+    elif isinstance(sessions, list):
+        sessions_list = sessions
+    else:
+        return {
+            "idle": False,
+            "idle_minutes": 0.0,
+            "idle_threshold_minutes": IDLE_THRESHOLD_MINUTES,
+            "error": _scrub_error(
+                f"openclaw sessions top-level shape is {type(sessions).__name__}, expected object"
+            ),
+            "reason": "openclaw sessions shape unexpected — defaulting to not-idle",
+        }
+
+    # If the response was truncated, the newest user-facing session might be
+    # missing. The CLI supports `--limit all` to remove the cap, so re-fetch
+    # once with the unlimited flag. We also accept `--active <minutes>` as a
+    # narrower filter, but only when we are confident the threshold covers it.
+    # The default ordering from the CLI returns newest-first, so even a capped
+    # page is safe IF it includes the user's most recent session.
+    has_more = isinstance(sessions, dict) and sessions.get("hasMore") is True
+    limit_applied = isinstance(sessions, dict) and sessions.get("limitApplied") is not None
+    if has_more or limit_applied:
+        try:
+            unlimited = subprocess.run(
+                ["openclaw", "sessions", "--json", "--limit", "all"],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            if unlimited.returncode == 0:
+                unlimited_data = json.loads(unlimited.stdout)
+                if isinstance(unlimited_data, dict) and isinstance(unlimited_data.get("sessions"), list):
+                    sessions_list = unlimited_data["sessions"]
+        except (subprocess.TimeoutExpired, json.JSONDecodeError, ValueError):
+            # Keep the original (possibly truncated) list and proceed; failing
+            # the unlimited retry must not mask real user activity.
+            pass
 
     latest_interaction_ms: int | None = None
 
-    for key, session in sessions.items():
-        # Must match at least one user-facing pattern
-        if not any(pat in key for pat in USER_SESSION_PATTERNS):
+    for session in sessions_list:
+        key = session.get("key") if isinstance(session, dict) else None
+        if not isinstance(key, str):
             continue
-        # Must NOT match any exclude pattern
-        if any(exc in key for exc in EXCLUDE_PATTERNS):
+        # Must match at least one user-facing pattern.
+        if not _is_user_session_key(key):
+            continue
+        # Must NOT match any exclude pattern (applied AFTER user-facing match).
+        if _is_excluded_session_key(key):
             continue
 
+        # Use lastInteractionAt only — user-originated activity. lastActivityAt
+        # also includes assistant/heartbeat/system writes; see
+        # nova-openclaw-production/src/shared/session-activity-timestamp.ts.
+        # Orchestrator trace: src/auto-reply/reply/session.ts:944 keeps
+        # lastInteractionAt unchanged for system events
+        # (`isSystemEvent ? baseEntry?.lastInteractionAt : now`), and heartbeats
+        # run in the isolated `:heartbeat` session, so non-human events don't
+        # fake activity on agent:<id>:<mainKey>.
         ts = session.get("lastInteractionAt")
         if ts is not None:
             try:
@@ -255,6 +493,8 @@ def check_idle() -> dict:
                 pass
 
     if latest_interaction_ms is None:
+        # Only reach here when the parse succeeded and the session list really
+        # contains no user-facing entries. In that case idle=true is safe.
         return {
             "idle": True,
             "idle_minutes": float("inf"),
@@ -307,68 +547,70 @@ def check_step1_agent_chat() -> dict:
         return _step_error(f"DB error: {exc}")
 
 
-def _last_conversational_role(session_file: str) -> str | None:
-    """Return the role ('user' or 'assistant') of the last conversational message in a session JSONL file.
-
-    Skips toolResult, system, and other non-conversational entries.
-    Returns None if no conversational message is found.
+def _fetch_unanswered_sessions() -> list[tuple[str, datetime]] | dict:
     """
-    if not os.path.exists(session_file):
-        return None
+    Query nova_memory for user-facing sessions whose most recent transcript
+    row is a user turn within the last 24 hours.
+
+    Uses the same session_key pattern filters as check_idle(). Returns a list
+    of (session_key, last_user_timestamp) or a _step_error dict on DB failure.
+    """
     try:
-        with open(session_file, "r") as fh:
-            lines = fh.readlines()
-    except OSError:
-        return None
-    # Walk backwards to find last user or assistant message
-    for line in reversed(lines):
-        line = line.strip()
-        if not line:
-            continue
+        conn = _db_connect()
         try:
-            entry = json.loads(line)
-        except (json.JSONDecodeError, ValueError):
+            with conn:
+                with conn.cursor() as cur:
+                    user_conditions, params = _user_session_sql_conditions("cs")
+                    cur.execute(
+                        f"""
+                        WITH latest AS (
+                          SELECT DISTINCT ON (ct.session_id)
+                            ct.session_id,
+                            ct.role,
+                            ct.timestamp
+                          FROM channel_transcripts ct
+                          JOIN channel_sessions cs ON cs.id = ct.session_id
+                          WHERE {user_conditions}
+                          ORDER BY ct.session_id, ct.timestamp DESC
+                        )
+                        SELECT cs.session_key, latest.timestamp
+                        FROM channel_sessions cs
+                        JOIN latest ON latest.session_id = cs.id
+                        WHERE latest.timestamp > NOW() - INTERVAL '1 day'
+                          AND latest.role = 'user';
+                        """,
+                        params,
+                    )
+                    rows = cur.fetchall()
+        finally:
+            conn.close()
+    except Exception as exc:
+        return _step_error(f"DB error: {exc}")
+
+    # Apply the same exclude patterns as check_idle() in Python, matching the
+    # original sessions.json filtering semantics.
+    result: list[tuple[str, datetime]] = []
+    for session_key, ts in rows:
+        if any(exc in session_key for exc in EXCLUDE_PATTERNS):
             continue
-        role = entry.get("message", {}).get("role")
-        if role in ("user", "assistant"):
-            return role
-    return None
+        result.append((session_key, ts))
+    return result
 
 
 def check_step2_unanswered_sessions() -> dict:
     """
     Step 2: Check for unanswered user messages in recent user-facing sessions.
-    Reads sessions.json and checks each session's JSONL file to see if the last
-    conversational message is from a user (i.e. unanswered).
+
+    Replaced the OpenClaw session JSONL reader with a query against
+    nova-mind's own channel_transcripts/channel_sessions tables (#710).
+    A session is unanswered when its latest transcript row is a user turn
+    with no later assistant turn within the last day.
     """
-    ONE_DAY_MS = 86_400_000
-    try:
-        with open(SESSIONS_JSON, "r") as fh:
-            sessions_data = json.load(fh)
-    except (OSError, json.JSONDecodeError) as exc:
-        return _step_error(f"Failed to read sessions.json: {exc}")
+    rows = _fetch_unanswered_sessions()
+    if isinstance(rows, dict):
+        return rows
 
-    now_ms = int(time.time() * 1000)
-    unanswered: list[str] = []
-
-    for key, sess in sessions_data.items():
-        updated = sess.get("updatedAt", 0)
-        age_ms = now_ms - updated
-        if age_ms >= ONE_DAY_MS:
-            continue
-        if not any(pat in key for pat in USER_SESSION_PATTERNS):
-            continue
-        if any(exc_pat in key for exc_pat in EXCLUDE_PATTERNS):
-            continue
-
-        session_file = sess.get("sessionFile", "")
-        if not session_file:
-            continue
-
-        last_role = _last_conversational_role(session_file)
-        if last_role == "user":
-            unanswered.append(key)
-
+    unanswered = [key for key, _ in rows]
     count = len(unanswered)
     if count > 0:
         return {
@@ -379,10 +621,33 @@ def check_step2_unanswered_sessions() -> dict:
     return {"actionable": False, "reason": "No unanswered user messages in recent sessions"}
 
 
+def _fetch_transcript_content_bytes() -> int:
+    """
+    Sum LENGTH(content) across channel_transcripts.
+
+    This replaces the old JSONL byte-growth signal (du over OpenClaw session
+    files) with a nova-mind-native measure: the total size of transcript
+    content stored in nova_memory. Growth since the last introspection is
+    current_total - last_total, preserving the original threshold semantics.
+    """
+    try:
+        conn = _db_connect()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT COALESCE(SUM(LENGTH(content)), 0) FROM channel_transcripts")
+                    row = cur.fetchone()
+                    return int(row[0]) if row else 0
+        finally:
+            conn.close()
+    except Exception:
+        return 0
+
+
 def check_step3_introspection() -> dict:
     """
     Step 3: Introspection gate.
-    Compares current daily log lines + session transcript bytes + elapsed time
+    Compares current daily log lines + transcript content bytes + elapsed time
     against last recorded values. Any threshold exceeded → actionable.
 
     Reads heartbeat state from two mirrored locations and uses whichever
@@ -479,28 +744,20 @@ def check_step3_introspection() -> dict:
     except (subprocess.TimeoutExpired, ValueError, IndexError, FileNotFoundError):
         pass  # Non-fatal; skip this sub-check
 
-    # Check session transcript byte growth
-    sessions_dir = os.path.expanduser("~/.openclaw/agents/nova/sessions/")
-    try:
-        result = subprocess.run(
-            ["bash", "-c", f"du -sb {sessions_dir}*.jsonl 2>/dev/null | awk '{{s+=$1}} END{{print s+0}}'"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            current_bytes = int(result.stdout.strip())
-            data["current_session_bytes"] = current_bytes
-            if last_bytes is not None:
-                byte_growth = current_bytes - last_bytes
-                data["byte_growth"] = byte_growth
-                if byte_growth >= INTROSPECT_BYTE_THRESHOLD:
-                    reasons.append(
-                        f"{byte_growth:,} bytes of new session transcripts "
-                        f"(threshold {INTROSPECT_BYTE_THRESHOLD:,})"
-                    )
-    except (subprocess.TimeoutExpired, ValueError, FileNotFoundError):
-        pass
+    # Check transcript content byte growth.
+    # Replaces the old JSONL byte-growth signal (du over OpenClaw session
+    # files) with a nova-mind-native query: SUM(LENGTH(content)) from
+    # channel_transcripts. The threshold semantics are unchanged.
+    current_bytes = _fetch_transcript_content_bytes()
+    data["current_session_bytes"] = current_bytes
+    if last_bytes is not None:
+        byte_growth = current_bytes - last_bytes
+        data["byte_growth"] = byte_growth
+        if byte_growth >= INTROSPECT_BYTE_THRESHOLD:
+            reasons.append(
+                f"{byte_growth:,} bytes of new transcript content "
+                f"(threshold {INTROSPECT_BYTE_THRESHOLD:,})"
+            )
 
     if reasons:
         return {
@@ -1250,11 +1507,26 @@ def check_step11_d100(prior_actionable_count: int) -> dict:
 # ---------------------------------------------------------------------------
 
 def main() -> None:
+    # --transcript-bytes: single-source-of-truth readout for the introspect
+    # SKILL's sessionTranscriptBytes baseline. Runs no other checks and
+    # writes no state.
+    if "--transcript-bytes" in sys.argv[1:]:
+        bytes_ = _fetch_transcript_content_bytes()
+        if bytes_ is None:
+            print(
+                "Could not query transcript content bytes from nova_memory.channel_transcripts",
+                file=sys.stderr,
+            )
+            sys.exit(3)
+        print(bytes_)
+        sys.exit(0)
+
     timestamp = _iso_now()
 
     # 1. Idle detection — always runs first
     idle_result = check_idle()
-    is_idle = idle_result.get("idle", True)
+    # LOUD FAIL-CLOSED: a missing idle field must NOT be treated as idle (#714).
+    is_idle = idle_result.get("idle", False)
     idle_minutes = idle_result.get("idle_minutes", 0.0)
 
     base = {
@@ -1267,8 +1539,16 @@ def main() -> None:
     if idle_result.get("reason"):
         base["idle_reason"] = idle_result["reason"]
 
+    # Surface gate errors distinctly so callers can tell "not idle" from "gate broken".
+    gate_error = idle_result.get("error")
+    if gate_error is not None:
+        base["error"] = _scrub_error(gate_error)
+
     if not is_idle:
         print(json.dumps(base, indent=2))
+        # Exit 3 when the gate itself is broken — never silently treat failure as idle.
+        if gate_error is not None:
+            sys.exit(3)
         return
 
     # 2. Run all 11 gate checks

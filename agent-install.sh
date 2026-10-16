@@ -46,6 +46,925 @@ TMPDIRS=()
 cleanup_tmp() { rm -f "${TMPFILES[@]}"; rm -rf "${TMPDIRS[@]}"; }
 trap cleanup_tmp EXIT
 
+# Helper: install the memory-extract plugin.  Builds in the source tree,
+# copies dist/ to the target, installs only runtime dependencies (#598/#724),
+# and enables the plugin in OpenClaw config.
+_install_memory_extract_plugin() {
+    local MEMORY_EXTRACT_SOURCE="${1:-$SCRIPT_DIR/memory/plugins/memory-extract}"
+    local MEMORY_EXTRACT_TARGET="${2:-$EXTENSIONS_DIR/memory-extract}"
+    local cfg="${OPENCLAW_CONFIG:-$OPENCLAW_DIR/openclaw.json}"
+
+    if [ ! -d "$MEMORY_EXTRACT_SOURCE" ]; then
+        echo -e "  ${CROSS_MARK} memory-extract plugin source not found at $MEMORY_EXTRACT_SOURCE"
+        VERIFICATION_ERRORS=$((VERIFICATION_ERRORS + 1))
+        return 1
+    fi
+
+    mkdir -p "$MEMORY_EXTRACT_TARGET/dist"
+
+    # Copy source and config files
+    for f in package.json package-lock.json openclaw.plugin.json tsconfig.json; do
+        if [ -f "$MEMORY_EXTRACT_SOURCE/$f" ]; then
+            cp "$MEMORY_EXTRACT_SOURCE/$f" "$MEMORY_EXTRACT_TARGET/$f"
+        fi
+    done
+    echo -e "  ${CHECK_MARK} memory-extract plugin config files copied"
+
+    # Build TypeScript in the source directory so the target only receives
+    # runtime dependencies (#598, #724).
+    if [ -d "$MEMORY_EXTRACT_SOURCE/src" ]; then
+        _install_plugin_build_dependencies "$MEMORY_EXTRACT_SOURCE" "memory-extract" || return 1
+
+        echo "  Building memory-extract TypeScript..."
+        local BUILD_LOG
+        BUILD_LOG=$(mktemp /tmp/memory-extract-build-XXXXXX.log)
+        TMPFILES+=("$BUILD_LOG")
+        if (cd "$MEMORY_EXTRACT_SOURCE" && "$MEMORY_EXTRACT_SOURCE/node_modules/.bin/tsc") >"$BUILD_LOG" 2>&1; then
+            cp -r "$MEMORY_EXTRACT_SOURCE/dist/"* "$MEMORY_EXTRACT_TARGET/dist/"
+            echo -e "  ${CHECK_MARK} memory-extract plugin built"
+            rm -f "$BUILD_LOG"
+        else
+            echo -e "  ${CROSS_MARK} memory-extract plugin build failed"
+            tail -10 "$BUILD_LOG"
+            VERIFICATION_ERRORS=$((VERIFICATION_ERRORS + 1))
+            cd "$SCRIPT_DIR"
+            return 1
+        fi
+    fi
+
+    # Install runtime dependencies in the target directory (#598)
+    _install_runtime_dependencies "$MEMORY_EXTRACT_TARGET" "memory-extract" || return 1
+    cd "$SCRIPT_DIR"
+
+    # Enable plugin in openclaw.json. Do this BEFORE removing the legacy hook
+    # directory or config entries so a failure here cannot leave the system
+    # with zero memory-extract (#1231).
+    if [ -f "$cfg" ] && command -v jq &>/dev/null; then
+        local cfg_tmp
+        cfg_tmp=$(mktemp "${cfg}.tmp.XXXXXX")
+        TMPFILES+=("$cfg_tmp")
+
+        if jq --arg path "$MEMORY_EXTRACT_TARGET" '
+            .plugins.load.paths = ((.plugins.load.paths // []) + [$path] | unique)
+            | .plugins.entries."memory-extract" = (.plugins.entries."memory-extract" // {}) * {
+                "enabled": true,
+                "hooks": {
+                  "allowConversationAccess": true
+                }
+              }
+        ' "$cfg" >"$cfg_tmp" && \
+            jq -e '(.plugins.entries."memory-extract".enabled == true) and ((.plugins.load.paths // []) | index($path) != null)' --arg path "$MEMORY_EXTRACT_TARGET" "$cfg_tmp" >/dev/null 2>&1 && \
+            mv "$cfg_tmp" "$cfg"; then
+            echo -e "  ${CHECK_MARK} memory-extract plugin enabled in OpenClaw config"
+        else
+            echo -e "  ${CROSS_MARK} Could not enable memory-extract plugin in config"
+            VERIFICATION_ERRORS=$((VERIFICATION_ERRORS + 1))
+            rm -f "$cfg_tmp"
+            return 1
+        fi
+
+        # Remove the legacy internal hook config entry if present. The r4
+        # installer and the restored staging config both use
+        # .hooks.internal.entries["memory-extract"].enabled. Delete the whole
+        # object, but only after the plugin entry has been verified (#1231).
+        if jq -e '.hooks.internal.entries["memory-extract"]' "$cfg" &>/dev/null; then
+            if jq 'del(.hooks.internal.entries["memory-extract"])' "$cfg" >"$cfg_tmp" && mv "$cfg_tmp" "$cfg"; then
+                echo -e "  ${CHECK_MARK} Removed memory-extract hook entry from config"
+            else
+                echo -e "  ${CROSS_MARK} Could not remove memory-extract hook entry from config"
+                VERIFICATION_ERRORS=$((VERIFICATION_ERRORS + 1))
+                rm -f "$cfg_tmp"
+                return 1
+            fi
+        fi
+        rm -f "$cfg_tmp"
+    fi
+
+    # Remove legacy memory-extract hook directory ONLY after the plugin config
+    # edit has been verified (#1231).
+    if [ -d "$OPENCLAW_DIR/hooks/memory-extract" ]; then
+        rm -rf "$OPENCLAW_DIR/hooks/memory-extract"
+        echo -e "  ${CHECK_MARK} Removed legacy memory-extract hook directory"
+    fi
+
+    # Verify installation
+    if [ -f "$MEMORY_EXTRACT_TARGET/dist/index.js" ] && [ -f "$MEMORY_EXTRACT_TARGET/openclaw.plugin.json" ]; then
+        echo -e "  ${CHECK_MARK} memory-extract plugin installed to $MEMORY_EXTRACT_TARGET"
+    else
+        echo -e "  ${CROSS_MARK} memory-extract plugin installation incomplete"
+        VERIFICATION_ERRORS=$((VERIFICATION_ERRORS + 1))
+        return 1
+    fi
+}
+
+# Helper: install the turn-context plugin's TypeScript build dependency.
+# Captures npm output so a peer-dependency failure is visible instead of
+# swallowed by >/dev/null 2>&1.  Exits non-zero on failure (#722).
+_install_turn_context_typescript_deps() {
+    local target_dir="$1"
+    local npm_log
+    npm_log=$(mktemp /tmp/agent-install-npm-XXXXXX.log)
+    TMPFILES+=("$npm_log")
+
+    echo "  Installing build dependencies..."
+    if (cd "$target_dir" && npm install --save-dev --legacy-peer-deps typescript) >"$npm_log" 2>&1; then
+        return 0
+    fi
+
+    echo -e "  ${CROSS_MARK} Failed to install TypeScript build dependencies"
+    echo "  npm output:"
+    sed 's/^/    /' "$npm_log" >&2
+    echo "  Hint: the installer already uses --legacy-peer-deps." >&2
+    echo "        Check the npm output above for the underlying cause." >&2
+    return 1
+}
+
+# Helper: install only runtime npm dependencies for a deployed plugin or
+# extension.  Uses npm ci --omit=dev when a lockfile is present, falling back
+# to npm install --omit=dev otherwise.  Output is captured so a dependency
+# resolution failure is visible instead of swallowed.  Exits non-zero on
+# failure (see #598 and #722).
+_install_runtime_dependencies() {
+    local target_dir="$1"
+    local label="$2"
+    local npm_log
+    npm_log=$(mktemp /tmp/agent-install-runtime-deps-XXXXXX.log)
+    TMPFILES+=("$npm_log")
+
+    # Idempotency: skip when the installed tree already satisfies the lockfile.
+    if [ "${FORCE_INSTALL:-0}" -eq 0 ] && \
+       [ -d "$target_dir/node_modules" ] && \
+       [ -f "$target_dir/package-lock.json" ] && \
+       [ "$target_dir/node_modules" -nt "$target_dir/package-lock.json" ]; then
+        echo -e "  ${CHECK_MARK} $label runtime dependencies already installed (use --force to reinstall)"
+        return 0
+    fi
+
+    echo "  Installing $label runtime dependencies..."
+    if [ -f "$target_dir/package-lock.json" ]; then
+        if (cd "$target_dir" && npm ci --omit=dev --legacy-peer-deps) >"$npm_log" 2>&1; then
+            echo -e "  ${CHECK_MARK} $label runtime dependencies installed"
+            return 0
+        fi
+    else
+        if (cd "$target_dir" && npm install --omit=dev --legacy-peer-deps) >"$npm_log" 2>&1; then
+            echo -e "  ${CHECK_MARK} $label runtime dependencies installed"
+            return 0
+        fi
+    fi
+
+    echo -e "  ${CROSS_MARK} Failed to install $label runtime dependencies"
+    echo "  npm output:"
+    sed 's/^/    /' "$npm_log" >&2
+    echo "  Hint: the installer already uses --legacy-peer-deps." >&2
+    echo "        Check the npm output above for the underlying cause." >&2
+    return 1
+}
+
+# Helper: install build dependencies (devDependencies) for a plugin in its
+# source directory.  We build in the source tree and then copy dist/ to the
+# deployed target so that the target only contains runtime dependencies (#598,
+# #724).
+_install_plugin_build_dependencies() {
+    local source_dir="$1"
+    local label="$2"
+    local npm_log
+    npm_log=$(mktemp /tmp/agent-install-build-deps-XXXXXX.log)
+    TMPFILES+=("$npm_log")
+
+    # Idempotency: skip when the installed tree already satisfies the lockfile.
+    if [ "${FORCE_INSTALL:-0}" -eq 0 ] && \
+       [ -d "$source_dir/node_modules" ] && \
+       [ -f "$source_dir/package-lock.json" ] && \
+       [ "$source_dir/node_modules" -nt "$source_dir/package-lock.json" ]; then
+        echo -e "  ${CHECK_MARK} $label build dependencies already installed (use --force to reinstall)"
+        return 0
+    fi
+
+    echo "  Installing $label build dependencies..."
+    if [ -f "$source_dir/package-lock.json" ]; then
+        if (cd "$source_dir" && npm ci --legacy-peer-deps) >"$npm_log" 2>&1; then
+            echo -e "  ${CHECK_MARK} $label build dependencies installed"
+            return 0
+        fi
+    else
+        if (cd "$source_dir" && npm install --legacy-peer-deps) >"$npm_log" 2>&1; then
+            echo -e "  ${CHECK_MARK} $label build dependencies installed"
+            return 0
+        fi
+    fi
+
+    echo -e "  ${CROSS_MARK} Failed to install $label build dependencies"
+    echo "  npm output:"
+    sed 's/^/    /' "$npm_log" >&2
+    echo "  Hint: the installer already uses --legacy-peer-deps." >&2
+    echo "        Check the npm output above for the underlying cause." >&2
+    return 1
+}
+
+# Helper: install the turn-context plugin.  Accepts optional source and
+# target directories so bats tests can run the install section into a
+# scratch HOME (#598).
+_install_turn_context_plugin() {
+    local TURN_CONTEXT_SOURCE="${1:-$SCRIPT_DIR/memory/plugins/turn-context}"
+    local TURN_CONTEXT_TARGET="${2:-$OPENCLAW_DIR/plugins/turn-context}"
+
+    if [ ! -d "$TURN_CONTEXT_SOURCE" ]; then
+        echo -e "  ${CROSS_MARK} turn-context plugin source not found at $TURN_CONTEXT_SOURCE"
+        VERIFICATION_ERRORS=$((VERIFICATION_ERRORS + 1))
+        return 1
+    fi
+
+    mkdir -p "$TURN_CONTEXT_TARGET/dist"
+
+    # Copy source and config files
+    for f in package.json package-lock.json openclaw.plugin.json tsconfig.json; do
+        if [ -f "$TURN_CONTEXT_SOURCE/$f" ]; then
+            cp "$TURN_CONTEXT_SOURCE/$f" "$TURN_CONTEXT_TARGET/$f"
+        fi
+    done
+    echo -e "  ${CHECK_MARK} Plugin config files copied"
+
+    # Install runtime dependencies in the target directory (#598)
+    _install_runtime_dependencies "$TURN_CONTEXT_TARGET" "turn-context" || return 1
+
+    # Build TypeScript if source exists
+    if [ -d "$TURN_CONTEXT_SOURCE/src" ]; then
+        local NEEDS_BUILD=0
+        if [ -f "$TURN_CONTEXT_TARGET/dist/index.js" ] && [ "$FORCE_INSTALL" -eq 0 ]; then
+            # Check if source is newer than dist
+            local NEWEST_SRC
+            NEWEST_SRC=$(find "$TURN_CONTEXT_SOURCE/src" -name '*.ts' -newer "$TURN_CONTEXT_TARGET/dist/index.js" 2>/dev/null | head -1)
+            if [ -z "$NEWEST_SRC" ]; then
+                echo -e "  ${CHECK_MARK} Plugin dist is up to date (use --force to rebuild)"
+            else
+                echo "  Source changed, rebuilding..."
+                NEEDS_BUILD=1
+            fi
+        else
+            NEEDS_BUILD=1
+        fi
+
+        if [ "$NEEDS_BUILD" -eq 1 ]; then
+            # Ensure typescript is available
+            if [ ! -d "$TURN_CONTEXT_SOURCE/node_modules/typescript" ]; then
+                _install_turn_context_typescript_deps "$TURN_CONTEXT_SOURCE" || return 1
+            fi
+            echo "  Building turn-context plugin..."
+            local BUILD_LOG
+            BUILD_LOG=$(mktemp /tmp/turn-context-build-XXXXXX.log)
+            TMPFILES+=("$BUILD_LOG")
+            if (cd "$TURN_CONTEXT_SOURCE" && "$TURN_CONTEXT_SOURCE/node_modules/.bin/tsc") >"$BUILD_LOG" 2>&1; then
+                # Copy built dist to target
+                cp -r "$TURN_CONTEXT_SOURCE/dist/"* "$TURN_CONTEXT_TARGET/dist/"
+                echo -e "  ${CHECK_MARK} Plugin built and installed"
+            else
+                echo -e "  ${CROSS_MARK} Plugin build failed"
+                tail -10 "$BUILD_LOG"
+                VERIFICATION_ERRORS=$((VERIFICATION_ERRORS + 1))
+                return 1
+            fi
+        fi
+    fi
+
+    # Enable in OpenClaw config
+    if [ -f "${OPENCLAW_CONFIG:-}" ] && command -v jq &>/dev/null; then
+        local PLUGIN_PATH
+        PLUGIN_PATH="$TURN_CONTEXT_TARGET"
+        jq --arg path "$PLUGIN_PATH" '
+            .plugins.load.paths = ((.plugins.load.paths // []) + [$path] | unique)
+            | .plugins.entries."turn-context" = (.plugins.entries."turn-context" // {}) * {
+                "enabled": true,
+                "hooks": {
+                  "allowConversationAccess": true
+                }
+              }
+        ' "$OPENCLAW_CONFIG" >"$OPENCLAW_CONFIG.tmp" && \
+            mv "$OPENCLAW_CONFIG.tmp" "$OPENCLAW_CONFIG" && \
+            echo -e "  ${CHECK_MARK} Plugin enabled in OpenClaw config" || \
+            echo -e "  ${WARNING} Could not enable plugin in config"
+    fi
+
+    # Verify installation
+    if [ -f "$TURN_CONTEXT_TARGET/dist/index.js" ] && [ -f "$TURN_CONTEXT_TARGET/openclaw.plugin.json" ]; then
+        echo -e "  ${CHECK_MARK} turn-context plugin installed to $TURN_CONTEXT_TARGET"
+    else
+        echo -e "  ${CROSS_MARK} turn-context plugin installation incomplete"
+        VERIFICATION_ERRORS=$((VERIFICATION_ERRORS + 1))
+        return 1
+    fi
+}
+
+# Helper: keep gateway.reload.mode valid for OpenClaw 2026.9.x.
+# Valid values are "off" and "hybrid"; never overwrite an existing valid
+# value, and never write the obsolete "hot" value (#723).
+_configure_gateway_reload_mode() {
+    local config_file="$1"
+    local existing_mode
+    existing_mode=$(jq -r '.gateway.reload.mode // empty' "$config_file" 2>/dev/null || true)
+
+    if [ "$existing_mode" = "off" ] || [ "$existing_mode" = "hybrid" ]; then
+        echo -e "  ${CHECK_MARK} gateway.reload.mode = \"$existing_mode\" (valid, left unchanged)"
+        return 0
+    fi
+
+    jq '.gateway.reload.mode = "hybrid"' "$config_file" >"$config_file.tmp" && \
+        mv "$config_file.tmp" "$config_file" && \
+        echo -e "  ${CHECK_MARK} Set gateway.reload.mode = \"hybrid\"" || \
+        echo -e "  ${WARNING} Could not set gateway.reload.mode"
+}
+
+# Helper: convert a pre-#707 agents.json array into the OpenClaw 2026.9.x
+# keyed object shape.  Each element must have an .id field; the id becomes
+# the object key and is removed from the value.
+_convert_legacy_agents_array() {
+    local input_file="$1"
+    local output_file="$2"
+    jq '
+        if type != "array" then error("not an array") else
+            map(select(.id != null))
+            | map({ key: .id, value: del(.id) })
+            | sort_by(.key)
+            | from_entries
+        end
+    ' "$input_file" >"$output_file" 2>/dev/null
+}
+
+# Helper: timestamped backup of agents.json with mode 600.
+_backup_agents_json() {
+    local src="$1"
+    local bak
+    bak="${src}.bak-$(date +%Y%m%d-%H%M%S)"
+    if cp "$src" "$bak" && chmod 600 "$bak"; then
+        printf '%s\n' "$bak"
+    fi
+}
+
+# Helper: generate agents.json from DB into $AGENTS_JSON.
+# Output matches the agent_config_sync plugin's JSON.stringify(data, null, 2) + "\n".
+_generate_agents_json() {
+    # Query get_agent_export_rows(), which scopes results to the connecting
+    # role (own row + subagents that list session_user in parent_agents) and
+    # filters to active, modeled agents. Shape logic mirrors sync.ts's
+    # buildAgentsList(); final serialization uses the same
+    # JSON.stringify(data, null, 2) + "\n" the agent_config_sync plugin uses.
+    #
+    # Output is the OpenClaw 2026.9.x agents.entries shape: a keyed object
+    # { "<id>": { model, default?, thinkingDefault?, subagents?, heartbeat? } }
+    # with the id itself as the object key, NOT a field inside the value.
+    local INITIAL_SYNC_QUERY="
+        SELECT COALESCE(json_agg(row_to_json(sub)), NULL)::text
+        FROM (
+            SELECT
+                name,
+                model,
+                fallback_models,
+                thinking,
+                instance_type,
+                is_default,
+                allowed_subagents,
+                heartbeat_enabled,
+                heartbeat_every,
+                heartbeat_target,
+                heartbeat_to,
+                heartbeat_isolated_session
+            FROM get_agent_export_rows()
+        ) sub
+    "
+    local AGENTS_DATA
+    if AGENTS_DATA=$(psql -U "$DB_USER" -d "$DB_NAME" -tAc "$INITIAL_SYNC_QUERY" 2>/dev/null); then
+        if [ -n "$AGENTS_DATA" ] && [ "$AGENTS_DATA" != "null" ] && [ "$AGENTS_DATA" != "" ]; then
+            # Duplicate-name guard: two rows with the same literal name would
+            # silently collapse in the keyed output. Detect this on raw DB
+            # data before serialization and fail loudly.
+            local DUP_NAMES
+            DUP_NAMES=$(echo "$AGENTS_DATA" | jq -r '
+                [group_by(.name)[] | select(length > 1 and .[0].name != null) | .[0].name]
+                | join(", ")
+            ' 2>/dev/null)
+            if [ -n "$DUP_NAMES" ]; then
+                echo -e "  ${WARNING} Duplicate agent names detected: $DUP_NAMES — not writing agents.json"
+                rm -f "$AGENTS_JSON_TMP"
+                return 1
+            fi
+
+            local FORMAT_OK=0
+            if command -v node &>/dev/null; then
+                # Preferred: byte-match the plugin's JSON.stringify(data, null, 2) + "\n"
+                # Build a keyed object, omitting the id from each value, applying
+                # the same thinkingDefault validation and heartbeat shape as sync.ts.
+                # shellcheck disable=SC2154,SC2086,SC2016
+                if echo "$AGENTS_DATA" | node -e '
+                    let input = "";
+                    process.stdin.setEncoding("utf8");
+                    process.stdin.on("data", c => input += c);
+                    process.stdin.on("end", () => {
+                        const fs = require("fs");
+                        const VALID_THINKING_DEFAULTS = new Set([
+                            "off", "minimal", "low", "medium", "high",
+                            "xhigh", "adaptive", "max", "ultra",
+                        ]);
+                        const AGENT_ID_REGEX = /^[a-z0-9_][a-z0-9_-]{0,63}$/i;
+                        const PROVIDER_REGISTRY_PATH = "/opt/agents/shared-config/models-providers.json";
+
+                        function loadKnownProviders() {
+                            try {
+                                const data = JSON.parse(fs.readFileSync(PROVIDER_REGISTRY_PATH, "utf8"));
+                                return new Set(Object.keys(data));
+                            } catch {
+                                return new Set();
+                            }
+                        }
+                        const KNOWN_PROVIDERS = loadKnownProviders();
+
+                        function extractProviderPrefix(model) {
+                            const idx = model.indexOf("/");
+                            if (idx === -1) return null;
+                            return model.slice(0, idx);
+                        }
+
+                        function warnIfUnknownProviderPrefix(id, model) {
+                            if (KNOWN_PROVIDERS.size === 0) return;
+                            const prefix = extractProviderPrefix(model);
+                            if (prefix == null) {
+                                console.warn("agent_config_sync: agent '" + id + "' model '" + model + "' has no provider prefix");
+                            } else if (!KNOWN_PROVIDERS.has(prefix)) {
+                                console.warn("agent_config_sync: agent '" + id + "' model '" + model + "' has unrecognized provider prefix '" + prefix + "'");
+                            }
+                        }
+
+                        function warnIfUnknownProviderPrefixes(id, model) {
+                            if (typeof model === "string") {
+                                warnIfUnknownProviderPrefix(id, model);
+                            } else {
+                                warnIfUnknownProviderPrefix(id, model.primary);
+                                for (const fallback of model.fallbacks) {
+                                    warnIfUnknownProviderPrefix(id, fallback);
+                                }
+                            }
+                        }
+
+                        const rows = JSON.parse(input);
+
+                        // Duplicate-name guard (defensive, also checked in bash above).
+                        const seen = new Map();
+                        for (let i = 0; i < rows.length; i++) {
+                            const name = rows[i].name;
+                            if (typeof name !== "string") continue;
+                            if (seen.has(name)) {
+                                throw new Error("Duplicate agent name '" + name + "' at rows " + seen.get(name) + " and " + i + "; each agent id must appear exactly once");
+                            }
+                            seen.set(name, i);
+                        }
+
+                        const entries = {};
+                        for (const row of rows) {
+                            // Defensive: get_agent_export_rows() already filters
+                            // status=active and model IS NOT NULL, but we re-apply
+                            // here so a fixture or future function change cannot emit
+                            // invalid entries.
+                            if (row.status != null && row.status !== "active") continue;
+                            if (row.model == null) continue;
+                            if (typeof row.name !== "string" || !AGENT_ID_REGEX.test(row.name)) continue;
+
+                            const hasFallbacks = Array.isArray(row.fallback_models) && row.fallback_models.length > 0;
+                            const entry = { model: hasFallbacks
+                                ? { primary: row.model, fallbacks: [...row.fallback_models] }
+                                : row.model };
+
+                            if (row.is_default === true) entry.default = true;
+
+                            if (typeof row.thinking === "string" && row.thinking.length > 0 &&
+                                VALID_THINKING_DEFAULTS.has(row.thinking)) {
+                                entry.thinkingDefault = row.thinking;
+                            }
+
+                            if (Array.isArray(row.allowed_subagents) && row.allowed_subagents.length > 0) {
+                                entry.subagents = { allowAgents: [...row.allowed_subagents].sort() };
+                            }
+
+                            if (row.heartbeat_enabled === true) {
+                                const hb = {};
+                                if (row.heartbeat_every != null) hb.every = row.heartbeat_every;
+                                if (row.heartbeat_target != null) hb.target = row.heartbeat_target;
+                                if (row.heartbeat_to != null) hb.to = row.heartbeat_to;
+                                // #714 — isolatedSession must be explicit when the row has a value.
+                                // true → true, false → false, null/undefined → omitted.
+                                if (row.heartbeat_isolated_session === true) {
+                                    hb.isolatedSession = true;
+                                } else if (row.heartbeat_isolated_session === false) {
+                                    hb.isolatedSession = false;
+                                }
+                                entry.heartbeat = hb;
+                            }
+
+                            warnIfUnknownProviderPrefixes(row.name, entry.model);
+
+                            entries[row.name] = entry;
+                        }
+                        const sorted = {};
+                        for (const key of Object.keys(entries).sort((a, b) => a.localeCompare(b))) {
+                            sorted[key] = entries[key];
+                        }
+                        process.stdout.write(JSON.stringify(sorted, null, 2) + "\n");
+                    });
+                ' >"$AGENTS_JSON_TMP"; then
+                    FORMAT_OK=1
+                fi
+            else
+                # Fallback if node is unavailable: best-effort keyed object via jq.
+                # thinkingDefault is not validated here (node is preferred);
+                # the resulting file is still structurally a keyed object.
+                if echo "$AGENTS_DATA" | jq '
+                    map({
+                        key: .name,
+                        value: (
+                            {model: (
+                                if (.fallback_models | type) == "array" and (.fallback_models | length) > 0
+                                then {primary: .model, fallbacks: .fallback_models}
+                                else .model
+                                end
+                            )}
+                            + (if .is_default == true then {default: true} else {} end)
+                            + (if (.allowed_subagents | type) == "array" and (.allowed_subagents | length) > 0
+                                then {subagents: {allowAgents: (.allowed_subagents | sort)}}
+                                else {} end)
+                            + (if .heartbeat_enabled == true
+                                then {heartbeat: (
+                                    (if .heartbeat_every != null then {every: .heartbeat_every} else {} end)
+                                    + (if .heartbeat_target != null then {target: .heartbeat_target} else {} end)
+                                    + (if .heartbeat_to != null then {to: .heartbeat_to} else {} end)
+                                    + (if .heartbeat_isolated_session == true then {isolatedSession: true}
+                               elif .heartbeat_isolated_session == false then {isolatedSession: false}
+                               else {} end)
+                                )}
+                                else {} end)
+                        )
+                    })
+                    | sort_by(.key)
+                    | from_entries
+                ' >"$AGENTS_JSON_TMP" 2>/dev/null; then
+                    if [ -s "$AGENTS_JSON_TMP" ] && [ "$(tail -c 1 "$AGENTS_JSON_TMP" | wc -l)" -eq 0 ]; then
+                        echo >> "$AGENTS_JSON_TMP"
+                    fi
+                    FORMAT_OK=1
+                fi
+            fi
+
+            if [ "$FORMAT_OK" -eq 1 ]; then
+                if mv "$AGENTS_JSON_TMP" "$AGENTS_JSON"; then
+                    echo -e "  ${CHECK_MARK} Generated agents.json from DB"
+                    return 0
+                else
+                    echo -e "  ${WARNING} Could not write agents.json"
+                    rm -f "$AGENTS_JSON_TMP"
+                    return 1
+                fi
+            else
+                echo -e "  ${WARNING} Could not serialize agents.json from DB data — not writing"
+                rm -f "$AGENTS_JSON_TMP"
+                return 1
+            fi
+        else
+            # DB returned NULL or empty — no agents in scope, but psql succeeded.
+            # Write a valid placeholder so the openclaw.json agents.entries $include
+            # stays valid and the gateway can boot; agent_config_sync will populate
+            # real data on startup. Failure paths (psql error / non-JSON) still write nothing.
+            printf '{"main": {}}\n' > "$AGENTS_JSON_TMP"
+            if mv "$AGENTS_JSON_TMP" "$AGENTS_JSON"; then
+                echo -e "  ${INFO} no agents in scope — wrote placeholder agents.json; agent_config_sync will populate on startup"
+                return 0
+            else
+                echo -e "  ${WARNING} Could not write empty agents.json placeholder"
+                rm -f "$AGENTS_JSON_TMP"
+                return 1
+            fi
+        fi
+    else
+        # psql failed — NEVER write placeholder
+        echo -e "  ${WARNING} Could not query DB for agents.json — agents.json not written"
+        echo -e "  ${INFO} agent_config_sync will generate agents.json when gateway starts"
+        rm -f "$AGENTS_JSON_TMP"
+        return 1
+    fi
+}
+
+# Helper: ensure agents.json is a valid non-empty keyed object, then switch
+# agents.entries to { "$include": "./agents.json" } (#707, #1231 r7).
+# Never switches to $include unless agents.json passes final validation.
+# Honors --regenerate-agents-json.  Preserves inline keyed agents.entries so
+# the agent set never shrinks.
+_configure_agents_entries_include() {
+    local OPENCLAW_CONFIG="${1:-$OPENCLAW_DIR/openclaw.json}"
+    local AGENTS_JSON="$OPENCLAW_DIR/agents.json"
+    local AGENTS_JSON_TMP="${AGENTS_JSON}.tmp.$$"
+
+    if [ ! -f "$OPENCLAW_CONFIG" ]; then
+        echo -e "  ${WARNING} OpenClaw config not found; cannot configure agents.entries"
+        VERIFICATION_ERRORS=$((VERIFICATION_ERRORS + 1))
+        return 1
+    fi
+
+    TMPFILES+=("$AGENTS_JSON_TMP")
+
+    _ensure_agents_json_valid() {
+        # Already a valid non-empty keyed object and not forcing regeneration.
+        if [ "$REGENERATE_AGENTS_JSON" -eq 0 ] && [ -f "$AGENTS_JSON" ] && \
+           jq -e 'type == "object" and length > 0' "$AGENTS_JSON" >/dev/null 2>&1; then
+            echo -e "  ${CHECK_MARK} agents.json is valid (keyed object)"
+            return 0
+        fi
+
+        # Not valid (or forced regeneration). Backup existing file if any.
+        local AGENTS_JSON_BAK=""
+        if [ -f "$AGENTS_JSON" ]; then
+            AGENTS_JSON_BAK=$(_backup_agents_json "$AGENTS_JSON")
+            if [ -n "$AGENTS_JSON_BAK" ]; then
+                echo -e "  ${INFO} Backed up existing agents.json to $AGENTS_JSON_BAK"
+            fi
+            rm -f "$AGENTS_JSON"
+        fi
+
+        # (a) Prefer DB generation.
+        local DB_GENERATED=0
+        if _generate_agents_json; then
+            DB_GENERATED=1
+        fi
+
+        # If DB produced only the placeholder, prefer legacy array conversion.
+        if [ "$DB_GENERATED" -eq 1 ] && \
+           jq -e 'type == "object" and length == 1 and has("main") and .main == {}' "$AGENTS_JSON" >/dev/null 2>&1; then
+            if [ -n "$AGENTS_JSON_BAK" ] && \
+               jq -e 'type == "array" and length > 0' "$AGENTS_JSON_BAK" >/dev/null 2>&1; then
+                if _convert_legacy_agents_array "$AGENTS_JSON_BAK" "$AGENTS_JSON_TMP"; then
+                    if jq -e 'type == "object" and length > 0' "$AGENTS_JSON_TMP" >/dev/null 2>&1; then
+                        mv "$AGENTS_JSON_TMP" "$AGENTS_JSON"
+                        echo -e "  ${CHECK_MARK} Converted legacy agents.json array to keyed object"
+                    fi
+                fi
+            fi
+        fi
+
+        # If DB failed or we still only have the placeholder, use inline entries.
+        if { [ "$DB_GENERATED" -eq 0 ] || \
+             jq -e 'type == "object" and length == 1 and has("main") and .main == {}' "$AGENTS_JSON" >/dev/null 2>&1; } && \
+           [ -n "$INLINE_AGENTS_ENTRIES" ]; then
+            printf '%s\n' "$INLINE_AGENTS_ENTRIES" > "$AGENTS_JSON_TMP" && \
+                mv "$AGENTS_JSON_TMP" "$AGENTS_JSON"
+        fi
+
+        # If still not a valid non-empty object, write placeholder.
+        if ! jq -e 'type == "object" and length > 0' "$AGENTS_JSON" >/dev/null 2>&1; then
+            printf '{"main": {}}\n' > "$AGENTS_JSON_TMP"
+            if mv "$AGENTS_JSON_TMP" "$AGENTS_JSON"; then
+                echo -e "  ${INFO} Wrote placeholder agents.json"
+            fi
+        fi
+
+        # Final sanity check.
+        if jq -e 'type == "object" and length > 0' "$AGENTS_JSON" >/dev/null 2>&1; then
+            return 0
+        fi
+        return 1
+    }
+
+    # Capture inline keyed agents.entries before we overwrite it (production case).
+    local INLINE_AGENTS_ENTRIES=""
+    if jq -e '(.agents.entries | type == "object") and (.agents.entries | has("$include") | not) and (.agents.entries | length > 0)' "$OPENCLAW_CONFIG" >/dev/null 2>&1; then
+        INLINE_AGENTS_ENTRIES=$(jq '.agents.entries' "$OPENCLAW_CONFIG")
+    fi
+
+    echo "  Checking agents.json status..."
+    if _ensure_agents_json_valid; then
+        # Merge inline entries back so the agent set does not shrink.
+        if [ -n "$INLINE_AGENTS_ENTRIES" ]; then
+            local BEFORE_KEYS=""
+            local AFTER_KEYS=""
+            BEFORE_KEYS=$(jq -r 'keys | .[]' "$AGENTS_JSON" 2>/dev/null | sort | tr '\n' ' ' || true)
+            if jq -s '.[0] * .[1]' "$AGENTS_JSON" <(printf '%s\n' "$INLINE_AGENTS_ENTRIES") >"$AGENTS_JSON_TMP" 2>/dev/null && \
+               mv "$AGENTS_JSON_TMP" "$AGENTS_JSON"; then
+                AFTER_KEYS=$(jq -r 'keys | .[]' "$AGENTS_JSON" 2>/dev/null | sort | tr '\n' ' ' || true)
+                if [ "$BEFORE_KEYS" != "$AFTER_KEYS" ]; then
+                    echo -e "  ${CHECK_MARK} Merged inline agents.entries to preserve agent set"
+                fi
+            fi
+        fi
+
+        # Final validation before touching agents.entries.
+        if jq -e 'type == "object" and length > 0' "$AGENTS_JSON" >/dev/null 2>&1; then
+            # No-shrink assertion for the production inline-object case.
+            if [ -n "$INLINE_AGENTS_ENTRIES" ]; then
+                local MISSING=""
+                MISSING=$(jq -s '.[1] - .[0] | keys | .[]' "$AGENTS_JSON" <(printf '%s\n' "$INLINE_AGENTS_ENTRIES") 2>/dev/null || true)
+                if [ -n "$MISSING" ]; then
+                    echo -e "  ${CROSS_MARK} Agent set shrunk after migration; missing: $MISSING"
+                    VERIFICATION_ERRORS=$((VERIFICATION_ERRORS + 1))
+                else
+                    echo -e "  ${CHECK_MARK} Agent set preserved (no shrinkage)"
+                fi
+            fi
+
+            local EXISTING_ENTRIES_INCLUDE
+            EXISTING_ENTRIES_INCLUDE=$(jq -r '.agents.entries["$include"] // empty' "$OPENCLAW_CONFIG" 2>/dev/null || true)
+            if [ -n "$EXISTING_ENTRIES_INCLUDE" ]; then
+                echo -e "  ${CHECK_MARK} agents.entries already uses \$include: $EXISTING_ENTRIES_INCLUDE"
+            else
+                if jq 'del(.agents.list) | .agents.entries = { "$include": "./agents.json" }' "$OPENCLAW_CONFIG" >"$OPENCLAW_CONFIG.tmp" && \
+                   mv "$OPENCLAW_CONFIG.tmp" "$OPENCLAW_CONFIG"; then
+                    echo -e "  ${CHECK_MARK} Set agents.entries = { \"\$include\": \"./agents.json\" }"
+                else
+                    echo -e "  ${WARNING} Could not set agents.entries \$include directive"
+                    VERIFICATION_ERRORS=$((VERIFICATION_ERRORS + 1))
+                fi
+            fi
+        else
+            echo -e "  ${WARNING} agents.json final validation failed; leaving agents.entries unchanged"
+            VERIFICATION_ERRORS=$((VERIFICATION_ERRORS + 1))
+        fi
+    else
+        echo -e "  ${WARNING} Could not make agents.json valid; leaving agents.entries unchanged"
+        VERIFICATION_ERRORS=$((VERIFICATION_ERRORS + 1))
+    fi
+}
+
+
+# Helper: install a metacognition plugin
+install_metacognition_plugin() {
+    local plugin_name="$1"
+    local plugin_source="$2"
+    local plugin_target="$3"
+
+    if [ ! -d "$plugin_source" ]; then
+        echo -e "  ${INFO} $plugin_name source not found at $plugin_source (skipping)"
+        return 0
+    fi
+
+    echo "  Installing $plugin_name..."
+    mkdir -p "$plugin_target"
+
+    # Copy source and config files
+    for f in package.json package-lock.json openclaw.plugin.json tsconfig.json src; do
+        if [ -e "$plugin_source/$f" ]; then
+            if [ -d "$plugin_source/$f" ]; then
+                rm -rf "${plugin_target:?}/$f"
+                cp -r "$plugin_source/$f" "$plugin_target/$f"
+            else
+                cp "$plugin_source/$f" "$plugin_target/$f"
+            fi
+        fi
+    done
+    echo -e "    ${CHECK_MARK} Source files copied"
+
+    # Build TypeScript in the source directory so the target only receives
+    # runtime dependencies (#598, #724).
+    if [ -d "$plugin_source/src" ]; then
+        _install_plugin_build_dependencies "$plugin_source" "$plugin_name" || return 1
+
+        echo "    Building TypeScript..."
+        BUILD_LOG=$(mktemp "/tmp/build-${plugin_name}-XXXXXX.log")
+        TMPFILES+=("$BUILD_LOG")
+        mkdir -p "$plugin_target/dist"
+        if (cd "$plugin_source" && "$plugin_source/node_modules/.bin/tsc") >"$BUILD_LOG" 2>&1; then
+            cp -r "$plugin_source/dist/"* "$plugin_target/dist/"
+            echo -e "    ${CHECK_MARK} Build completed"
+            rm -f "$BUILD_LOG"
+        else
+            echo -e "    ${CROSS_MARK} Build failed"
+            tail -10 "$BUILD_LOG"
+            VERIFICATION_ERRORS=$((VERIFICATION_ERRORS + 1))
+            cd "$SCRIPT_DIR"
+            return 1
+        fi
+    fi
+
+    # Install runtime dependencies in the target directory (#598)
+    _install_runtime_dependencies "$plugin_target" "$plugin_name" || return 1
+    cd "$SCRIPT_DIR"
+
+    # Enable in OpenClaw config
+    if [ -f "$OPENCLAW_CONFIG" ] && command -v jq &>/dev/null; then
+        jq --arg path "$plugin_target" --arg name "$plugin_name" '
+            .plugins.load.paths = ((.plugins.load.paths // []) + [$path] | unique)
+            | .plugins.entries[$name] = (.plugins.entries[$name] // {}) * {
+                "enabled": true,
+                "hooks": {
+                  "allowConversationAccess": true
+                }
+              }
+        ' "$OPENCLAW_CONFIG" >"$OPENCLAW_CONFIG.tmp" && \
+            mv "$OPENCLAW_CONFIG.tmp" "$OPENCLAW_CONFIG" && \
+            echo -e "    ${CHECK_MARK} $plugin_name enabled in OpenClaw config" || \
+            echo -e "    ${WARNING} Could not enable $plugin_name in config"
+    fi
+
+    # Verify installation
+    if [ -f "$plugin_target/dist/index.js" ] && [ -f "$plugin_target/openclaw.plugin.json" ]; then
+        echo -e "  ${CHECK_MARK} $plugin_name installed to $plugin_target"
+    else
+        echo -e "  ${CROSS_MARK} $plugin_name installation incomplete"
+        VERIFICATION_ERRORS=$((VERIFICATION_ERRORS + 1))
+    fi
+
+    # Run any plugin migrations
+    local plugin_migrations="$plugin_source/database/migrations"
+    if [ -d "$plugin_migrations" ]; then
+        echo "    Running $plugin_name migrations..."
+        local mig_files=()
+        while IFS= read -r -d '' f; do
+            mig_files+=("$f")
+        done < <(find "$plugin_migrations" -maxdepth 1 -name "*.sql" -print0 | sort -z)
+
+        for sql_file in "${mig_files[@]}"; do
+            local mig_name
+            mig_name=$(basename "$sql_file")
+            if _superuser_psql "$DB_NAME" -f "$sql_file" >/dev/null 2>&1; then
+                echo -e "    ${CHECK_MARK} Migration: $mig_name"
+            else
+                echo -e "    ${WARNING} Migration failed: $mig_name"
+            fi
+        done
+    fi
+}
+
+verify_config() {
+    echo ""
+    echo "Config verification..."
+
+    if [ -z "${PGUSER:-}" ]; then
+        echo -e "  ${WARNING} PGUSER not set (using: $(whoami))"
+        VERIFICATION_WARNINGS=$((VERIFICATION_WARNINGS + 1))
+    else
+        echo -e "  ${CHECK_MARK} PGUSER set: $PGUSER"
+    fi
+
+    if psql -U "$DB_USER" -d "$DB_NAME" -c '\q' 2>/dev/null; then
+        echo -e "  ${CHECK_MARK} Database connection works"
+    else
+        echo -e "  ${CROSS_MARK} Database connection failed"
+        VERIFICATION_ERRORS=$((VERIFICATION_ERRORS + 1))
+    fi
+
+    # memory-extract is a plugin after #726.
+    if [ -f "$OPENCLAW_CONFIG" ]; then
+        if command -v jq &>/dev/null; then
+            if jq -e '.plugins.entries["memory-extract"]' "$OPENCLAW_CONFIG" &>/dev/null; then
+                echo -e "  ${CHECK_MARK} memory-extract plugin configured"
+            else
+                echo -e "  ${WARNING} memory-extract plugin not found in OpenClaw config"
+                VERIFICATION_WARNINGS=$((VERIFICATION_WARNINGS + 1))
+            fi
+
+            # Legacy hook config entry must not remain. The r4 installer uses
+            # .hooks.internal.entries["memory-extract"].enabled (#1231).
+            if jq -e '.hooks.internal.entries["memory-extract"]' "$OPENCLAW_CONFIG" &>/dev/null; then
+                echo -e "  ${WARNING} Legacy memory-extract hook entry still present in OpenClaw config"
+                VERIFICATION_WARNINGS=$((VERIFICATION_WARNINGS + 1))
+            fi
+        else
+            echo -e "  ${WARNING} jq not available; cannot verify memory-extract plugin configuration"
+            VERIFICATION_WARNINGS=$((VERIFICATION_WARNINGS + 1))
+        fi
+    else
+        echo -e "  ${WARNING} OpenClaw config not found at $OPENCLAW_CONFIG"
+        VERIFICATION_WARNINGS=$((VERIFICATION_WARNINGS + 1))
+    fi
+
+    # Legacy hook directory must not remain.
+    if [ -d "$OPENCLAW_DIR/hooks/memory-extract" ]; then
+        echo -e "  ${WARNING} Legacy memory-extract hook directory still present at $OPENCLAW_DIR/hooks/memory-extract"
+        VERIFICATION_WARNINGS=$((VERIFICATION_WARNINGS + 1))
+    fi
+
+    # session-init remains a hook.
+    local HOOK_CONFIG="$HOME/.openclaw/hooks.json"
+    if [ -f "$HOOK_CONFIG" ]; then
+        echo -e "  ${CHECK_MARK} OpenClaw hook config exists"
+        if grep -q '"session-init"' "$HOOK_CONFIG" 2>/dev/null; then
+            local ENABLED
+            ENABLED=$(grep -A5 '"session-init"' "$HOOK_CONFIG" | grep -cE '"enabled"\s*:\s*true' || echo "0")
+            if [ "$ENABLED" -gt 0 ]; then
+                echo -e "  ${CHECK_MARK} Hook 'session-init' enabled"
+            else
+                echo -e "  ${WARNING} Hook 'session-init' exists but not enabled"
+                VERIFICATION_WARNINGS=$((VERIFICATION_WARNINGS + 1))
+            fi
+        else
+            echo -e "  ${WARNING} Hook 'session-init' not found in OpenClaw config"
+            VERIFICATION_WARNINGS=$((VERIFICATION_WARNINGS + 1))
+        fi
+    else
+        echo -e "  ${WARNING} OpenClaw hook config not found at $HOOK_CONFIG"
+        VERIFICATION_WARNINGS=$((VERIFICATION_WARNINGS + 1))
+    fi
+}
+
+# When the installer is sourced by unit tests, stop here so tests can call
+# the helper functions above without running the full installer.  This guard
+# is NOT used in normal execution.
+if [ "${AGENT_INSTALL_TEST_MODE:-}" = "1" ] && [ "${BASH_SOURCE[0]}" != "${0}" ]; then
+    return 0
+fi
+
 # ============================================
 # SECTION 2: Source shared library
 # ============================================
@@ -86,6 +1005,7 @@ PGPASS_FILE="${HOME}/.pgpass"
 
 WORKSPACE="${OPENCLAW_WORKSPACE:-$HOME/.openclaw/workspace-coder}"
 OPENCLAW_DIR="$HOME/.openclaw"
+OPENCLAW_CONFIG="${OPENCLAW_CONFIG:-$OPENCLAW_DIR/openclaw.json}"
 # shellcheck disable=SC2034
 OPENCLAW_PROJECTS="$OPENCLAW_DIR/projects"
 EXTENSIONS_DIR="$OPENCLAW_DIR/extensions"
@@ -968,48 +1888,6 @@ verify_cognition() {
 
 }
 
-verify_config() {
-    echo ""
-    echo "Config verification..."
-
-    if [ -z "${PGUSER:-}" ]; then
-        echo -e "  ${WARNING} PGUSER not set (using: $(whoami))"
-        VERIFICATION_WARNINGS=$((VERIFICATION_WARNINGS + 1))
-    else
-        echo -e "  ${CHECK_MARK} PGUSER set: $PGUSER"
-    fi
-
-    if psql -U "$DB_USER" -d "$DB_NAME" -c '\q' 2>/dev/null; then
-        echo -e "  ${CHECK_MARK} Database connection works"
-    else
-        echo -e "  ${CROSS_MARK} Database connection failed"
-        VERIFICATION_ERRORS=$((VERIFICATION_ERRORS + 1))
-    fi
-
-    local HOOK_CONFIG="$HOME/.openclaw/hooks.json"
-    if [ -f "$HOOK_CONFIG" ]; then
-        echo -e "  ${CHECK_MARK} OpenClaw hook config exists"
-        for hook in "memory-extract" "session-init"; do
-            if grep -q "\"$hook\"" "$HOOK_CONFIG" 2>/dev/null; then
-                local ENABLED
-                ENABLED=$(grep -A5 "\"$hook\"" "$HOOK_CONFIG" | grep -c "\"enabled\": true" || echo "0")
-                if [ "$ENABLED" -gt 0 ]; then
-                    echo -e "  ${CHECK_MARK} Hook '$hook' enabled"
-                else
-                    echo -e "  ${WARNING} Hook '$hook' exists but not enabled"
-                    VERIFICATION_WARNINGS=$((VERIFICATION_WARNINGS + 1))
-                fi
-            else
-                echo -e "  ${WARNING} Hook '$hook' not found in OpenClaw config"
-                VERIFICATION_WARNINGS=$((VERIFICATION_WARNINGS + 1))
-            fi
-        done
-    else
-        echo -e "  ${WARNING} OpenClaw hook config not found at $HOOK_CONFIG"
-        VERIFICATION_WARNINGS=$((VERIFICATION_WARNINGS + 1))
-    fi
-}
-
 # ============================================
 # Run verification early if --verify-only
 # ============================================
@@ -1625,15 +2503,20 @@ echo "Memory hooks installation..."
 HOOKS_TARGET="$OPENCLAW_DIR/hooks"
 mkdir -p "$HOOKS_TARGET"
 
-# Note: semantic-recall and agent-turn-context were replaced by turn-context plugin (#182)
-for hook in "memory-extract" "session-init"; do
-    install_hook "$hook" "$SCRIPT_DIR/memory/hooks" && result=$? || result=$?
-    if [ "$result" -eq 0 ]; then
-        INSTALLED_HOOKS+=("$hook")
-    elif [ "$result" -eq 2 ]; then
-        SKIPPED_HOOKS+=("$hook")
-    fi
-done
+# Note: semantic-recall and agent-turn-context were replaced by turn-context plugin (#182).
+# Note: memory-extract was migrated to a plugin (#726) and is no longer installed as a hook.
+install_hook "session-init" "$SCRIPT_DIR/memory/hooks" && result=$? || result=$?
+if [ "$result" -eq 0 ]; then
+    INSTALLED_HOOKS+=("session-init")
+elif [ "$result" -eq 2 ]; then
+    SKIPPED_HOOKS+=("session-init")
+fi
+
+# --- Memory-extract plugin (replaces the legacy memory-extract hook) ---
+echo ""
+echo "Memory-extract plugin installation..."
+
+_install_memory_extract_plugin "$SCRIPT_DIR/memory/plugins/memory-extract" "$EXTENSIONS_DIR/memory-extract" || exit 1
 
 # --- Memory scripts ---
 echo ""
@@ -1932,188 +2815,12 @@ done
 echo ""
 echo "Turn-context plugin installation..."
 
-TURN_CONTEXT_SOURCE="$SCRIPT_DIR/memory/plugins/turn-context"
-TURN_CONTEXT_TARGET="$OPENCLAW_DIR/plugins/turn-context"
-
-if [ -d "$TURN_CONTEXT_SOURCE" ]; then
-    mkdir -p "$TURN_CONTEXT_TARGET/dist"
-
-    # Copy source and config files
-    for f in package.json openclaw.plugin.json tsconfig.json; do
-        if [ -f "$TURN_CONTEXT_SOURCE/$f" ]; then
-            cp "$TURN_CONTEXT_SOURCE/$f" "$TURN_CONTEXT_TARGET/$f"
-        fi
-    done
-    echo -e "  ${CHECK_MARK} Plugin config files copied"
-
-    # Build TypeScript if source exists
-    if [ -d "$TURN_CONTEXT_SOURCE/src" ]; then
-        if [ -f "$TURN_CONTEXT_TARGET/dist/index.js" ] && [ "$FORCE_INSTALL" -eq 0 ]; then
-            # Check if source is newer than dist
-            NEWEST_SRC=$(find "$TURN_CONTEXT_SOURCE/src" -name '*.ts' -newer "$TURN_CONTEXT_TARGET/dist/index.js" 2>/dev/null | head -1)
-            if [ -z "$NEWEST_SRC" ]; then
-                echo -e "  ${CHECK_MARK} Plugin dist is up to date (use --force to rebuild)"
-            else
-                echo "  Source changed, rebuilding..."
-                NEEDS_BUILD=1
-            fi
-        else
-            NEEDS_BUILD=1
-        fi
-
-        if [ "${NEEDS_BUILD:-0}" -eq 1 ]; then
-            # Ensure typescript is available
-            if [ ! -d "$TURN_CONTEXT_SOURCE/node_modules/typescript" ]; then
-                echo "  Installing build dependencies..."
-                (cd "$TURN_CONTEXT_SOURCE" && npm install --save-dev typescript) >/dev/null 2>&1
-            fi
-            echo "  Building turn-context plugin..."
-            BUILD_LOG=$(mktemp /tmp/turn-context-build-XXXXXX.log)
-            TMPFILES+=("$BUILD_LOG")
-            if (cd "$TURN_CONTEXT_SOURCE" && npx tsc) >"$BUILD_LOG" 2>&1; then
-                # Copy built dist to target
-                cp -r "$TURN_CONTEXT_SOURCE/dist/"* "$TURN_CONTEXT_TARGET/dist/"
-                echo -e "  ${CHECK_MARK} Plugin built and installed"
-            else
-                echo -e "  ${CROSS_MARK} Plugin build failed"
-                tail -10 "$BUILD_LOG"
-                VERIFICATION_ERRORS=$((VERIFICATION_ERRORS + 1))
-            fi
-        fi
-    fi
-
-    # Enable in OpenClaw config
-    if [ -f "$OPENCLAW_CONFIG" ] && command -v jq &>/dev/null; then
-        PLUGIN_PATH="$TURN_CONTEXT_TARGET"
-        jq --arg path "$PLUGIN_PATH" '
-            .plugins.load.paths = ((.plugins.load.paths // []) + [$path] | unique)
-            | .plugins.entries."turn-context" = {"enabled": true}
-        ' "$OPENCLAW_CONFIG" >"$OPENCLAW_CONFIG.tmp" && \
-            mv "$OPENCLAW_CONFIG.tmp" "$OPENCLAW_CONFIG" && \
-            echo -e "  ${CHECK_MARK} Plugin enabled in OpenClaw config" || \
-            echo -e "  ${WARNING} Could not enable plugin in config"
-    fi
-
-    # Verify installation
-    if [ -f "$TURN_CONTEXT_TARGET/dist/index.js" ] && [ -f "$TURN_CONTEXT_TARGET/openclaw.plugin.json" ]; then
-        echo -e "  ${CHECK_MARK} turn-context plugin installed to $TURN_CONTEXT_TARGET"
-    else
-        echo -e "  ${CROSS_MARK} turn-context plugin installation incomplete"
-        VERIFICATION_ERRORS=$((VERIFICATION_ERRORS + 1))
-    fi
-else
-    echo -e "  ${CROSS_MARK} turn-context plugin source not found at $TURN_CONTEXT_SOURCE"
-    VERIFICATION_ERRORS=$((VERIFICATION_ERRORS + 1))
-fi
+_install_turn_context_plugin "$SCRIPT_DIR/memory/plugins/turn-context" "$OPENCLAW_DIR/plugins/turn-context" || exit 1
 
 # --- Metacognition plugins (self-awareness, confidence-check) ---
 echo ""
 echo "Metacognition plugins installation..."
 
-# Helper: install a metacognition plugin
-install_metacognition_plugin() {
-    local plugin_name="$1"
-    local plugin_source="$2"
-    local plugin_target="$3"
-
-    if [ ! -d "$plugin_source" ]; then
-        echo -e "  ${INFO} $plugin_name source not found at $plugin_source (skipping)"
-        return 0
-    fi
-
-    echo "  Installing $plugin_name..."
-    mkdir -p "$plugin_target"
-
-    # Copy source and config files
-    for f in package.json openclaw.plugin.json tsconfig.json src; do
-        if [ -e "$plugin_source/$f" ]; then
-            if [ -d "$plugin_source/$f" ]; then
-                rm -rf "${plugin_target:?}/$f"
-                cp -r "$plugin_source/$f" "$plugin_target/$f"
-            else
-                cp "$plugin_source/$f" "$plugin_target/$f"
-            fi
-        fi
-    done
-    echo -e "    ${CHECK_MARK} Source files copied"
-
-    # Install dependencies and build
-    cd "$plugin_target"
-    if [ ! -d "node_modules" ] || [ "$FORCE_INSTALL" -eq 1 ]; then
-        echo "    Installing dependencies..."
-        NPM_INSTALL_LOG=$(mktemp "/tmp/npm-install-${plugin_name}-XXXXXX.log")
-        TMPFILES+=("$NPM_INSTALL_LOG")
-        if npm install >"$NPM_INSTALL_LOG" 2>&1; then
-            echo -e "    ${CHECK_MARK} Dependencies installed"
-            rm -f "$NPM_INSTALL_LOG"
-        else
-            echo -e "    ${WARNING} npm install had issues"
-            tail -10 "$NPM_INSTALL_LOG"
-        fi
-    fi
-
-    # Build TypeScript
-    if [ -d "$plugin_target/src" ]; then
-        echo "    Building TypeScript..."
-        BUILD_LOG=$(mktemp "/tmp/build-${plugin_name}-XXXXXX.log")
-        TMPFILES+=("$BUILD_LOG")
-        if npx tsc >"$BUILD_LOG" 2>&1; then
-            echo -e "    ${CHECK_MARK} Build completed"
-            rm -f "$BUILD_LOG"
-        else
-            echo -e "    ${CROSS_MARK} Build failed"
-            tail -10 "$BUILD_LOG"
-            VERIFICATION_ERRORS=$((VERIFICATION_ERRORS + 1))
-            cd "$SCRIPT_DIR"
-            return 1
-        fi
-    fi
-    cd "$SCRIPT_DIR"
-
-    # Enable in OpenClaw config
-    if [ -f "$OPENCLAW_CONFIG" ] && command -v jq &>/dev/null; then
-        jq --arg path "$plugin_target" --arg name "$plugin_name" '
-            .plugins.load.paths = ((.plugins.load.paths // []) + [$path] | unique)
-            | .plugins.entries[$name] = (.plugins.entries[$name] // {}) * {
-                "enabled": true,
-                "hooks": {
-                  "allowConversationAccess": true
-                }
-              }
-        ' "$OPENCLAW_CONFIG" >"$OPENCLAW_CONFIG.tmp" && \
-            mv "$OPENCLAW_CONFIG.tmp" "$OPENCLAW_CONFIG" && \
-            echo -e "    ${CHECK_MARK} $plugin_name enabled in OpenClaw config" || \
-            echo -e "    ${WARNING} Could not enable $plugin_name in config"
-    fi
-
-    # Verify installation
-    if [ -f "$plugin_target/dist/index.js" ] && [ -f "$plugin_target/openclaw.plugin.json" ]; then
-        echo -e "  ${CHECK_MARK} $plugin_name installed to $plugin_target"
-    else
-        echo -e "  ${CROSS_MARK} $plugin_name installation incomplete"
-        VERIFICATION_ERRORS=$((VERIFICATION_ERRORS + 1))
-    fi
-
-    # Run any plugin migrations
-    local plugin_migrations="$plugin_source/database/migrations"
-    if [ -d "$plugin_migrations" ]; then
-        echo "    Running $plugin_name migrations..."
-        local mig_files=()
-        while IFS= read -r -d '' f; do
-            mig_files+=("$f")
-        done < <(find "$plugin_migrations" -maxdepth 1 -name "*.sql" -print0 | sort -z)
-
-        for sql_file in "${mig_files[@]}"; do
-            local mig_name
-            mig_name=$(basename "$sql_file")
-            if _superuser_psql "$DB_NAME" -f "$sql_file" >/dev/null 2>&1; then
-                echo -e "    ${CHECK_MARK} Migration: $mig_name"
-            else
-                echo -e "    ${WARNING} Migration failed: $mig_name"
-            fi
-        done
-    fi
-}
 
 install_metacognition_plugin "self-awareness" \
     "$SCRIPT_DIR/cognition/metacognition/self-awareness" \
@@ -2140,19 +2847,9 @@ if [ -d "$BOOTSTRAP_SOURCE" ]; then
     echo "  Syncing bootstrap-context files..."
     sync_directory "$BOOTSTRAP_SOURCE" "$BOOTSTRAP_TARGET" "bootstrap-context files"
 
-    # Install npm dependencies if package.json exists
+    # Install runtime dependencies if package.json exists (#598)
     if [ -f "$BOOTSTRAP_TARGET/package.json" ]; then
-        if [ ! -d "$BOOTSTRAP_TARGET/node_modules" ] || [ "$FORCE_INSTALL" -eq 1 ]; then
-            echo "  Installing hook dependencies..."
-            NPM_INSTALL_LOG="${TMPDIR:-/tmp}/npm-install-hook-$$.log"
-            if (cd "$BOOTSTRAP_TARGET" && npm install) >"$NPM_INSTALL_LOG" 2>&1; then
-                echo -e "  ${CHECK_MARK} Hook dependencies installed"
-                rm -f "$NPM_INSTALL_LOG"
-            else
-                echo -e "  ${WARNING} npm install had issues (hook may use shared node_modules)"
-                rm -f "$NPM_INSTALL_LOG"
-            fi
-        fi
+        _install_runtime_dependencies "$BOOTSTRAP_TARGET" "bootstrap-context" || true
     fi
 
     # Run the DB setup script
@@ -2186,28 +2883,24 @@ if [ -d "$AGENT_CONFIG_SYNC_SOURCE" ]; then
     mkdir -p "$AGENT_CONFIG_SYNC_TARGET"
     sync_directory "$AGENT_CONFIG_SYNC_SOURCE" "$AGENT_CONFIG_SYNC_TARGET" "agent-config-sync files"
 
+    # Build in the source directory and copy dist/ to the target so the target
+    # only contains runtime dependencies (#598, #724).
     echo "  Building agent_config_sync TypeScript..."
-    cd "$AGENT_CONFIG_SYNC_TARGET"
-
-    if [ ! -d "node_modules" ] || [ "$FORCE_INSTALL" -eq 1 ]; then
-        NPM_INSTALL_LOG="${TMPDIR:-/tmp}/npm-install-config-sync-$$.log"
-        if npm install >"$NPM_INSTALL_LOG" 2>&1; then
-            echo -e "  ${CHECK_MARK} Dependencies installed"
-            rm -f "$NPM_INSTALL_LOG"
-        else
-            echo -e "  ${WARNING} npm install had issues (may use shared node_modules)"
-            rm -f "$NPM_INSTALL_LOG"
-        fi
-    fi
+    _install_plugin_build_dependencies "$AGENT_CONFIG_SYNC_SOURCE" "agent_config_sync" || true
 
     NPM_BUILD_LOG="${TMPDIR:-/tmp}/npm-build-config-sync-$$.log"
-    if npm run build >"$NPM_BUILD_LOG" 2>&1; then
+    if (cd "$AGENT_CONFIG_SYNC_SOURCE" && "$AGENT_CONFIG_SYNC_SOURCE/node_modules/.bin/tsc") >"$NPM_BUILD_LOG" 2>&1; then
+        mkdir -p "$AGENT_CONFIG_SYNC_TARGET/dist"
+        cp -r "$AGENT_CONFIG_SYNC_SOURCE/dist/"* "$AGENT_CONFIG_SYNC_TARGET/dist/"
         echo -e "  ${CHECK_MARK} agent_config_sync build completed"
         rm -f "$NPM_BUILD_LOG"
     else
         echo -e "  ${CROSS_MARK} agent_config_sync build failed"
         tail -20 "$NPM_BUILD_LOG"
     fi
+
+    # Install runtime dependencies in the target directory (#598)
+    _install_runtime_dependencies "$AGENT_CONFIG_SYNC_TARGET" "agent_config_sync" || true
 
     cd "$SCRIPT_DIR"
 
@@ -2247,27 +2940,14 @@ if [ -d "$AGENT_CONFIG_SYNC_SOURCE" ]; then
                 echo -e "  ${WARNING} Could not remove agent-config-db hook from config"
         fi
 
-        # Set agents.list to { "$include": "./agents.json" }
-        EXISTING_LIST_INCLUDE=$(jq -r '.agents.list["$include"] // empty' "$OPENCLAW_CONFIG" 2>/dev/null || true)
-        if [ -n "$EXISTING_LIST_INCLUDE" ]; then
-            echo -e "  ${CHECK_MARK} agents.list already uses \$include: $EXISTING_LIST_INCLUDE"
-        else
-            jq '.agents.list = { "$include": "./agents.json" }' "$OPENCLAW_CONFIG" >"$OPENCLAW_CONFIG.tmp" && \
-                mv "$OPENCLAW_CONFIG.tmp" "$OPENCLAW_CONFIG" && \
-                echo -e "  ${CHECK_MARK} Set agents.list = { \"\$include\": \"./agents.json\" }" || \
-                echo -e "  ${WARNING} Could not set agents.list \$include directive"
-        fi
+        # Ensure agents.json is a valid keyed object BEFORE switching
+        # agents.entries to $include (#1231 r7). The gateway schema rejects
+        # arrays and empty objects, and retiring agent_config_sync before it
+        # can rewrite a stale array leaves the gateway unbootable.
+        _configure_agents_entries_include "$OPENCLAW_CONFIG"
 
-        # Ensure gateway.reload.mode is not "off"
-        EXISTING_MODE=$(jq -r '.gateway.reload.mode // empty' "$OPENCLAW_CONFIG" 2>/dev/null)
-        if [ -z "$EXISTING_MODE" ] || [ "$EXISTING_MODE" = "off" ]; then
-            jq '.gateway.reload.mode = "hot"' "$OPENCLAW_CONFIG" >"$OPENCLAW_CONFIG.tmp" && \
-                mv "$OPENCLAW_CONFIG.tmp" "$OPENCLAW_CONFIG" && \
-                echo -e "  ${CHECK_MARK} Set gateway.reload.mode = \"hot\"" || \
-                echo -e "  ${WARNING} Could not set gateway.reload.mode"
-        else
-            echo -e "  ${CHECK_MARK} gateway.reload.mode = \"$EXISTING_MODE\""
-        fi
+        # Keep gateway.reload.mode valid for OpenClaw 2026.9.x (#723)
+        _configure_gateway_reload_mode "$OPENCLAW_CONFIG"
 
         # Set maxSpawnDepth if missing
         EXISTING_DEPTH=$(jq -r '.agents.defaults.subagents.maxSpawnDepth // empty' "$OPENCLAW_CONFIG" 2>/dev/null)
@@ -2279,180 +2959,55 @@ if [ -d "$AGENT_CONFIG_SYNC_SOURCE" ]; then
         else
             echo -e "  ${CHECK_MARK} maxSpawnDepth already set to $EXISTING_DEPTH"
         fi
+
+        # Configure agents.defaults.heartbeat so every heartbeat run/wake routes
+        # to #proactive-mode (Discord channel 1504054635231445112) and runs in
+        # an isolated session. Cadence defaults to 30m; TC-714-001 is pending so
+        # the live cadence is NOT changed to 20m yet (#714 Rev 2).
+        # Derivation: HEARTBEAT.md:66-67, motivation/README.md Configuration,
+        # OpenClaw 2026.9.6 HeartbeatSchema.isolatedSession (fork
+        # src/config/zod-schema.agent-runtime.ts:61).
+        EXISTING_HB_EVERY=$(jq -r '.agents.defaults.heartbeat.every // empty' "$OPENCLAW_CONFIG" 2>/dev/null)
+        if [ -z "$EXISTING_HB_EVERY" ]; then
+            jq '.agents.defaults.heartbeat.every = "30m"' "$OPENCLAW_CONFIG" >"$OPENCLAW_CONFIG.tmp" && \
+                mv "$OPENCLAW_CONFIG.tmp" "$OPENCLAW_CONFIG" && \
+                echo -e "  ${CHECK_MARK} Set agents.defaults.heartbeat.every = 30m" || \
+                echo -e "  ${WARNING} Could not set heartbeat cadence"
+        else
+            echo -e "  ${CHECK_MARK} agents.defaults.heartbeat.every already set to $EXISTING_HB_EVERY"
+        fi
+
+        EXISTING_HB_TARGET=$(jq -r '.agents.defaults.heartbeat.target // empty' "$OPENCLAW_CONFIG" 2>/dev/null)
+        if [ -z "$EXISTING_HB_TARGET" ]; then
+            jq '.agents.defaults.heartbeat.target = "discord"' "$OPENCLAW_CONFIG" >"$OPENCLAW_CONFIG.tmp" && \
+                mv "$OPENCLAW_CONFIG.tmp" "$OPENCLAW_CONFIG" && \
+                echo -e "  ${CHECK_MARK} Set agents.defaults.heartbeat.target = discord" || \
+                echo -e "  ${WARNING} Could not set heartbeat target"
+        else
+            echo -e "  ${CHECK_MARK} agents.defaults.heartbeat.target already set to $EXISTING_HB_TARGET"
+        fi
+
+        EXISTING_HB_TO=$(jq -r '.agents.defaults.heartbeat.to // empty' "$OPENCLAW_CONFIG" 2>/dev/null)
+        if [ -z "$EXISTING_HB_TO" ]; then
+            jq '.agents.defaults.heartbeat.to = "channel:1504054635231445112"' "$OPENCLAW_CONFIG" >"$OPENCLAW_CONFIG.tmp" && \
+                mv "$OPENCLAW_CONFIG.tmp" "$OPENCLAW_CONFIG" && \
+                echo -e "  ${CHECK_MARK} Set agents.defaults.heartbeat.to = channel:1504054635231445112 (#proactive-mode)" || \
+                echo -e "  ${WARNING} Could not set heartbeat destination"
+        else
+            echo -e "  ${CHECK_MARK} agents.defaults.heartbeat.to already set to $EXISTING_HB_TO"
+        fi
+
+        EXISTING_HB_ISO=$(jq -r '.agents.defaults.heartbeat.isolatedSession // empty' "$OPENCLAW_CONFIG" 2>/dev/null)
+        if [ -z "$EXISTING_HB_ISO" ]; then
+            jq '.agents.defaults.heartbeat.isolatedSession = true' "$OPENCLAW_CONFIG" >"$OPENCLAW_CONFIG.tmp" && \
+                mv "$OPENCLAW_CONFIG.tmp" "$OPENCLAW_CONFIG" && \
+                echo -e "  ${CHECK_MARK} Set agents.defaults.heartbeat.isolatedSession = true" || \
+                echo -e "  ${WARNING} Could not set heartbeat isolatedSession"
+        else
+            echo -e "  ${CHECK_MARK} agents.defaults.heartbeat.isolatedSession already set to $EXISTING_HB_ISO"
+        fi
     fi
 
-    # Generate initial agents.json from DB
-    # Safety rules (#252):
-    #   - If agents.json exists and is valid JSON → skip write (agent_config_sync keeps it in sync)
-    #   - If agents.json exists but is INVALID JSON → skip and warn (require --regenerate-agents-json to fix)
-    #   - If agents.json does not exist → generate from DB
-    #   - --regenerate-agents-json: backup existing file, then regenerate from DB regardless
-    #   - NEVER write '[]' on psql failure
-    AGENTS_JSON="$OPENCLAW_DIR/agents.json"
-    AGENTS_JSON_TMP="${AGENTS_JSON}.tmp.$$"
-    TMPFILES+=("$AGENTS_JSON_TMP")
-
-    # Helper: generate agents.json from DB into $AGENTS_JSON
-    _generate_agents_json() {
-        # Query get_agent_export_rows(), which scopes results to the connecting
-        # role (own row + subagents that list session_user in parent_agents) and
-        # filters to active, modeled agents. Shape logic mirrors sync.ts's
-        # buildAgentsList(); final serialization uses the same
-        # JSON.stringify(data, null, 2) + "\n" the agent_config_sync plugin uses.
-        local INITIAL_SYNC_QUERY="
-            SELECT COALESCE(json_agg(entry), NULL)::text
-            FROM (
-                SELECT jsonb_strip_nulls(
-                    jsonb_build_object(
-                        'id', name,
-                        'model',
-                        CASE
-                            WHEN fallback_models IS NOT NULL AND array_length(fallback_models, 1) > 0
-                            THEN jsonb_build_object('primary', model, 'fallbacks', to_jsonb(fallback_models))
-                            ELSE to_jsonb(model)
-                        END
-                    )
-                    || CASE WHEN is_default = true THEN jsonb_build_object('default', true) ELSE '{}'::jsonb END
-                    || CASE WHEN allowed_subagents IS NOT NULL AND array_length(allowed_subagents, 1) > 0
-                        THEN jsonb_build_object('subagents', jsonb_build_object('allowAgents',
-                            (SELECT jsonb_agg(s ORDER BY s) FROM unnest(allowed_subagents) s)))
-                        ELSE '{}'::jsonb END
-                    || CASE WHEN heartbeat_enabled = true AND heartbeat_every IS NOT NULL AND heartbeat_every <> ''
-                        THEN jsonb_build_object('heartbeat', jsonb_strip_nulls(
-                            jsonb_build_object('every', heartbeat_every)
-                            || CASE WHEN heartbeat_target IS NOT NULL AND heartbeat_target <> '' THEN jsonb_build_object('target', heartbeat_target) ELSE '{}'::jsonb END
-                            || CASE WHEN heartbeat_to IS NOT NULL AND heartbeat_to <> '' THEN jsonb_build_object('to', heartbeat_to) ELSE '{}'::jsonb END))
-                        ELSE '{}'::jsonb END
-                ) AS entry
-                FROM get_agent_export_rows()
-            ) sub
-        "
-        local AGENTS_DATA
-        if AGENTS_DATA=$(psql -U "$DB_USER" -d "$DB_NAME" -tAc "$INITIAL_SYNC_QUERY" 2>/dev/null); then
-            if [ -n "$AGENTS_DATA" ] && [ "$AGENTS_DATA" != "null" ] && [ "$AGENTS_DATA" != "" ]; then
-                local FORMAT_OK=0
-                if command -v node &>/dev/null; then
-                    # Preferred: byte-match the plugin's JSON.stringify(data, null, 2) + "\n"
-                    # Reconstruct each entry in the exact key order buildAgentsList()
-                    # uses (id, model, default, subagents, heartbeat) so PostgreSQL's
-                    # jsonb canonical ordering does not leak through.
-                    if echo "$AGENTS_DATA" | node -e '
-                        let input = "";
-                        process.stdin.setEncoding("utf8");
-                        process.stdin.on("data", c => input += c);
-                        process.stdin.on("end", () => {
-                            const rows = JSON.parse(input);
-                            const list = [];
-                            for (const row of rows) {
-                                const entry = { id: row.id, model: row.model };
-                                if (row.default === true) entry.default = true;
-                                if (row.subagents) entry.subagents = row.subagents;
-                                if (row.heartbeat) {
-                                    const hb = { every: row.heartbeat.every };
-                                    if (row.heartbeat.target) hb.target = row.heartbeat.target;
-                                    if (row.heartbeat.to) hb.to = row.heartbeat.to;
-                                    entry.heartbeat = hb;
-                                }
-                                list.push(entry);
-                            }
-                            list.sort((a, b) => a.id.localeCompare(b.id));
-                            process.stdout.write(JSON.stringify(list, null, 2) + "\n");
-                        });
-                    ' >"$AGENTS_JSON_TMP" 2>/dev/null; then
-                        FORMAT_OK=1
-                    fi
-                else
-                    # Fallback if node is unavailable: jq reconstructs the same key order and sorts.
-                    if echo "$AGENTS_DATA" | jq '
-                        map(
-                            {id: .id, model: .model} +
-                            (if .default == true then {default: true} else {} end) +
-                            (if .subagents then {subagents: .subagents} else {} end) +
-                            (if .heartbeat then {heartbeat: (
-                                {every: .heartbeat.every} +
-                                (if .heartbeat.target then {target: .heartbeat.target} else {} end) +
-                                (if .heartbeat.to then {to: .heartbeat.to} else {} end)
-                            )} else {} end)
-                        ) | sort_by(.id)
-                    ' >"$AGENTS_JSON_TMP" 2>/dev/null; then
-                        if [ -s "$AGENTS_JSON_TMP" ] && [ "$(tail -c 1 "$AGENTS_JSON_TMP" | wc -l)" -eq 0 ]; then
-                            echo >> "$AGENTS_JSON_TMP"
-                        fi
-                        FORMAT_OK=1
-                    fi
-                fi
-
-                if [ "$FORMAT_OK" -eq 1 ]; then
-                    if mv "$AGENTS_JSON_TMP" "$AGENTS_JSON"; then
-                        echo -e "  ${CHECK_MARK} Generated agents.json from DB"
-                        return 0
-                    else
-                        echo -e "  ${WARNING} Could not write agents.json"
-                        rm -f "$AGENTS_JSON_TMP"
-                        return 1
-                    fi
-                else
-                    echo -e "  ${WARNING} Could not serialize agents.json from DB data — not writing"
-                    rm -f "$AGENTS_JSON_TMP"
-                    return 1
-                fi
-            else
-                # DB returned NULL or empty — no agents in scope, but psql succeeded.
-                # Write an empty placeholder so the openclaw.json $include stays valid
-                # and the gateway can boot; agent_config_sync will populate real data
-                # on startup. Failure paths (psql error / non-JSON) still write nothing.
-                printf '[]\n' > "$AGENTS_JSON_TMP"
-                if mv "$AGENTS_JSON_TMP" "$AGENTS_JSON"; then
-                    echo -e "  ${INFO} no agents in scope — wrote empty agents.json placeholder; agent_config_sync will populate on startup"
-                    return 0
-                else
-                    echo -e "  ${WARNING} Could not write empty agents.json placeholder"
-                    rm -f "$AGENTS_JSON_TMP"
-                    return 1
-                fi
-            fi
-        else
-            # psql failed — NEVER write '[]'
-            echo -e "  ${WARNING} Could not query DB for agents.json — agents.json not written"
-            echo -e "  ${INFO} agent_config_sync will generate agents.json when gateway starts"
-            rm -f "$AGENTS_JSON_TMP"
-            return 1
-        fi
-    }
-
-    echo "  Checking agents.json status..."
-    if [ -f "$AGENTS_JSON" ]; then
-        if jq '.' "$AGENTS_JSON" >/dev/null 2>&1; then
-            # File exists and is valid JSON
-            if [ "$REGENERATE_AGENTS_JSON" -eq 1 ]; then
-                # --regenerate-agents-json: backup and regenerate
-                AGENTS_JSON_BAK="${AGENTS_JSON}.bak-$(date +%Y%m%d-%H%M%S)"
-                cp "$AGENTS_JSON" "$AGENTS_JSON_BAK" && \
-                    echo -e "  ${INFO} Backed up existing agents.json to $AGENTS_JSON_BAK"
-                echo "  Regenerating agents.json from database..."
-                _generate_agents_json
-            else
-                echo -e "  ${CHECK_MARK} agents.json present and valid; agent_config_sync will keep it in sync"
-            fi
-        else
-            # File exists but is INVALID JSON
-            if [ "$REGENERATE_AGENTS_JSON" -eq 1 ]; then
-                # --regenerate-agents-json: backup corrupt file and regenerate
-                AGENTS_JSON_BAK="${AGENTS_JSON}.bak-$(date +%Y%m%d-%H%M%S)"
-                cp "$AGENTS_JSON" "$AGENTS_JSON_BAK" && \
-                    echo -e "  ${WARNING} Backed up corrupt agents.json to $AGENTS_JSON_BAK"
-                echo "  Regenerating agents.json from database..."
-                _generate_agents_json
-            else
-                echo -e "  ${WARNING} agents.json exists but contains invalid JSON — skipping write."
-                echo -e "  ${INFO} Pass --regenerate-agents-json to fix it."
-            fi
-        fi
-    else
-        # File does not exist — generate from DB
-        echo "  Generating initial agents.json from database..."
-        _generate_agents_json
-    fi
 else
     echo -e "  ${WARNING} cognition/focus/agent-config-sync not found (skipping)"
 fi
@@ -2644,12 +3199,19 @@ if [ -f "$OPENCLAW_CONFIG" ] && command -v jq &>/dev/null; then
     if [ "$HOOKS_ENABLED" = "true" ] || [ "$INTERNAL_HOOKS_ENABLED" = "true" ]; then
         EXISTING_TOKEN=$(jq -r '.hooks.token // empty' "$OPENCLAW_CONFIG")
         if [ -z "$EXISTING_TOKEN" ]; then
+            if ! command -v openssl &>/dev/null; then
+                echo -e "  ${CROSS_MARK} openssl is required to generate hooks.token"
+                exit 1
+            fi
             HOOKS_TOKEN=$(openssl rand -hex 32)
-            jq --arg token "$HOOKS_TOKEN" '.hooks.token = $token' \
-                "$OPENCLAW_CONFIG" >"$OPENCLAW_CONFIG.tmp" && \
-                mv "$OPENCLAW_CONFIG.tmp" "$OPENCLAW_CONFIG" && \
-                echo -e "  ${CHECK_MARK} Generated hooks.token" || \
-                echo -e "  ${WARNING} Could not set hooks.token"
+            if jq --arg token "$HOOKS_TOKEN" '.hooks.token = $token' \
+                    "$OPENCLAW_CONFIG" >"$OPENCLAW_CONFIG.tmp" && \
+                    mv "$OPENCLAW_CONFIG.tmp" "$OPENCLAW_CONFIG"; then
+                echo -e "  ${CHECK_MARK} Generated hooks.token"
+            else
+                echo -e "  ${CROSS_MARK} Could not set hooks.token"
+                exit 1
+            fi
         else
             echo -e "  ${CHECK_MARK} hooks.token already exists (preserved)"
         fi
@@ -2709,6 +3271,7 @@ fi
 echo "    • Scripts → $SCRIPTS_TARGET_OPENCLAW"
 echo "    • Python venv → $VENV_DIR"
 echo "  [cognition]"
+echo "    • memory-extract extension → $EXTENSIONS_DIR/memory-extract"
 echo "    • agent_config_sync extension → $EXTENSIONS_DIR/agent_config_sync"
 echo "    • turn-context plugin → $OPENCLAW_DIR/plugins/turn-context"
 echo "    • Motivation system → $MOTIVATION_DIR"

@@ -7,7 +7,8 @@ set -e
 CONFIG_FILE="${1:-$HOME/.openclaw/openclaw.json}"
 # Note: semantic-recall and agent-turn-context are now consolidated into the
 # turn-context plugin (memory/plugins/turn-context/). See issue #182.
-HOOKS_TO_ENABLE=("memory-extract" "session-init")
+# Note: memory-extract is now a plugin (memory/plugins/memory-extract/). See issue #726.
+HOOKS_TO_ENABLE=("session-init")
 DRY_RUN="${DRY_RUN:-0}"
 
 # Color codes
@@ -52,6 +53,16 @@ else
     echo -e "${BLUE}[DRY-RUN]${NC} Would create backup: $BACKUP_FILE"
 fi
 
+# Generate a hooks token if one does not already exist. Enabling hooks
+# without a token leaves the gateway unbootable, so this must happen
+# atomically with the hooks.enabled change (#724).
+if ! command -v openssl &> /dev/null; then
+    echo -e "${RED}Error: openssl is required to generate hooks.token${NC}"
+    exit 1
+fi
+
+HOOKS_TOKEN=$(openssl rand -hex 32)
+
 # Build jq filter to enable hooks
 # This handles multiple cases:
 # 1. No hooks section at all
@@ -85,6 +96,9 @@ else . end |
 # Ensure internal.enabled is true
 .hooks.internal.enabled = true |
 
+# Ensure a token exists (set only if missing)
+.hooks.token //= $token |
+
 # Ensure entries object exists
 if .hooks.internal | has("entries") | not then
   .hooks.internal.entries = {}
@@ -92,14 +106,14 @@ else . end |
 
 # Enable each hook
 # Note: semantic-recall and agent-turn-context replaced by turn-context plugin (#182)
-.hooks.internal.entries["memory-extract"] = {"enabled": true} |
+# Note: memory-extract replaced by plugin (#726)
 .hooks.internal.entries["session-init"] = {"enabled": true}
 '
 
 # Apply the filter
 if [ "$DRY_RUN" -eq 0 ]; then
     TEMP_FILE=$(mktemp)
-    if jq "$JQ_FILTER" "$CONFIG_FILE" > "$TEMP_FILE"; then
+    if jq --arg token "$HOOKS_TOKEN" "$JQ_FILTER" "$CONFIG_FILE" > "$TEMP_FILE"; then
         mv "$TEMP_FILE" "$CONFIG_FILE"
         echo -e "${GREEN}✓${NC} Config updated successfully"
     else
@@ -110,7 +124,7 @@ if [ "$DRY_RUN" -eq 0 ]; then
 else
     echo -e "${BLUE}[DRY-RUN]${NC} Would apply this configuration:"
     echo ""
-    jq "$JQ_FILTER" "$CONFIG_FILE" | jq '.hooks'
+    jq --arg token "$HOOKS_TOKEN" "$JQ_FILTER" "$CONFIG_FILE" | jq '.hooks'
 fi
 
 echo ""

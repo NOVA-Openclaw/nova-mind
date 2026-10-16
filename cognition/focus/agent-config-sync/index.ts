@@ -102,7 +102,7 @@ function createConfigSyncService(api: OpenClawPluginApi) {
       reconnectDelay = RECONNECT_DELAY_MS;
 
       // Initial agents.json sync on startup
-      const changed = await syncAgentsConfig(client, outputPath);
+      const changed = await syncAgentsConfig(client, outputPath, log);
       if (changed) {
         log.info(`agent_config_sync: Initial sync wrote ${outputPath}`);
         log.info("agent_config_sync: Signaling gateway to reload config (SIGUSR1)");
@@ -151,7 +151,7 @@ function createConfigSyncService(api: OpenClawPluginApi) {
           log.info("agent_config_sync: Received agent config change notification");
 
           try {
-            const changed = await syncAgentsConfig(client, outputPath);
+            const changed = await syncAgentsConfig(client, outputPath, log);
             if (changed) {
               log.info(`agent_config_sync: Config updated → ${outputPath}`);
               log.info(

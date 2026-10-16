@@ -958,6 +958,63 @@ verify_config() {
     fi
 }
 
+# Detect peer-shadowed relations for the target database and configure the
+# pgschema ignore base file / peer mode accordingly.
+# Sets globals: PGSCHEMA_PEER_MODE, PGSCHEMA_IGNORE_BASE,
+# PEER_SHADOWED_NAMES, PEER_SHADOWED_RELKINDS, PEER_SHADOWED_KINDS.
+# Fails closed: returns non-zero when detection cannot be queried, so the
+# caller skips the schema-apply stage instead of planning with zero exclusions.
+_resolve_peer_shadowed_relations() {
+    local shadowed_json detect_rc stderr_tmp
+    stderr_tmp=$(mktemp /tmp/peer-shadowed-stderr-XXXXXX)
+    TMPFILES+=("$stderr_tmp")
+    detect_rc=0
+    shadowed_json=$("$VENV_PYTHON" "$SCRIPT_DIR/database/detect_peer_shadowed.py" \
+        --schema-file "$SCHEMA_FILE" \
+        --dsn "host=/var/run/postgresql port=${PGPORT:-5432} dbname=$DB_NAME user=$DB_USER" 2>"$stderr_tmp") || detect_rc=$?
+
+    if [ "$detect_rc" -ne 0 ]; then
+        echo -e "  ${CROSS_MARK} Peer-shadowed relation detection failed (exit $detect_rc) — schema apply skipped"
+        if [ -s "$stderr_tmp" ]; then
+            cat "$stderr_tmp" >&2
+        fi
+        if [ -n "$shadowed_json" ]; then
+            printf '%s\n' "$shadowed_json" >&2
+        fi
+        return "$detect_rc"
+    fi
+
+    # Log informational stderr (detection summary) on success.
+    if [ -s "$stderr_tmp" ]; then
+        cat "$stderr_tmp" >&2
+    fi
+
+    PEER_SHADOWED_NAMES=()
+    PEER_SHADOWED_RELKINDS=()
+    PEER_SHADOWED_KINDS=()
+    while IFS= read -r line; do
+        local name relkind kind
+        name=$(printf '%s' "$line" | jq -r '.name // empty')
+        relkind=$(printf '%s' "$line" | jq -r '.relkind // empty')
+        kind=$(printf '%s' "$line" | jq -r '.kind // empty')
+        if [ -n "$name" ]; then
+            PEER_SHADOWED_NAMES+=("$name")
+            PEER_SHADOWED_RELKINDS+=("$relkind")
+            PEER_SHADOWED_KINDS+=("$name ($kind)")
+        fi
+    done <<< "$shadowed_json"
+
+    if [ "${#PEER_SHADOWED_NAMES[@]}" -gt 0 ]; then
+        PGSCHEMA_PEER_MODE=1
+        PGSCHEMA_IGNORE_BASE="$SCRIPT_DIR/database/.pgschemaignore-peer"
+        echo -e "  ${INFO} Peer-shadowed relations detected: ${PEER_SHADOWED_KINDS[*]}"
+    else
+        PGSCHEMA_PEER_MODE=0
+        PGSCHEMA_IGNORE_BASE="$SCRIPT_DIR/database/.pgschemaignore"
+    fi
+    return 0
+}
+
 # When the installer is sourced by unit tests, stop here so tests can call
 # the helper functions above without running the full installer.  This guard
 # is NOT used in normal execution.
@@ -2337,6 +2394,21 @@ else
     echo -e "  ${INFO} No renames.json found — skipping Step 1.5"
 fi
 
+# Peer-shadowed relation detection must run before pgschema plans; it queries
+# the target DB to find foreign tables/views that shadow tables declared by
+# schema.sql. On failure the installer fails closed and skips the apply stage.
+PEER_SHADOWED_NAMES=()
+PEER_SHADOWED_RELKINDS=()
+PEER_SHADOWED_KINDS=()
+PGSCHEMA_PEER_MODE=0
+PGSCHEMA_IGNORE_BASE="$SCRIPT_DIR/database/.pgschemaignore"
+
+if [ "$SCHEMA_DIFF_SKIPPED" -eq 0 ]; then
+    if ! _resolve_peer_shadowed_relations; then
+        SCHEMA_DIFF_SKIPPED=1
+    fi
+fi
+
 if [ "$SCHEMA_DIFF_SKIPPED" -eq 1 ]; then
     echo -e "  ${WARNING} Skipping pgschema plan/apply (pre-schema step failed above)"
 else
@@ -2356,21 +2428,6 @@ else
         "--plan-user" "$PG_SUPERUSER"
     )
 
-    # Detect federation-peer bootstrap-context shape (nova-mind#608).
-    # On peers, agent_bootstrap_context is a VIEW over agent_bootstrap_context_local
-    # plus the foreign table nova_bootstrap_context. schema.sql declares a TABLE,
-    # so pgschema would otherwise plan CREATE TABLE / CREATE TRIGGER and fail with
-    # SQLSTATE 42809. When the view is present, swap in a peer-only ignore set.
-    BOOTSTRAP_CONTEXT_RELKIND=$(psql -U "$DB_USER" -d "$DB_NAME" -tAc \
-        "SELECT c.relkind FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relname = 'agent_bootstrap_context';" 2>/dev/null | tr -d '[:space:]')
-    if [ "$BOOTSTRAP_CONTEXT_RELKIND" = "v" ]; then
-        PGSCHEMA_PEER_MODE=1
-        PGSCHEMA_IGNORE_FILE="$SCRIPT_DIR/database/.pgschemaignore-peer"
-    else
-        PGSCHEMA_PEER_MODE=0
-        PGSCHEMA_IGNORE_FILE="$SCRIPT_DIR/database/.pgschemaignore"
-    fi
-
     # Use a dedicated non-sticky scratch directory for the plan/reorder/apply
     # cycle (nova-mind#664). /tmp has the sticky bit (1777), which blocks the
     # agent user from renaming a file over a file owned by the postgres user.
@@ -2384,8 +2441,20 @@ else
     # file into the scratch directory and plan from there. This also fixes the
     # prior discovery gap where the file lived in database/ but planning ran
     # from the repo root.
-    cp "$PGSCHEMA_IGNORE_FILE" "$PGSCHEMA_SCRATCH_DIR/.pgschemaignore"
+    # In peer mode, dynamically inject the detected shadowed relations into the
+    # [tables] and [views] sections so pgschema itself ignores them during
+    # planning.  Everything else stays in .pgschemaignore-peer for objects that
+    # cannot be derived from relkind f/v (functions, triggers, etc.).
+    cp "$PGSCHEMA_IGNORE_BASE" "$PGSCHEMA_SCRATCH_DIR/.pgschemaignore"
     chmod 644 "$PGSCHEMA_SCRATCH_DIR/.pgschemaignore"
+    if [ "${#PEER_SHADOWED_NAMES[@]}" -gt 0 ]; then
+        names_csv=$(IFS=,; echo "${PEER_SHADOWED_NAMES[*]}")
+        relkinds_csv=$(IFS=,; echo "${PEER_SHADOWED_RELKINDS[*]}")
+        "$VENV_PYTHON" "$SCRIPT_DIR/database/inject_peer_shadowed_ignores.py" \
+            --ignore-file "$PGSCHEMA_SCRATCH_DIR/.pgschemaignore" \
+            --names "$names_csv" \
+            --relkinds "$relkinds_csv"
+    fi
     pushd "$PGSCHEMA_SCRATCH_DIR" >/dev/null || exit 1
 
     # PLAN_FILE is written by pgschema running as the superuser, so do not
@@ -2443,10 +2512,12 @@ else
                 --output "$FILTERED_PLAN_FILE"
             )
             if [ "$PGSCHEMA_PEER_MODE" -eq 1 ]; then
-                # Peer FDW bootstrap-context stack (VIEW + foreign table + sequence +
-                # triggers + privileges) is owned by the FDW setup (#520), not
-                # schema.sql. Strip every plan step that refers to it (#608).
-                STRIP_ARGS+=(--ignore-table-triggers agent_bootstrap_context)
+                # Peer-shadowed relations (VIEW / foreign table + sequence +
+                # triggers + privileges + comments + constraints + indexes) are
+                # owned by the FDW setup (#520), not schema.sql. Strip every plan
+                # step that refers to them (#608 / #1231).
+                ignored_csv=$(IFS=,; echo "${PEER_SHADOWED_NAMES[*]}")
+                STRIP_ARGS+=(--ignore-objects "$ignored_csv" --log-exclusions)
             fi
             DESTRUCTIVE_COUNT=$("$VENV_PYTHON" "$SCRIPT_DIR/database/strip_destructive.py" "${STRIP_ARGS[@]}" 2>&1) || STRIP_EXIT=$?
 

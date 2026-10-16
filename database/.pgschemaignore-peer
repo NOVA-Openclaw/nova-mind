@@ -1,25 +1,19 @@
-# Peer-only pgschema ignore file (nova-mind#608).
+# Peer-only pgschema ignore file (nova-mind#608 / #1231).
 #
-# On federation peers (graybeard, victoria), agent_bootstrap_context is a VIEW
-# over agent_bootstrap_context_local plus the foreign table nova_bootstrap_context.
-# schema.sql declares it as a TABLE for the canonical gateway (nova_memory).
-# This file is a complete ignore set that MUST be used ONLY when the target
-# database has agent_bootstrap_context with relkind = 'v'. The installer detects
-# that shape and swaps this file in at plan time.
+# On federation peers some objects declared as TABLEs by schema.sql exist as
+# VIEWs or FOREIGN TABLEs (e.g. agent_bootstrap_context as a VIEW, ai_models as
+# a FOREIGN TABLE).  The installer now detects these dynamically before planning
+# by querying the target DB for public relations with relkind IN ('f','v')
+# whose names match a table that schema.sql CREATEs (#1231).  Detected names are
+# injected into [tables]/[views] at plan time and stripped from the post-plan
+# filter by database/strip_destructive.py --ignore-objects.
+#
+# This static file is therefore kept ONLY for objects and patterns that cannot
+# be derived from that query: functions, triggers, and the nova_bootstrap_context
+# foreign table (which is not declared by schema.sql but is part of the peer
+# FDW bootstrap stack).
 #
 # Keep this file in sync with database/.pgschemaignore (the base ignore set).
-# The additional peer-only patterns below prevent pgschema from planning
-# DROP VIEW / CREATE TABLE / CREATE TRIGGER on the FDW bootstrap stack.
-#
-# Peer-side grants on agent_bootstrap_context (the VIEW) and its foreign
-# table nova_bootstrap_context are owned by the FDW setup (#520), not by
-# schema.sql; they are stripped from the peer-mode plan by the installer's
-# post-plan filter (database/strip_destructive.py --ignore-table-triggers).
-#
-# NOTE: pgschema v1.7.2 does not honor the [triggers] section for
-# type="table.trigger" steps, so the installer also strips those steps
-# explicitly when peer mode is active. The [triggers] entries remain here
-# as defensive documentation / forward-compat.
 
 [tables]
 patterns = [
@@ -38,14 +32,14 @@ patterns = [
   "order_adjustments",
   "price_cache_v2",
   "*_local",
-  # Peer-only FDW bootstrap-context stack (#608)
-  "agent_bootstrap_context",   # federation VIEW on peers; real TABLE only on nova_memory
-  "nova_bootstrap_context"     # foreign table imported from nova_memory
+  # Peer-only FDW bootstrap-context stack (#608 / #1231)
+  # agent_bootstrap_context is injected dynamically when the target has it as a VIEW.
+  "nova_bootstrap_context"     # foreign table imported from nova_memory (not in schema.sql)
 ]
 
 [views]
 patterns = [
-  "agent_bootstrap_context"    # federation VIEW on peers
+  # agent_bootstrap_context is injected dynamically when the target has it as a VIEW.
 ]
 
 [functions]

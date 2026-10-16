@@ -1,0 +1,62 @@
+# Peer-only pgschema ignore file (nova-mind#608).
+#
+# On federation peers (graybeard, victoria), agent_bootstrap_context is a VIEW
+# over agent_bootstrap_context_local plus the foreign table nova_bootstrap_context.
+# schema.sql declares it as a TABLE for the canonical gateway (nova_memory).
+# This file is a complete ignore set that MUST be used ONLY when the target
+# database has agent_bootstrap_context with relkind = 'v'. The installer detects
+# that shape and swaps this file in at plan time.
+#
+# Keep this file in sync with database/.pgschemaignore (the base ignore set).
+# The additional peer-only patterns below prevent pgschema from planning
+# DROP VIEW / CREATE TABLE / CREATE TRIGGER on the FDW bootstrap stack.
+#
+# Peer-side grants on agent_bootstrap_context (the VIEW) and its foreign
+# table nova_bootstrap_context are owned by the FDW setup (#520), not by
+# schema.sql; they are stripped from the peer-mode plan by the installer's
+# post-plan filter (database/strip_destructive.py --ignore-table-triggers).
+#
+# NOTE: pgschema v1.7.2 does not honor the [triggers] section for
+# type="table.trigger" steps, so the installer also strips those steps
+# explicitly when peer mode is active. The [triggers] entries remain here
+# as defensive documentation / forward-compat.
+
+[tables]
+patterns = [
+  # Base patterns from database/.pgschemaignore
+  "portfolios",
+  "portfolio_snapshots",
+  "portfolio_asset_classes",
+  "positions",
+  "trades",
+  "cash_ledger",
+  "strategies",
+  "strategy_notes",
+  "instruments",
+  "asset_classes",
+  "open_orders",
+  "order_adjustments",
+  "price_cache_v2",
+  "*_local",
+  # Peer-only FDW bootstrap-context stack (#608)
+  "agent_bootstrap_context",   # federation VIEW on peers; real TABLE only on nova_memory
+  "nova_bootstrap_context"     # foreign table imported from nova_memory
+]
+
+[views]
+patterns = [
+  "agent_bootstrap_context"    # federation VIEW on peers
+]
+
+[functions]
+patterns = [
+  "bootstrap_context_view_*",  # peer INSTEAD OF trigger functions (where present)
+  "protect_bootstrap_context_writes_v2"
+]
+
+[triggers]
+patterns = [
+  "protect_bootstrap_context",
+  "heartbeat_content_changed",
+  "zz_touch_updated_at"
+]

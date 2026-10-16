@@ -1,9 +1,10 @@
 #!/usr/bin/env bats
-# Tests for nova-mind#608: peer FDW bootstrap-context stack must be left alone
-# during schema apply, while nova_memory continues to manage the real table.
+# Tests for nova-mind#608 / #1231: peer-shadowed relations (VIEWs and FOREIGN
+# TABLEs that schema.sql declares as TABLEs) must be left alone during schema
+# apply, while nova_memory continues to manage the real tables.
 #
-# Verifies the installer's peer-detection + peer-only .pgschemaignore +
-# --ignore-table-triggers filter pipeline.
+# Verifies the installer's dynamic peer-detection (database/detect_peer_shadowed.py)
+# + peer-only .pgschemaignore + --ignore-objects filter pipeline.
 
 BATS_TEST_DIRNAME="$(cd "$(dirname "$BATS_TEST_FILENAME")" && pwd)"
 REPO_ROOT="$(cd "$BATS_TEST_DIRNAME/../.." && pwd)"
@@ -28,6 +29,10 @@ _drop_test_db() {
 }
 
 # Run the installer's plan-filter pipeline against a fixture database.
+# Uses dynamic peer-shadowed detection (#1231): queries the fixture DB for
+# public f/v relations matching schema.sql tables and feeds them to the
+# post-plan strip filter.  In "peer" mode the static .pgschemaignore-peer is
+# used as a base and the detected names are injected into [tables]/[views].
 # Args: DB_NAME PEER_MODE(0|1)
 _run_installer_filter_pipeline() {
     local DB="$1"
@@ -35,17 +40,49 @@ _run_installer_filter_pipeline() {
     local PLAN="$3"
     local FILTERED="$4"
 
-    local SCRATCH IGNORE_FILE TRIGGER_ARG
+    local SCRATCH IGNORE_FILE OBJ_FILTER
     SCRATCH=$(mktemp -d /tmp/pgschema-608-XXXXXX)
-    if [ "$PEER_MODE" -eq 1 ]; then
+
+    cp "$REPO_ROOT/database/schema.sql" "$SCRATCH/schema.sql"
+
+    # Detect shadowed relations dynamically, exactly as the installer does.
+    local SHADOWED_JSON SHADOWED_NAMES SHADOWED_RELKINDS SHADOWED_CSV
+    SHADOWED_JSON=$("$VENV_PYTHON" "$REPO_ROOT/database/detect_peer_shadowed.py" \
+        --schema-file "$SCRATCH/schema.sql" \
+        --dsn "host=/var/run/postgresql dbname=$DB user=nova" 2>/dev/null) || SHADOWED_JSON=""
+    SHADOWED_NAMES=()
+    SHADOWED_RELKINDS=()
+    while IFS= read -r line; do
+        local name relkind
+        name=$(printf '%s' "$line" | jq -r '.name // empty')
+        relkind=$(printf '%s' "$line" | jq -r '.relkind // empty')
+        if [ -n "$name" ]; then
+            SHADOWED_NAMES+=("$name")
+            SHADOWED_RELKINDS+=("$relkind")
+        fi
+    done <<< "$SHADOWED_JSON"
+
+    if [ "$PEER_MODE" -eq 1 ] && [ "${#SHADOWED_NAMES[@]}" -gt 0 ]; then
         IGNORE_FILE="$REPO_ROOT/database/.pgschemaignore-peer"
-        TRIGGER_ARG="--ignore-table-triggers agent_bootstrap_context"
+        SHADOWED_CSV=$(IFS=,; echo "${SHADOWED_NAMES[*]}")
+        OBJ_FILTER="--ignore-objects $SHADOWED_CSV --log-exclusions"
     else
         IGNORE_FILE="$REPO_ROOT/database/.pgschemaignore"
-        TRIGGER_ARG=""
+        OBJ_FILTER=""
     fi
     cp "$IGNORE_FILE" "$SCRATCH/.pgschemaignore"
-    cp "$REPO_ROOT/database/schema.sql" "$SCRATCH/schema.sql"
+
+    # Inject detected names into the scratch ignore file, mirroring the
+    # installer's Python helper.
+    if [ "$PEER_MODE" -eq 1 ] && [ "${#SHADOWED_NAMES[@]}" -gt 0 ]; then
+        local names_csv relkinds_csv
+        names_csv=$(IFS=,; echo "${SHADOWED_NAMES[*]}")
+        relkinds_csv=$(IFS=,; echo "${SHADOWED_RELKINDS[*]}")
+        "$VENV_PYTHON" "$REPO_ROOT/database/inject_peer_shadowed_ignores.py" \
+            --ignore-file "$SCRATCH/.pgschemaignore" \
+            --names "$names_csv" \
+            --relkinds "$relkinds_csv"
+    fi
 
     (
         cd "$SCRATCH" || exit 1
@@ -62,7 +99,8 @@ _run_installer_filter_pipeline() {
             --no-color >/dev/null 2>&1
     )
 
-    run "$VENV_PYTHON" "$STRIPPER" --plan "$PLAN" --output "$FILTERED" $TRIGGER_ARG
+    # shellcheck disable=SC2086
+    run "$VENV_PYTHON" "$STRIPPER" --plan "$PLAN" --output "$FILTERED" $OBJ_FILTER
     rm -rf "$SCRATCH"
 }
 
@@ -327,6 +365,163 @@ for s in steps:
         violations.append('CREATE TABLE agent_bootstrap_context')
     if s.get('type') == 'table.trigger' and 'agent_bootstrap_context' in path:
         violations.append('table.trigger on agent_bootstrap_context: ' + path)
+print('\n'.join(violations))
+PY
+    [ "$status" -eq 0 ]
+    [ -n "$output" ]
+
+    rm -f "$PLAN" "$FILTERED"
+    _drop_test_db "$DB"
+}
+
+# Seed a foreign-table-shaped peer fixture for a schema.sql table (ai_models).
+# This reproduces the nova-mind#1231 failure mode where ai_models is a FOREIGN
+# TABLE on the peer and schema.sql declares it as a TABLE.
+_seed_foreign_table_fixture() {
+    local DB="$1"
+    local FIXTURE
+    FIXTURE=$(mktemp)
+
+    cat > "$FIXTURE" <<'SQL'
+CREATE EXTENSION IF NOT EXISTS postgres_fdw;
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_foreign_server WHERE srvname = 'loopback') THEN
+        EXECUTE format('CREATE SERVER loopback FOREIGN DATA WRAPPER postgres_fdw OPTIONS (host %L, dbname %L)', 'localhost', current_database());
+    END IF;
+END $$;
+CREATE TABLE ai_models_local (
+    id serial PRIMARY KEY,
+    provider text NOT NULL,
+    model text NOT NULL,
+    input_price_per_mtok numeric,
+    output_price_per_mtok numeric,
+    description text,
+    supports_vision boolean DEFAULT false,
+    supports_reasoning boolean DEFAULT false,
+    context_window integer,
+    updated_at timestamptz DEFAULT now()
+);
+CREATE FOREIGN TABLE ai_models (
+    id int,
+    provider text,
+    model text,
+    input_price_per_mtok numeric,
+    output_price_per_mtok numeric,
+    description text,
+    supports_vision boolean,
+    supports_reasoning boolean,
+    context_window integer,
+    updated_at timestamptz
+) SERVER loopback OPTIONS (schema_name 'public', table_name 'ai_models_local');
+SQL
+
+    psql -U nova -d "$DB" -v ON_ERROR_STOP=1 -f "$FIXTURE" >/dev/null
+    rm -f "$FIXTURE"
+}
+
+# Assert that no step references NAME as a whole path component, excluding
+# any *_local variant.  Reusable for both VIEW and FOREIGN TABLE shadows.
+_assert_no_shadow_refs() {
+    local FILTERED="$1"
+    local NAME="$2"
+    run "$VENV_PYTHON" -c "
+import json, re
+with open('$FILTERED') as f:
+    p = json.load(f)
+steps = [s for g in (p.get('groups') or []) for s in g.get('steps', [])]
+violations = []
+for s in steps:
+    path = s.get('path', '')
+    if re.search(r'(?<!\w)' + re.escape('$NAME') + r'(?!\w)', path) and '_local' not in path:
+        violations.append(path)
+print('\n'.join(violations))
+"
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+}
+
+@test "TC-1231a: peer FOREIGN TABLE (ai_models) is excluded from plan" {
+    if [ ! -x "$VENV_PYTHON" ]; then skip "venv python not available at $VENV_PYTHON"; fi
+    if ! "$VENV_PYTHON" -c "import pglast" 2>/dev/null; then skip "pglast not installed"; fi
+    if ! _pg_available; then skip "live PostgreSQL/pgschema not available"; fi
+
+    DB=$(_make_test_db)
+    PLAN=$(mktemp)
+    FILTERED=$(mktemp)
+    _seed_foreign_table_fixture "$DB"
+    _run_installer_filter_pipeline "$DB" 1 "$PLAN" "$FILTERED"
+    [ "$status" -eq 0 ]
+    _assert_no_shadow_refs "$FILTERED" "ai_models"
+    rm -f "$PLAN" "$FILTERED"
+    _drop_test_db "$DB"
+}
+
+@test "TC-1231b: peer VIEW + FOREIGN TABLE together are both excluded from plan" {
+    if [ ! -x "$VENV_PYTHON" ]; then skip "venv python not available at $VENV_PYTHON"; fi
+    if ! "$VENV_PYTHON" -c "import pglast" 2>/dev/null; then skip "pglast not installed"; fi
+    if ! _pg_available; then skip "live PostgreSQL/pgschema not available"; fi
+
+    DB=$(_make_test_db)
+    PLAN=$(mktemp)
+    FILTERED=$(mktemp)
+    # Both the bootstrap view stack and the ai_models foreign table.
+    _seed_peer_fixture "$DB" 0 0
+    _seed_foreign_table_fixture "$DB"
+    _run_installer_filter_pipeline "$DB" 1 "$PLAN" "$FILTERED"
+    [ "$status" -eq 0 ]
+    _assert_no_fdw_ops "$FILTERED"
+    _assert_no_shadow_refs "$FILTERED" "agent_bootstrap_context"
+    _assert_no_shadow_refs "$FILTERED" "ai_models"
+    rm -f "$PLAN" "$FILTERED"
+    _drop_test_db "$DB"
+}
+
+@test "TC-1231c: mutation - disabling dynamic detection exposes foreign-table ops" {
+    if [ ! -x "$VENV_PYTHON" ]; then skip "venv python not available at $VENV_PYTHON"; fi
+    if ! "$VENV_PYTHON" -c "import pglast" 2>/dev/null; then skip "pglast not installed"; fi
+    if ! _pg_available; then skip "live PostgreSQL/pgschema not available"; fi
+
+    DB=$(_make_test_db)
+    PLAN=$(mktemp)
+    FILTERED=$(mktemp)
+    _seed_foreign_table_fixture "$DB"
+
+    # Plan with the base ignore file and no dynamic object filter.
+    SCRATCH=$(mktemp -d /tmp/pgschema-1231-mut-XXXXXX)
+    cp "$REPO_ROOT/database/.pgschemaignore" "$SCRATCH/.pgschemaignore"
+    cp "$REPO_ROOT/database/schema.sql" "$SCRATCH/schema.sql"
+    (
+        cd "$SCRATCH" || exit 1
+        pgschema plan \
+            --host /var/run/postgresql \
+            --user nova \
+            --db "$DB" \
+            --schema public \
+            --file schema.sql \
+            --plan-host /var/run/postgresql \
+            --plan-db nova_memory \
+            --plan-user nova \
+            --output-json "$PLAN" \
+            --no-color >/dev/null 2>&1
+    )
+    run "$VENV_PYTHON" "$STRIPPER" --plan "$PLAN" --output "$FILTERED"
+    rm -rf "$SCRATCH"
+    [ "$status" -eq 0 ]
+
+    # Without dynamic exclusion there must be at least one offending step
+    # referencing ai_models (CREATE TABLE, privilege, index, etc.).
+    run "$VENV_PYTHON" - <<PY
+import json, re
+with open('$FILTERED') as f:
+    p = json.load(f)
+steps = [s for g in (p.get('groups') or []) for s in g.get('steps', [])]
+violations = []
+for s in steps:
+    sql = s.get('sql', '').upper()
+    path = s.get('path', '')
+    if re.search(r'(?<!\w)ai_models(?!\w)', path) and '_local' not in path:
+        violations.append(path)
 print('\n'.join(violations))
 PY
     [ "$status" -eq 0 ]

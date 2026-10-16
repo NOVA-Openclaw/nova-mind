@@ -29,7 +29,7 @@ def test_strips_drop_table():
         {"sql": "DROP TABLE public.old_table;", "operation": "drop", "type": "table", "path": "public.old_table"},
         {"sql": "CREATE TABLE public.new_table (id int);", "operation": "create", "type": "table", "path": "public.new_table"},
     ])
-    filtered, count = strip_destructive(plan)
+    filtered, count, excluded = strip_destructive(plan)
     assert count == 1
     assert len(filtered["groups"][0]["steps"]) == 1
     assert filtered["groups"][0]["steps"][0]["operation"] == "create"
@@ -40,7 +40,7 @@ def test_strips_drop_column():
         {"sql": "ALTER TABLE public.t DROP COLUMN old_col;", "operation": "drop", "type": "column", "path": "public.t.old_col"},
         {"sql": "ALTER TABLE public.t ADD COLUMN new_col int;", "operation": "alter", "type": "column", "path": "public.t.new_col"},
     ])
-    filtered, count = strip_destructive(plan)
+    filtered, count, excluded = strip_destructive(plan)
     assert count == 1
     assert len(filtered["groups"][0]["steps"]) == 1
     assert filtered["groups"][0]["steps"][0]["operation"] == "alter"
@@ -54,7 +54,7 @@ def test_strips_drop_index_constraint_function_trigger():
         {"sql": "DROP TRIGGER tr ON public.t;", "operation": "drop", "type": "trigger", "path": "public.t.tr"},
         {"sql": "CREATE TABLE public.t (id int);", "operation": "create", "type": "table", "path": "public.t"},
     ])
-    filtered, count = strip_destructive(plan)
+    filtered, count, excluded = strip_destructive(plan)
     assert count == 4
     assert len(filtered["groups"][0]["steps"]) == 1
 
@@ -66,14 +66,14 @@ def test_preserves_non_drop_operations():
         {"sql": "CREATE INDEX idx_t ON public.t (c);", "operation": "create", "type": "index", "path": "public.idx_t"},
         {"sql": "COMMENT ON TABLE public.t IS 'x';", "operation": "create", "type": "comment", "path": "public.t"},
     ])
-    filtered, count = strip_destructive(plan)
+    filtered, count, excluded = strip_destructive(plan)
     assert count == 0
     assert len(filtered["groups"][0]["steps"]) == 4
 
 
 def test_empty_plan_returns_empty():
     plan = _plan([])
-    filtered, count = strip_destructive(plan)
+    filtered, count, excluded = strip_destructive(plan)
     assert count == 0
     assert filtered["groups"] == []
 
@@ -85,7 +85,7 @@ def test_null_groups_normalized():
         "source_fingerprint": {"hash": "test"},
         "groups": None,
     }
-    filtered, count = strip_destructive(plan)
+    filtered, count, excluded = strip_destructive(plan)
     assert count == 0
     assert filtered["groups"] == []
 
@@ -96,7 +96,7 @@ def test_missing_groups_normalized():
         "pgschema_version": "1.7.2",
         "source_fingerprint": {"hash": "test"},
     }
-    filtered, count = strip_destructive(plan)
+    filtered, count, excluded = strip_destructive(plan)
     assert count == 0
     assert filtered["groups"] == []
 

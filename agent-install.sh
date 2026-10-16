@@ -2562,13 +2562,46 @@ else
                         # Post-schema grant reconciliation (#452): pgschema deliberately
                         # ignores privilege steps, so explicit GRANT/REVOKE lines in
                         # schema.sql must be applied separately to survive fresh installs.
+                        # Peer-shadowed relations (foreign tables/views managed by the
+                        # peer FDW setup, #520) and their default <name>_id_seq sequences
+                        # do not exist locally, so skip any GRANT/REVOKE that targets them.
                         echo "  Reconciling explicit schema grants..."
-                        GRANT_COUNT=$(grep -cE '^[[:space:]]*(GRANT|REVOKE)[[:space:]]+' "$SCHEMA_FILE_TMP" 2>/dev/null || echo 0)
-                        if [ "$GRANT_COUNT" -gt 0 ] 2>/dev/null; then
-                            if grep -E '^[[:space:]]*(GRANT|REVOKE)[[:space:]]+' "$SCHEMA_FILE_TMP" | _superuser_psql "$DB_NAME" -v ON_ERROR_STOP=1 -f - >/dev/null 2>&1; then
-                                echo -e "  ${CHECK_MARK} Applied $GRANT_COUNT explicit grant/revoke statement(s)"
+                        GRANT_ALL_COUNT=$(grep -cE '^[[:space:]]*(GRANT|REVOKE)[[:space:]]+' "$SCHEMA_FILE_TMP" 2>/dev/null || echo 0)
+                        if [ "$GRANT_ALL_COUNT" -gt 0 ] 2>/dev/null; then
+                            GRANT_EXTRACT_FILE=$(mktemp "$PGSCHEMA_SCRATCH_DIR/grants-extract-XXXXXX.sql")
+                            GRANT_FILTERED_FILE=$(mktemp "$PGSCHEMA_SCRATCH_DIR/grants-filtered-XXXXXX.sql")
+                            TMPFILES+=("$GRANT_EXTRACT_FILE" "$GRANT_FILTERED_FILE")
+                            grep -E '^[[:space:]]*(GRANT|REVOKE)[[:space:]]+' "$SCHEMA_FILE_TMP" >"$GRANT_EXTRACT_FILE"
+                            GRANT_FILTER_ARGS=()
+                            if [ "${#PEER_SHADOWED_NAMES[@]}" -gt 0 ]; then
+                                shadowed_csv=$(IFS=,; echo "${PEER_SHADOWED_NAMES[*]}")
+                                GRANT_FILTER_ARGS+=(--shadowed-names "$shadowed_csv")
+                            fi
+                            if "$VENV_PYTHON" "$SCRIPT_DIR/database/filter_shadowed_grants.py" "${GRANT_FILTER_ARGS[@]}" <"$GRANT_EXTRACT_FILE" >"$GRANT_FILTERED_FILE" 2>"$GRANT_FILTERED_FILE.stderr"; then
+                                if [ -s "$GRANT_FILTERED_FILE.stderr" ]; then
+                                    while IFS= read -r line; do
+                                        echo -e "  ${INFO} $line"
+                                    done < "$GRANT_FILTERED_FILE.stderr"
+                                fi
+                                GRANT_COUNT=$(grep -cE '^[[:space:]]*(GRANT|REVOKE)[[:space:]]+' "$GRANT_FILTERED_FILE" 2>/dev/null || echo 0)
+                                if [ "$GRANT_COUNT" -gt 0 ] 2>/dev/null; then
+                                    GRANT_PSQL_ERR=$(mktemp "$PGSCHEMA_SCRATCH_DIR/grants-psqlerr-XXXXXX")
+                                    TMPFILES+=("$GRANT_PSQL_ERR")
+                                    if _superuser_psql "$DB_NAME" -v ON_ERROR_STOP=1 -f "$GRANT_FILTERED_FILE" >/dev/null 2>"$GRANT_PSQL_ERR"; then
+                                        echo -e "  ${CHECK_MARK} Applied $GRANT_COUNT explicit grant/revoke statement(s)"
+                                    else
+                                        echo -e "  ${CROSS_MARK} Grant reconciliation failed"
+                                        if [ -s "$GRANT_PSQL_ERR" ]; then
+                                            echo "  psql errors (first ~20 lines):"
+                                            head -20 "$GRANT_PSQL_ERR" | sed 's/^/    /'
+                                        fi
+                                        SCHEMA_DIFF_SKIPPED=1
+                                    fi
+                                else
+                                    echo -e "  ${INFO} No explicit grant/revoke statements remain after peer-shadowed filtering"
+                                fi
                             else
-                                echo -e "  ${CROSS_MARK} Grant reconciliation failed"
+                                echo -e "  ${CROSS_MARK} Failed to filter peer-shadowed grant statements"
                                 SCHEMA_DIFF_SKIPPED=1
                             fi
                         else

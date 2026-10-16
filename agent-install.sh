@@ -877,7 +877,7 @@ install_metacognition_plugin() {
         for sql_file in "${mig_files[@]}"; do
             local mig_name
             mig_name=$(basename "$sql_file")
-            if _superuser_psql "$DB_NAME" -f "$sql_file" >/dev/null 2>&1; then
+            if _superuser_psql "$DB_NAME" -v ON_ERROR_STOP=1 -f - <"$sql_file" >/dev/null 2>&1; then
                 echo -e "    ${CHECK_MARK} Migration: $mig_name"
             else
                 echo -e "    ${WARNING} Migration failed: $mig_name"
@@ -956,6 +956,24 @@ verify_config() {
         echo -e "  ${WARNING} OpenClaw hook config not found at $HOOK_CONFIG"
         VERIFICATION_WARNINGS=$((VERIFICATION_WARNINGS + 1))
     fi
+}
+
+# Shared helper: returns 0 if NAME is a peer-shadowed relation or its default
+# <name>_id_seq sequence.  Use this to gate every post-pgschema (or otherwise
+# outside-pgschema) per-relation stage so peer-shadowed objects are never
+# touched by schema.sql-derived operations (#1231).
+_is_peer_shadowed() {
+    local name="${1:-}"
+    if [ -z "$name" ] || [ "${#PEER_SHADOWED_NAMES[@]}" -eq 0 ]; then
+        return 1
+    fi
+    local base="${name%_id_seq}"
+    for shadowed in "${PEER_SHADOWED_NAMES[@]}"; do
+        if [ "$name" = "$shadowed" ] || [ "$name" = "${shadowed}_id_seq" ] || [ "$base" = "$shadowed" ]; then
+            return 0
+        fi
+    done
+    return 1
 }
 
 # Detect peer-shadowed relations for the target database and configure the
@@ -2346,7 +2364,10 @@ if [ -f "$RENAMES_FILE" ]; then
              WHERE table_schema = 'public' AND table_name = '$table' AND column_name = '$col_from'" \
             2>/dev/null | tr -d '[:space:]')
 
-        if [ "${EXISTS:-0}" -eq 1 ]; then
+        if _is_peer_shadowed "$table"; then
+            echo -e "  ${INFO} Skipping column rename on peer-shadowed table $table ($pr)"
+            SKIPPED=$((SKIPPED + 1))
+        elif [ "${EXISTS:-0}" -eq 1 ]; then
             # Use superuser for ALTER TABLE DDL
             if _superuser_psql "$DB_NAME" -c \
                 "ALTER TABLE \"$table\" RENAME COLUMN \"$col_from\" TO \"$col_to\";" >/dev/null 2>&1; then
@@ -2373,7 +2394,10 @@ if [ -f "$RENAMES_FILE" ]; then
              WHERE table_schema = 'public' AND table_name = '$tbl_from'" \
             2>/dev/null | tr -d '[:space:]')
 
-        if [ "${EXISTS:-0}" -eq 1 ]; then
+        if _is_peer_shadowed "$tbl_from" || _is_peer_shadowed "$tbl_to"; then
+            echo -e "  ${INFO} Skipping table rename on peer-shadowed relation $tbl_from/$tbl_to ($pr)"
+            SKIPPED=$((SKIPPED + 1))
+        elif [ "${EXISTS:-0}" -eq 1 ]; then
             # Use superuser for ALTER TABLE DDL
             if _superuser_psql "$DB_NAME" -c \
                 "ALTER TABLE \"$tbl_from\" RENAME TO \"$tbl_to\";" >/dev/null 2>&1; then
@@ -2493,6 +2517,7 @@ else
         DO_APPLY=1
         if [ $REORDER_EXIT -eq 0 ]; then
             mv "$REORDERED_PLAN_FILE" "$PLAN_FILE"
+            chmod 644 "$PLAN_FILE"
             echo -e "  ${CHECK_MARK} Plan reordered by dependencies"
         else
             echo -e "  ${CROSS_MARK} Plan reorder failed (exit $REORDER_EXIT) — schema apply skipped"
@@ -2526,6 +2551,7 @@ else
                 SCHEMA_DIFF_SKIPPED=1
             else
                 mv "$FILTERED_PLAN_FILE" "$PLAN_FILE"
+                chmod 644 "$PLAN_FILE"
                 if [ "${DESTRUCTIVE_COUNT:-0}" -gt 0 ] 2>/dev/null; then
                     echo -e "  ${INFO} Stripped $DESTRUCTIVE_COUNT destructive operation(s) (DROP skipped; #498)"
                 fi
@@ -2549,10 +2575,53 @@ else
                         TABLE_COUNT=$(psql -U "$DB_USER" -d "$DB_NAME" -tAc "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE'" | tr -d '[:space:]')
                         echo "      Total tables in database: $TABLE_COUNT"
 
-                        # Reassign ownership of all objects to the agent user
+                        # Reassign ownership of applied objects to the agent user.
+                        # In peer mode, REASSIGN OWNED BY would also touch shadowed
+                        # foreign tables/views owned by the FDW setup (#520), so
+                        # reassign object-by-object and skip the exclusion set.
                         if [ "$PG_SUPERUSER" != "$DB_USER" ]; then
                             echo "  Reassigning ownership to '$DB_USER'..."
-                            if _superuser_psql "$DB_NAME" -c "REASSIGN OWNED BY \"$PG_SUPERUSER\" TO \"$DB_USER\";" >/dev/null 2>&1; then
+                            REASSIGN_OK=1
+                            if [ "${#PEER_SHADOWED_NAMES[@]}" -gt 0 ]; then
+                                REASSIGN_STATE_FILE=$(mktemp "$PGSCHEMA_SCRATCH_DIR/reassign-state-XXXXXX")
+                                TMPFILES+=("$REASSIGN_STATE_FILE")
+                                echo 1 >"$REASSIGN_STATE_FILE"
+                                _superuser_psql "$DB_NAME" -tAF'|' -c "
+                                    SELECT quote_ident(n.nspname) || '.' || quote_ident(c.relname),
+                                           c.relkind::text
+                                      FROM pg_class c
+                                      JOIN pg_namespace n ON n.oid = c.relnamespace
+                                     WHERE n.nspname = 'public'
+                                       AND c.relowner = (SELECT oid FROM pg_roles WHERE rolname = '$PG_SUPERUSER')
+                                       AND NOT (c.relkind = 'S' AND EXISTS (
+                                           SELECT 1 FROM pg_depend d
+                                           JOIN pg_class t ON t.oid = d.refobjid
+                                            WHERE d.objid = c.oid
+                                              AND d.deptype = 'a'
+                                              AND t.relkind IN ('r', 'p')))
+                                     ORDER BY c.relname;" 2>/dev/null | while IFS='|' read -r obj kind; do
+                                    [ -z "$obj" ] && continue
+                                    name=${obj##*.}
+                                    name=${name//\"/}
+                                    if _is_peer_shadowed "$name"; then
+                                        echo -e "  ${INFO} Skipping ownership reassignment for peer-shadowed object $name"
+                                        continue
+                                    fi
+                                    case "$kind" in
+                                        S) sql="ALTER SEQUENCE $obj OWNER TO \"$DB_USER\";" ;;
+                                        *) sql="ALTER TABLE $obj OWNER TO \"$DB_USER\";" ;;
+                                    esac
+                                    if ! _superuser_psql "$DB_NAME" -c "$sql" >/dev/null 2>&1; then
+                                        echo 0 >"$REASSIGN_STATE_FILE"
+                                    fi
+                                done
+                                REASSIGN_OK=$(cat "$REASSIGN_STATE_FILE" 2>/dev/null || echo 0)
+                            else
+                                if ! _superuser_psql "$DB_NAME" -c "REASSIGN OWNED BY \"$PG_SUPERUSER\" TO \"$DB_USER\";" >/dev/null 2>&1; then
+                                    REASSIGN_OK=0
+                                fi
+                            fi
+                            if [ "$REASSIGN_OK" -eq 1 ]; then
                                 echo -e "  ${CHECK_MARK} Ownership reassigned to '$DB_USER'"
                             else
                                 echo -e "  ${WARNING} Could not reassign ownership (objects may be owned by $PG_SUPERUSER)"
@@ -2587,13 +2656,13 @@ else
                                 if [ "$GRANT_COUNT" -gt 0 ] 2>/dev/null; then
                                     GRANT_PSQL_ERR=$(mktemp "$PGSCHEMA_SCRATCH_DIR/grants-psqlerr-XXXXXX")
                                     TMPFILES+=("$GRANT_PSQL_ERR")
-                                    if _superuser_psql "$DB_NAME" -v ON_ERROR_STOP=1 -f "$GRANT_FILTERED_FILE" >/dev/null 2>"$GRANT_PSQL_ERR"; then
+                                    if _superuser_psql "$DB_NAME" -v ON_ERROR_STOP=1 -f - >/dev/null 2>"$GRANT_PSQL_ERR" <"$GRANT_FILTERED_FILE"; then
                                         echo -e "  ${CHECK_MARK} Applied $GRANT_COUNT explicit grant/revoke statement(s)"
                                     else
                                         echo -e "  ${CROSS_MARK} Grant reconciliation failed"
                                         if [ -s "$GRANT_PSQL_ERR" ]; then
-                                            echo "  psql errors (first ~20 lines):"
-                                            head -20 "$GRANT_PSQL_ERR" | sed 's/^/    /'
+                                            echo "  psql errors (first ~20 ERROR lines):"
+                                            grep -E '^ERROR:' "$GRANT_PSQL_ERR" | head -20 | sed 's/^/    /'
                                         fi
                                         SCHEMA_DIFF_SKIPPED=1
                                     fi

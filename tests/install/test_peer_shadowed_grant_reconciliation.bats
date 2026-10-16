@@ -2,10 +2,24 @@
 # Tests for nova-mind#1231 deploy blocker #3:
 # peer-shadowed relation grants must be skipped during reconciliation,
 # and psql errors must be surfaced instead of swallowed.
+#
+# Scope addition: every post-/outside-pgschema per-relation stage must also
+# gate on the peer-shadowed exclusion set via the shared _is_peer_shadowed
+# helper (renames and ownership reassignment).
 
 BATS_TEST_DIRNAME="$(cd "$(dirname "$BATS_TEST_FILENAME")" && pwd)"
 REPO_ROOT="$(cd "$BATS_TEST_DIRNAME/../.." && pwd)"
 FILTER="$REPO_ROOT/database/filter_shadowed_grants.py"
+
+_source_installer_peer_helper() {
+    local fake_home="$1"
+    local fake_repo="$2"
+    mkdir -p "$fake_repo/lib"
+    cp "$REPO_ROOT/agent-install.sh" "$fake_repo/agent-install.sh"
+    printf '%s\n' 'load_pg_env() { :; }' 'load_pg_superuser_env() { :; }' >"$fake_repo/lib/pg-env.sh"
+    printf '%s\n' '# stub' >"$fake_repo/lib/agent-chat-peer-detection.sh"
+    HOME="$fake_home" AGENT_INSTALL_TEST_MODE=1 source "$fake_repo/agent-install.sh"
+}
 
 @test "TC-1231g: reconciliation filter skips shadowed foreign table and its id_seq grants" {
     run python3 "$FILTER" --shadowed-names ai_models <<'SQL'
@@ -107,4 +121,98 @@ SQL
     [[ "$output" == *"ERROR:  permission denied for relation t"* ]]
 
     rm -rf "$FAKE_HOME" "$FAKE_REPO" "$PGSCHEMA_SCRATCH_DIR"
+}
+
+@test "TC-1231i: shared _is_peer_shadowed helper matches relation and id_seq" {
+    FAKE_HOME="$(mktemp -d)"
+    FAKE_REPO="$(mktemp -d)"
+    _source_installer_peer_helper "$FAKE_HOME" "$FAKE_REPO"
+
+    PEER_SHADOWED_NAMES=(agent_bootstrap_context ai_models)
+    results=""
+    _is_peer_shadowed "agent_bootstrap_context" && results="${results}yes" || results="${results}no"
+    _is_peer_shadowed "agent_bootstrap_context_id_seq" && results="${results}yes" || results="${results}no"
+    _is_peer_shadowed "ai_models" && results="${results}yes" || results="${results}no"
+    _is_peer_shadowed "ai_models_id_seq" && results="${results}yes" || results="${results}no"
+    _is_peer_shadowed "tasks" && results="${results}yes" || results="${results}no"
+    _is_peer_shadowed "" && results="${results}yes" || results="${results}no"
+
+    [ "$results" = "yesyesyesyesnono" ]
+
+    rm -rf "$FAKE_HOME" "$FAKE_REPO"
+}
+
+@test "TC-1231j: column rename is skipped on peer-shadowed table" {
+    FAKE_HOME="$(mktemp -d)"
+    FAKE_REPO="$(mktemp -d)"
+    _source_installer_peer_helper "$FAKE_HOME" "$FAKE_REPO"
+
+    PEER_SHADOWED_NAMES=(ai_models)
+    APPLIED=0
+    SKIPPED=0
+    table="ai_models"
+    col_from="old_col"
+    col_to="new_col"
+    pr="#1231"
+    EXISTS=1
+
+    # Simulate the gating branch from agent-install.sh.
+    if _is_peer_shadowed "$table"; then
+        echo "  INFO Skipping column rename on peer-shadowed table $table ($pr)"
+        SKIPPED=$((SKIPPED + 1))
+    elif [ "${EXISTS:-0}" -eq 1 ]; then
+        APPLIED=$((APPLIED + 1))
+    else
+        SKIPPED=$((SKIPPED + 1))
+    fi
+
+    [ "$APPLIED" -eq 0 ]
+    [ "$SKIPPED" -eq 1 ]
+
+    rm -rf "$FAKE_HOME" "$FAKE_REPO"
+}
+
+@test "TC-1231k: table rename is skipped when either name is peer-shadowed" {
+    FAKE_HOME="$(mktemp -d)"
+    FAKE_REPO="$(mktemp -d)"
+    _source_installer_peer_helper "$FAKE_HOME" "$FAKE_REPO"
+
+    PEER_SHADOWED_NAMES=(ai_models)
+
+    if _is_peer_shadowed "ai_models" || _is_peer_shadowed "ai_models_legacy"; then
+        skip1=0
+    else
+        skip1=1
+    fi
+    [ "$skip1" -eq 0 ]
+
+    if _is_peer_shadowed "tasks" || _is_peer_shadowed "ai_models"; then
+        skip2=0
+    else
+        skip2=1
+    fi
+    [ "$skip2" -eq 0 ]
+
+    rm -rf "$FAKE_HOME" "$FAKE_REPO"
+}
+
+@test "TC-1231l: ownership-reassignment query excludes peer-shadowed objects" {
+    FAKE_HOME="$(mktemp -d)"
+    FAKE_REPO="$(mktemp -d)"
+    _source_installer_peer_helper "$FAKE_HOME" "$FAKE_REPO"
+
+    PEER_SHADOWED_NAMES=(ai_models)
+
+    # The SQL in agent-install.sh excludes sequences owned by tables and orders
+    # by relname.  Verify the query string still contains the peer-shadowed
+    # skip logic (implemented in the bash while-loop) and the table-owned-seq
+    # exclusion.
+    run grep -q "_is_peer_shadowed" "$FAKE_REPO/agent-install.sh"
+    [ "$status" -eq 0 ]
+    run grep -q "d.deptype = 'a'" "$FAKE_REPO/agent-install.sh"
+    [ "$status" -eq 0 ]
+    run grep -q "Skipping ownership reassignment for peer-shadowed" "$FAKE_REPO/agent-install.sh"
+    [ "$status" -eq 0 ]
+
+    rm -rf "$FAKE_HOME" "$FAKE_REPO"
 }

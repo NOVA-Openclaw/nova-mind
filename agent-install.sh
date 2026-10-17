@@ -969,9 +969,12 @@ _resolve_peer_shadowed_relations() {
     stderr_tmp=$(mktemp /tmp/peer-shadowed-stderr-XXXXXX)
     TMPFILES+=("$stderr_tmp")
     detect_rc=0
-    shadowed_json=$("$VENV_PYTHON" "$SCRIPT_DIR/database/detect_peer_shadowed.py" \
-        --schema-file "$SCHEMA_FILE" \
-        --dsn "host=/var/run/postgresql port=${PGPORT:-5432} dbname=$DB_NAME user=$DB_USER" 2>"$stderr_tmp") || detect_rc=$?
+    # #743: detect_peer_shadowed.py reads agent connection params from PG*
+    # env vars; do not pass the superuser password on the command line.
+    shadowed_json=$(PGHOST="$PGHOST" PGPORT="${PGPORT:-5432}" PGDATABASE="$DB_NAME" \
+        PGUSER="$DB_USER" PGPASSWORD="${PGPASSWORD:-}" \
+        "$VENV_PYTHON" "$SCRIPT_DIR/database/detect_peer_shadowed.py" \
+        --schema-file "$SCHEMA_FILE" --dbname "$DB_NAME" 2>"$stderr_tmp") || detect_rc=$?
 
     if [ "$detect_rc" -ne 0 ]; then
         echo -e "  ${CROSS_MARK} Peer-shadowed relation detection failed (exit $detect_rc) — schema apply skipped"
@@ -1014,13 +1017,6 @@ _resolve_peer_shadowed_relations() {
     fi
     return 0
 }
-
-# When the installer is sourced by unit tests, stop here so tests can call
-# the helper functions above without running the full installer.  This guard
-# is NOT used in normal execution.
-if [ "${AGENT_INSTALL_TEST_MODE:-}" = "1" ] && [ "${BASH_SOURCE[0]}" != "${0}" ]; then
-    return 0
-fi
 
 # ============================================
 # SECTION 2: Source shared library
@@ -1091,39 +1087,74 @@ COMPLETION_LOG_RECONCILE_SCRIPT="completion-log-reconcile.py"
 COMPLETION_LOG_RECONCILE_CRON_MARKER="$HOME/.openclaw/scripts/$COMPLETION_LOG_RECONCILE_SCRIPT"
 COMPLETION_LOG_RECONCILE_CRON_ENTRY='*/5 * * * * '"$COMPLETION_LOG_RECONCILE_CRON_MARKER"' >> '"$OPENCLAW_LOGS_DIR"'/completion-log-reconcile.log 2>&1'
 
-# Superuser connection helper for DDL operations
+# Superuser connection helper for DDL operations.
+# Superuser credentials are session-only (never persisted).  The password is
+# passed only via the PGPASSWORD env var scoped to a single command so it
+# never appears on a command line, in a file, in a log, or in set -x output.
 PG_SUPERUSER="${PG_SUPERUSER:-$DB_USER}"
-PG_SUPERUSER_PASSWORD="${PG_SUPERUSER_PASSWORD:-${PGPASSWORD:-}}"
 PG_SUPERUSER_HOST="${PG_SUPERUSER_HOST:-/var/run/postgresql}"
 
+# Run a command with PGPASSWORD set to the superuser password, temporarily
+# disabling xtrace so the password is never printed even when bash -x is used.
+_run_with_superuser_secret() {
+    local old_xtrace=0
+    [[ $- == *x* ]] && old_xtrace=1 && set +x
+    PGPASSWORD="${PG_SUPERUSER_PASSWORD:-${PGPASSWORD:-}}" "$@"
+    local rc=$?
+    if [ "$old_xtrace" -eq 1 ]; then
+        set -x
+    fi
+    return $rc
+}
+
 _superuser_psql() {
-    # Runs psql as the superuser for DDL operations.
-    # Falls back to regular DB_USER if superuser is the same.
+    # Runs psql as PG_SUPERUSER for DDL operations.
+    # Falls back to the agent's own DB role when the two are the same.
     local db="${1:-$DB_NAME}"
     shift || true
     if [ "$PG_SUPERUSER" = "$DB_USER" ]; then
         psql -U "$DB_USER" -d "$db" "$@"
     else
-        sudo -u "$PG_SUPERUSER" psql -d "$db" "$@"
+        _run_with_superuser_secret psql \
+            -h "$PG_SUPERUSER_HOST" -U "$PG_SUPERUSER" -d "$db" "$@"
     fi
 }
 
 _superuser_createdb() {
-    # Runs createdb as the superuser.
+    # Runs createdb as PG_SUPERUSER.
     if [ "$PG_SUPERUSER" = "$DB_USER" ]; then
         createdb -U "$DB_USER" "$@"
     else
-        sudo -u "$PG_SUPERUSER" createdb "$@"
+        _run_with_superuser_secret createdb \
+            -h "$PG_SUPERUSER_HOST" -U "$PG_SUPERUSER" "$@"
     fi
 }
 
 _superuser_pgschema() {
-    # Runs pgschema as the superuser for plan/apply.
+    # Runs pgschema as PG_SUPERUSER for plan/apply.
     if [ "$PG_SUPERUSER" = "$DB_USER" ]; then
         "$PGSCHEMA_BIN" "$@"
     else
-        sudo -u "$PG_SUPERUSER" "$PGSCHEMA_BIN" "$@"
+        _run_with_superuser_secret "$PGSCHEMA_BIN" "$@"
     fi
+}
+
+# Verify that a direct connection to PostgreSQL as PG_SUPERUSER works.
+# Used for fail-fast before any schema steps (#743).
+_verify_superuser_connection() {
+    if [ "$PG_SUPERUSER" = "$DB_USER" ]; then
+        return 0
+    fi
+    # Check for a password without expanding it under xtrace.
+    local old_xtrace=0
+    [[ $- == *x* ]] && old_xtrace=1 && set +x
+    local password_set=1
+    [ -n "${PG_SUPERUSER_PASSWORD:-${PGPASSWORD:-}}" ] || password_set=0
+    [ "$old_xtrace" -eq 1 ] && set -x
+    if [ "$password_set" -eq 0 ]; then
+        return 1
+    fi
+    _superuser_psql postgres -tAc "SELECT 1" >/dev/null 2>&1
 }
 
 # Transfer ownership of installer-created objects from PG_SUPERUSER to DB_USER.
@@ -1516,6 +1547,13 @@ if [ -n "$DB_NAME_OVERRIDE" ]; then
     DB_NAME="$DB_NAME_OVERRIDE"
 fi
 
+# When the installer is sourced by unit tests, stop here so tests can call
+# the helper functions above without running the full installer.  This guard
+# is NOT used in normal execution.
+if [ "${AGENT_INSTALL_TEST_MODE:-}" = "1" ] && [ "${BASH_SOURCE[0]}" != "${0}" ]; then
+    return 0
+fi
+
 # ============================================
 # SECTION 5: Prerequisites check
 # ============================================
@@ -1537,7 +1575,7 @@ if command -v psql &>/dev/null; then
     echo -e "  ${CHECK_MARK} PostgreSQL installed ($PG_VERSION)"
 else
     echo -e "  ${CROSS_MARK} PostgreSQL not found"
-    echo "  Install: sudo apt install postgresql postgresql-contrib"
+    echo "  Install: apt install postgresql postgresql-contrib"
     exit 1
 fi
 
@@ -1546,11 +1584,11 @@ if pg_isready -q 2>/dev/null; then
     echo -e "  ${CHECK_MARK} PostgreSQL service running"
 else
     echo -e "  ${CROSS_MARK} PostgreSQL service not running"
-    echo "  Start: sudo systemctl start postgresql"
+    echo "  Start: systemctl start postgresql"
     exit 1
 fi
 
-# Superuser DDL capability check (#661): agent-install.sh run standalone
+# Superuser DDL capability check (#661 / #743): agent-install.sh run standalone
 # (skipping shell-install.sh's interactive prompt) leaves PG_SUPERUSER
 # unset, and load_pg_superuser_env's fallback resolves it to the agent's
 # own DB_USER (see lib/pg-env.sh). schema.sql previously contained
@@ -1566,12 +1604,25 @@ fi
 # phase 1 means most fresh installs now succeed even without a real
 # superuser, so failing closed here would block installs that no longer
 # need superuser privilege at all.
+#
+# #743: when PG_SUPERUSER differs from DB_USER, the password is required.
+# Fail fast with a clear error before any schema change if the direct
+# superuser connection cannot be established.
 if [ "$PG_SUPERUSER" = "$DB_USER" ]; then
     SUPERUSER_CHECK_ROLE="$DB_USER"
 else
     SUPERUSER_CHECK_ROLE="$PG_SUPERUSER"
+    if ! _verify_superuser_connection; then
+        if [ -z "$PG_SUPERUSER_PASSWORD" ]; then
+            echo -e "  ${CROSS_MARK} PG_SUPERUSER='$PG_SUPERUSER' is set but PG_SUPERUSER_PASSWORD is empty"
+        else
+            echo -e "  ${CROSS_MARK} Cannot connect to PostgreSQL as PG_SUPERUSER='$PG_SUPERUSER' on host '$PG_SUPERUSER_HOST'"
+        fi
+        echo "      Provide the superuser password via PG_SUPERUSER_PASSWORD, or run via shell-install.sh."
+        exit 1
+    fi
 fi
-SUPERUSER_CHECK=$(psql -U "$DB_USER" -d postgres -tAc \
+SUPERUSER_CHECK=$(_superuser_psql postgres -tAc \
     "SELECT CASE WHEN EXISTS(SELECT 1 FROM pg_roles WHERE rolname = '$SUPERUSER_CHECK_ROLE')
          THEN (SELECT rolsuper FROM pg_roles WHERE rolname = '$SUPERUSER_CHECK_ROLE')
          ELSE NULL
@@ -1593,7 +1644,7 @@ if command -v jq &>/dev/null; then
     echo -e "  ${CHECK_MARK} jq available"
 else
     echo -e "  ${CROSS_MARK} jq not found (required)"
-    echo "  Install: sudo apt install jq"
+    echo "  Install: apt install jq"
     exit 1
 fi
 
@@ -1624,7 +1675,7 @@ if [ $VERIFY_ONLY -eq 0 ]; then
         fi
     else
         echo -e "  ${CROSS_MARK} Node.js not found"
-        echo "  Install: curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash - && sudo apt install -y nodejs"
+        echo "  Install: curl -fsSL https://deb.nodesource.com/setup_18.x | bash - && apt install -y nodejs"
         exit 1
     fi
 
@@ -1643,7 +1694,7 @@ if command -v python3 &>/dev/null; then
     echo -e "  ${CHECK_MARK} Python3 available ($PYTHON_VERSION)"
 else
     echo -e "  ${CROSS_MARK} Python3 not found (required for memory scripts)"
-    echo "  Install: sudo apt install python3 python3-pip"
+    echo "  Install: apt install python3 python3-pip"
     exit 1
 fi
 
@@ -2241,7 +2292,7 @@ if python3 -m venv --help &>/dev/null; then
     echo -e "  ${CHECK_MARK} python3-venv available"
 else
     echo -e "  ${CROSS_MARK} python3-venv module not found"
-    echo "  Install: sudo apt install python3-venv"
+    echo "  Install: apt install python3-venv"
     exit 1
 fi
 
@@ -2456,16 +2507,16 @@ if [ "$SCHEMA_DIFF_SKIPPED" -eq 1 ]; then
     echo -e "  ${WARNING} Skipping pgschema plan/apply (pre-schema step failed above)"
 else
     # Build connection args for DDL operations.
-    # When superuser differs from DB_USER, _superuser_pgschema runs via sudo -u,
-    # so peer auth works with the unix socket — no password needed.
+    # #743: _superuser_pgschema authenticates directly as PG_SUPERUSER using
+    # PG_SUPERUSER_PASSWORD (scoped PGPASSWORD env); no peer auth.
     PGSCHEMA_CONN_ARGS=(
-        "--host" "/var/run/postgresql"
+        "--host" "$PG_SUPERUSER_HOST"
         "--port" "${PGPORT:-5432}"
         "--db" "$DB_NAME"
         "--user" "$PG_SUPERUSER"
     )
     PGSCHEMA_PLAN_ARGS=(
-        "--plan-host" "/var/run/postgresql"
+        "--plan-host" "$PG_SUPERUSER_HOST"
         "--plan-port" "${PGPORT:-5432}"
         "--plan-db" "$DB_NAME"
         "--plan-user" "$PG_SUPERUSER"

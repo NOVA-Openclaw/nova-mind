@@ -100,10 +100,33 @@ def _target_roles(line: str) -> list[str]:
     return roles
 
 
+def _dsn(dbname: str, superuser: bool = False) -> str:
+    """Build a libpq DSN from PG* env vars (#743).
+
+    Defaults to the agent's own DB role.  When ``superuser`` is True, uses
+    PG_SUPERUSER/PG_SUPERUSER_PASSWORD/PG_SUPERUSER_HOST instead.
+    """
+    if superuser:
+        host = os.environ.get("PG_SUPERUSER_HOST", "/var/run/postgresql")
+        port = os.environ.get("PGPORT", "5432")
+        user = os.environ.get("PG_SUPERUSER", "")
+        password = os.environ.get("PG_SUPERUSER_PASSWORD", "")
+    else:
+        host = os.environ.get("PGHOST", "/var/run/postgresql")
+        port = os.environ.get("PGPORT", "5432")
+        user = os.environ.get("PGUSER", "")
+        password = os.environ.get("PGPASSWORD", "")
+    parts = [f"host={host}", f"port={port}", f"dbname={dbname}"]
+    if user:
+        parts.append(f"user={user}")
+    if password:
+        parts.append(f"password={password}")
+    return " ".join(parts)
+
+
 def _load_owner_map(dbname: str) -> Dict[Tuple[str, str], str]:
     """Query the catalog for relation owners in the target database."""
-    dsn = f"host=/var/run/postgresql dbname={dbname}"
-    conn = psycopg2.connect(dsn)
+    conn = psycopg2.connect(_dsn(dbname))
     try:
         with conn.cursor() as cur:
             cur.execute(

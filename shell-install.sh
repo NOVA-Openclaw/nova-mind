@@ -112,51 +112,76 @@ else
 fi
 
 if [ "$NEED_PROMPT" = true ]; then
-    # Non-interactive guard — don't hang if no TTY
+    # Non-interactive path: if the environment already provides the database
+    # and superuser details, write postgres.json from the env values instead
+    # of hanging on a missing TTY (#743).
     if ! [ -t 0 ]; then
-        echo -e "  ${RED}❌${NC} Database configuration is required but stdin is not a TTY."
-        echo "      Run this script interactively, or create $PG_CONFIG manually."
-        exit 1
+        if [ -n "${PGHOST:-}" ] && [ -n "${PGPORT:-}" ] && [ -n "${PGDATABASE:-}" ] && [ -n "${PGUSER:-}" ]; then
+            cat > "$PG_CONFIG" <<EOF
+{
+  "host": "$PGHOST",
+  "port": $PGPORT,
+  "database": "$PGDATABASE",
+  "user": "$PGUSER",
+  "password": "${PGPASSWORD:-}"
+}
+EOF
+            chmod 600 "$PG_CONFIG"
+            echo -e "  ${GREEN}✅${NC} Wrote $PG_CONFIG from environment (non-interactive)"
+            load_pg_env
+            export PG_SUPERUSER="${PG_SUPERUSER:-postgres}"
+            export PG_SUPERUSER_PASSWORD="${PG_SUPERUSER_PASSWORD:-}"
+            export PG_SUPERUSER_HOST="${PG_SUPERUSER_HOST:-/var/run/postgresql}"
+            echo -e "  ${GREEN}✅${NC} Superuser set to '$PG_SUPERUSER' (session-only, not persisted)"
+            echo -e "  ${GREEN}✅${NC} Superuser host set to '$PG_SUPERUSER_HOST'"
+            echo "  Resolved: PGHOST=$PGHOST PGDATABASE=${PGDATABASE:-(not set)} PGUSER=$PGUSER"
+            NEED_PROMPT=false
+        else
+            echo -e "  ${RED}❌${NC} Database configuration is required but stdin is not a TTY."
+            echo "      Run this script interactively, or create $PG_CONFIG manually."
+            exit 1
+        fi
     fi
 
-    # Prompt for database connection details
-    DEFAULT_HOST="localhost"
-    DEFAULT_PORT="5432"
-    DEFAULT_USER="$(whoami)"
-    DEFAULT_DB="${DEFAULT_USER//-/_}_memory"
+    if [ "$NEED_PROMPT" = true ]; then
+        # Prompt for database connection details
+        DEFAULT_HOST="localhost"
+        DEFAULT_PORT="5432"
+        DEFAULT_USER="$(whoami)"
+        DEFAULT_DB="${DEFAULT_USER//-/_}_memory"
 
-    echo ""
-    echo "  Enter PostgreSQL connection details (press Enter for defaults):"
-    echo ""
+        echo ""
+        echo "  Enter PostgreSQL connection details (press Enter for defaults):"
+        echo ""
 
-    read -rp "    Host [$DEFAULT_HOST]: " INPUT_HOST
-    read -rp "    Port [$DEFAULT_PORT]: " INPUT_PORT
-    read -rp "    Database [$DEFAULT_DB]: " INPUT_DB
-    read -rp "    User [$DEFAULT_USER]: " INPUT_USER
-    read -rsp "    Password []: " INPUT_PASS
-    echo ""
-    echo ""
+        read -rp "    Host [$DEFAULT_HOST]: " INPUT_HOST
+        read -rp "    Port [$DEFAULT_PORT]: " INPUT_PORT
+        read -rp "    Database [$DEFAULT_DB]: " INPUT_DB
+        read -rp "    User [$DEFAULT_USER]: " INPUT_USER
+        read -rsp "    Password []: " INPUT_PASS
+        echo ""
+        echo ""
 
-    # Prompt for postgres superuser credentials (session-only, NOT persisted)
-    DEFAULT_SUPERUSER="postgres"
-    DEFAULT_SUPERUSER_HOST="/var/run/postgresql"
-    echo "  PostgreSQL superuser for schema operations (CREATE EXTENSION, DDL):"
-    read -rp "    Superuser [$DEFAULT_SUPERUSER]: " INPUT_SUPERUSER
-    read -rsp "    Superuser password []: " INPUT_SUPERUSER_PASS
-    echo ""
-    read -rp "    Superuser host (unix socket path or hostname) [$DEFAULT_SUPERUSER_HOST]: " INPUT_SUPERUSER_HOST
-    echo ""
+        # Prompt for postgres superuser credentials (session-only, NOT persisted)
+        DEFAULT_SUPERUSER="postgres"
+        DEFAULT_SUPERUSER_HOST="/var/run/postgresql"
+        echo "  PostgreSQL superuser for schema operations (CREATE EXTENSION, DDL):"
+        read -rp "    Superuser [$DEFAULT_SUPERUSER]: " INPUT_SUPERUSER
+        read -rsp "    Superuser password []: " INPUT_SUPERUSER_PASS
+        echo ""
+        read -rp "    Superuser host (unix socket path or hostname) [$DEFAULT_SUPERUSER_HOST]: " INPUT_SUPERUSER_HOST
+        echo ""
 
-    DB_HOST="${INPUT_HOST:-$DEFAULT_HOST}"
-    DB_PORT="${INPUT_PORT:-$DEFAULT_PORT}"
-    DB_NAME="${INPUT_DB:-$DEFAULT_DB}"
-    DB_USER="${INPUT_USER:-$DEFAULT_USER}"
-    DB_PASS="${INPUT_PASS:-}"
-    PG_SUPERUSER="${INPUT_SUPERUSER:-$DEFAULT_SUPERUSER}"
-    PG_SUPERUSER_PASSWORD="${INPUT_SUPERUSER_PASS:-}"
-    PG_SUPERUSER_HOST="${INPUT_SUPERUSER_HOST:-$DEFAULT_SUPERUSER_HOST}"
+        DB_HOST="${INPUT_HOST:-$DEFAULT_HOST}"
+        DB_PORT="${INPUT_PORT:-$DEFAULT_PORT}"
+        DB_NAME="${INPUT_DB:-$DEFAULT_DB}"
+        DB_USER="${INPUT_USER:-$DEFAULT_USER}"
+        DB_PASS="${INPUT_PASS:-}"
+        PG_SUPERUSER="${INPUT_SUPERUSER:-$DEFAULT_SUPERUSER}"
+        PG_SUPERUSER_PASSWORD="${INPUT_SUPERUSER_PASS:-}"
+        PG_SUPERUSER_HOST="${INPUT_SUPERUSER_HOST:-$DEFAULT_SUPERUSER_HOST}"
 
-    cat > "$PG_CONFIG" <<EOF
+        cat > "$PG_CONFIG" <<EOF
 {
   "host": "$DB_HOST",
   "port": $DB_PORT,
@@ -165,25 +190,26 @@ if [ "$NEED_PROMPT" = true ]; then
   "password": "$DB_PASS"
 }
 EOF
-    chmod 600 "$PG_CONFIG"
-    echo -e "  ${GREEN}✅${NC} Wrote $PG_CONFIG (chmod 600)"
+        chmod 600 "$PG_CONFIG"
+        echo -e "  ${GREEN}✅${NC} Wrote $PG_CONFIG (chmod 600)"
 
-    # Reload env with the new config (this sets PGUSER/PGPASSWORD from the agent user)
-    load_pg_env
+        # Reload env with the new config (this sets PGUSER/PGPASSWORD from the agent user)
+        load_pg_env
 
-    # Export superuser credentials for agent-install.sh (session-only)
-    export PG_SUPERUSER="$PG_SUPERUSER"
-    export PG_SUPERUSER_PASSWORD="$PG_SUPERUSER_PASSWORD"
-    export PG_SUPERUSER_HOST="$PG_SUPERUSER_HOST"
-    echo -e "  ${GREEN}✅${NC} Superuser set to '$PG_SUPERUSER' (session-only, not persisted)"
-    echo -e "  ${GREEN}✅${NC} Superuser host set to '$PG_SUPERUSER_HOST'"
+        # Export superuser credentials for agent-install.sh (session-only)
+        export PG_SUPERUSER="$PG_SUPERUSER"
+        export PG_SUPERUSER_PASSWORD="$PG_SUPERUSER_PASSWORD"
+        export PG_SUPERUSER_HOST="$PG_SUPERUSER_HOST"
+        echo -e "  ${GREEN}✅${NC} Superuser set to '$PG_SUPERUSER' (session-only, not persisted)"
+        echo -e "  ${GREEN}✅${NC} Superuser host set to '$PG_SUPERUSER_HOST'"
 
-    echo "  Resolved: PGHOST=$PGHOST PGDATABASE=${PGDATABASE:-(not set)} PGUSER=$PGUSER"
+        echo "  Resolved: PGHOST=$PGHOST PGDATABASE=${PGDATABASE:-(not set)} PGUSER=$PGUSER"
 
-    # Empty password warning for TCP hosts (post-prompt)
-    if [[ "$PGHOST" != /* ]] && [ -z "${PGPASSWORD:-}" ]; then
-        echo -e "  ${YELLOW}⚠️  No password set for a network host ($PGHOST)${NC}"
-        echo "      The agent_chat plugin requires password auth for TCP connections."
+        # Empty password warning for TCP hosts (post-prompt)
+        if [[ "$PGHOST" != /* ]] && [ -z "${PGPASSWORD:-}" ]; then
+            echo -e "  ${YELLOW}⚠️  No password set for a network host ($PGHOST)${NC}"
+            echo "      The agent_chat plugin requires password auth for TCP connections."
+        fi
     fi
 fi
 
@@ -201,7 +227,7 @@ fi
 
 if ! command -v jq &>/dev/null; then
     echo -e "  ${RED}❌${NC} jq is required to manage openclaw.json"
-    echo "      Install: sudo apt install jq"
+    echo "      Install: apt install jq"
     exit 1
 fi
 

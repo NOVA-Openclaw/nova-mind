@@ -2577,6 +2577,7 @@ else
                                 shadowed_csv=$(IFS=,; echo "${PEER_SHADOWED_NAMES[*]}")
                                 GRANT_FILTER_ARGS+=(--shadowed-names "$shadowed_csv")
                             fi
+                            GRANT_FILTER_ARGS+=(--dbname "$DB_NAME" --db-user "$DB_USER")
                             if "$VENV_PYTHON" "$SCRIPT_DIR/database/filter_shadowed_grants.py" "${GRANT_FILTER_ARGS[@]}" <"$GRANT_EXTRACT_FILE" >"$GRANT_FILTERED_FILE" 2>"$GRANT_FILTERED_FILE.stderr"; then
                                 if [ -s "$GRANT_FILTERED_FILE.stderr" ]; then
                                     while IFS= read -r line; do
@@ -2586,22 +2587,38 @@ else
                                 GRANT_COUNT=$(grep -cE '^[[:space:]]*(GRANT|REVOKE)[[:space:]]+' "$GRANT_FILTERED_FILE" 2>/dev/null || echo 0)
                                 if [ "$GRANT_COUNT" -gt 0 ] 2>/dev/null; then
                                     GRANT_PSQL_ERR=$(mktemp "$PGSCHEMA_SCRATCH_DIR/grants-psqlerr-XXXXXX")
-                                    TMPFILES+=("$GRANT_PSQL_ERR")
-                                    if _superuser_psql "$DB_NAME" -v ON_ERROR_STOP=1 -f - <"$GRANT_FILTERED_FILE" >/dev/null 2>"$GRANT_PSQL_ERR"; then
-                                        echo -e "  ${CHECK_MARK} Applied $GRANT_COUNT explicit grant/revoke statement(s)"
-                                    else
-                                        echo -e "  ${CROSS_MARK} Grant reconciliation failed"
-                                        if [ -s "$GRANT_PSQL_ERR" ]; then
-                                            echo "  psql errors (first ~20 lines):"
-                                            head -20 "$GRANT_PSQL_ERR" | sed 's/^/    /'
-                                        fi
+                                    GRANT_SNAPSHOT_FILE=$(mktemp "$PGSCHEMA_SCRATCH_DIR/grants-snapshot-XXXXXX.json")
+                                    TMPFILES+=("$GRANT_PSQL_ERR" "$GRANT_SNAPSHOT_FILE")
+                                    echo "  Capturing DB_USER privilege snapshot before reconciliation..."
+                                    if ! "$VENV_PYTHON" "$SCRIPT_DIR/database/grant_reconcile_gate.py" --dbname "$DB_NAME" --db-user "$DB_USER" snapshot >"$GRANT_SNAPSHOT_FILE" 2>"$GRANT_PSQL_ERR"; then
+                                        echo -e "  ${CROSS_MARK} Failed to capture privilege snapshot"
+                                        head -20 "$GRANT_PSQL_ERR" | sed 's/^/    /'
                                         SCHEMA_DIFF_SKIPPED=1
+                                    else
+                                        if _superuser_psql "$DB_NAME" -v ON_ERROR_STOP=1 -f - <"$GRANT_FILTERED_FILE" >/dev/null 2>"$GRANT_PSQL_ERR"; then
+                                            echo -e "  ${CHECK_MARK} Applied $GRANT_COUNT explicit grant/revoke statement(s)"
+                                            echo "  Verifying DB_USER privileges after reconciliation..."
+                                            if "$VENV_PYTHON" "$SCRIPT_DIR/database/grant_reconcile_gate.py" --dbname "$DB_NAME" --db-user "$DB_USER" verify "$GRANT_SNAPSHOT_FILE" 2>"$GRANT_PSQL_ERR"; then
+                                                echo -e "  ${CHECK_MARK} DB_USER privilege gate passed"
+                                            else
+                                                echo -e "  ${CROSS_MARK} DB_USER privilege gate failed"
+                                                head -40 "$GRANT_PSQL_ERR" | sed 's/^/    /'
+                                                SCHEMA_DIFF_SKIPPED=1
+                                            fi
+                                        else
+                                            echo -e "  ${CROSS_MARK} Grant reconciliation failed"
+                                            if [ -s "$GRANT_PSQL_ERR" ]; then
+                                                echo "  psql errors (first ~20 lines):"
+                                                head -20 "$GRANT_PSQL_ERR" | sed 's/^/    /'
+                                            fi
+                                            SCHEMA_DIFF_SKIPPED=1
+                                        fi
                                     fi
                                 else
-                                    echo -e "  ${INFO} No explicit grant/revoke statements remain after peer-shadowed filtering"
+                                    echo -e "  ${INFO} No explicit grant/revoke statements remain after filtering"
                                 fi
                             else
-                                echo -e "  ${CROSS_MARK} Failed to filter peer-shadowed grant statements"
+                                echo -e "  ${CROSS_MARK} Failed to filter grant statements"
                                 SCHEMA_DIFF_SKIPPED=1
                             fi
                         else

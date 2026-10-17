@@ -33,6 +33,7 @@ setup() {
     export DB_USER="testuser"
     export DB_NAME="test_memory"
     export PGUSER="testuser"
+    export PGDATABASE="test_memory"
     export PGHOST="localhost"
     export PGPORT="5432"
 }
@@ -45,6 +46,8 @@ source_installer_functions() {
     # shellcheck disable=SC1090
     source "$FAKE_REPO/agent-install.sh"
     export -f _superuser_psql _superuser_createdb _superuser_pgschema _verify_superuser_connection
+    export -f _check_agent_credentials _check_superuser_prep_done _run_credential_and_superuser_checks
+    export -f _print_superuser_sql _halt_agent_credentials_error _halt_missing_superuser_password
 }
 
 # ─── (a) no sudo remains in installer scripts ───────────────────────────────
@@ -258,4 +261,156 @@ EOF
     [ "$status" -eq 0 ]
     [[ "$output" == *"connection ok"* ]]
     [[ "$output" != *"top-secret"* ]]
+}
+
+# ─── (d) #743 chunk 2: required agent credentials and optional superuser skip ─
+
+@test "TC-743-030: --print-superuser-sql emits CREATE ROLE, CREATE DATABASE OWNER, CREATE EXTENSION and no password" {
+    source_installer_functions
+
+    run _print_superuser_sql
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"CREATE ROLE testuser LOGIN PASSWORD '<set-by-dba>'"* ]]
+    [[ "$output" == *"CREATE DATABASE test_memory OWNER testuser"* ]]
+    [[ "$output" == *"CREATE EXTENSION IF NOT EXISTS vector"* ]]
+}
+
+@test "TC-743-031: _check_agent_credentials reports failure when psql cannot connect" {
+    source_installer_functions
+
+    cat >"$STUB_BIN/psql" <<'EOF'
+#!/usr/bin/env bash
+echo "psql: error: connection to server failed" >&2
+exit 1
+EOF
+    chmod +x "$STUB_BIN/psql"
+
+    run _check_agent_credentials
+    [ "$status" -ne 0 ]
+}
+
+@test "TC-743-032: agent credential failure halts before any mutation" {
+    cat >"$STUB_BIN/psql" <<'EOF'
+#!/usr/bin/env bash
+echo "psql: error: connection to server failed" >&2
+exit 1
+EOF
+    chmod +x "$STUB_BIN/psql"
+
+    # pg_isready must succeed so the installer reaches the credential check.
+    cat >"$STUB_BIN/pg_isready" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+    chmod +x "$STUB_BIN/pg_isready"
+
+    run bash "$FAKE_REPO/agent-install.sh"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Cannot connect to PostgreSQL as agent role 'testuser'"* ]]
+    [[ "$output" == *"CREATE ROLE testuser LOGIN PASSWORD"* ]]
+    [[ "$output" == *"CREATE DATABASE test_memory OWNER testuser"* ]]
+    [[ "$output" == *"CREATE EXTENSION IF NOT EXISTS vector"* ]]
+
+    # No mutation should have occurred in FAKE_HOME.
+    [ "$(find "$FAKE_HOME" -type f | wc -l)" -eq 1 ]
+    [ -f "$FAKE_HOME/.openclaw/postgres.json" ]
+}
+
+_make_smart_psql_stub() {
+    local agent_cred_exit="${1:-0}"
+    local db_owner="${2:-}"
+    local ext_present="${3:-0}"
+    cat >"$STUB_BIN/psql" <<EOF
+#!/usr/bin/env bash
+args="\$*"
+if [[ "\$args" == *"SELECT 1 FROM pg_database"* ]]; then
+    [ -n "$db_owner" ] && echo "1" || echo ""
+    exit 0
+elif [[ "\$args" == *"pg_get_userbyid(datdba)"* ]]; then
+    echo "$db_owner"
+    exit 0
+elif [[ "\$args" == *"SELECT 1 FROM pg_extension"* ]]; then
+    if [ "$ext_present" -eq 1 ]; then
+        echo "1"
+    else
+        echo ""
+    fi
+    exit 0
+elif [[ "\$args" == *"SELECT 1"* ]]; then
+    exit $agent_cred_exit
+fi
+echo "psql: unrecognized stub invocation: \$args" >&2
+exit 1
+EOF
+    chmod +x "$STUB_BIN/psql"
+}
+
+@test "TC-743-033: missing distinct superuser password with prep not done halts with instructions and prep SQL" {
+    source_installer_functions
+    _make_smart_psql_stub 0 "" 0
+
+    export PG_SUPERUSER="postgres"
+    export PG_SUPERUSER_PASSWORD=""
+    export PG_SUPERUSER_HOST="localhost"
+
+    run _run_credential_and_superuser_checks
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Superuser password is required but not provided"* ]]
+    [[ "$output" == *"PG_SUPERUSER_PASSWORD environment variable"* ]]
+    [[ "$output" == *"Interactive shell-install.sh prompt"* ]]
+    [[ "$output" == *"CREATE ROLE testuser LOGIN PASSWORD"* ]]
+    [[ "$output" == *"CREATE DATABASE test_memory OWNER testuser"* ]]
+    [[ "$output" == *"CREATE EXTENSION IF NOT EXISTS vector"* ]]
+}
+
+@test "TC-743-034: prep done sets SKIP_SUPERUSER_PHASE and skips superuser phase" {
+    source_installer_functions
+    _make_smart_psql_stub 0 "testuser" 1
+
+    export PG_SUPERUSER="postgres"
+    export PG_SUPERUSER_PASSWORD=""
+    export PG_SUPERUSER_HOST="localhost"
+
+    run _run_credential_and_superuser_checks
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Superuser prep already done"* ]]
+    [[ "$output" == *"skipping superuser-only reconciliation steps"* ]]
+}
+
+@test "TC-743-035: real password is never leaked in --print-superuser-sql or halt output" {
+    source_installer_functions
+
+    export PGPASSWORD="super-secret-agent-password"
+    export PG_SUPERUSER_PASSWORD="super-secret-superuser-password"
+
+    # --print output
+    run _print_superuser_sql
+    [[ "$output" != *"super-secret-agent-password"* ]]
+    [[ "$output" != *"super-secret-superuser-password"* ]]
+
+    # Agent credential failure output
+    cat >"$STUB_BIN/psql" <<'EOF'
+#!/usr/bin/env bash
+exit 1
+EOF
+    chmod +x "$STUB_BIN/psql"
+    run _halt_agent_credentials_error
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Cannot connect to PostgreSQL as agent role 'testuser'"* ]]
+    [[ "$output" != *"super-secret-agent-password"* ]]
+    [[ "$output" != *"super-secret-superuser-password"* ]]
+
+    # Missing superuser password output
+    cat >"$STUB_BIN/psql" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+    chmod +x "$STUB_BIN/psql"
+    export PG_SUPERUSER="postgres"
+    export PG_SUPERUSER_PASSWORD=""
+    run _halt_missing_superuser_password
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Superuser password is required but not provided"* ]]
+    [[ "$output" != *"super-secret-agent-password"* ]]
+    [[ "$output" != *"super-secret-superuser-password"* ]]
 }

@@ -44,11 +44,38 @@ import psycopg2
 EXCLUDED_SCHEMAS = {"pg_catalog", "information_schema"}
 
 
-def _connect(dbname: str, user: str | None = None) -> psycopg2.extensions.connection:
-    dsn = f"host=/var/run/postgresql dbname={dbname}"
+def _dsn(dbname: str, superuser: bool = False) -> str:
+    """Build a libpq DSN from PG* env vars (#743).
+
+    Defaults to the agent's own DB role.  When ``superuser`` is True, uses
+    PG_SUPERUSER/PG_SUPERUSER_PASSWORD/PG_SUPERUSER_HOST instead.
+    """
+    if superuser:
+        host = os.environ.get("PG_SUPERUSER_HOST", "/var/run/postgresql")
+        port = os.environ.get("PGPORT", "5432")
+        user = os.environ.get("PG_SUPERUSER", "")
+        password = os.environ.get("PG_SUPERUSER_PASSWORD", "")
+    else:
+        host = os.environ.get("PGHOST", "/var/run/postgresql")
+        port = os.environ.get("PGPORT", "5432")
+        user = os.environ.get("PGUSER", "")
+        password = os.environ.get("PGPASSWORD", "")
+    parts = [f"host={host}", f"port={port}", f"dbname={dbname}"]
     if user:
+        parts.append(f"user={user}")
+    if password:
+        parts.append(f"password={password}")
+    return " ".join(parts)
+
+
+def _connect(dbname: str, user: str | None = None, superuser: bool = False) -> psycopg2.extensions.connection:
+    # ``user`` is retained for backward compatibility with callers/tests that
+    # pass --connect-user; when absent we fall back to the env-based role.
+    if user:
+        dsn = _dsn(dbname)
         dsn += f" user={user}"
-    return psycopg2.connect(dsn)
+        return psycopg2.connect(dsn)
+    return psycopg2.connect(_dsn(dbname, superuser=superuser))
 
 
 def _quote_ident(ident: str) -> str:
@@ -452,7 +479,7 @@ def _apply_cmd(args) -> int:
         print("No ownership changes needed.", file=sys.stderr)
         return 0
 
-    conn = _connect(args.dbname, args.connect_user or args.superuser)
+    conn = _connect(args.dbname, superuser=True)
     try:
         with conn.cursor() as cur:
             for stmt in statements:

@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -92,6 +93,25 @@ def _query_shadowed_tables(
     return results
 
 
+def _dsn(dbname: str) -> str:
+    """Build a libpq DSN from PG* env vars (#743).
+
+    Uses the agent's own DB role (PGUSER/PGPASSWORD/PGHOST/PGPORT) rather
+    than the superuser credentials.  Falls back to local peer auth defaults
+    only when the env vars are absent.
+    """
+    host = os.environ.get("PGHOST", "/var/run/postgresql")
+    port = os.environ.get("PGPORT", "5432")
+    user = os.environ.get("PGUSER", "")
+    password = os.environ.get("PGPASSWORD", "")
+    parts = [f"host={host}", f"port={port}", f"dbname={dbname}"]
+    if user:
+        parts.append(f"user={user}")
+    if password:
+        parts.append(f"password={password}")
+    return " ".join(parts)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -101,8 +121,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--dsn",
-        required=True,
-        help="libpq connection string for the target database",
+        default=None,
+        help="libpq connection string for the target database (optional; default: PG* env)",
+    )
+    parser.add_argument(
+        "--dbname",
+        default=os.environ.get("PGDATABASE", ""),
+        help="Target database name (default: $PGDATABASE)",
     )
     args = parser.parse_args(argv)
 
@@ -118,8 +143,13 @@ def main(argv: list[str] | None = None) -> int:
         print("ERROR: no CREATE TABLE statements found in schema.sql", file=sys.stderr)
         return 2
 
+    dsn = args.dsn if args.dsn else _dsn(args.dbname)
+    if not args.dbname and not args.dsn:
+        print("ERROR: --dbname or --dsn is required", file=sys.stderr)
+        return 2
+
     try:
-        shadowed = _query_shadowed_tables(schema_tables, args.dsn)
+        shadowed = _query_shadowed_tables(schema_tables, dsn)
     except Exception as exc:  # noqa: BLE001
         print(f"ERROR: failed to query target database: {exc}", file=sys.stderr)
         return 2

@@ -1260,6 +1260,26 @@ _run_credential_and_superuser_checks() {
     fi
 }
 
+# Run a psql DDL operation as the appropriate role for the current schema phase.
+# When SKIP_SUPERUSER_PHASE=1, run as DB_USER (the agent owns the DB); otherwise
+# run as PG_SUPERUSER.
+_schema_ddl_psql() {
+    if [ "$SKIP_SUPERUSER_PHASE" -eq 1 ]; then
+        psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 "$@"
+    else
+        _superuser_psql "$DB_NAME" "$@"
+    fi
+}
+
+# Run pgschema plan/apply as the appropriate role for the current schema phase.
+_schema_pgschema() {
+    if [ "$SKIP_SUPERUSER_PHASE" -eq 1 ]; then
+        "$PGSCHEMA_BIN" "$@"
+    else
+        _superuser_pgschema "$@"
+    fi
+}
+
 # Transfer ownership of installer-created objects from PG_SUPERUSER to DB_USER.
 # Uses database/fix_installer_ownership.py to derive the list from the catalog
 # and skips the peer/FDW bootstrap stack (#666).
@@ -1307,6 +1327,483 @@ _transfer_installer_ownership() {
 # Removes any existing entry with the same host:port:database:user prefix
 # and appends the current password, so re-runs are idempotent and password
 # rotations are picked up.
+# Run the full schema-management pipeline (extensions, pre-migrations,
+# renames, peer-shadow detection, pgschema plan/apply, ownership transfer,
+# and grant reconciliation).  When SKIP_SUPERUSER_PHASE=1 the pipeline runs
+# as DB_USER and skips steps that require a PostgreSQL superuser.
+_run_schema_management() {
+    # --- Schema management via pgschema (superuser phase) ---
+    SCHEMA_FILE="$SCRIPT_DIR/database/schema.sql"
+    
+    if [ ! -f "$SCHEMA_FILE" ]; then
+        echo -e "  ${CROSS_MARK} database/schema.sql not found at $SCHEMA_FILE"
+        exit 1
+    fi
+    
+    SCHEMA_DIFF_SKIPPED=0
+    
+    echo ""
+    echo "Schema management (pgschema)..."
+
+    # Track superuser-only installer steps that are bypassed when the DBA has
+    # already done the superuser prep and no superuser password is provided.
+    # These are reported in a single visible WARNING at the end.
+    _SKIPPED_SUPERUSER_STEPS=()
+    
+    # -- Extensions (superuser only) --
+    if [ "$SKIP_SUPERUSER_PHASE" -eq 1 ]; then
+        echo -e "  ${WARNING} Skipping CREATE EXTENSION (superuser-only; verified present by DBA prep)"
+        _SKIPPED_SUPERUSER_STEPS+=("CREATE EXTENSION")
+    else
+        echo "  Ensuring extensions..."
+        if [ ${#_INSTALLER_EXTENSIONS[@]} -gt 0 ]; then
+            for ext in "${_INSTALLER_EXTENSIONS[@]}"; do
+                if _superuser_psql "$DB_NAME" -tAc "SELECT 1 FROM pg_extension WHERE extname = '$ext'" | grep -q 1; then
+                    echo -e "  ${CHECK_MARK} Extension '$ext' already installed"
+                else
+                    if _superuser_psql "$DB_NAME" -c "CREATE EXTENSION IF NOT EXISTS \"$ext\";" >/dev/null 2>&1; then
+                        echo -e "  ${CHECK_MARK} Extension '$ext' installed"
+                    else
+                        echo -e "  ${CROSS_MARK} Extension '$ext' not installed — requires superuser"
+                        SCHEMA_DIFF_SKIPPED=1
+                    fi
+                fi
+            done
+        else
+            echo -e "  ${INFO} No extensions defined in schema.sql"
+        fi
+    fi
+    
+    # -- Pre-migrations (run as the active schema role) --
+    PRE_MIGRATIONS_DIR="$SCRIPT_DIR/database/pre-migrations"
+    if [ -d "$PRE_MIGRATIONS_DIR" ]; then
+        PRE_MIGRATION_FILES=()
+        while IFS= read -r -d '' f; do
+            PRE_MIGRATION_FILES+=("$f")
+        done < <(find "$PRE_MIGRATIONS_DIR" -maxdepth 1 -name "*.sql" -print0 | sort -z)
+    
+        if [ ${#PRE_MIGRATION_FILES[@]} -gt 0 ]; then
+            echo "  Running pre-migrations (${#PRE_MIGRATION_FILES[@]} files)..."
+            for sql_file in "${PRE_MIGRATION_FILES[@]}"; do
+                local_filename=$(basename "$sql_file")
+                # Copy to /tmp so the superuser process can read it (nova-mind#663):
+                # pre-migration files live under the agent's $HOME, which is mode
+                # 0750 -- a distinct superuser unix user (PG_SUPERUSER != DB_USER)
+                # cannot traverse into it. Mirrors the schema step's existing
+                # /tmp-copy + chmod 644 pattern (see SCHEMA_FILE_TMP below).
+                PRE_MIGRATION_FILE_TMP=$(mktemp /tmp/pgschema-premigration-XXXXXX.sql)
+                TMPFILES+=("$PRE_MIGRATION_FILE_TMP")
+                cp "$sql_file" "$PRE_MIGRATION_FILE_TMP"
+                chmod 644 "$PRE_MIGRATION_FILE_TMP"
+                if _schema_ddl_psql -f "$PRE_MIGRATION_FILE_TMP" >/dev/null 2>&1; then
+                    echo -e "  ${CHECK_MARK} Pre-migration: $local_filename"
+                else
+                    echo -e "  ${CROSS_MARK} Pre-migration failed: $local_filename"
+                    SCHEMA_DIFF_SKIPPED=1
+                fi
+            done
+        else
+            echo -e "  ${INFO} No pre-migration scripts found"
+        fi
+    fi
+    
+    # -- Step 1.5: Apply declarative renames from renames.json before pgschema --
+    RENAMES_FILE="$SCRIPT_DIR/memory/database/renames.json"
+    if [ -f "$RENAMES_FILE" ]; then
+        echo "  Processing renames.json (Step 1.5)..."
+        # shellcheck disable=SC2034
+        RENAME_COUNT=$(jq '[.renames[] | select(.column.from? != null)] | length' "$RENAMES_FILE" 2>/dev/null || echo "0")
+        APPLIED=0
+        SKIPPED=0
+    
+        # Process column renames
+        while IFS= read -r entry; do
+            table=$(echo "$entry" | jq -r '.table')
+            col_from=$(echo "$entry" | jq -r '.column.from')
+            col_to=$(echo "$entry" | jq -r '.column.to')
+            pr=$(echo "$entry" | jq -r '.pr // "unknown"')
+    
+            # Check if the FROM column still exists (use DB_USER for reads)
+            EXISTS=$(psql -U "$DB_USER" -d "$DB_NAME" -tAc \
+                "SELECT COUNT(*) FROM information_schema.columns
+                 WHERE table_schema = 'public' AND table_name = '$table' AND column_name = '$col_from'" \
+                2>/dev/null | tr -d '[:space:]')
+    
+            if [ "${EXISTS:-0}" -eq 1 ]; then
+                # Run rename as the active schema role
+                if _schema_ddl_psql -c \
+                    "ALTER TABLE \"$table\" RENAME COLUMN \"$col_from\" TO \"$col_to\";" >/dev/null 2>&1; then
+                    echo -e "  ${CHECK_MARK} Renamed $table.$col_from → $col_to ($pr)"
+                    APPLIED=$((APPLIED + 1))
+                else
+                    echo -e "  ${CROSS_MARK} Failed to rename $table.$col_from → $col_to"
+                    SCHEMA_DIFF_SKIPPED=1
+                fi
+            else
+                echo -e "  ${INFO} $table.$col_from already renamed (skipping)"
+                SKIPPED=$((SKIPPED + 1))
+            fi
+        done < <(jq -c '.renames[] | select(.column.from? != null)' "$RENAMES_FILE" 2>/dev/null)
+    
+        # Process table renames
+        while IFS= read -r entry; do
+            tbl_from=$(echo "$entry" | jq -r '.table.from')
+            tbl_to=$(echo "$entry" | jq -r '.table.to')
+            pr=$(echo "$entry" | jq -r '.pr // "unknown"')
+    
+            EXISTS=$(psql -U "$DB_USER" -d "$DB_NAME" -tAc \
+                "SELECT COUNT(*) FROM information_schema.tables
+                 WHERE table_schema = 'public' AND table_name = '$tbl_from'" \
+                2>/dev/null | tr -d '[:space:]')
+    
+            if [ "${EXISTS:-0}" -eq 1 ]; then
+                # Run rename as the active schema role
+                if _schema_ddl_psql -c \
+                    "ALTER TABLE \"$tbl_from\" RENAME TO \"$tbl_to\";" >/dev/null 2>&1; then
+                    echo -e "  ${CHECK_MARK} Renamed table $tbl_from → $tbl_to ($pr)"
+                    APPLIED=$((APPLIED + 1))
+                else
+                    echo -e "  ${CROSS_MARK} Failed to rename table $tbl_from → $tbl_to"
+                    SCHEMA_DIFF_SKIPPED=1
+                fi
+            else
+                echo -e "  ${INFO} Table $tbl_from already renamed (skipping)"
+                SKIPPED=$((SKIPPED + 1))
+            fi
+        done < <(jq -c '.renames[] | select(.table | type == "object")' "$RENAMES_FILE" 2>/dev/null)
+    
+        echo -e "  ${INFO} Renames: $APPLIED applied, $SKIPPED skipped"
+    else
+        echo -e "  ${INFO} No renames.json found — skipping Step 1.5"
+    fi
+    
+    # Peer-shadowed relation detection must run before pgschema plans; it queries
+    # the target DB to find foreign tables/views that shadow tables declared by
+    # schema.sql. On failure the installer fails closed and skips the apply stage.
+    PEER_SHADOWED_NAMES=()
+    PEER_SHADOWED_RELKINDS=()
+    PEER_SHADOWED_KINDS=()
+    PGSCHEMA_PEER_MODE=0
+    PGSCHEMA_IGNORE_BASE="$SCRIPT_DIR/database/.pgschemaignore"
+    
+    if [ "$SCHEMA_DIFF_SKIPPED" -eq 0 ]; then
+        if ! _resolve_peer_shadowed_relations; then
+            SCHEMA_DIFF_SKIPPED=1
+        fi
+    fi
+    
+    if [ "$SCHEMA_DIFF_SKIPPED" -eq 1 ]; then
+        echo -e "  ${WARNING} Skipping pgschema plan/apply (pre-schema step failed above)"
+    else
+        # Build connection args for DDL operations.
+        # #743: when skipping the superuser phase, plan and apply as DB_USER.
+        if [ "$SKIP_SUPERUSER_PHASE" -eq 1 ]; then
+            PGSCHEMA_CONN_ARGS=(
+                "--host" "$PGHOST"
+                "--port" "${PGPORT:-5432}"
+                "--db" "$DB_NAME"
+                "--user" "$DB_USER"
+            )
+            PGSCHEMA_PLAN_ARGS=(
+                "--plan-host" "$PGHOST"
+                "--plan-port" "${PGPORT:-5432}"
+                "--plan-db" "$DB_NAME"
+                "--plan-user" "$DB_USER"
+            )
+        else
+            PGSCHEMA_CONN_ARGS=(
+                "--host" "$PG_SUPERUSER_HOST"
+                "--port" "${PGPORT:-5432}"
+                "--db" "$DB_NAME"
+                "--user" "$PG_SUPERUSER"
+            )
+            PGSCHEMA_PLAN_ARGS=(
+                "--plan-host" "$PG_SUPERUSER_HOST"
+                "--plan-port" "${PGPORT:-5432}"
+                "--plan-db" "$DB_NAME"
+                "--plan-user" "$PG_SUPERUSER"
+            )
+        fi
+    
+        # Use a dedicated non-sticky scratch directory for the plan/reorder/apply
+        # cycle (nova-mind#664). /tmp has the sticky bit (1777), which blocks the
+        # agent user from renaming a file over a file owned by the postgres user.
+        # A fresh mktemp -d directory has no sticky bit and, with mode 777, lets
+        # both the agent user and postgres create and rename files inside it.
+        PGSCHEMA_SCRATCH_DIR=$(mktemp -d /tmp/pgschema-scratch-XXXXXX)
+        TMPDIRS+=("$PGSCHEMA_SCRATCH_DIR")
+        chmod 777 "$PGSCHEMA_SCRATCH_DIR"
+    
+        # pgschema discovers .pgschemaignore from cwd, so copy the selected ignore
+        # file into the scratch directory and plan from there. This also fixes the
+        # prior discovery gap where the file lived in database/ but planning ran
+        # from the repo root.
+        # In peer mode, dynamically inject the detected shadowed relations into the
+        # [tables] and [views] sections so pgschema itself ignores them during
+        # planning.  Everything else stays in .pgschemaignore-peer for objects that
+        # cannot be derived from relkind f/v (functions, triggers, etc.).
+        cp "$PGSCHEMA_IGNORE_BASE" "$PGSCHEMA_SCRATCH_DIR/.pgschemaignore"
+        chmod 644 "$PGSCHEMA_SCRATCH_DIR/.pgschemaignore"
+        if [ "${#PEER_SHADOWED_NAMES[@]}" -gt 0 ]; then
+            names_csv=$(IFS=,; echo "${PEER_SHADOWED_NAMES[*]}")
+            relkinds_csv=$(IFS=,; echo "${PEER_SHADOWED_RELKINDS[*]}")
+            "$VENV_PYTHON" "$SCRIPT_DIR/database/inject_peer_shadowed_ignores.py" \
+                --ignore-file "$PGSCHEMA_SCRATCH_DIR/.pgschemaignore" \
+                --names "$names_csv" \
+                --relkinds "$relkinds_csv"
+        fi
+        pushd "$PGSCHEMA_SCRATCH_DIR" >/dev/null || exit 1
+    
+        # PLAN_FILE is written by pgschema running as the superuser, so do not
+        # pre-create it; let the superuser create the inode fresh.
+        PLAN_FILE="$PGSCHEMA_SCRATCH_DIR/plan.json"
+    
+        # Copy schema file into the scratch dir so the superuser process can read it
+        # (the agent's home directory may not be traversable by the superuser unix user)
+        SCHEMA_FILE_TMP=$(mktemp "$PGSCHEMA_SCRATCH_DIR/schema-XXXXXX.sql")
+        cp "$SCHEMA_FILE" "$SCHEMA_FILE_TMP"
+        chmod 644 "$SCHEMA_FILE_TMP"
+    
+        if [ "$SKIP_SUPERUSER_PHASE" -eq 1 ]; then
+            echo "  Running pgschema plan (as DB_USER $DB_USER)..."
+        else
+            echo "  Running pgschema plan (as superuser $PG_SUPERUSER)..."
+        fi
+        PLAN_EXIT=0
+        _schema_pgschema plan \
+            "${PGSCHEMA_CONN_ARGS[@]}" \
+            --schema public \
+            --file "$SCHEMA_FILE_TMP" \
+            "${PGSCHEMA_PLAN_ARGS[@]}" \
+            --output-json "$PLAN_FILE" \
+            --no-color 2>&1 || PLAN_EXIT=$?
+    
+        if [ $PLAN_EXIT -ne 0 ]; then
+            echo -e "  ${CROSS_MARK} pgschema plan failed (exit $PLAN_EXIT) — schema apply skipped"
+            SCHEMA_DIFF_SKIPPED=1
+        else
+            # REORDERED_PLAN_FILE is written by plan_reorder.py (agent user) and
+            # then moved over the superuser-owned plan file, so keep it in the
+            # scratch directory with no sticky bit.
+            REORDERED_PLAN_FILE="$PGSCHEMA_SCRATCH_DIR/reordered.json"
+            echo "  Reordering plan by dependencies..."
+            REORDER_EXIT=0
+            "$VENV_PYTHON" "$SCRIPT_DIR/database/plan_reorder.py" \
+                --plan "$PLAN_FILE" \
+                --output "$REORDERED_PLAN_FILE" 2>&1 || REORDER_EXIT=$?
+            DO_APPLY=1
+            if [ $REORDER_EXIT -eq 0 ]; then
+                mv "$REORDERED_PLAN_FILE" "$PLAN_FILE"
+                echo -e "  ${CHECK_MARK} Plan reordered by dependencies"
+
+                # Fail closed: when running as DB_USER, ensure the plan contains no
+                # superuser-only steps before any apply attempt.
+                if [ "$SKIP_SUPERUSER_PHASE" -eq 1 ]; then
+                    echo "  Checking plan for superuser-only steps..."
+                    if ! "$VENV_PYTHON" "$SCRIPT_DIR/database/plan_check_superuser.py" --plan "$PLAN_FILE"; then
+                        echo "" >&2
+                        echo -e "  ${CROSS_MARK} Schema plan contains superuser-only steps" >&2
+                        echo "      Provide PG_SUPERUSER_PASSWORD and re-run, or ask a DBA to apply these steps." >&2
+                        echo "" >&2
+                        echo "      Provide the superuser password via one of:" >&2
+                        echo "        - PG_SUPERUSER_PASSWORD environment variable" >&2
+                        echo "        - Interactive shell-install.sh prompt" >&2
+                        echo "" >&2
+                        echo "      Or ask a DBA to run the prep SQL out of band as a PostgreSQL superuser:" >&2
+                        echo "" >&2
+                        _print_superuser_sql >&2
+                        echo "" >&2
+                        SCHEMA_DIFF_SKIPPED=1
+                        DO_APPLY=0
+                    fi
+                fi
+            else
+                echo -e "  ${CROSS_MARK} Plan reorder failed (exit $REORDER_EXIT) — schema apply skipped"
+                SCHEMA_DIFF_SKIPPED=1
+                DO_APPLY=0
+            fi
+
+            if [ "$DO_APPLY" -eq 1 ]; then
+                # Strip all destructive (DROP) operations from the plan.
+                # Additive-by-construction: unknown/local tables live untouched;
+                # only CREATE/ALTER ADD/etc. steps are applied (#498).
+                FILTERED_PLAN_FILE="$PGSCHEMA_SCRATCH_DIR/filtered.json"
+                echo "  Stripping destructive operations from plan..."
+                STRIP_EXIT=0
+                STRIP_ARGS=(
+                    --plan "$PLAN_FILE"
+                    --output "$FILTERED_PLAN_FILE"
+                )
+                if [ "$PGSCHEMA_PEER_MODE" -eq 1 ]; then
+                    # Peer-shadowed relations (VIEW / foreign table + sequence +
+                    # triggers + privileges + comments + constraints + indexes) are
+                    # owned by the FDW setup (#520), not schema.sql. Strip every plan
+                    # step that refers to them (#608 / #1231).
+                    ignored_csv=$(IFS=,; echo "${PEER_SHADOWED_NAMES[*]}")
+                    STRIP_ARGS+=(--ignore-objects "$ignored_csv" --log-exclusions)
+                fi
+                DESTRUCTIVE_COUNT=$("$VENV_PYTHON" "$SCRIPT_DIR/database/strip_destructive.py" "${STRIP_ARGS[@]}" 2>&1) || STRIP_EXIT=$?
+    
+                if [ $STRIP_EXIT -ne 0 ]; then
+                    echo -e "  ${CROSS_MARK} Failed to strip destructive operations from plan"
+                    SCHEMA_DIFF_SKIPPED=1
+                else
+                    mv "$FILTERED_PLAN_FILE" "$PLAN_FILE"
+                    if [ "${DESTRUCTIVE_COUNT:-0}" -gt 0 ] 2>/dev/null; then
+                        echo -e "  ${INFO} Stripped $DESTRUCTIVE_COUNT destructive operation(s) (DROP skipped; #498)"
+                    fi
+    
+                    TOTAL_STEPS=$(jq '[(.groups // [])[] | .steps[] | select(.type != "privilege")] | length' "$PLAN_FILE" 2>/dev/null || echo "0")
+    
+                    if [ "$TOTAL_STEPS" -eq 0 ] 2>/dev/null; then
+                        echo -e "  ${CHECK_MARK} Schema is up to date — no changes needed"
+                    else
+                        echo "  Applying $TOTAL_STEPS schema change(s)..."
+                        APPLY_EXIT=0
+                        _schema_pgschema apply \
+                            "${PGSCHEMA_CONN_ARGS[@]}" \
+                            --schema public \
+                            --plan "$PLAN_FILE" \
+                            --auto-approve \
+                            --no-color 2>&1 || APPLY_EXIT=$?
+    
+                        if [ $APPLY_EXIT -eq 0 ]; then
+                            echo -e "  ${CHECK_MARK} Schema applied successfully"
+                            TABLE_COUNT=$(psql -U "$DB_USER" -d "$DB_NAME" -tAc "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE'" | tr -d '[:space:]')
+                            echo "      Total tables in database: $TABLE_COUNT"
+    
+                            if [ "$SKIP_SUPERUSER_PHASE" -eq 1 ]; then
+                                echo -e "  ${WARNING} Skipping installer ownership transfer (superuser-only)"
+                                echo -e "  ${WARNING} Skipping explicit grant reconciliation (superuser-only)"
+                                _SKIPPED_SUPERUSER_STEPS+=("ownership transfer")
+                                _SKIPPED_SUPERUSER_STEPS+=("grant reconciliation")
+                            else
+                                # Per-object ownership transfer (#666): pgschema applies as the
+                            # superuser, so new relations are owned by PG_SUPERUSER.
+                            # REASSIGN OWNED BY always fails on required system objects,
+                            # so transfer ownership object-by-object and skip the peer/FDW
+                            # bootstrap stack (foreign tables, FDW-backed views and their
+                            # dependencies).  Derivation is from the catalog, not names.
+                            if [ "$PG_SUPERUSER" != "$DB_USER" ]; then
+                                PROTECTED_SNAPSHOT_FILE=$(mktemp "$PGSCHEMA_SCRATCH_DIR/protected-snapshot-XXXXXX.json")
+                                PROTECTED_PSQL_ERR=$(mktemp "$PGSCHEMA_SCRATCH_DIR/protected-psqlerr-XXXXXX")
+                                TMPFILES+=("$PROTECTED_SNAPSHOT_FILE" "$PROTECTED_PSQL_ERR")
+                                echo "  Capturing protected-object ownership snapshot before transfer..."
+                                if ! "$VENV_PYTHON" "$SCRIPT_DIR/database/grant_reconcile_gate.py" \
+                                        --dbname "$DB_NAME" \
+                                        --db-user "$DB_USER" \
+                                        --superuser "$PG_SUPERUSER" \
+                                        protected-snapshot >"$PROTECTED_SNAPSHOT_FILE" 2>"$PROTECTED_PSQL_ERR"; then
+                                    echo -e "  ${CROSS_MARK} Failed to capture protected-object ownership snapshot"
+                                    head -20 "$PROTECTED_PSQL_ERR" | sed 's/^/    /'
+                                    SCHEMA_DIFF_SKIPPED=1
+                                fi
+                                _transfer_installer_ownership
+                            fi
+    
+                            # Post-schema grant reconciliation (#452): pgschema deliberately
+                            # ignores privilege steps, so explicit GRANT/REVOKE lines in
+                            # schema.sql must be applied separately to survive fresh installs.
+                            # Peer-shadowed relations (foreign tables/views managed by the
+                            # peer FDW setup, #520) and their default <name>_id_seq sequences
+                            # do not exist locally, so skip any GRANT/REVOKE that targets them.
+                            echo "  Reconciling explicit schema grants..."
+                            GRANT_ALL_COUNT=$(grep -cE '^[[:space:]]*(GRANT|REVOKE)[[:space:]]+' "$SCHEMA_FILE_TMP" 2>/dev/null || echo 0)
+                            if [ "$GRANT_ALL_COUNT" -gt 0 ] 2>/dev/null; then
+                                GRANT_EXTRACT_FILE=$(mktemp "$PGSCHEMA_SCRATCH_DIR/grants-extract-XXXXXX.sql")
+                                GRANT_FILTERED_FILE=$(mktemp "$PGSCHEMA_SCRATCH_DIR/grants-filtered-XXXXXX.sql")
+                                TMPFILES+=("$GRANT_EXTRACT_FILE" "$GRANT_FILTERED_FILE")
+                                grep -E '^[[:space:]]*(GRANT|REVOKE)[[:space:]]+' "$SCHEMA_FILE_TMP" >"$GRANT_EXTRACT_FILE"
+                                GRANT_FILTER_ARGS=()
+                                if [ "${#PEER_SHADOWED_NAMES[@]}" -gt 0 ]; then
+                                    shadowed_csv=$(IFS=,; echo "${PEER_SHADOWED_NAMES[*]}")
+                                    GRANT_FILTER_ARGS+=(--shadowed-names "$shadowed_csv")
+                                fi
+                                GRANT_FILTER_ARGS+=(--dbname "$DB_NAME" --db-user "$DB_USER")
+                                if "$VENV_PYTHON" "$SCRIPT_DIR/database/filter_shadowed_grants.py" "${GRANT_FILTER_ARGS[@]}" <"$GRANT_EXTRACT_FILE" >"$GRANT_FILTERED_FILE" 2>"$GRANT_FILTERED_FILE.stderr"; then
+                                    if [ -s "$GRANT_FILTERED_FILE.stderr" ]; then
+                                        while IFS= read -r line; do
+                                            echo -e "  ${INFO} $line"
+                                        done < "$GRANT_FILTERED_FILE.stderr"
+                                    fi
+                                    GRANT_COUNT=$(grep -cE '^[[:space:]]*(GRANT|REVOKE)[[:space:]]+' "$GRANT_FILTERED_FILE" 2>/dev/null || echo 0)
+                                    if [ "$GRANT_COUNT" -gt 0 ] 2>/dev/null; then
+                                        GRANT_PSQL_ERR=$(mktemp "$PGSCHEMA_SCRATCH_DIR/grants-psqlerr-XXXXXX")
+                                        GRANT_SNAPSHOT_FILE=$(mktemp "$PGSCHEMA_SCRATCH_DIR/grants-snapshot-XXXXXX.json")
+                                        TMPFILES+=("$GRANT_PSQL_ERR" "$GRANT_SNAPSHOT_FILE")
+                                        echo "  Capturing DB_USER privilege snapshot before reconciliation..."
+                                        if ! "$VENV_PYTHON" "$SCRIPT_DIR/database/grant_reconcile_gate.py" --dbname "$DB_NAME" --db-user "$DB_USER" snapshot >"$GRANT_SNAPSHOT_FILE" 2>"$GRANT_PSQL_ERR"; then
+                                            echo -e "  ${CROSS_MARK} Failed to capture privilege snapshot"
+                                            head -20 "$GRANT_PSQL_ERR" | sed 's/^/    /'
+                                            SCHEMA_DIFF_SKIPPED=1
+                                        else
+                                            if _superuser_psql "$DB_NAME" -v ON_ERROR_STOP=1 -f - <"$GRANT_FILTERED_FILE" >/dev/null 2>"$GRANT_PSQL_ERR"; then
+                                                echo -e "  ${CHECK_MARK} Applied $GRANT_COUNT explicit grant/revoke statement(s)"
+                                                echo "  Verifying DB_USER privileges after reconciliation..."
+                                                if "$VENV_PYTHON" "$SCRIPT_DIR/database/grant_reconcile_gate.py" --dbname "$DB_NAME" --db-user "$DB_USER" verify "$GRANT_SNAPSHOT_FILE" 2>"$GRANT_PSQL_ERR"; then
+                                                    echo -e "  ${CHECK_MARK} DB_USER privilege gate passed"
+                                                    echo "  Running absolute DB_USER privilege check..."
+                                                    PROTECTED_CHECK_ARGS=()
+                                                    if [ -n "${PROTECTED_SNAPSHOT_FILE:-}" ] && [ -s "$PROTECTED_SNAPSHOT_FILE" ]; then
+                                                        PROTECTED_CHECK_ARGS+=(--protected-snapshot "$PROTECTED_SNAPSHOT_FILE")
+                                                    fi
+                                                    if "$VENV_PYTHON" "$SCRIPT_DIR/database/grant_reconcile_gate.py" --dbname "$DB_NAME" --db-user "$DB_USER" --superuser "$PG_SUPERUSER" check "${PROTECTED_CHECK_ARGS[@]}" 2>"$GRANT_PSQL_ERR"; then
+                                                        echo -e "  ${CHECK_MARK} Absolute DB_USER privilege check passed"
+                                                    else
+                                                        echo -e "  ${CROSS_MARK} Absolute DB_USER privilege check failed"
+                                                        head -40 "$GRANT_PSQL_ERR" | sed 's/^/    /'
+                                                        SCHEMA_DIFF_SKIPPED=1
+                                                    fi
+                                                else
+                                                    echo -e "  ${CROSS_MARK} DB_USER privilege gate failed"
+                                                    head -40 "$GRANT_PSQL_ERR" | sed 's/^/    /'
+                                                    SCHEMA_DIFF_SKIPPED=1
+                                                fi
+                                            else
+                                                echo -e "  ${CROSS_MARK} Grant reconciliation failed"
+                                                if [ -s "$GRANT_PSQL_ERR" ]; then
+                                                    echo "  psql errors (first ~20 lines):"
+                                                    head -20 "$GRANT_PSQL_ERR" | sed 's/^/    /'
+                                                fi
+                                                SCHEMA_DIFF_SKIPPED=1
+                                            fi
+                                        fi
+                                    else
+                                        echo -e "  ${INFO} No explicit grant/revoke statements remain after filtering"
+                                    fi
+                                else
+                                    echo -e "  ${CROSS_MARK} Failed to filter grant statements"
+                                    SCHEMA_DIFF_SKIPPED=1
+                                fi
+                            else
+                                echo -e "  ${INFO} No explicit grant/revoke statements found"
+                            fi
+                            fi
+                        else
+                            echo -e "  ${CROSS_MARK} Schema apply failed (exit $APPLY_EXIT)"
+                            SCHEMA_DIFF_SKIPPED=1
+                        fi
+                    fi
+                fi
+            fi
+        fi
+    
+        popd >/dev/null || true
+        rm -f "$PLAN_FILE"
+    fi
+    
+    # --- Schema apply exit-code gate (#597 / #498) ---
+    if [ "$SCHEMA_DIFF_SKIPPED" -eq 1 ]; then
+        echo ""
+        echo -e "  ${CROSS_MARK} Schema apply stage failed — installation aborting"
+        exit 1
+    fi
+    # --- Superuser-only step skip summary ---
+    if [ "$SKIP_SUPERUSER_PHASE" -eq 1 ] && [ ${#_SKIPPED_SUPERUSER_STEPS[@]} -gt 0 ]; then
+        echo ""
+        echo -e "  ${WARNING} Superuser-only steps skipped: ${_SKIPPED_SUPERUSER_STEPS[*]}"
+    fi
+}
 _ensure_pgpass_entry() {
     local host="$1"
     local port="$2"
@@ -2499,419 +2996,7 @@ fi
 
 
 # --- Schema management via pgschema (superuser phase) ---
-SCHEMA_FILE="$SCRIPT_DIR/database/schema.sql"
-
-if [ ! -f "$SCHEMA_FILE" ]; then
-    echo -e "  ${CROSS_MARK} database/schema.sql not found at $SCHEMA_FILE"
-    exit 1
-fi
-
-SCHEMA_DIFF_SKIPPED=0
-
-if [ "$SKIP_SUPERUSER_PHASE" -eq 1 ]; then
-    echo ""
-    echo -e "  ${INFO} Schema management skipped (superuser phase skipped)"
-else
-    echo ""
-    echo "Schema management (pgschema)..."
-
-# -- Extensions (use superuser for CREATE EXTENSION) --
-echo "  Ensuring extensions..."
-if [ ${#_INSTALLER_EXTENSIONS[@]} -gt 0 ]; then
-    for ext in "${_INSTALLER_EXTENSIONS[@]}"; do
-        if _superuser_psql "$DB_NAME" -tAc "SELECT 1 FROM pg_extension WHERE extname = '$ext'" | grep -q 1; then
-            echo -e "  ${CHECK_MARK} Extension '$ext' already installed"
-        else
-            if _superuser_psql "$DB_NAME" -c "CREATE EXTENSION IF NOT EXISTS \"$ext\";" >/dev/null 2>&1; then
-                echo -e "  ${CHECK_MARK} Extension '$ext' installed"
-            else
-                echo -e "  ${CROSS_MARK} Extension '$ext' not installed — requires superuser"
-                SCHEMA_DIFF_SKIPPED=1
-            fi
-        fi
-    done
-else
-    echo -e "  ${INFO} No extensions defined in schema.sql"
-fi
-
-# -- Pre-migrations (use superuser for DDL) --
-PRE_MIGRATIONS_DIR="$SCRIPT_DIR/database/pre-migrations"
-if [ -d "$PRE_MIGRATIONS_DIR" ]; then
-    PRE_MIGRATION_FILES=()
-    while IFS= read -r -d '' f; do
-        PRE_MIGRATION_FILES+=("$f")
-    done < <(find "$PRE_MIGRATIONS_DIR" -maxdepth 1 -name "*.sql" -print0 | sort -z)
-
-    if [ ${#PRE_MIGRATION_FILES[@]} -gt 0 ]; then
-        echo "  Running pre-migrations (${#PRE_MIGRATION_FILES[@]} files)..."
-        for sql_file in "${PRE_MIGRATION_FILES[@]}"; do
-            local_filename=$(basename "$sql_file")
-            # Copy to /tmp so the superuser process can read it (nova-mind#663):
-            # pre-migration files live under the agent's $HOME, which is mode
-            # 0750 -- a distinct superuser unix user (PG_SUPERUSER != DB_USER)
-            # cannot traverse into it. Mirrors the schema step's existing
-            # /tmp-copy + chmod 644 pattern (see SCHEMA_FILE_TMP below).
-            PRE_MIGRATION_FILE_TMP=$(mktemp /tmp/pgschema-premigration-XXXXXX.sql)
-            TMPFILES+=("$PRE_MIGRATION_FILE_TMP")
-            cp "$sql_file" "$PRE_MIGRATION_FILE_TMP"
-            chmod 644 "$PRE_MIGRATION_FILE_TMP"
-            if _superuser_psql "$DB_NAME" -f "$PRE_MIGRATION_FILE_TMP" >/dev/null 2>&1; then
-                echo -e "  ${CHECK_MARK} Pre-migration: $local_filename"
-            else
-                echo -e "  ${CROSS_MARK} Pre-migration failed: $local_filename"
-                SCHEMA_DIFF_SKIPPED=1
-            fi
-        done
-    else
-        echo -e "  ${INFO} No pre-migration scripts found"
-    fi
-fi
-
-# -- Step 1.5: Apply declarative renames from renames.json before pgschema --
-RENAMES_FILE="$SCRIPT_DIR/memory/database/renames.json"
-if [ -f "$RENAMES_FILE" ]; then
-    echo "  Processing renames.json (Step 1.5)..."
-    # shellcheck disable=SC2034
-    RENAME_COUNT=$(jq '[.renames[] | select(.column.from? != null)] | length' "$RENAMES_FILE" 2>/dev/null || echo "0")
-    APPLIED=0
-    SKIPPED=0
-
-    # Process column renames
-    while IFS= read -r entry; do
-        table=$(echo "$entry" | jq -r '.table')
-        col_from=$(echo "$entry" | jq -r '.column.from')
-        col_to=$(echo "$entry" | jq -r '.column.to')
-        pr=$(echo "$entry" | jq -r '.pr // "unknown"')
-
-        # Check if the FROM column still exists (use DB_USER for reads)
-        EXISTS=$(psql -U "$DB_USER" -d "$DB_NAME" -tAc \
-            "SELECT COUNT(*) FROM information_schema.columns
-             WHERE table_schema = 'public' AND table_name = '$table' AND column_name = '$col_from'" \
-            2>/dev/null | tr -d '[:space:]')
-
-        if [ "${EXISTS:-0}" -eq 1 ]; then
-            # Use superuser for ALTER TABLE DDL
-            if _superuser_psql "$DB_NAME" -c \
-                "ALTER TABLE \"$table\" RENAME COLUMN \"$col_from\" TO \"$col_to\";" >/dev/null 2>&1; then
-                echo -e "  ${CHECK_MARK} Renamed $table.$col_from → $col_to ($pr)"
-                APPLIED=$((APPLIED + 1))
-            else
-                echo -e "  ${CROSS_MARK} Failed to rename $table.$col_from → $col_to"
-                SCHEMA_DIFF_SKIPPED=1
-            fi
-        else
-            echo -e "  ${INFO} $table.$col_from already renamed (skipping)"
-            SKIPPED=$((SKIPPED + 1))
-        fi
-    done < <(jq -c '.renames[] | select(.column.from? != null)' "$RENAMES_FILE" 2>/dev/null)
-
-    # Process table renames
-    while IFS= read -r entry; do
-        tbl_from=$(echo "$entry" | jq -r '.table.from')
-        tbl_to=$(echo "$entry" | jq -r '.table.to')
-        pr=$(echo "$entry" | jq -r '.pr // "unknown"')
-
-        EXISTS=$(psql -U "$DB_USER" -d "$DB_NAME" -tAc \
-            "SELECT COUNT(*) FROM information_schema.tables
-             WHERE table_schema = 'public' AND table_name = '$tbl_from'" \
-            2>/dev/null | tr -d '[:space:]')
-
-        if [ "${EXISTS:-0}" -eq 1 ]; then
-            # Use superuser for ALTER TABLE DDL
-            if _superuser_psql "$DB_NAME" -c \
-                "ALTER TABLE \"$tbl_from\" RENAME TO \"$tbl_to\";" >/dev/null 2>&1; then
-                echo -e "  ${CHECK_MARK} Renamed table $tbl_from → $tbl_to ($pr)"
-                APPLIED=$((APPLIED + 1))
-            else
-                echo -e "  ${CROSS_MARK} Failed to rename table $tbl_from → $tbl_to"
-                SCHEMA_DIFF_SKIPPED=1
-            fi
-        else
-            echo -e "  ${INFO} Table $tbl_from already renamed (skipping)"
-            SKIPPED=$((SKIPPED + 1))
-        fi
-    done < <(jq -c '.renames[] | select(.table | type == "object")' "$RENAMES_FILE" 2>/dev/null)
-
-    echo -e "  ${INFO} Renames: $APPLIED applied, $SKIPPED skipped"
-else
-    echo -e "  ${INFO} No renames.json found — skipping Step 1.5"
-fi
-
-# Peer-shadowed relation detection must run before pgschema plans; it queries
-# the target DB to find foreign tables/views that shadow tables declared by
-# schema.sql. On failure the installer fails closed and skips the apply stage.
-PEER_SHADOWED_NAMES=()
-PEER_SHADOWED_RELKINDS=()
-PEER_SHADOWED_KINDS=()
-PGSCHEMA_PEER_MODE=0
-PGSCHEMA_IGNORE_BASE="$SCRIPT_DIR/database/.pgschemaignore"
-
-if [ "$SCHEMA_DIFF_SKIPPED" -eq 0 ]; then
-    if ! _resolve_peer_shadowed_relations; then
-        SCHEMA_DIFF_SKIPPED=1
-    fi
-fi
-
-if [ "$SCHEMA_DIFF_SKIPPED" -eq 1 ]; then
-    echo -e "  ${WARNING} Skipping pgschema plan/apply (pre-schema step failed above)"
-else
-    # Build connection args for DDL operations.
-    # #743: _superuser_pgschema authenticates directly as PG_SUPERUSER using
-    # PG_SUPERUSER_PASSWORD (scoped PGPASSWORD env); no peer auth.
-    PGSCHEMA_CONN_ARGS=(
-        "--host" "$PG_SUPERUSER_HOST"
-        "--port" "${PGPORT:-5432}"
-        "--db" "$DB_NAME"
-        "--user" "$PG_SUPERUSER"
-    )
-    PGSCHEMA_PLAN_ARGS=(
-        "--plan-host" "$PG_SUPERUSER_HOST"
-        "--plan-port" "${PGPORT:-5432}"
-        "--plan-db" "$DB_NAME"
-        "--plan-user" "$PG_SUPERUSER"
-    )
-
-    # Use a dedicated non-sticky scratch directory for the plan/reorder/apply
-    # cycle (nova-mind#664). /tmp has the sticky bit (1777), which blocks the
-    # agent user from renaming a file over a file owned by the postgres user.
-    # A fresh mktemp -d directory has no sticky bit and, with mode 777, lets
-    # both the agent user and postgres create and rename files inside it.
-    PGSCHEMA_SCRATCH_DIR=$(mktemp -d /tmp/pgschema-scratch-XXXXXX)
-    TMPDIRS+=("$PGSCHEMA_SCRATCH_DIR")
-    chmod 777 "$PGSCHEMA_SCRATCH_DIR"
-
-    # pgschema discovers .pgschemaignore from cwd, so copy the selected ignore
-    # file into the scratch directory and plan from there. This also fixes the
-    # prior discovery gap where the file lived in database/ but planning ran
-    # from the repo root.
-    # In peer mode, dynamically inject the detected shadowed relations into the
-    # [tables] and [views] sections so pgschema itself ignores them during
-    # planning.  Everything else stays in .pgschemaignore-peer for objects that
-    # cannot be derived from relkind f/v (functions, triggers, etc.).
-    cp "$PGSCHEMA_IGNORE_BASE" "$PGSCHEMA_SCRATCH_DIR/.pgschemaignore"
-    chmod 644 "$PGSCHEMA_SCRATCH_DIR/.pgschemaignore"
-    if [ "${#PEER_SHADOWED_NAMES[@]}" -gt 0 ]; then
-        names_csv=$(IFS=,; echo "${PEER_SHADOWED_NAMES[*]}")
-        relkinds_csv=$(IFS=,; echo "${PEER_SHADOWED_RELKINDS[*]}")
-        "$VENV_PYTHON" "$SCRIPT_DIR/database/inject_peer_shadowed_ignores.py" \
-            --ignore-file "$PGSCHEMA_SCRATCH_DIR/.pgschemaignore" \
-            --names "$names_csv" \
-            --relkinds "$relkinds_csv"
-    fi
-    pushd "$PGSCHEMA_SCRATCH_DIR" >/dev/null || exit 1
-
-    # PLAN_FILE is written by pgschema running as the superuser, so do not
-    # pre-create it; let the superuser create the inode fresh.
-    PLAN_FILE="$PGSCHEMA_SCRATCH_DIR/plan.json"
-
-    # Copy schema file into the scratch dir so the superuser process can read it
-    # (the agent's home directory may not be traversable by the superuser unix user)
-    SCHEMA_FILE_TMP=$(mktemp "$PGSCHEMA_SCRATCH_DIR/schema-XXXXXX.sql")
-    cp "$SCHEMA_FILE" "$SCHEMA_FILE_TMP"
-    chmod 644 "$SCHEMA_FILE_TMP"
-
-    echo "  Running pgschema plan (as superuser $PG_SUPERUSER)..."
-    PLAN_EXIT=0
-    _superuser_pgschema plan \
-        "${PGSCHEMA_CONN_ARGS[@]}" \
-        --schema public \
-        --file "$SCHEMA_FILE_TMP" \
-        "${PGSCHEMA_PLAN_ARGS[@]}" \
-        --output-json "$PLAN_FILE" \
-        --no-color 2>&1 || PLAN_EXIT=$?
-
-    if [ $PLAN_EXIT -ne 0 ]; then
-        echo -e "  ${CROSS_MARK} pgschema plan failed (exit $PLAN_EXIT) — schema apply skipped"
-        SCHEMA_DIFF_SKIPPED=1
-    else
-        # REORDERED_PLAN_FILE is written by plan_reorder.py (agent user) and
-        # then moved over the superuser-owned plan file, so keep it in the
-        # scratch directory with no sticky bit.
-        REORDERED_PLAN_FILE="$PGSCHEMA_SCRATCH_DIR/reordered.json"
-        echo "  Reordering plan by dependencies..."
-        REORDER_EXIT=0
-        "$VENV_PYTHON" "$SCRIPT_DIR/database/plan_reorder.py" \
-            --plan "$PLAN_FILE" \
-            --output "$REORDERED_PLAN_FILE" 2>&1 || REORDER_EXIT=$?
-        DO_APPLY=1
-        if [ $REORDER_EXIT -eq 0 ]; then
-            mv "$REORDERED_PLAN_FILE" "$PLAN_FILE"
-            echo -e "  ${CHECK_MARK} Plan reordered by dependencies"
-        else
-            echo -e "  ${CROSS_MARK} Plan reorder failed (exit $REORDER_EXIT) — schema apply skipped"
-            SCHEMA_DIFF_SKIPPED=1
-            DO_APPLY=0
-        fi
-
-        if [ "$DO_APPLY" -eq 1 ]; then
-            # Strip all destructive (DROP) operations from the plan.
-            # Additive-by-construction: unknown/local tables live untouched;
-            # only CREATE/ALTER ADD/etc. steps are applied (#498).
-            FILTERED_PLAN_FILE="$PGSCHEMA_SCRATCH_DIR/filtered.json"
-            echo "  Stripping destructive operations from plan..."
-            STRIP_EXIT=0
-            STRIP_ARGS=(
-                --plan "$PLAN_FILE"
-                --output "$FILTERED_PLAN_FILE"
-            )
-            if [ "$PGSCHEMA_PEER_MODE" -eq 1 ]; then
-                # Peer-shadowed relations (VIEW / foreign table + sequence +
-                # triggers + privileges + comments + constraints + indexes) are
-                # owned by the FDW setup (#520), not schema.sql. Strip every plan
-                # step that refers to them (#608 / #1231).
-                ignored_csv=$(IFS=,; echo "${PEER_SHADOWED_NAMES[*]}")
-                STRIP_ARGS+=(--ignore-objects "$ignored_csv" --log-exclusions)
-            fi
-            DESTRUCTIVE_COUNT=$("$VENV_PYTHON" "$SCRIPT_DIR/database/strip_destructive.py" "${STRIP_ARGS[@]}" 2>&1) || STRIP_EXIT=$?
-
-            if [ $STRIP_EXIT -ne 0 ]; then
-                echo -e "  ${CROSS_MARK} Failed to strip destructive operations from plan"
-                SCHEMA_DIFF_SKIPPED=1
-            else
-                mv "$FILTERED_PLAN_FILE" "$PLAN_FILE"
-                if [ "${DESTRUCTIVE_COUNT:-0}" -gt 0 ] 2>/dev/null; then
-                    echo -e "  ${INFO} Stripped $DESTRUCTIVE_COUNT destructive operation(s) (DROP skipped; #498)"
-                fi
-
-                TOTAL_STEPS=$(jq '[(.groups // [])[] | .steps[] | select(.type != "privilege")] | length' "$PLAN_FILE" 2>/dev/null || echo "0")
-
-                if [ "$TOTAL_STEPS" -eq 0 ] 2>/dev/null; then
-                    echo -e "  ${CHECK_MARK} Schema is up to date — no changes needed"
-                else
-                    echo "  Applying $TOTAL_STEPS schema change(s)..."
-                    APPLY_EXIT=0
-                    _superuser_pgschema apply \
-                        "${PGSCHEMA_CONN_ARGS[@]}" \
-                        --schema public \
-                        --plan "$PLAN_FILE" \
-                        --auto-approve \
-                        --no-color 2>&1 || APPLY_EXIT=$?
-
-                    if [ $APPLY_EXIT -eq 0 ]; then
-                        echo -e "  ${CHECK_MARK} Schema applied successfully"
-                        TABLE_COUNT=$(psql -U "$DB_USER" -d "$DB_NAME" -tAc "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE'" | tr -d '[:space:]')
-                        echo "      Total tables in database: $TABLE_COUNT"
-
-                        # Per-object ownership transfer (#666): pgschema applies as the
-                        # superuser, so new relations are owned by PG_SUPERUSER.
-                        # REASSIGN OWNED BY always fails on required system objects,
-                        # so transfer ownership object-by-object and skip the peer/FDW
-                        # bootstrap stack (foreign tables, FDW-backed views and their
-                        # dependencies).  Derivation is from the catalog, not names.
-                        if [ "$PG_SUPERUSER" != "$DB_USER" ]; then
-                            PROTECTED_SNAPSHOT_FILE=$(mktemp "$PGSCHEMA_SCRATCH_DIR/protected-snapshot-XXXXXX.json")
-                            PROTECTED_PSQL_ERR=$(mktemp "$PGSCHEMA_SCRATCH_DIR/protected-psqlerr-XXXXXX")
-                            TMPFILES+=("$PROTECTED_SNAPSHOT_FILE" "$PROTECTED_PSQL_ERR")
-                            echo "  Capturing protected-object ownership snapshot before transfer..."
-                            if ! "$VENV_PYTHON" "$SCRIPT_DIR/database/grant_reconcile_gate.py" \
-                                    --dbname "$DB_NAME" \
-                                    --db-user "$DB_USER" \
-                                    --superuser "$PG_SUPERUSER" \
-                                    protected-snapshot >"$PROTECTED_SNAPSHOT_FILE" 2>"$PROTECTED_PSQL_ERR"; then
-                                echo -e "  ${CROSS_MARK} Failed to capture protected-object ownership snapshot"
-                                head -20 "$PROTECTED_PSQL_ERR" | sed 's/^/    /'
-                                SCHEMA_DIFF_SKIPPED=1
-                            fi
-                            _transfer_installer_ownership
-                        fi
-
-                        # Post-schema grant reconciliation (#452): pgschema deliberately
-                        # ignores privilege steps, so explicit GRANT/REVOKE lines in
-                        # schema.sql must be applied separately to survive fresh installs.
-                        # Peer-shadowed relations (foreign tables/views managed by the
-                        # peer FDW setup, #520) and their default <name>_id_seq sequences
-                        # do not exist locally, so skip any GRANT/REVOKE that targets them.
-                        echo "  Reconciling explicit schema grants..."
-                        GRANT_ALL_COUNT=$(grep -cE '^[[:space:]]*(GRANT|REVOKE)[[:space:]]+' "$SCHEMA_FILE_TMP" 2>/dev/null || echo 0)
-                        if [ "$GRANT_ALL_COUNT" -gt 0 ] 2>/dev/null; then
-                            GRANT_EXTRACT_FILE=$(mktemp "$PGSCHEMA_SCRATCH_DIR/grants-extract-XXXXXX.sql")
-                            GRANT_FILTERED_FILE=$(mktemp "$PGSCHEMA_SCRATCH_DIR/grants-filtered-XXXXXX.sql")
-                            TMPFILES+=("$GRANT_EXTRACT_FILE" "$GRANT_FILTERED_FILE")
-                            grep -E '^[[:space:]]*(GRANT|REVOKE)[[:space:]]+' "$SCHEMA_FILE_TMP" >"$GRANT_EXTRACT_FILE"
-                            GRANT_FILTER_ARGS=()
-                            if [ "${#PEER_SHADOWED_NAMES[@]}" -gt 0 ]; then
-                                shadowed_csv=$(IFS=,; echo "${PEER_SHADOWED_NAMES[*]}")
-                                GRANT_FILTER_ARGS+=(--shadowed-names "$shadowed_csv")
-                            fi
-                            GRANT_FILTER_ARGS+=(--dbname "$DB_NAME" --db-user "$DB_USER")
-                            if "$VENV_PYTHON" "$SCRIPT_DIR/database/filter_shadowed_grants.py" "${GRANT_FILTER_ARGS[@]}" <"$GRANT_EXTRACT_FILE" >"$GRANT_FILTERED_FILE" 2>"$GRANT_FILTERED_FILE.stderr"; then
-                                if [ -s "$GRANT_FILTERED_FILE.stderr" ]; then
-                                    while IFS= read -r line; do
-                                        echo -e "  ${INFO} $line"
-                                    done < "$GRANT_FILTERED_FILE.stderr"
-                                fi
-                                GRANT_COUNT=$(grep -cE '^[[:space:]]*(GRANT|REVOKE)[[:space:]]+' "$GRANT_FILTERED_FILE" 2>/dev/null || echo 0)
-                                if [ "$GRANT_COUNT" -gt 0 ] 2>/dev/null; then
-                                    GRANT_PSQL_ERR=$(mktemp "$PGSCHEMA_SCRATCH_DIR/grants-psqlerr-XXXXXX")
-                                    GRANT_SNAPSHOT_FILE=$(mktemp "$PGSCHEMA_SCRATCH_DIR/grants-snapshot-XXXXXX.json")
-                                    TMPFILES+=("$GRANT_PSQL_ERR" "$GRANT_SNAPSHOT_FILE")
-                                    echo "  Capturing DB_USER privilege snapshot before reconciliation..."
-                                    if ! "$VENV_PYTHON" "$SCRIPT_DIR/database/grant_reconcile_gate.py" --dbname "$DB_NAME" --db-user "$DB_USER" snapshot >"$GRANT_SNAPSHOT_FILE" 2>"$GRANT_PSQL_ERR"; then
-                                        echo -e "  ${CROSS_MARK} Failed to capture privilege snapshot"
-                                        head -20 "$GRANT_PSQL_ERR" | sed 's/^/    /'
-                                        SCHEMA_DIFF_SKIPPED=1
-                                    else
-                                        if _superuser_psql "$DB_NAME" -v ON_ERROR_STOP=1 -f - <"$GRANT_FILTERED_FILE" >/dev/null 2>"$GRANT_PSQL_ERR"; then
-                                            echo -e "  ${CHECK_MARK} Applied $GRANT_COUNT explicit grant/revoke statement(s)"
-                                            echo "  Verifying DB_USER privileges after reconciliation..."
-                                            if "$VENV_PYTHON" "$SCRIPT_DIR/database/grant_reconcile_gate.py" --dbname "$DB_NAME" --db-user "$DB_USER" verify "$GRANT_SNAPSHOT_FILE" 2>"$GRANT_PSQL_ERR"; then
-                                                echo -e "  ${CHECK_MARK} DB_USER privilege gate passed"
-                                                echo "  Running absolute DB_USER privilege check..."
-                                                PROTECTED_CHECK_ARGS=()
-                                                if [ -n "${PROTECTED_SNAPSHOT_FILE:-}" ] && [ -s "$PROTECTED_SNAPSHOT_FILE" ]; then
-                                                    PROTECTED_CHECK_ARGS+=(--protected-snapshot "$PROTECTED_SNAPSHOT_FILE")
-                                                fi
-                                                if "$VENV_PYTHON" "$SCRIPT_DIR/database/grant_reconcile_gate.py" --dbname "$DB_NAME" --db-user "$DB_USER" --superuser "$PG_SUPERUSER" check "${PROTECTED_CHECK_ARGS[@]}" 2>"$GRANT_PSQL_ERR"; then
-                                                    echo -e "  ${CHECK_MARK} Absolute DB_USER privilege check passed"
-                                                else
-                                                    echo -e "  ${CROSS_MARK} Absolute DB_USER privilege check failed"
-                                                    head -40 "$GRANT_PSQL_ERR" | sed 's/^/    /'
-                                                    SCHEMA_DIFF_SKIPPED=1
-                                                fi
-                                            else
-                                                echo -e "  ${CROSS_MARK} DB_USER privilege gate failed"
-                                                head -40 "$GRANT_PSQL_ERR" | sed 's/^/    /'
-                                                SCHEMA_DIFF_SKIPPED=1
-                                            fi
-                                        else
-                                            echo -e "  ${CROSS_MARK} Grant reconciliation failed"
-                                            if [ -s "$GRANT_PSQL_ERR" ]; then
-                                                echo "  psql errors (first ~20 lines):"
-                                                head -20 "$GRANT_PSQL_ERR" | sed 's/^/    /'
-                                            fi
-                                            SCHEMA_DIFF_SKIPPED=1
-                                        fi
-                                    fi
-                                else
-                                    echo -e "  ${INFO} No explicit grant/revoke statements remain after filtering"
-                                fi
-                            else
-                                echo -e "  ${CROSS_MARK} Failed to filter grant statements"
-                                SCHEMA_DIFF_SKIPPED=1
-                            fi
-                        else
-                            echo -e "  ${INFO} No explicit grant/revoke statements found"
-                        fi
-                    else
-                        echo -e "  ${CROSS_MARK} Schema apply failed (exit $APPLY_EXIT)"
-                        SCHEMA_DIFF_SKIPPED=1
-                    fi
-                fi
-            fi
-        fi
-    fi
-
-    popd >/dev/null || true
-    rm -f "$PLAN_FILE"
-fi
-
-# --- Schema apply exit-code gate (#597 / #498) ---
-if [ "$SCHEMA_DIFF_SKIPPED" -eq 1 ]; then
-    echo ""
-    echo -e "  ${CROSS_MARK} Schema apply stage failed — installation aborting"
-    exit 1
-fi
-fi # end SKIP_SUPERUSER_PHASE
+_run_schema_management
 
 # --- Memory hooks ---
 echo ""

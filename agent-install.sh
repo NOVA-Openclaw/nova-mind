@@ -1126,6 +1126,49 @@ _superuser_pgschema() {
     fi
 }
 
+# Transfer ownership of installer-created objects from PG_SUPERUSER to DB_USER.
+# Uses database/fix_installer_ownership.py to derive the list from the catalog
+# and skips the peer/FDW bootstrap stack (#666).
+_transfer_installer_ownership() {
+    echo "  Transferring ownership of installer-created objects to '$DB_USER'..."
+    local ownership_sql_file ownership_err ownership_count
+    ownership_sql_file=$(mktemp "$PGSCHEMA_SCRATCH_DIR/ownership-XXXXXX.sql")
+    ownership_err=$(mktemp "$PGSCHEMA_SCRATCH_DIR/ownership-err-XXXXXX")
+    TMPFILES+=("$ownership_sql_file" "$ownership_err")
+    if "$VENV_PYTHON" "$SCRIPT_DIR/database/fix_installer_ownership.py" \
+            --dbname "$DB_NAME" \
+            --db-user "$DB_USER" \
+            --superuser "$PG_SUPERUSER" \
+            plan >"$ownership_sql_file" 2>"$ownership_err"; then
+        if [ -s "$ownership_err" ]; then
+            while IFS= read -r line; do
+                echo -e "  ${INFO} $line"
+            done < "$ownership_err"
+        fi
+        ownership_count=$(grep -cE '^[[:space:]]*ALTER[[:space:]]+' "$ownership_sql_file" 2>/dev/null || echo 0)
+        if [ "$ownership_count" -gt 0 ] 2>/dev/null; then
+            if _superuser_psql "$DB_NAME" -v ON_ERROR_STOP=1 -f "$ownership_sql_file" >/dev/null 2>"$ownership_err"; then
+                echo -e "  ${CHECK_MARK} Ownership transferred for $ownership_count object(s)"
+            else
+                echo -e "  ${CROSS_MARK} Ownership transfer failed"
+                if [ -s "$ownership_err" ]; then
+                    echo "  psql errors (first ~20 lines):"
+                    head -20 "$ownership_err" | sed 's/^/    /'
+                fi
+                SCHEMA_DIFF_SKIPPED=1
+            fi
+        else
+            echo -e "  ${INFO} No installer-created objects need ownership transfer"
+        fi
+    else
+        echo -e "  ${CROSS_MARK} Failed to plan ownership transfer"
+        if [ -s "$ownership_err" ]; then
+            head -20 "$ownership_err" | sed 's/^/    /'
+        fi
+        SCHEMA_DIFF_SKIPPED=1
+    fi
+}
+
 # Ensure a ~/.pgpass entry exists for a given connection.
 # Removes any existing entry with the same host:port:database:user prefix
 # and appends the current password, so re-runs are idempotent and password
@@ -2549,14 +2592,14 @@ else
                         TABLE_COUNT=$(psql -U "$DB_USER" -d "$DB_NAME" -tAc "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE'" | tr -d '[:space:]')
                         echo "      Total tables in database: $TABLE_COUNT"
 
-                        # Reassign ownership of all objects to the agent user
+                        # Per-object ownership transfer (#666): pgschema applies as the
+                        # superuser, so new relations are owned by PG_SUPERUSER.
+                        # REASSIGN OWNED BY always fails on required system objects,
+                        # so transfer ownership object-by-object and skip the peer/FDW
+                        # bootstrap stack (foreign tables, FDW-backed views and their
+                        # dependencies).  Derivation is from the catalog, not names.
                         if [ "$PG_SUPERUSER" != "$DB_USER" ]; then
-                            echo "  Reassigning ownership to '$DB_USER'..."
-                            if _superuser_psql "$DB_NAME" -c "REASSIGN OWNED BY \"$PG_SUPERUSER\" TO \"$DB_USER\";" >/dev/null 2>&1; then
-                                echo -e "  ${CHECK_MARK} Ownership reassigned to '$DB_USER'"
-                            else
-                                echo -e "  ${WARNING} Could not reassign ownership (objects may be owned by $PG_SUPERUSER)"
-                            fi
+                            _transfer_installer_ownership
                         fi
 
                         # Post-schema grant reconciliation (#452): pgschema deliberately
@@ -2600,6 +2643,14 @@ else
                                             echo "  Verifying DB_USER privileges after reconciliation..."
                                             if "$VENV_PYTHON" "$SCRIPT_DIR/database/grant_reconcile_gate.py" --dbname "$DB_NAME" --db-user "$DB_USER" verify "$GRANT_SNAPSHOT_FILE" 2>"$GRANT_PSQL_ERR"; then
                                                 echo -e "  ${CHECK_MARK} DB_USER privilege gate passed"
+                                                echo "  Running absolute DB_USER privilege check..."
+                                                if "$VENV_PYTHON" "$SCRIPT_DIR/database/grant_reconcile_gate.py" --dbname "$DB_NAME" --db-user "$DB_USER" --superuser "$PG_SUPERUSER" check 2>"$GRANT_PSQL_ERR"; then
+                                                    echo -e "  ${CHECK_MARK} Absolute DB_USER privilege check passed"
+                                                else
+                                                    echo -e "  ${CROSS_MARK} Absolute DB_USER privilege check failed"
+                                                    head -40 "$GRANT_PSQL_ERR" | sed 's/^/    /'
+                                                    SCHEMA_DIFF_SKIPPED=1
+                                                fi
                                             else
                                                 echo -e "  ${CROSS_MARK} DB_USER privilege gate failed"
                                                 head -40 "$GRANT_PSQL_ERR" | sed 's/^/    /'

@@ -8,7 +8,7 @@ superuser owns system objects, so the installer must transfer ownership
 object-by-object.
 
 This helper derives the transfer list from the catalog, excluding the
-peer/FDW bootstrap stack and SOUL-protection objects:
+peer/FDW bootstrap stack and SOUL/bootstrap-protection objects:
 
 * all FOREIGN TABLEs in ``public``
 * VIEWs that reference a foreign table
@@ -17,6 +17,11 @@ peer/FDW bootstrap stack and SOUL-protection objects:
 * event triggers and their functions
 * relations/functions named ``soul_protect%`` / ``audit_soul_protect%``
   and anything they depend on
+* ``bootstrap_context_config`` and its indexes
+* functions named ``protect_%`` or ``%bootstrap%``
+* functions used by triggers on ``agent_bootstrap_context``,
+  ``agent_bootstrap_context_local``, ``bootstrap_context_config`` or any
+  FDW/shadowed relation
 * functions that belong to an extension
 
 Output (``plan`` subcommand):
@@ -105,8 +110,9 @@ def _fdw_excluded_oids(cur) -> Set[int]:
     return {row[0] for row in cur.fetchall()}
 
 
-def _protected_oids(cur) -> Tuple[Set[int], Dict[int, str]]:
-    """Return OIDs of SOUL-protection objects and a reason per OID."""
+def _protected_oids(cur, excluded_oids: Set[int]) -> Tuple[Set[int], Dict[int, str]]:
+    """Return OIDs of SOUL/bootstrap-protection objects and a reason per OID."""
+    excluded_list = list(excluded_oids) if excluded_oids else [0]
     cur.execute(
         """
         WITH RECURSIVE secdef_funcs AS (
@@ -128,8 +134,51 @@ def _protected_oids(cur) -> Tuple[Set[int], Dict[int, str]]:
               FROM pg_class c
               JOIN pg_namespace n ON n.oid = c.relnamespace
              WHERE n.nspname = 'public'
-               AND (c.relname LIKE 'soul_protect%'
-                    OR c.relname LIKE 'audit_soul_protect%')
+               AND (c.relname LIKE %s OR c.relname LIKE %s)
+        ),
+        bootstrap_config_table AS (
+            SELECT c.oid
+              FROM pg_class c
+              JOIN pg_namespace n ON n.oid = c.relnamespace
+             WHERE n.nspname = 'public'
+               AND c.relname = 'bootstrap_context_config'
+        ),
+        bootstrap_config_indexes AS (
+            SELECT i.indexrelid AS oid
+              FROM pg_index i
+              JOIN pg_class c ON c.oid = i.indrelid
+              JOIN pg_namespace n ON n.oid = c.relnamespace
+             WHERE n.nspname = 'public'
+               AND c.relname = 'bootstrap_context_config'
+        ),
+        bootstrap_rel_names AS (
+            SELECT c.oid
+              FROM pg_class c
+              JOIN pg_namespace n ON n.oid = c.relnamespace
+             WHERE n.nspname = 'public'
+               AND c.relname IN ('agent_bootstrap_context',
+                                 'agent_bootstrap_context_local',
+                                 'bootstrap_context_config')
+        ),
+        excluded_rels AS (
+            SELECT oid FROM bootstrap_rel_names
+            UNION
+            SELECT unnest(%s::oid[])
+        ),
+        bootstrap_trigger_funcs AS (
+            SELECT DISTINCT p.oid
+              FROM pg_proc p
+              JOIN pg_trigger t ON t.tgfoid = p.oid
+              JOIN pg_namespace n ON n.oid = p.pronamespace
+             WHERE n.nspname = 'public'
+               AND t.tgrelid IN (SELECT oid FROM excluded_rels)
+        ),
+        named_funcs AS (
+            SELECT p.oid
+              FROM pg_proc p
+              JOIN pg_namespace n ON n.oid = p.pronamespace
+             WHERE n.nspname = 'public'
+               AND (p.proname LIKE %s OR p.proname LIKE %s)
         ),
         seeds AS (
             SELECT oid, 'pg_proc'::regclass AS classid,
@@ -143,12 +192,28 @@ def _protected_oids(cur) -> Tuple[Set[int], Dict[int, str]]:
             SELECT oid, 'pg_class'::regclass,
                    'SOUL-protection named object'::text
               FROM soul_rels
+            UNION ALL
+            SELECT oid, 'pg_class'::regclass,
+                   'bootstrap_context_config table or index'::text
+              FROM bootstrap_config_table
+            UNION ALL
+            SELECT oid, 'pg_class'::regclass,
+                   'bootstrap_context_config table or index'::text
+              FROM bootstrap_config_indexes
+            UNION ALL
+            SELECT oid, 'pg_proc'::regclass,
+                   'trigger on bootstrap or FDW/shadowed relation'::text
+              FROM bootstrap_trigger_funcs
+            UNION ALL
+            SELECT oid, 'pg_proc'::regclass,
+                   'protect/bootstrap named function'::text
+              FROM named_funcs
         ),
         rec AS (
             SELECT * FROM seeds
             UNION
             SELECT d.refobjid, d.refclassid,
-                   'dependency of SOUL-protection event trigger or SECURITY DEFINER function'::text
+                   'dependency of SOUL/bootstrap-protection object'::text
               FROM pg_depend d
               JOIN rec r ON r.oid = d.objid AND r.classid = d.classid
              WHERE d.deptype IN ('n', 'a', 'f')
@@ -167,13 +232,21 @@ def _protected_oids(cur) -> Tuple[Set[int], Dict[int, str]]:
                )
         )
         SELECT oid, classid, reason FROM rec
-        """
+        """,
+        (
+            'soul_protect%',
+            'audit_soul_protect%',
+            excluded_list,
+            'protect\\_%',
+            '%bootstrap%',
+        ),
+
     )
     protected: Set[int] = set()
     reasons: Dict[int, str] = {}
     for oid, _classid, reason in cur.fetchall():
         protected.add(oid)
-        if oid not in reasons or reason != 'dependency of SOUL-protection event trigger or SECURITY DEFINER function':
+        if oid not in reasons or reason != 'dependency of SOUL/bootstrap-protection object':
             reasons[oid] = reason
     return protected, reasons
 
@@ -323,7 +396,7 @@ def _generate_sql(
                     f"target role '{db_user}' does not exist in database '{dbname}'"
                 )
             excluded_oids = _fdw_excluded_oids(cur)
-            protected_oids, reasons = _protected_oids(cur)
+            protected_oids, reasons = _protected_oids(cur, excluded_oids)
             rels, rel_log = _relations_to_transfer(
                 cur, superuser, excluded_oids, protected_oids, reasons
             )

@@ -2599,6 +2599,19 @@ else
                         # bootstrap stack (foreign tables, FDW-backed views and their
                         # dependencies).  Derivation is from the catalog, not names.
                         if [ "$PG_SUPERUSER" != "$DB_USER" ]; then
+                            PROTECTED_SNAPSHOT_FILE=$(mktemp "$PGSCHEMA_SCRATCH_DIR/protected-snapshot-XXXXXX.json")
+                            PROTECTED_PSQL_ERR=$(mktemp "$PGSCHEMA_SCRATCH_DIR/protected-psqlerr-XXXXXX")
+                            TMPFILES+=("$PROTECTED_SNAPSHOT_FILE" "$PROTECTED_PSQL_ERR")
+                            echo "  Capturing protected-object ownership snapshot before transfer..."
+                            if ! "$VENV_PYTHON" "$SCRIPT_DIR/database/grant_reconcile_gate.py" \
+                                    --dbname "$DB_NAME" \
+                                    --db-user "$DB_USER" \
+                                    --superuser "$PG_SUPERUSER" \
+                                    protected-snapshot >"$PROTECTED_SNAPSHOT_FILE" 2>"$PROTECTED_PSQL_ERR"; then
+                                echo -e "  ${CROSS_MARK} Failed to capture protected-object ownership snapshot"
+                                head -20 "$PROTECTED_PSQL_ERR" | sed 's/^/    /'
+                                SCHEMA_DIFF_SKIPPED=1
+                            fi
                             _transfer_installer_ownership
                         fi
 
@@ -2644,7 +2657,11 @@ else
                                             if "$VENV_PYTHON" "$SCRIPT_DIR/database/grant_reconcile_gate.py" --dbname "$DB_NAME" --db-user "$DB_USER" verify "$GRANT_SNAPSHOT_FILE" 2>"$GRANT_PSQL_ERR"; then
                                                 echo -e "  ${CHECK_MARK} DB_USER privilege gate passed"
                                                 echo "  Running absolute DB_USER privilege check..."
-                                                if "$VENV_PYTHON" "$SCRIPT_DIR/database/grant_reconcile_gate.py" --dbname "$DB_NAME" --db-user "$DB_USER" --superuser "$PG_SUPERUSER" check 2>"$GRANT_PSQL_ERR"; then
+                                                PROTECTED_CHECK_ARGS=()
+                                                if [ -n "${PROTECTED_SNAPSHOT_FILE:-}" ] && [ -s "$PROTECTED_SNAPSHOT_FILE" ]; then
+                                                    PROTECTED_CHECK_ARGS+=(--protected-snapshot "$PROTECTED_SNAPSHOT_FILE")
+                                                fi
+                                                if "$VENV_PYTHON" "$SCRIPT_DIR/database/grant_reconcile_gate.py" --dbname "$DB_NAME" --db-user "$DB_USER" --superuser "$PG_SUPERUSER" check "${PROTECTED_CHECK_ARGS[@]}" 2>"$GRANT_PSQL_ERR"; then
                                                     echo -e "  ${CHECK_MARK} Absolute DB_USER privilege check passed"
                                                 else
                                                     echo -e "  ${CROSS_MARK} Absolute DB_USER privilege check failed"

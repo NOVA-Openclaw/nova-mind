@@ -103,6 +103,21 @@ _run_gate_check() {
     python3 "$GATE" --dbname "$DB" --db-user "$DB_USER" --superuser postgres check
 }
 
+# Capture a protected-object ownership snapshot for relative checks.
+_run_protected_snapshot() {
+    local DB="$1"
+    local DB_USER="$2"
+    python3 "$GATE" --dbname "$DB" --db-user "$DB_USER" --superuser postgres protected-snapshot
+}
+
+# Run the gate "check" with a protected-owner snapshot (relative ownership check).
+_run_gate_check_with_snapshot() {
+    local DB="$1"
+    local DB_USER="$2"
+    local SNAP="$3"
+    python3 "$GATE" --dbname "$DB" --db-user "$DB_USER" --superuser postgres check --protected-snapshot "$SNAP"
+}
+
 @test "TC-666a: postgres-created table is transferred to DB_USER and accessible" {
     if ! _pg_available; then skip "PostgreSQL not available"; fi
 
@@ -413,6 +428,135 @@ SQL
     [ "$status" -ne 0 ]
     [[ "$output" == *"secdef_fixture_fn"* ]]
     [[ "$output" == *"protected"* ]]
+
+    _drop_test_db "$DB"
+    _drop_test_user "$DB_USER"
+}
+
+# Seed a table and a trigger on it that mimics the bootstrap-context pattern.
+_seed_bootstrap_trigger_fixture() {
+    local DB="$1"
+    psql -U nova -d "$DB" -v ON_ERROR_STOP=1 <<'SQL' >/dev/null
+SET ROLE postgres;
+CREATE TABLE bootstrap_context_fixture (id serial PRIMARY KEY, payload text);
+CREATE FUNCTION bootstrap_fixture_trigger_fn() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN RETURN NEW; END;
+$$;
+CREATE TRIGGER bootstrap_fixture_trg
+    BEFORE INSERT ON bootstrap_context_fixture
+    FOR EACH ROW EXECUTE FUNCTION bootstrap_fixture_trigger_fn();
+SQL
+}
+
+@test "TC-666i: trigger function on a bootstrap-named table is NOT transferred" {
+    if ! _pg_available; then skip "PostgreSQL not available"; fi
+
+    DB=$(_make_test_db)
+    DB_USER=$(_create_test_user)
+    psql -U nova -d "$DB" -c "GRANT CONNECT ON DATABASE \"$DB\" TO \"$DB_USER\";" >/dev/null
+    _seed_bootstrap_trigger_fixture "$DB"
+
+    _run_ownership_transfer "$DB" "$DB_USER"
+
+    run psql -U nova -d "$DB" -tAc "SELECT pg_get_userbyid(proowner) FROM pg_proc WHERE proname='bootstrap_fixture_trigger_fn'"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"postgres"* ]]
+
+    _drop_test_db "$DB"
+    _drop_test_user "$DB_USER"
+}
+
+@test "TC-666i-mut: without bootstrap-trigger exclusion the function would transfer" {
+    if ! _pg_available; then skip "PostgreSQL not available"; fi
+
+    DB=$(_make_test_db)
+    DB_USER=$(_create_test_user)
+    _seed_bootstrap_trigger_fixture "$DB"
+
+    run python3 - "$DB" "$DB_USER" <<PY
+import sys
+sys.path.insert(0, '$REPO_ROOT/database')
+import fix_installer_ownership
+fix_installer_ownership._protected_oids = lambda cur, excluded: (set(), {})
+sql, _ = fix_installer_ownership._generate_sql('$DB', '$DB_USER', 'postgres', 'nova')
+for stmt in sql:
+    if 'bootstrap_fixture_trigger_fn' in stmt:
+        print(stmt)
+PY
+    [ "$status" -eq 0 ]
+    [ -n "$output" ]
+
+    _drop_test_db "$DB"
+    _drop_test_user "$DB_USER"
+}
+
+@test "TC-666j: relative protected-owner gate warns on pre-existing drift but passes" {
+    if ! _pg_available; then skip "PostgreSQL not available"; fi
+
+    DB=$(_make_test_db)
+    DB_USER=$(_create_test_user)
+    psql -U nova -d "$DB" -c "GRANT CONNECT ON DATABASE \"$DB\" TO \"$DB_USER\";" >/dev/null
+    _seed_secdef_fixture "$DB"
+    # Pre-existing drift: SECURITY DEFINER function already owned by DB_USER.
+    psql -U nova -d "$DB" -c "SET ROLE postgres; ALTER FUNCTION secdef_fixture_fn() OWNER TO \"$DB_USER\";" >/dev/null
+
+    SNAP=$(mktemp)
+    _run_protected_snapshot "$DB" "$DB_USER" >"$SNAP"
+    run _run_gate_check_with_snapshot "$DB" "$DB_USER" "$SNAP"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"WARNING"* ]]
+    [[ "$output" == *"secdef_fixture_fn"* ]]
+    rm -f "$SNAP"
+
+    _drop_test_db "$DB"
+    _drop_test_user "$DB_USER"
+}
+
+@test "TC-666j-mut: relative protected-owner gate fails when owner changes" {
+    if ! _pg_available; then skip "PostgreSQL not available"; fi
+
+    DB=$(_make_test_db)
+    DB_USER=$(_create_test_user)
+    psql -U nova -d "$DB" -c "GRANT CONNECT ON DATABASE \"$DB\" TO \"$DB_USER\";" >/dev/null
+    _seed_secdef_fixture "$DB"
+
+    SNAP=$(mktemp)
+    _run_protected_snapshot "$DB" "$DB_USER" >"$SNAP"
+
+    # Simulate a buggy transfer changing the protected object's owner.
+    psql -U nova -d "$DB" -c "SET ROLE postgres; ALTER FUNCTION secdef_fixture_fn() OWNER TO \"$DB_USER\";" >/dev/null
+
+    run _run_gate_check_with_snapshot "$DB" "$DB_USER" "$SNAP"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"secdef_fixture_fn"* ]]
+    [[ "$output" == *"changed"* ]]
+    rm -f "$SNAP"
+
+    _drop_test_db "$DB"
+    _drop_test_user "$DB_USER"
+}
+
+@test "TC-666k: staging ordering — absolute privilege check passes only after transfer" {
+    if ! _pg_available; then skip "PostgreSQL not available"; fi
+
+    DB=$(_make_test_db)
+    DB_USER=$(_create_test_user)
+    psql -U nova -d "$DB" -c "GRANT CONNECT ON DATABASE \"$DB\" TO \"$DB_USER\";" >/dev/null
+    _seed_postgres_table "$DB"
+
+    # Before transfer: absolute privilege check fails.
+    run _run_gate_check "$DB" "$DB_USER"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"installer_created_table"* ]]
+
+    _run_ownership_transfer "$DB" "$DB_USER"
+
+    # After transfer: absolute privilege check passes (relative ownership gate too).
+    SNAP=$(mktemp)
+    _run_protected_snapshot "$DB" "$DB_USER" >"$SNAP"
+    run _run_gate_check_with_snapshot "$DB" "$DB_USER" "$SNAP"
+    [ "$status" -eq 0 ]
+    rm -f "$SNAP"
 
     _drop_test_db "$DB"
     _drop_test_user "$DB_USER"

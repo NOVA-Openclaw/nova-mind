@@ -306,6 +306,118 @@ PY
     _drop_test_user "$DB_USER"
 }
 
+# Seed a SECURITY DEFINER function owned by postgres.
+_seed_secdef_fixture() {
+    local DB="$1"
+    psql -U nova -d "$DB" -v ON_ERROR_STOP=1 <<'SQL' >/dev/null
+SET ROLE postgres;
+CREATE FUNCTION secdef_fixture_fn() RETURNS int
+    LANGUAGE sql SECURITY DEFINER AS $$ SELECT 1 $$;
+SQL
+}
+
+# Seed an event trigger and its function, both owned by postgres.
+_seed_event_trigger_fixture() {
+    local DB="$1"
+    psql -U nova -d "$DB" -v ON_ERROR_STOP=1 <<'SQL' >/dev/null
+SET ROLE postgres;
+CREATE FUNCTION evt_trigger_fixture_fn() RETURNS event_trigger
+    LANGUAGE plpgsql AS $$ BEGIN END; $$;
+CREATE EVENT TRIGGER test_fixture_ev
+    ON sql_drop EXECUTE FUNCTION evt_trigger_fixture_fn();
+SQL
+}
+
+# Seed a SOUL-named audit table and sequence, owned by postgres.
+_seed_soul_fixture() {
+    local DB="$1"
+    psql -U nova -d "$DB" -v ON_ERROR_STOP=1 <<'SQL' >/dev/null
+SET ROLE postgres;
+CREATE TABLE soul_protect_audit (
+    id serial PRIMARY KEY,
+    msg text
+);
+SQL
+}
+
+@test "TC-666e: SECURITY DEFINER function owned by postgres is NOT transferred" {
+    if ! _pg_available; then skip "PostgreSQL not available"; fi
+
+    DB=$(_make_test_db)
+    DB_USER=$(_create_test_user)
+    psql -U nova -d "$DB" -c "GRANT CONNECT ON DATABASE \"$DB\" TO \"$DB_USER\";" >/dev/null
+    _seed_secdef_fixture "$DB"
+
+    _run_ownership_transfer "$DB" "$DB_USER"
+
+    run psql -U nova -d "$DB" -tAc "SELECT pg_get_userbyid(proowner) FROM pg_proc WHERE proname='secdef_fixture_fn'"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"postgres"* ]]
+
+    _drop_test_db "$DB"
+    _drop_test_user "$DB_USER"
+}
+
+@test "TC-666f: event-trigger function is NOT transferred" {
+    if ! _pg_available; then skip "PostgreSQL not available"; fi
+
+    DB=$(_make_test_db)
+    DB_USER=$(_create_test_user)
+    psql -U nova -d "$DB" -c "GRANT CONNECT ON DATABASE \"$DB\" TO \"$DB_USER\";" >/dev/null
+    _seed_event_trigger_fixture "$DB"
+
+    _run_ownership_transfer "$DB" "$DB_USER"
+
+    run psql -U nova -d "$DB" -tAc "SELECT pg_get_userbyid(proowner) FROM pg_proc WHERE proname='evt_trigger_fixture_fn'"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"postgres"* ]]
+
+    run psql -U nova -d "$DB" -tAc "SELECT pg_get_userbyid(evtowner) FROM pg_event_trigger WHERE evtname='test_fixture_ev'"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"postgres"* ]]
+
+    _drop_test_db "$DB"
+    _drop_test_user "$DB_USER"
+}
+
+@test "TC-666g: soul_protect_audit stays postgres-owned" {
+    if ! _pg_available; then skip "PostgreSQL not available"; fi
+
+    DB=$(_make_test_db)
+    DB_USER=$(_create_test_user)
+    psql -U nova -d "$DB" -c "GRANT CONNECT ON DATABASE \"$DB\" TO \"$DB_USER\";" >/dev/null
+    _seed_soul_fixture "$DB"
+
+    _run_ownership_transfer "$DB" "$DB_USER"
+
+    run psql -U nova -d "$DB" -tAc "SELECT c.relname, pg_get_userbyid(c.relowner) FROM pg_class c WHERE c.relname LIKE 'soul_protect%' ORDER BY c.relname"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"soul_protect_audit|postgres"* ]]
+    [[ "$output" == *"soul_protect_audit_id_seq|postgres"* ]]
+    [[ "$output" == *"soul_protect_audit_pkey|postgres"* ]]
+
+    _drop_test_db "$DB"
+    _drop_test_user "$DB_USER"
+}
+
+@test "TC-666h: gate fails when a protected object's owner changed" {
+    if ! _pg_available; then skip "PostgreSQL not available"; fi
+
+    DB=$(_make_test_db)
+    DB_USER=$(_create_test_user)
+    psql -U nova -d "$DB" -c "GRANT CONNECT ON DATABASE \"$DB\" TO \"$DB_USER\";" >/dev/null
+    _seed_secdef_fixture "$DB"
+    psql -U nova -d "$DB" -c "SET ROLE postgres; ALTER FUNCTION secdef_fixture_fn() OWNER TO \"$DB_USER\";" >/dev/null
+
+    run _run_gate_check "$DB" "$DB_USER"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"secdef_fixture_fn"* ]]
+    [[ "$output" == *"protected"* ]]
+
+    _drop_test_db "$DB"
+    _drop_test_user "$DB_USER"
+}
+
 @test "TC-666-shellcheck: new bats file passes shellcheck" {
     if ! command -v shellcheck &>/dev/null; then skip "shellcheck not installed"; fi
     run shellcheck "$BATS_TEST_FILENAME"

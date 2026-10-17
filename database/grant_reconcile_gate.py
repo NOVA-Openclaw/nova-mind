@@ -42,6 +42,9 @@ def _connect(dbname: str):
     return psycopg2.connect(dsn)
 
 
+from fix_installer_ownership import _protected_oids, _check_target_role as _role_exists
+
+
 def _fdw_excluded_oids(cur) -> Set[int]:
     """Return OIDs of the FDW bootstrap view stack that must not be gated.
 
@@ -118,13 +121,16 @@ def _relations_to_check(
     db_user: str,
     superuser: str,
     excluded_oids: Set[int],
+    protected_oids: Set[int],
 ) -> List[Tuple[str, str, str]]:
     """Return (schema, name, relkind) for relations DB_USER must be able to use.
 
     This includes every relation DB_USER owns and every non-excluded relation
-    still owned by the superuser (the run-created fallback set).
+    still owned by the superuser (the run-created fallback set).  Protected
+    SOUL objects are excluded because they must remain superuser-owned.
     """
-    excluded_list = list(excluded_oids) if excluded_oids else [0]
+    skip = excluded_oids | protected_oids
+    skip_list = list(skip) if skip else [0]
     cur.execute(
         """
         SELECT n.nspname, c.relname, c.relkind
@@ -139,15 +145,51 @@ def _relations_to_check(
            )
          ORDER BY n.nspname, c.relkind, c.relname
         """,
-        (db_user, superuser, excluded_list),
+        (db_user, superuser, skip_list),
     )
     return [(row[0], row[1], row[2]) for row in cur.fetchall()]
 
 
+def _protected_ownership(cur, superuser: str) -> List[Tuple[str, str]]:
+    """Return (kind, name) of protected objects not owned by the superuser."""
+    bad: List[Tuple[str, str]] = []
+    protected, _ = _protected_oids(cur)
+    if protected:
+        cur.execute(
+            """
+            SELECT 'relation', n.nspname || '.' || c.relname
+              FROM pg_class c
+              JOIN pg_namespace n ON n.oid = c.relnamespace
+              JOIN pg_roles r ON r.oid = c.relowner
+             WHERE c.oid = ANY(%s)
+               AND r.rolname <> %s
+            UNION ALL
+            SELECT 'function', n.nspname || '.' || p.proname
+              FROM pg_proc p
+              JOIN pg_namespace n ON n.oid = p.pronamespace
+              JOIN pg_roles r ON r.oid = p.proowner
+             WHERE p.oid = ANY(%s)
+               AND r.rolname <> %s
+            UNION ALL
+            SELECT 'event trigger', evtname
+              FROM pg_event_trigger e
+              JOIN pg_roles r ON r.oid = e.evtowner
+             WHERE r.rolname <> %s
+            ORDER BY 1, 2
+            """,
+            (list(protected), superuser, list(protected), superuser, superuser),
+        )
+        bad = [(kind, name) for kind, name in cur.fetchall()]
+    return bad
+
+
 def _check_privileges(cur, db_user: str, superuser: str) -> List[Tuple[str, str, str]]:
     """Return list of (schema, name, privilege) that DB_USER is missing."""
+    if not _role_exists(cur, db_user):
+        return [("", f"role '{db_user}' does not exist", "")]
     excluded_oids = _fdw_excluded_oids(cur)
-    relations = _relations_to_check(cur, db_user, superuser, excluded_oids)
+    protected_oids, _ = _protected_oids(cur)
+    relations = _relations_to_check(cur, db_user, superuser, excluded_oids, protected_oids)
     missing: List[Tuple[str, str, str]] = []
     for schema, name, kind in relations:
         rel = f'"{schema}"."{name}"'
@@ -230,15 +272,27 @@ def _check_cmd(args) -> int:
     try:
         with conn.cursor() as cur:
             missing = _check_privileges(cur, args.db_user, args.superuser)
+            bad_owners = _protected_ownership(cur, args.superuser)
     finally:
         conn.close()
+    failed = False
     if missing:
+        failed = True
         print(
             f"ERROR: DB_USER '{args.db_user}' is missing required privileges:",
             file=sys.stderr,
         )
         for schema, name, priv in missing:
             print(f'  "{schema}"."{name}" {priv}', file=sys.stderr)
+    if bad_owners:
+        failed = True
+        print(
+            "ERROR: protected SOUL object(s) are not owned by the superuser:",
+            file=sys.stderr,
+        )
+        for kind, name in bad_owners:
+            print(f"  [{kind}] {name}", file=sys.stderr)
+    if failed:
         return 1
     print(f"OK: DB_USER '{args.db_user}' has all required privileges", file=sys.stderr)
     return 0

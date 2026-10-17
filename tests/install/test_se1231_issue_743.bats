@@ -734,3 +734,170 @@ EOF
     run shellcheck "$BATS_TEST_FILENAME"
     [ "$status" -eq 0 ]
 }
+
+# ─── chunk 4: ownership check for existing objects when SKIP_SUPERUSER_PHASE=1 ─
+
+_write_ownership_catalog() {
+    cat >"$1" <<'JSON'
+[
+  {"schema": "public", "name": "protect_bootstrap_context_writes_v2", "kind": "function", "owner": "postgres"},
+  {"schema": "public", "name": "test_table", "kind": "table", "owner": "testuser"}
+]
+JSON
+}
+
+_write_postgres_owned_function_plan() {
+    cat >"$1" <<'JSON'
+{
+  "version": "1.0.0",
+  "pgschema_version": "stub",
+  "source_fingerprint": {"hash": "x"},
+  "groups": [
+    {
+      "steps": [
+        {
+          "sql": "CREATE OR REPLACE FUNCTION protect_bootstrap_context_writes_v2() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END; $$;",
+          "type": "function",
+          "operation": "create",
+          "path": "public.protect_bootstrap_context_writes_v2"
+        }
+      ]
+    }
+  ]
+}
+JSON
+}
+
+_write_agent_owned_table_plan() {
+    cat >"$1" <<'JSON'
+{
+  "version": "1.0.0",
+  "pgschema_version": "stub",
+  "source_fingerprint": {"hash": "x"},
+  "groups": [
+    {
+      "steps": [
+        {
+          "sql": "ALTER TABLE test_table ADD COLUMN x integer;",
+          "type": "table",
+          "operation": "alter",
+          "path": "public.test_table"
+        }
+      ]
+    }
+  ]
+}
+JSON
+}
+
+_write_unparseable_step_plan() {
+    cat >"$1" <<'JSON'
+{
+  "version": "1.0.0",
+  "pgschema_version": "stub",
+  "source_fingerprint": {"hash": "x"},
+  "groups": [
+    {
+      "steps": [
+        {
+          "sql": "ALTER THING foo;",
+          "type": "thing",
+          "operation": "alter",
+          "path": "not_a_valid_path"
+        }
+      ]
+    }
+  ]
+}
+JSON
+}
+
+@test "TC-743-050: plan altering postgres-owned function halts and lists owner" {
+    local plan_file catalog
+    plan_file="$(mktemp)"
+    catalog="$(mktemp)"
+    _write_postgres_owned_function_plan "$plan_file"
+    _write_ownership_catalog "$catalog"
+
+    run python3 "$REPO_ROOT/database/plan_check_superuser.py" \
+        --plan "$plan_file" \
+        --catalog-stub "$catalog" \
+        --db-user testuser
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"protect_bootstrap_context_writes_v2"* ]]
+    [[ "$output" == *"postgres"* ]]
+
+    rm -f "$plan_file" "$catalog"
+}
+
+@test "TC-743-051-mut: removing ownership check lets postgres-owned function pass" {
+    local plan_file catalog mutated_script
+    plan_file="$(mktemp)"
+    catalog="$(mktemp)"
+    mutated_script="$(mktemp)"
+    _write_postgres_owned_function_plan "$plan_file"
+    _write_ownership_catalog "$catalog"
+
+    # Mutate a copy of the checker to remove the ownership-resolution block.
+    python3 - <<PY
+import re
+with open("$REPO_ROOT/database/plan_check_superuser.py", "r", encoding="utf-8") as fh:
+    src = fh.read()
+# Replace _check_step's body with regex/create-only checks and no ownership lookup.
+replacement = '''def _check_step(step: dict[str, Any], db_user: str, resolver: Any) -> tuple[str, str | None] | None:
+    regex_reason = _step_requires_superuser(step)
+    if regex_reason:
+        return regex_reason, None
+    if resolver is None:
+        return None
+    if _is_create_only(step):
+        return None
+    return None
+'''
+src = re.sub(r"def _check_step\(.*?\n(?=def |\Z)", replacement, src, count=1, flags=re.S)
+with open("$mutated_script", "w", encoding="utf-8") as fh:
+    fh.write(src)
+PY
+
+    run python3 "$mutated_script" \
+        --plan "$plan_file" \
+        --catalog-stub "$catalog" \
+        --db-user testuser
+    [ "$status" -eq 0 ]
+
+    rm -f "$plan_file" "$catalog" "$mutated_script"
+}
+
+@test "TC-743-052: plan altering agent-owned table proceeds" {
+    local plan_file catalog
+    plan_file="$(mktemp)"
+    catalog="$(mktemp)"
+    _write_agent_owned_table_plan "$plan_file"
+    _write_ownership_catalog "$catalog"
+
+    run python3 "$REPO_ROOT/database/plan_check_superuser.py" \
+        --plan "$plan_file" \
+        --catalog-stub "$catalog" \
+        --db-user testuser
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+
+    rm -f "$plan_file" "$catalog"
+}
+
+@test "TC-743-053: unparseable step halts" {
+    local plan_file catalog
+    plan_file="$(mktemp)"
+    catalog="$(mktemp)"
+    _write_unparseable_step_plan "$plan_file"
+    _write_ownership_catalog "$catalog"
+
+    run python3 "$REPO_ROOT/database/plan_check_superuser.py" \
+        --plan "$plan_file" \
+        --catalog-stub "$catalog" \
+        --db-user testuser
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"unparseable or unresolvable"* ]]
+
+    rm -f "$plan_file" "$catalog"
+}

@@ -1597,12 +1597,17 @@ _run_schema_management() {
                 echo -e "  ${CHECK_MARK} Plan reordered by dependencies"
 
                 # Fail closed: when running as DB_USER, ensure the plan contains no
-                # superuser-only steps before any apply attempt.
+                # superuser-only steps and no existing objects owned by another role.
                 if [ "$SKIP_SUPERUSER_PHASE" -eq 1 ]; then
-                    echo "  Checking plan for superuser-only steps..."
-                    if ! "$VENV_PYTHON" "$SCRIPT_DIR/database/plan_check_superuser.py" --plan "$PLAN_FILE"; then
+                    echo "  Checking plan for superuser-only steps and object ownership..."
+                    if ! "$VENV_PYTHON" "$SCRIPT_DIR/database/plan_check_superuser.py" \
+                            --plan "$PLAN_FILE" \
+                            --host "$PGHOST" \
+                            --port "${PGPORT:-5432}" \
+                            --dbname "$DB_NAME" \
+                            --db-user "$DB_USER"; then
                         echo "" >&2
-                        echo -e "  ${CROSS_MARK} Schema plan contains superuser-only steps" >&2
+                        echo -e "  ${CROSS_MARK} Schema plan contains superuser-only steps or targets objects not owned by $DB_USER" >&2
                         echo "      Provide PG_SUPERUSER_PASSWORD and re-run, or ask a DBA to apply these steps." >&2
                         echo "" >&2
                         echo "      Provide the superuser password via one of:" >&2

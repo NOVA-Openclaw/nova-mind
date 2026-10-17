@@ -167,8 +167,9 @@ def main(argv: list[str] | None = None) -> int:
         objects = _target_objects(line)
         skip_name: str | None = None
         for obj in objects:
-            if obj in shadowed or obj in shadowed_seqs:
-                skip_name = obj
+            # shadowed names/sequences are unqualified; compare the relation name.
+            if obj[1] in shadowed or obj[1] in shadowed_seqs:
+                skip_name = obj[1]
                 break
 
         if skip_name is None and line.lstrip().upper().startswith("REVOKE"):

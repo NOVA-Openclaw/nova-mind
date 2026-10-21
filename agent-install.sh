@@ -1234,6 +1234,7 @@ _run_credential_and_superuser_checks() {
     if ! _check_agent_credentials; then
         _halt_agent_credentials_error
     fi
+    AGENT_CREDENTIALS_VERIFIED=1
     echo -e "  ${CHECK_MARK} Agent credentials verified for '$DB_USER'"
 }
 
@@ -1485,45 +1486,20 @@ _run_schema_management() {
                 mv "$REORDERED_PLAN_FILE" "$PLAN_FILE"
                 echo -e "  ${CHECK_MARK} Plan reordered by dependencies"
 
-                # Fail closed: ensure the plan contains no
-                # superuser-only steps and no existing objects owned by another role.
-                echo "  Checking plan for superuser-only steps and object ownership..."
-                if ! "$VENV_PYTHON" "$SCRIPT_DIR/database/plan_check_superuser.py" \
-                        --plan "$PLAN_FILE" \
-                        --host "$PGHOST" \
-                        --port "${PGPORT:-5432}" \
-                        --dbname "$DB_NAME" \
-                        --db-user "$DB_USER"; then
-                    echo "" >&2
-                    echo -e "  ${CROSS_MARK} Schema plan contains superuser-only steps or targets objects not owned by $DB_USER" >&2
-                    echo "      Ask a DBA to apply these steps as a PostgreSQL superuser." >&2
-                    echo "" >&2
-                    echo "      Provide the superuser password via one of:" >&2
-                    echo "        - Interactive shell-install.sh prompt" >&2
-                    echo "" >&2
-                    echo "      Or ask a DBA to run the prep SQL out of band as a PostgreSQL superuser:" >&2
-                    echo "" >&2
-                    _print_superuser_sql >&2
-                    echo "" >&2
-                    SCHEMA_DIFF_SKIPPED=1
-                    DO_APPLY=0
-                fi
-            else
-                echo -e "  ${CROSS_MARK} Plan reorder failed (exit $REORDER_EXIT) — schema apply skipped"
-                SCHEMA_DIFF_SKIPPED=1
-                DO_APPLY=0
-            fi
-
-            if [ "$DO_APPLY" -eq 1 ]; then
-                # Strip all destructive (DROP) operations from the plan.
-                # Additive-by-construction: unknown/local tables live untouched;
-                # only CREATE/ALTER ADD/etc. steps are applied (#498).
+                # Filter the plan before the superuser/ownership gate:
+                # drop destructive operations, peer-shadowed objects, ADP
+                # REVOKEs, and any step targeting an existing object not owned
+                # by DB_USER (#765).
                 FILTERED_PLAN_FILE="$PGSCHEMA_SCRATCH_DIR/filtered.json"
-                echo "  Stripping destructive operations from plan..."
+                echo "  Stripping destructive and non-owned steps from plan..."
                 STRIP_EXIT=0
                 STRIP_ARGS=(
                     --plan "$PLAN_FILE"
                     --output "$FILTERED_PLAN_FILE"
+                    --db-user "$DB_USER"
+                    --dbname "$DB_NAME"
+                    --host "$PGHOST"
+                    --port "${PGPORT:-5432}"
                 )
                 if [ "$PGSCHEMA_PEER_MODE" -eq 1 ]; then
                     # Peer-shadowed relations (VIEW / foreign table + sequence +
@@ -1533,18 +1509,56 @@ _run_schema_management() {
                     ignored_csv=$(IFS=,; echo "${PEER_SHADOWED_NAMES[*]}")
                     STRIP_ARGS+=(--ignore-objects "$ignored_csv" --log-exclusions)
                 fi
-                DESTRUCTIVE_COUNT=$("$VENV_PYTHON" "$SCRIPT_DIR/database/strip_destructive.py" "${STRIP_ARGS[@]}" 2>&1) || STRIP_EXIT=$?
-    
+                STRIP_OUTPUT=$("$VENV_PYTHON" "$SCRIPT_DIR/database/strip_destructive.py" "${STRIP_ARGS[@]}" 2>&1) || STRIP_EXIT=$?
+
                 if [ $STRIP_EXIT -ne 0 ]; then
-                    echo -e "  ${CROSS_MARK} Failed to strip destructive operations from plan"
+                    echo -e "  ${CROSS_MARK} Failed to strip destructive/non-owned steps from plan"
+                    echo "$STRIP_OUTPUT" >&2
                     SCHEMA_DIFF_SKIPPED=1
+                    DO_APPLY=0
                 else
                     mv "$FILTERED_PLAN_FILE" "$PLAN_FILE"
+                    DESTRUCTIVE_COUNT=$(printf '%s\n' "$STRIP_OUTPUT" | tail -n 1)
                     if [ "${DESTRUCTIVE_COUNT:-0}" -gt 0 ] 2>/dev/null; then
-                        echo -e "  ${INFO} Stripped $DESTRUCTIVE_COUNT destructive operation(s) (DROP skipped; #498)"
+                        echo -e "  ${INFO} Stripped $DESTRUCTIVE_COUNT destructive/non-owned step(s)"
                     fi
-    
-                    TOTAL_STEPS=$(jq '[(.groups // [])[] | .steps[] | select(.type != "privilege")] | length' "$PLAN_FILE" 2>/dev/null || echo "0")
+                    # Surface any per-object SKIPPED/EXCLUDED log lines.
+                    printf '%s\n' "$STRIP_OUTPUT" | sed '$d' | while IFS= read -r line; do
+                        [ -n "$line" ] && echo -e "  ${INFO} $line"
+                    done
+
+                    # Fail closed: ensure the filtered plan still contains no
+                    # superuser-only steps and no remaining objects owned by
+                    # another role.
+                    echo "  Checking plan for superuser-only steps and object ownership..."
+                    if ! "$VENV_PYTHON" "$SCRIPT_DIR/database/plan_check_superuser.py" \
+                            --plan "$PLAN_FILE" \
+                            --host "$PGHOST" \
+                            --port "${PGPORT:-5432}" \
+                            --dbname "$DB_NAME" \
+                            --db-user "$DB_USER"; then
+                        echo "" >&2
+                        echo -e "  ${CROSS_MARK} Schema plan contains superuser-only steps or targets objects not owned by $DB_USER" >&2
+                        echo "      Ask a DBA to apply these steps as a PostgreSQL superuser." >&2
+                        if [ "${AGENT_CREDENTIALS_VERIFIED:-0}" -ne 1 ]; then
+                            echo "" >&2
+                            echo "      Or ask a DBA to run the prep SQL out of band as a PostgreSQL superuser:" >&2
+                            echo "" >&2
+                            _print_superuser_sql >&2
+                            echo "" >&2
+                        fi
+                        SCHEMA_DIFF_SKIPPED=1
+                        DO_APPLY=0
+                    fi
+                fi
+            else
+                echo -e "  ${CROSS_MARK} Plan reorder failed (exit $REORDER_EXIT) — schema apply skipped"
+                SCHEMA_DIFF_SKIPPED=1
+                DO_APPLY=0
+            fi
+
+            if [ "$DO_APPLY" -eq 1 ]; then
+                TOTAL_STEPS=$(jq '[(.groups // [])[] | .steps[] | select(.type != "privilege")] | length' "$PLAN_FILE" 2>/dev/null || echo "0")
     
                     if [ "$TOTAL_STEPS" -eq 0 ] 2>/dev/null; then
                         echo -e "  ${CHECK_MARK} Schema is up to date — no changes needed"
@@ -1690,10 +1704,9 @@ _run_schema_management() {
                             SCHEMA_DIFF_SKIPPED=1
                         fi
                     fi
-                fi
             fi
         fi
-    
+
         popd >/dev/null || true
         rm -f "$PLAN_FILE"
     fi

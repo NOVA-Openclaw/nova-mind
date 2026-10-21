@@ -79,14 +79,14 @@
 
 | Table | Description | Columns |
 |-------|-------------|---------|
-| agent_actions | Agent action definitions. READ-ONLY except Newhart. | 8 |
+| agent_actions | Agent action definitions. READ-ONLY except Newhart. Not enforced by the installer since #759; see #761. | 8 |
 | agent_aliases | Agent aliases for flexible mention matching. Supports case-insensitive routing. | 4 |
 | agent_bootstrap_context | Bootstrap context entries. Agents may write to their own AGENT-scoped records (matching their db user). Newhart (Agent Design/Management domain) manages schema, cross-agent entries, and GLOBAL/UNIVERSAL-scoped records. | 9 |
-| agent_domains | Agent domain assignments. READ-ONLY except Newhart. | 9 |
-| agent_jobs | Agent job definitions. READ-ONLY except Newhart. | 18 |
-| agent_modifications | Agent modification history. READ-ONLY except Newhart. | 7 |
+| agent_domains | Agent domain assignments. READ-ONLY except Newhart. Not enforced by the installer since #759; see #761. | 9 |
+| agent_jobs | Agent job definitions. READ-ONLY except Newhart. Not enforced by the installer since #759; see #761. | 18 |
+| agent_modifications | Agent modification history. READ-ONLY except Newhart. Not enforced by the installer since #759; see #761. | 7 |
 | agent_spawns | Tracks all agent spawns from the general-purpose spawner daemon | 14 |
-| agent_system_config | Agent system configuration. READ-ONLY except Newhart. | 6 |
+| agent_system_config | Agent system configuration. READ-ONLY except Newhart. Not enforced by the installer since #759; see #761. | 6 |
 | agent_turn_context | - | 8 |
 | agents | Agent registry | 38 |
 | ai_models | Available AI models. NOVA maintains this; Newhart reads for agent assignments. Credentials and endpoints stored in 1Password (see credential_ref column). | 16 |

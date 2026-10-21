@@ -46,10 +46,11 @@ teardown() {
 source_installer_functions() {
     # shellcheck disable=SC1090
     source "$FAKE_REPO/agent-install.sh"
-    export -f _superuser_psql _superuser_createdb _superuser_pgschema _verify_superuser_connection
+    export -f _superuser_psql _superuser_createdb
     export -f _schema_ddl_psql _schema_pgschema _run_schema_management
-    export -f _check_agent_credentials _check_superuser_prep_done _run_credential_and_superuser_checks
-    export -f _print_superuser_sql _halt_agent_credentials_error _halt_missing_superuser_password
+    export -f _check_agent_credentials _run_credential_and_superuser_checks
+    export -f _bootstrap_precheck_passes _bootstrap_role_and_database
+    export -f _print_superuser_sql _halt_agent_credentials_error _halt_bootstrap_credentials_error
 }
 
 # ─── (a) no sudo remains in installer scripts ───────────────────────────────
@@ -98,7 +99,7 @@ EOF
     export PG_SUPERUSER_PASSWORD="secret123"
     export PG_SUPERUSER_HOST="pg.example.com"
 
-    run _superuser_psql "$DB_NAME" -c "SELECT 1"
+    run _superuser_psql postgres -c "SELECT 1"
     [ "$status" -eq 0 ]
 
     run grep -E '^argv:' "$recording"
@@ -135,30 +136,6 @@ EOF
     [[ "$output" == *"PGPASSWORD=secret123"* ]]
 }
 
-@test "TC-743-012: _superuser_pgschema passes password via PGPASSWORD env" {
-    source_installer_functions
-
-    local recording
-    recording="$(mktemp)"
-    _make_recording_stub "pgschema" "$recording"
-    export PGSCHEMA_BIN="pgschema"
-
-    export PG_SUPERUSER="postgres"
-    export PG_SUPERUSER_PASSWORD="secret123"
-    export PG_SUPERUSER_HOST="pg.example.com"
-
-    run _superuser_pgschema plan --db "$DB_NAME"
-    [ "$status" -eq 0 ]
-
-    run grep -E '^argv:' "$recording"
-    [[ "$output" == *"plan"* ]]
-    [[ "$output" != *"secret123"* ]]
-    [[ "$output" != *"--password"* ]]
-
-    run grep -E '^PGPASSWORD=' "$recording"
-    [[ "$output" == *"PGPASSWORD=secret123"* ]]
-}
-
 @test "TC-743-013: helpers do not place password in argv when stdin is used" {
     source_installer_functions
 
@@ -170,7 +147,7 @@ EOF
     export PG_SUPERUSER_PASSWORD="secret123"
     export PG_SUPERUSER_HOST="localhost"
 
-    run _superuser_psql "$DB_NAME" -c "SELECT 1"
+    run _superuser_psql postgres -c "SELECT 1"
     [ "$status" -eq 0 ]
 
     run grep -E '^argv:' "$recording"
@@ -179,70 +156,6 @@ EOF
 
     run grep -E '^PGPASSWORD=' "$recording"
     [[ "$output" == *"PGPASSWORD=secret123"* ]]
-}
-
-# ─── (c) wrong/missing password fails fast before schema steps ──────────────
-
-_make_failing_psql_stub() {
-    cat >"$STUB_BIN/psql" <<'EOF'
-#!/usr/bin/env bash
-# Succeed only when PGPASSWORD matches the expected value.
-if [ "${PGPASSWORD:-}" = "correct" ]; then
-    exit 0
-fi
-echo "psql: error: connection to server failed" >&2
-exit 1
-EOF
-    chmod +x "$STUB_BIN/psql"
-}
-
-@test "TC-743-020: _verify_superuser_connection fails with wrong password" {
-    source_installer_functions
-    _make_failing_psql_stub
-
-    export PG_SUPERUSER="postgres"
-    export PG_SUPERUSER_PASSWORD="wrong"
-    export PG_SUPERUSER_HOST="localhost"
-
-    run _verify_superuser_connection
-    [ "$status" -ne 0 ]
-}
-
-@test "TC-743-021: _verify_superuser_connection succeeds with correct password" {
-    source_installer_functions
-    _make_failing_psql_stub
-
-    export PG_SUPERUSER="postgres"
-    export PG_SUPERUSER_PASSWORD="correct"
-    export PG_SUPERUSER_HOST="localhost"
-
-    run _verify_superuser_connection
-    [ "$status" -eq 0 ]
-}
-
-@test "TC-743-022: _verify_superuser_connection fails when password is empty" {
-    source_installer_functions
-    _make_failing_psql_stub
-
-    export PG_SUPERUSER="postgres"
-    export PG_SUPERUSER_PASSWORD=""
-    export PG_SUPERUSER_HOST="localhost"
-
-    run _verify_superuser_connection
-    [ "$status" -ne 0 ]
-}
-
-@test "TC-743-023: password does not appear in helper output on failure" {
-    source_installer_functions
-    _make_failing_psql_stub
-
-    export PG_SUPERUSER="postgres"
-    export PG_SUPERUSER_PASSWORD="leaked-password"
-    export PG_SUPERUSER_HOST="localhost"
-
-    run _verify_superuser_connection
-    [ "$status" -ne 0 ]
-    [[ "$output" != *"leaked-password"* ]]
 }
 
 @test "TC-743-024: _superuser_psql output does not contain password" {
@@ -259,7 +172,7 @@ EOF
     export PG_SUPERUSER_PASSWORD="top-secret"
     export PG_SUPERUSER_HOST="localhost"
 
-    run _superuser_psql "$DB_NAME" -c "SELECT 1"
+    run _superuser_psql postgres -c "SELECT 1"
     [ "$status" -eq 0 ]
     [[ "$output" == *"connection ok"* ]]
     [[ "$output" != *"top-secret"* ]]
@@ -291,7 +204,7 @@ EOF
     [ "$status" -ne 0 ]
 }
 
-@test "TC-743-032: agent credential failure halts before any mutation" {
+@test "TC-743-032: missing role/database with no superuser credentials prints bootstrap instructions and exits 1" {
     cat >"$STUB_BIN/psql" <<'EOF'
 #!/usr/bin/env bash
 echo "psql: error: connection to server failed" >&2
@@ -299,7 +212,7 @@ exit 1
 EOF
     chmod +x "$STUB_BIN/psql"
 
-    # pg_isready must succeed so the installer reaches the credential check.
+    # pg_isready must succeed so the installer reaches the bootstrap check.
     cat >"$STUB_BIN/pg_isready" <<'EOF'
 #!/usr/bin/env bash
 exit 0
@@ -308,7 +221,7 @@ EOF
 
     run bash "$FAKE_REPO/agent-install.sh"
     [ "$status" -eq 1 ]
-    [[ "$output" == *"Cannot connect to PostgreSQL as agent role 'testuser'"* ]]
+    [[ "$output" == *"Agent role 'testuser' or database 'test_memory' does not exist"* ]]
     [[ "$output" == *"CREATE ROLE testuser LOGIN PASSWORD"* ]]
     [[ "$output" == *"CREATE DATABASE test_memory OWNER testuser"* ]]
     [[ "$output" == *"CREATE EXTENSION IF NOT EXISTS vector"* ]]
@@ -316,67 +229,6 @@ EOF
     # No mutation should have occurred in FAKE_HOME.
     [ "$(find "$FAKE_HOME" -type f | wc -l)" -eq 1 ]
     [ -f "$FAKE_HOME/.openclaw/postgres.json" ]
-}
-
-_make_smart_psql_stub() {
-    local agent_cred_exit="${1:-0}"
-    local db_owner="${2:-}"
-    local ext_present="${3:-0}"
-    cat >"$STUB_BIN/psql" <<EOF
-#!/usr/bin/env bash
-args="\$*"
-if [[ "\$args" == *"SELECT 1 FROM pg_database"* ]]; then
-    [ -n "$db_owner" ] && echo "1" || echo ""
-    exit 0
-elif [[ "\$args" == *"pg_get_userbyid(datdba)"* ]]; then
-    echo "$db_owner"
-    exit 0
-elif [[ "\$args" == *"SELECT 1 FROM pg_extension"* ]]; then
-    if [ "$ext_present" -eq 1 ]; then
-        echo "1"
-    else
-        echo ""
-    fi
-    exit 0
-elif [[ "\$args" == *"SELECT 1"* ]]; then
-    exit $agent_cred_exit
-fi
-echo "psql: unrecognized stub invocation: \$args" >&2
-exit 1
-EOF
-    chmod +x "$STUB_BIN/psql"
-}
-
-@test "TC-743-033: missing distinct superuser password with prep not done halts with instructions and prep SQL" {
-    source_installer_functions
-    _make_smart_psql_stub 0 "" 0
-
-    export PG_SUPERUSER="postgres"
-    export PG_SUPERUSER_PASSWORD=""
-    export PG_SUPERUSER_HOST="localhost"
-
-    run _run_credential_and_superuser_checks
-    [ "$status" -eq 1 ]
-    [[ "$output" == *"Superuser password is required but not provided"* ]]
-    [[ "$output" == *"PG_SUPERUSER_PASSWORD environment variable"* ]]
-    [[ "$output" == *"Interactive shell-install.sh prompt"* ]]
-    [[ "$output" == *"CREATE ROLE testuser LOGIN PASSWORD"* ]]
-    [[ "$output" == *"CREATE DATABASE test_memory OWNER testuser"* ]]
-    [[ "$output" == *"CREATE EXTENSION IF NOT EXISTS vector"* ]]
-}
-
-@test "TC-743-034: prep done sets SKIP_SUPERUSER_PHASE and skips superuser phase" {
-    source_installer_functions
-    _make_smart_psql_stub 0 "testuser" 1
-
-    export PG_SUPERUSER="postgres"
-    export PG_SUPERUSER_PASSWORD=""
-    export PG_SUPERUSER_HOST="localhost"
-
-    run _run_credential_and_superuser_checks
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"Superuser prep already done"* ]]
-    [[ "$output" == *"skipping superuser-only reconciliation steps"* ]]
 }
 
 @test "TC-743-035: real password is never leaked in --print-superuser-sql or halt output" {
@@ -402,17 +254,10 @@ EOF
     [[ "$output" != *"super-secret-agent-password"* ]]
     [[ "$output" != *"super-secret-superuser-password"* ]]
 
-    # Missing superuser password output
-    cat >"$STUB_BIN/psql" <<'EOF'
-#!/usr/bin/env bash
-exit 0
-EOF
-    chmod +x "$STUB_BIN/psql"
-    export PG_SUPERUSER="postgres"
-    export PG_SUPERUSER_PASSWORD=""
-    run _halt_missing_superuser_password
+    # Bootstrap credentials error output
+    run _halt_bootstrap_credentials_error
     [ "$status" -eq 1 ]
-    [[ "$output" == *"Superuser password is required but not provided"* ]]
+    [[ "$output" == *"Agent role 'testuser' or database 'test_memory' does not exist"* ]]
     [[ "$output" != *"super-secret-agent-password"* ]]
     [[ "$output" != *"super-secret-superuser-password"* ]]
 }
@@ -430,6 +275,7 @@ _setup_schema_test_env() {
     if [ ! -x "$VENV_PYTHON" ]; then
         VENV_PYTHON="$(command -v python3)"
     fi
+    export VENV_PYTHON
 
     # Stubs for pgschema and the reorder/strip Python helpers.
     cat >"$STUB_BIN/pgschema" <<'EOF'
@@ -506,8 +352,46 @@ print(0)
 EOF
     chmod +x "$FAKE_REPO/database/strip_destructive.py"
 
-    # Ensure the real plan_check_superuser.py is discoverable.
+    # Ensure the real Python helpers are discoverable.
     cp "$REPO_ROOT/database/plan_check_superuser.py" "$FAKE_REPO/database/plan_check_superuser.py"
+    cp "$REPO_ROOT/database/grant_reconcile_gate.py" "$FAKE_REPO/database/grant_reconcile_gate.py"
+    cp "$REPO_ROOT/database/fix_installer_ownership.py" "$FAKE_REPO/database/fix_installer_ownership.py"
+
+    # Stub grant_reconcile_gate.py so schema-management tests don't need a live DB.
+    cat >"$FAKE_REPO/database/grant_reconcile_gate.py" <<'EOF'
+#!/usr/bin/env python3
+import argparse
+import json
+import sys
+
+def main(argv=None):
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--dbname", default="")
+    parser.add_argument("--db-user", default="")
+    parser.add_argument("--superuser", default="")
+    sub = parser.add_subparsers(dest="action", required=True)
+    sub.add_parser("snapshot")
+    sub.add_parser("verify")
+    sub.add_parser("protected-snapshot")
+    check = sub.add_parser("check")
+    check.add_argument("--protected-snapshot", default=None)
+    args = parser.parse_args(argv)
+    if args.action == "snapshot":
+        json.dump({}, sys.stdout)
+        print()
+    elif args.action == "verify":
+        print("OK: snapshot verified", file=sys.stderr)
+    elif args.action == "protected-snapshot":
+        json.dump({}, sys.stdout)
+        print()
+    elif args.action == "check":
+        print("OK: protected-object ownership gate passed", file=sys.stderr)
+    return 0
+
+if __name__ == "__main__":
+    sys.exit(main())
+EOF
+    chmod +x "$FAKE_REPO/database/grant_reconcile_gate.py"
 
     # Override peer-shadow detection so no live DB is needed.
     _resolve_peer_shadowed_relations() { return 0; }
@@ -589,7 +473,7 @@ JSON
     [ "$status" -ne 0 ]
     [[ "$output" == *"Schema plan contains superuser-only steps"* ]]
     [[ "$output" == *"CREATE EXTENSION"* ]]
-    [[ "$output" == *"PG_SUPERUSER_PASSWORD environment variable"* ]]
+    [[ "$output" == *"Ask a DBA to apply these steps as a PostgreSQL superuser."* ]]
     rm -f "$plan_file"
 }
 
@@ -642,23 +526,6 @@ JSON
     rm -f "$plan_file"
 }
 
-@test "TC-743-043: warning lists skipped superuser-only steps" {
-    source_installer_functions
-    _setup_schema_test_env
-    local plan_file
-    plan_file="$(mktemp)"
-    _write_plan "$plan_file"
-    export PGSCHEMA_STUB_PLAN="$plan_file"
-
-    run _run_schema_management
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"Superuser-only steps skipped:"* ]]
-    [[ "$output" == *"CREATE EXTENSION"* ]]
-    [[ "$output" == *"ownership transfer"* ]]
-    [[ "$output" == *"grant reconciliation"* ]]
-    rm -f "$plan_file"
-}
-
 @test "TC-743-045: plan_check_superuser.py flags CREATE SERVER and CREATE EVENT TRIGGER" {
     plan_file="$(mktemp)"
     cat >"$plan_file" <<'JSON'
@@ -691,42 +558,6 @@ JSON
     [[ "$output" == *"CREATE SERVER (FDW)"* ]]
     [[ "$output" == *"CREATE EVENT TRIGGER"* ]]
     rm -f "$plan_file"
-}
-
-@test "TC-743-044: _schema_pgschema uses superuser password when SKIP_SUPERUSER_PHASE=0" {
-    source_installer_functions
-
-    local recording
-    recording="$(mktemp)"
-    cat >"$STUB_BIN/pgschema" <<EOF
-#!/usr/bin/env bash
-printf '%s\n' "argv:\$*" >> "$recording"
-while IFS='=' read -r key val; do
-    case "\$key" in
-        PGPASSWORD|PG_SUPERUSER_PASSWORD) printf '%s=%s\n' "\$key" "\$val" >> "$recording" ;;
-    esac
-done < <(env)
-printf '\n' >> "$recording"
-exit 0
-EOF
-    chmod +x "$STUB_BIN/pgschema"
-    export PGSCHEMA_BIN="$STUB_BIN/pgschema"
-
-    export PG_SUPERUSER="postgres"
-    export PG_SUPERUSER_PASSWORD="secret123"
-    export SKIP_SUPERUSER_PHASE=0
-
-    run _schema_pgschema plan --db "$DB_NAME"
-    [ "$status" -eq 0 ]
-
-    run grep -E '^argv:' "$recording"
-    [[ "$output" == *"plan"* ]]
-    [[ "$output" != *"secret123"* ]]
-
-    run grep -E '^PGPASSWORD=' "$recording"
-    [[ "$output" == *"PGPASSWORD=secret123"* ]]
-
-    rm -f "$recording"
 }
 
 @test "TC-743-shellcheck: bats file passes shellcheck" {

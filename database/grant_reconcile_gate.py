@@ -36,6 +36,9 @@ _PRIVS_BY_KIND: Dict[str, List[Tuple[str, str]]] = {
     "S": [("USAGE", "has_sequence"), ("SELECT", "has_sequence"), ("UPDATE", "has_sequence")],
 }
 
+# Base DML privileges monitored for *all* grantees by the --all-grantees gate.
+_BASE_DML_PRIVS = ["SELECT", "INSERT", "UPDATE", "DELETE"]
+
 
 def _dsn(dbname: str, superuser: bool = False) -> str:
     """Build a libpq DSN from PG* env vars (#743).
@@ -210,40 +213,6 @@ def _protected_owner_snapshot(cur, superuser: str) -> Dict[_OwnerKey, str]:
     return snapshot
 
 
-def _protected_ownership(cur, superuser: str) -> List[_OwnerKey]:
-    """Return protected-object keys not owned by the superuser (absolute)."""
-    bad: List[_OwnerKey] = []
-    excluded_oids = _fdw_excluded_oids(cur)
-    protected, _ = _protected_oids(cur, excluded_oids)
-    if protected:
-        cur.execute(
-            """
-            SELECT 'relation', n.nspname || '.' || c.relname
-              FROM pg_class c
-              JOIN pg_namespace n ON n.oid = c.relnamespace
-              JOIN pg_roles r ON r.oid = c.relowner
-             WHERE c.oid = ANY(%s)
-               AND r.rolname <> %s
-            UNION ALL
-            SELECT 'function', n.nspname || '.' || p.proname
-              FROM pg_proc p
-              JOIN pg_namespace n ON n.oid = p.pronamespace
-              JOIN pg_roles r ON r.oid = p.proowner
-             WHERE p.oid = ANY(%s)
-               AND r.rolname <> %s
-            UNION ALL
-            SELECT 'event trigger', evtname
-              FROM pg_event_trigger e
-              JOIN pg_roles r ON r.oid = e.evtowner
-             WHERE r.rolname <> %s
-            ORDER BY 1, 2
-            """,
-            (list(protected), superuser, list(protected), superuser, superuser),
-        )
-        bad = [(kind, name) for kind, name in cur.fetchall()]
-    return bad
-
-
 def _check_protected_ownership(
     cur,
     superuser: str,
@@ -320,11 +289,41 @@ def _owned_relations(cur, db_user: str) -> List[Tuple[str, str, str]]:
     return [(row[0], row[1], row[2]) for row in cur.fetchall()]
 
 
+def _all_grantee_relations(cur) -> List[Tuple[str, str, str]]:
+    """Return (grantee, schema, name) for every named role with base-DML
+    privileges on a public table, view, matview, or foreign table."""
+    cur.execute(
+        "SELECT DISTINCT grantee, table_schema, table_name "
+        "FROM information_schema.table_privileges "
+        "WHERE table_schema = 'public' "
+        "  AND privilege_type IN ('SELECT','INSERT','UPDATE','DELETE') "
+        "  AND grantee != 'PUBLIC' "
+        "ORDER BY grantee, table_schema, table_name"
+    )
+    return [(row[0], row[1], row[2]) for row in cur.fetchall()]
+
+
+def _all_grantee_snapshot(cur) -> Dict[str, Dict[str, Dict[str, bool]]]:
+    """Snapshot base-DML privileges for every named grantee on public relations."""
+    snapshot: Dict[str, Dict[str, Dict[str, bool]]] = {}
+    for grantee, schema, name in _all_grantee_relations(cur):
+        rel = f'"{schema}"."{name}"'
+        entry = snapshot.setdefault(grantee, {})
+        rel_entry = entry.setdefault(rel, {})
+        for priv in _BASE_DML_PRIVS:
+            cur.execute("SELECT has_table_privilege(%s, %s, %s)", (grantee, rel, priv))
+            rel_entry[priv] = bool(cur.fetchone()[0])
+    return snapshot
+
+
 def _snapshot_cmd(args) -> int:
     conn = _connect(args.dbname)
     try:
         with conn.cursor() as cur:
-            snapshot = _snapshot(cur, args.db_user)
+            if args.all_grantees:
+                snapshot = _all_grantee_snapshot(cur)
+            else:
+                snapshot = _snapshot(cur, args.db_user)
     finally:
         conn.close()
     json.dump(snapshot, sys.stdout, sort_keys=True, indent=2)
@@ -334,14 +333,33 @@ def _snapshot_cmd(args) -> int:
 
 def _verify_cmd(args) -> int:
     with open(args.snapshot, "r", encoding="utf-8") as fh:
-        before: Dict[str, Dict[str, bool]] = json.load(fh)
+        before = json.load(fh)
     conn = _connect(args.dbname)
     try:
         with conn.cursor() as cur:
-            after = _snapshot(cur, args.db_user)
+            if args.all_grantees:
+                after = _all_grantee_snapshot(cur)
+            else:
+                after = _snapshot(cur, args.db_user)
     finally:
         conn.close()
-    lost: List[Tuple[str, str]] = []
+    if args.all_grantees:
+        lost: List[Tuple[str, str, str]] = []
+        for grantee in sorted(before):
+            for rel in sorted(before[grantee]):
+                for priv, had in sorted(before[grantee][rel].items()):
+                    if had and not after.get(grantee, {}).get(rel, {}).get(priv, False):
+                        lost.append((grantee, rel, priv))
+        if lost:
+            print("ERROR: grantee(s) lost base-DML privileges after reconciliation:", file=sys.stderr)
+            for grantee, rel, priv in lost:
+                print(f"  {grantee}: {rel} {priv}", file=sys.stderr)
+            return 1
+        total = sum(len(rels) for rels in before.values())
+        print(f"OK: all grantees retained {total} base-DML privilege entries", file=sys.stderr)
+        return 0
+
+    lost = []
     for rel, privs in sorted(before.items()):
         for priv, had in sorted(privs.items()):
             if had and not after.get(rel, {}).get(priv, False):
@@ -375,18 +393,19 @@ def _check_cmd(args) -> int:
         for key, owner in raw.items():
             kind, name = key.split(":", 1)
             protected_snapshot[(kind, name)] = owner
+    if not protected_snapshot:
+        print(
+            "ERROR: --protected-snapshot is required for the protected-owner gate",
+            file=sys.stderr,
+        )
+        return 1
     conn = _connect(args.dbname)
     try:
         with conn.cursor() as cur:
             missing = _check_privileges(cur, args.db_user, args.superuser)
-            if protected_snapshot:
-                changed, drift = _check_protected_ownership(
-                    cur, args.superuser, protected_snapshot
-                )
-            else:
-                bad = _protected_ownership(cur, args.superuser)
-                changed = [((kind, name), "<current>", "<not superuser>") for kind, name in bad]
-                drift = []
+            changed, drift = _check_protected_ownership(
+                cur, args.superuser, protected_snapshot
+            )
     finally:
         conn.close()
     failed = False
@@ -426,9 +445,19 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--superuser", default="postgres", help="Superuser role that owns run-created objects")
     sub = parser.add_subparsers(dest="action", required=True)
     snap = sub.add_parser("snapshot", help="Print JSON privilege snapshot")
+    snap.add_argument(
+        "--all-grantees",
+        action="store_true",
+        help="Snapshot base-DML privileges for every named grantee, not only DB_USER",
+    )
     snap.set_defaults(func=_snapshot_cmd)
     verify = sub.add_parser("verify", help="Verify snapshot and report losses")
     verify.add_argument("snapshot", help="Path to JSON snapshot")
+    verify.add_argument(
+        "--all-grantees",
+        action="store_true",
+        help="Verify base-DML privileges for every named grantee",
+    )
     verify.set_defaults(func=_verify_cmd)
     prot_snap = sub.add_parser("protected-snapshot", help="Print JSON protected-object owner snapshot")
     prot_snap.set_defaults(func=_protected_snapshot_cmd)

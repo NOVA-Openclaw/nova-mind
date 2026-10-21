@@ -158,3 +158,49 @@ def test_owner_revoke_still_skipped_before_non_owned_check(monkeypatch, captured
     assert out.strip() == ""
     assert "owner/DB_USER REVOKE" in err
     assert "Kept 0" in err
+
+
+def test_base_dml_revoke_from_old_owner_on_owned_table_is_skipped(monkeypatch, captured):
+    # nova owns the table now; a stale REVOKE from newhart is owner-ACL residue.
+    owners = {("public", "t"): "nova"}
+    stdin = "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE t FROM newhart;\n"
+    rc, out, err = _run_filter(monkeypatch, stdin, owners, is_super=False)
+    assert rc == 0
+    assert out.strip() == ""
+    assert "additive base-DML REVOKE" in err
+    assert "Kept 0" in err
+
+
+def test_public_base_dml_revoke_is_kept(monkeypatch, captured):
+    owners = {("public", "t"): "nova"}
+    stdin = "REVOKE ALL PRIVILEGES ON TABLE t FROM PUBLIC;\n"
+    rc, out, err = _run_filter(monkeypatch, stdin, owners, is_super=False)
+    assert rc == 0
+    assert "REVOKE ALL PRIVILEGES ON TABLE t FROM PUBLIC" in out
+    assert "SKIPPED" not in err
+    assert "Kept 1" in err
+
+
+def test_allowlisted_revoke_is_kept(monkeypatch, captured):
+    monkeypatch.setattr(
+        fsg,
+        "_ALLOWED_RESTRICTIVE_REVOKES",
+        [("newhart", "public", "t", frozenset({"delete"}), "unit-test allowlist")],
+    )
+    owners = {("public", "t"): "nova"}
+    stdin = "REVOKE DELETE ON TABLE t FROM newhart;\n"
+    rc, out, err = _run_filter(monkeypatch, stdin, owners, is_super=False)
+    assert rc == 0
+    assert "REVOKE DELETE ON TABLE t FROM newhart" in out
+    assert "SKIPPED" not in err
+    assert "Kept 1" in err
+
+
+def test_non_base_dml_revoke_from_named_role_is_kept(monkeypatch, captured):
+    owners = {("public", "t"): "nova"}
+    stdin = "REVOKE TRIGGER ON TABLE t FROM newhart;\n"
+    rc, out, err = _run_filter(monkeypatch, stdin, owners, is_super=False)
+    assert rc == 0
+    assert "REVOKE TRIGGER ON TABLE t FROM newhart" in out
+    assert "SKIPPED" not in err
+    assert "Kept 1" in err

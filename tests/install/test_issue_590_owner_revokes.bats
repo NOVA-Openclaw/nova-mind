@@ -17,36 +17,37 @@ SQL
     [[ "$output" != *"REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agents FROM nova"* ]]
 }
 
-@test "TC-590a-mut: owner REVOKE is kept when owner map is unavailable" {
+@test "TC-590a-mut: non-base-DML owner REVOKE is kept when owner map is unavailable" {
     run python3 "$FILTER" <<'SQL'
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agents FROM nova;
+REVOKE TRIGGER ON TABLE agents FROM nova;
 SQL
     [ "$status" -eq 0 ]
     [[ "$output" == *"Kept 1 grant/revoke statement(s)"* ]]
-    [[ "$output" == *"REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agents FROM nova"* ]]
+    [[ "$output" == *"REVOKE TRIGGER ON TABLE agents FROM nova"* ]]
     [[ "$output" != *"SKIPPED"* ]]
 }
 
-@test "TC-590c: non-owner REVOKEs are still applied" {
-    # agents is owned by nova; revoking FROM gidget is not owner-targeted.
+@test "TC-590c: non-owner, non-base-DML REVOKEs are still applied" {
+    # agents is owned by nova; revoking TRIGGER FROM gidget is not owner-targeted
+    # and does not touch the additive base-DML set, so it is kept.
     run python3 "$FILTER" --dbname nova_memory --db-user nova <<'SQL'
-REVOKE DELETE, INSERT, UPDATE ON TABLE agents FROM gidget;
+REVOKE TRIGGER ON TABLE agents FROM gidget;
 SQL
     [ "$status" -eq 0 ]
     [[ "$output" == *"Kept 1 grant/revoke statement(s)"* ]]
-    [[ "$output" == *"REVOKE DELETE, INSERT, UPDATE ON TABLE agents FROM gidget"* ]]
+    [[ "$output" == *"REVOKE TRIGGER ON TABLE agents FROM gidget"* ]]
     [[ "$output" != *"owner/DB_USER"* ]]
 }
 
-@test "TC-590c-mut: filtering does not drop non-owner REVOKEs" {
+@test "TC-590c-mut: filtering does not drop non-owner, non-base-DML REVOKEs" {
     run python3 "$FILTER" --dbname nova_memory --db-user nova <<'SQL'
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agents FROM nova;
-REVOKE DELETE, INSERT, UPDATE ON TABLE agents FROM gidget;
+REVOKE TRIGGER ON TABLE agents FROM gidget;
 SQL
     [ "$status" -eq 0 ]
     [[ "$output" == *"SKIPPED: 1 owner/DB_USER REVOKE statement(s) (DB_USER 'nova')"* ]]
     [[ "$output" == *"Kept 1 grant/revoke statement(s)"* ]]
-    [[ "$output" == *"REVOKE DELETE, INSERT, UPDATE ON TABLE agents FROM gidget"* ]]
+    [[ "$output" == *"REVOKE TRIGGER ON TABLE agents FROM gidget"* ]]
     [[ "$output" != *"REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agents FROM nova"* ]]
 }
 

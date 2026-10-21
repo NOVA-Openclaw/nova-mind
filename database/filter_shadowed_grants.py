@@ -49,6 +49,38 @@ FROM_RE = re.compile(
 
 _SPLIT_RE = re.compile(r"\s*,\s*")
 
+# Base table DML privileges that the installer treats as additive: once a
+# named role holds one of these, a schema.sql REVOKE must not take it away.
+_BASE_DML_PRIVS = {"select", "insert", "update", "delete"}
+
+# Explicit allowlist for intentional restrictive revokes.  Each entry is
+# (role, schema, object, privileges, reason).  role/schema/object are
+# lower-case identifiers; "*" matches any.  privileges is a frozenset of
+# lower-case privilege names or "*" for any base-DML privilege.
+#
+# After inspecting the current database/schema.sql, every base-DML
+# REVOKE ... FROM <named role> line matches the owner-ACL residue pattern
+# described in nova-mind#759, so no production entries are required here.
+# The mechanism is unit-tested by monkeypatching this list.
+_ALLOWED_RESTRICTIVE_REVOKES: list[
+    tuple[str, str, str, frozenset[str] | str, str]
+] = []
+
+
+def _revoked_privileges(line: str) -> set[str]:
+    """Return the lower-case privilege names revoked by a REVOKE statement."""
+    match = re.search(r"^\s*REVOKE\s+(.*?)\s+ON\s+", line, re.IGNORECASE)
+    if not match:
+        return set()
+    privs: set[str] = set()
+    for part in _SPLIT_RE.split(match.group(1)):
+        p = part.strip().lower()
+        if p in ("all", "all privileges"):
+            privs.update(_BASE_DML_PRIVS)
+        elif p and p != "grant option for":
+            privs.add(p)
+    return privs
+
 
 def _normalize_identifier(ident: str) -> str:
     ident = ident.strip()
@@ -177,6 +209,26 @@ def _is_superuser(dbname: str, db_user: str) -> bool:
         conn.close()
 
 
+def _matches_allowlist(
+    role: str,
+    schema: str,
+    name: str,
+    privs: set[str],
+) -> bool:
+    """Return True when a base-DML REVOKE is explicitly allowlisted."""
+    for a_role, a_schema, a_obj, a_privs, _reason in _ALLOWED_RESTRICTIVE_REVOKES:
+        if a_role != "*" and a_role != role:
+            continue
+        if a_schema != "*" and a_schema != schema:
+            continue
+        if a_obj != "*" and a_obj != name:
+            continue
+        if a_privs != "*" and not privs.issubset(a_privs):
+            continue
+        return True
+    return False
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -250,6 +302,31 @@ def main(argv: list[str] | None = None) -> int:
                     skip_name = f"non-owned object '{schema}.{name}' (owner '{owner}')"
                     break
 
+        # Reconciliation is additive for base table privileges: never replay a
+        # REVOKE that strips SELECT/INSERT/UPDATE/DELETE from a named role,
+        # unless the statement is explicitly allowlisted.  FROM PUBLIC revokes
+        # and revokes of non-base-DML privileges (TRIGGER, REFERENCES, etc.)
+        # are still applied.
+        if skip_name is None and line.lstrip().upper().startswith("REVOKE"):
+            revoked = _revoked_privileges(line)
+            base_revoked = revoked & _BASE_DML_PRIVS
+            if base_revoked:
+                from_roles = _target_roles(line)
+                named_roles = [r for r in from_roles if r != "public"]
+                if named_roles:
+                    for obj in objects:
+                        schema, name = obj
+                        allowed = any(
+                            _matches_allowlist(role, schema, name, base_revoked)
+                            for role in named_roles
+                        )
+                        if not allowed:
+                            skip_name = (
+                                f"base-DML revoke from named role on "
+                                f"'{schema}.{name}'"
+                            )
+                            break
+
         if skip_name is not None:
             skipped[skip_name] = skipped.get(skip_name, 0) + 1
         else:
@@ -261,6 +338,11 @@ def main(argv: list[str] | None = None) -> int:
         if name.startswith("owner ") or name.startswith("DB_USER "):
             print(
                 f"SKIPPED: {count} owner/DB_USER REVOKE statement(s) ({name})",
+                file=sys.stderr,
+            )
+        elif name.startswith("base-DML revoke"):
+            print(
+                f"SKIPPED: {count} additive base-DML REVOKE statement(s) ({name})",
                 file=sys.stderr,
             )
         elif name.startswith("non-owned object "):

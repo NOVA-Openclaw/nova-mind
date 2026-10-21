@@ -1612,51 +1612,67 @@ _run_schema_management() {
                                     if [ "$GRANT_COUNT" -gt 0 ] 2>/dev/null; then
                                         GRANT_PSQL_ERR=$(mktemp "$PGSCHEMA_SCRATCH_DIR/grants-psqlerr-XXXXXX")
                                         GRANT_SNAPSHOT_FILE=$(mktemp "$PGSCHEMA_SCRATCH_DIR/grants-snapshot-XXXXXX.json")
-                                        TMPFILES+=("$GRANT_PSQL_ERR" "$GRANT_SNAPSHOT_FILE")
+                                        GRANT_ALL_SNAPSHOT_FILE=$(mktemp "$PGSCHEMA_SCRATCH_DIR/grants-all-snapshot-XXXXXX.json")
+                                        TMPFILES+=("$GRANT_PSQL_ERR" "$GRANT_SNAPSHOT_FILE" "$GRANT_ALL_SNAPSHOT_FILE")
                                         echo "  Capturing DB_USER privilege snapshot before reconciliation..."
                                         if ! "$VENV_PYTHON" "$SCRIPT_DIR/database/grant_reconcile_gate.py" --dbname "$DB_NAME" --db-user "$DB_USER" snapshot >"$GRANT_SNAPSHOT_FILE" 2>"$GRANT_PSQL_ERR"; then
                                             echo -e "  ${CROSS_MARK} Failed to capture privilege snapshot"
                                             head -20 "$GRANT_PSQL_ERR" | sed 's/^/    /'
                                             SCHEMA_DIFF_SKIPPED=1
                                         else
-                                            if _grant_reconcile_psql -f - <"$GRANT_FILTERED_FILE" >/dev/null 2>"$GRANT_PSQL_ERR"; then
-                                                echo -e "  ${CHECK_MARK} Applied $GRANT_COUNT explicit grant/revoke statement(s)"
-                                                echo "  Verifying DB_USER privileges after reconciliation..."
-                                                if "$VENV_PYTHON" "$SCRIPT_DIR/database/grant_reconcile_gate.py" --dbname "$DB_NAME" --db-user "$DB_USER" verify "$GRANT_SNAPSHOT_FILE" 2>"$GRANT_PSQL_ERR"; then
-                                                    echo -e "  ${CHECK_MARK} DB_USER privilege gate passed"
-                                                    echo "  Running protected-object ownership gate..."
-                                                    PROTECTED_CHECK_ARGS=()
-                                                    if [ -n "${PROTECTED_SNAPSHOT_FILE:-}" ] && [ -s "$PROTECTED_SNAPSHOT_FILE" ]; then
-                                                        PROTECTED_CHECK_ARGS+=(--protected-snapshot "$PROTECTED_SNAPSHOT_FILE")
-                                                    fi
-                                                    if "$VENV_PYTHON" "$SCRIPT_DIR/database/grant_reconcile_gate.py" --dbname "$DB_NAME" --db-user "$DB_USER" --superuser "$DB_USER" check "${PROTECTED_CHECK_ARGS[@]}" 2>"$GRANT_PSQL_ERR"; then
-                                                        echo -e "  ${CHECK_MARK} Protected-object ownership gate passed"
+                                            echo "  Capturing all-grantee base-DML privilege snapshot before reconciliation..."
+                                            if ! "$VENV_PYTHON" "$SCRIPT_DIR/database/grant_reconcile_gate.py" --dbname "$DB_NAME" --db-user "$DB_USER" snapshot --all-grantees >"$GRANT_ALL_SNAPSHOT_FILE" 2>"$GRANT_PSQL_ERR"; then
+                                                echo -e "  ${CROSS_MARK} Failed to capture all-grantee privilege snapshot"
+                                                head -20 "$GRANT_PSQL_ERR" | sed 's/^/    /'
+                                                SCHEMA_DIFF_SKIPPED=1
+                                            else
+                                                if _grant_reconcile_psql -f - <"$GRANT_FILTERED_FILE" >/dev/null 2>"$GRANT_PSQL_ERR"; then
+                                                    echo -e "  ${CHECK_MARK} Applied $GRANT_COUNT explicit grant/revoke statement(s)"
+                                                    echo "  Verifying DB_USER privileges after reconciliation..."
+                                                    if "$VENV_PYTHON" "$SCRIPT_DIR/database/grant_reconcile_gate.py" --dbname "$DB_NAME" --db-user "$DB_USER" verify "$GRANT_SNAPSHOT_FILE" 2>"$GRANT_PSQL_ERR"; then
+                                                        echo -e "  ${CHECK_MARK} DB_USER privilege gate passed"
+                                                        echo "  Running protected-object ownership gate..."
+                                                        PROTECTED_CHECK_ARGS=()
+                                                        if [ -n "${PROTECTED_SNAPSHOT_FILE:-}" ] && [ -s "$PROTECTED_SNAPSHOT_FILE" ]; then
+                                                            PROTECTED_CHECK_ARGS+=(--protected-snapshot "$PROTECTED_SNAPSHOT_FILE")
+                                                        fi
+                                                        if "$VENV_PYTHON" "$SCRIPT_DIR/database/grant_reconcile_gate.py" --dbname "$DB_NAME" --db-user "$DB_USER" --superuser "$DB_USER" check "${PROTECTED_CHECK_ARGS[@]}" 2>"$GRANT_PSQL_ERR"; then
+                                                            echo -e "  ${CHECK_MARK} Protected-object ownership gate passed"
+                                                            echo "  Verifying all-grantee base-DML privileges after reconciliation..."
+                                                            if "$VENV_PYTHON" "$SCRIPT_DIR/database/grant_reconcile_gate.py" --dbname "$DB_NAME" --db-user "$DB_USER" verify --all-grantees "$GRANT_ALL_SNAPSHOT_FILE" 2>"$GRANT_PSQL_ERR"; then
+                                                                echo -e "  ${CHECK_MARK} All-grantee base-DML privilege gate passed"
+                                                            else
+                                                                echo -e "  ${CROSS_MARK} All-grantee base-DML privilege gate failed"
+                                                                head -40 "$GRANT_PSQL_ERR" | sed 's/^/    /'
+                                                                SCHEMA_DIFF_SKIPPED=1
+                                                            fi
+                                                        else
+                                                            echo -e "  ${CROSS_MARK} Protected-object ownership gate failed"
+                                                            head -40 "$GRANT_PSQL_ERR" | sed 's/^/    /'
+                                                            SCHEMA_DIFF_SKIPPED=1
+                                                        fi
                                                     else
-                                                        echo -e "  ${CROSS_MARK} Protected-object ownership gate failed"
+                                                        echo -e "  ${CROSS_MARK} DB_USER privilege gate failed"
                                                         head -40 "$GRANT_PSQL_ERR" | sed 's/^/    /'
                                                         SCHEMA_DIFF_SKIPPED=1
                                                     fi
                                                 else
-                                                    echo -e "  ${CROSS_MARK} DB_USER privilege gate failed"
-                                                    head -40 "$GRANT_PSQL_ERR" | sed 's/^/    /'
+                                                    echo -e "  ${CROSS_MARK} Grant reconciliation failed"
+                                                    if [ -s "$GRANT_PSQL_ERR" ]; then
+                                                        local _error_lines _warning_count
+                                                        _error_lines=$(grep -n '^ERROR:' "$GRANT_PSQL_ERR" || true)
+                                                        _warning_count=$(grep -c '^WARNING:' "$GRANT_PSQL_ERR" 2>/dev/null || echo 0)
+                                                        if [ -n "$_error_lines" ]; then
+                                                            echo "  psql errors:"
+                                                            echo "$_error_lines" | head -20 | sed 's/^/    /'
+                                                        fi
+                                                        if [ "$_warning_count" -gt 0 ]; then
+                                                            echo "  ($_warning_count WARNING line(s) omitted; see full log below)"
+                                                        fi
+                                                        echo "  Full stderr preserved at: $GRANT_PSQL_ERR"
+                                                    fi
                                                     SCHEMA_DIFF_SKIPPED=1
                                                 fi
-                                            else
-                                                echo -e "  ${CROSS_MARK} Grant reconciliation failed"
-                                                if [ -s "$GRANT_PSQL_ERR" ]; then
-                                                    local _error_lines _warning_count
-                                                    _error_lines=$(grep -n '^ERROR:' "$GRANT_PSQL_ERR" || true)
-                                                    _warning_count=$(grep -c '^WARNING:' "$GRANT_PSQL_ERR" 2>/dev/null || echo 0)
-                                                    if [ -n "$_error_lines" ]; then
-                                                        echo "  psql errors:"
-                                                        echo "$_error_lines" | head -20 | sed 's/^/    /'
-                                                    fi
-                                                    if [ "$_warning_count" -gt 0 ]; then
-                                                        echo "  ($_warning_count WARNING line(s) omitted; see full log below)"
-                                                    fi
-                                                    echo "  Full stderr preserved at: $GRANT_PSQL_ERR"
-                                                fi
-                                                SCHEMA_DIFF_SKIPPED=1
                                             fi
                                         fi
                                     else

@@ -210,38 +210,13 @@ def _protected_owner_snapshot(cur, superuser: str) -> Dict[_OwnerKey, str]:
     return snapshot
 
 
-def _protected_ownership(cur, superuser: str) -> List[_OwnerKey]:
-    """Return protected-object keys not owned by the superuser (absolute)."""
-    bad: List[_OwnerKey] = []
-    excluded_oids = _fdw_excluded_oids(cur)
-    protected, _ = _protected_oids(cur, excluded_oids)
-    if protected:
-        cur.execute(
-            """
-            SELECT 'relation', n.nspname || '.' || c.relname
-              FROM pg_class c
-              JOIN pg_namespace n ON n.oid = c.relnamespace
-              JOIN pg_roles r ON r.oid = c.relowner
-             WHERE c.oid = ANY(%s)
-               AND r.rolname <> %s
-            UNION ALL
-            SELECT 'function', n.nspname || '.' || p.proname
-              FROM pg_proc p
-              JOIN pg_namespace n ON n.oid = p.pronamespace
-              JOIN pg_roles r ON r.oid = p.proowner
-             WHERE p.oid = ANY(%s)
-               AND r.rolname <> %s
-            UNION ALL
-            SELECT 'event trigger', evtname
-              FROM pg_event_trigger e
-              JOIN pg_roles r ON r.oid = e.evtowner
-             WHERE r.rolname <> %s
-            ORDER BY 1, 2
-            """,
-            (list(protected), superuser, list(protected), superuser, superuser),
-        )
-        bad = [(kind, name) for kind, name in cur.fetchall()]
-    return bad
+def _is_superuser_cur(cur, user: str) -> bool:
+    """Return True if ``user`` is a PostgreSQL superuser according to the catalog."""
+    if not user:
+        return False
+    cur.execute("SELECT rolsuper FROM pg_roles WHERE rolname = %s", (user,))
+    row = cur.fetchone()
+    return bool(row and row[0])
 
 
 def _check_protected_ownership(
@@ -383,10 +358,21 @@ def _check_cmd(args) -> int:
                 changed, drift = _check_protected_ownership(
                     cur, args.superuser, protected_snapshot
                 )
-            else:
-                bad = _protected_ownership(cur, args.superuser)
-                changed = [((kind, name), "<current>", "<not superuser>") for kind, name in bad]
+            elif _is_superuser_cur(cur, args.superuser):
+                current = _protected_owner_snapshot(cur, args.superuser)
+                changed = [
+                    (key, owner, f"<not owned by {args.superuser}>")
+                    for key, owner in current.items()
+                    if owner != args.superuser
+                ]
                 drift = []
+            else:
+                print(
+                    f"ERROR: --superuser '{args.superuser}' is not a PostgreSQL superuser; "
+                    "provide --protected-snapshot for a relative ownership check",
+                    file=sys.stderr,
+                )
+                return 1
     finally:
         conn.close()
     failed = False
@@ -400,10 +386,16 @@ def _check_cmd(args) -> int:
             print(f'  "{schema}"."{name}" {priv}', file=sys.stderr)
     if changed:
         failed = True
-        print(
-            "ERROR: protected object owner(s) changed during the run:",
-            file=sys.stderr,
-        )
+        if protected_snapshot:
+            print(
+                "ERROR: protected object owner(s) changed during the run:",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                f"ERROR: protected object owner(s) not owned by superuser '{args.superuser}':",
+                file=sys.stderr,
+            )
         for (kind, name), before, after in changed:
             print(f"  [{kind}] {name}: {before} -> {after}", file=sys.stderr)
     if drift:

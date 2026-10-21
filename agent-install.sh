@@ -1181,6 +1181,18 @@ _check_agent_credentials() {
     psql -U "$DB_USER" -d postgres -tAc "SELECT 1" >/dev/null 2>&1
 }
 
+# Check whether a named role is a PostgreSQL superuser.  Connects as DB_USER
+# (which is always available) and returns true only when the catalog reports
+# rolsuper = t.  Used to decide the actual capability of PG_SUPERUSER, not
+# just whether its name differs from DB_USER (#756).
+_check_role_superuser() {
+    local role="$1"
+    local result
+    result=$(psql -U "$DB_USER" -d postgres -tAc \
+        "SELECT rolsuper FROM pg_roles WHERE rolname = '$role'" 2>/dev/null | tr -d '[:space:]')
+    [ "$result" = "t" ]
+}
+
 # Check whether the superuser-only prep has already been completed so the
 # installer can skip the superuser phase when no superuser password is given.
 # Verifies: target DB exists and is owned by DB_USER; required extensions exist.
@@ -1257,6 +1269,9 @@ _run_credential_and_superuser_checks() {
                 _halt_missing_superuser_password
             fi
         fi
+    elif ! _check_role_superuser "$PG_SUPERUSER"; then
+        echo -e "  ${INFO} PG_SUPERUSER='$PG_SUPERUSER' is not a PostgreSQL superuser; skipping superuser-only steps"
+        SKIP_SUPERUSER_PHASE=1
     fi
 }
 
@@ -1268,6 +1283,17 @@ _schema_ddl_psql() {
         psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 "$@"
     else
         _superuser_psql "$DB_NAME" "$@"
+    fi
+}
+
+# Run explicit grant/reconcile psql as the appropriate role for the current phase.
+# When SKIP_SUPERUSER_PHASE=1, run as DB_USER so a non-superuser agent can apply
+# only the grants on objects it owns (#756); otherwise run as PG_SUPERUSER.
+_grant_reconcile_psql() {
+    if [ "$SKIP_SUPERUSER_PHASE" -eq 1 ]; then
+        psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 "$@"
+    else
+        _superuser_psql "$DB_NAME" -v ON_ERROR_STOP=1 "$@"
     fi
 }
 
@@ -1677,34 +1703,36 @@ _run_schema_management() {
                             TABLE_COUNT=$(psql -U "$DB_USER" -d "$DB_NAME" -tAc "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE'" | tr -d '[:space:]')
                             echo "      Total tables in database: $TABLE_COUNT"
     
+                            # Always capture a protected-object ownership snapshot before any
+                            # mutation.  The snapshot only needs catalog reads, so it works
+                            # even when PG_SUPERUSER is not a real superuser (#756).
+                            PROTECTED_SNAPSHOT_FILE=$(mktemp "$PGSCHEMA_SCRATCH_DIR/protected-snapshot-XXXXXX.json")
+                            PROTECTED_PSQL_ERR=$(mktemp "$PGSCHEMA_SCRATCH_DIR/protected-psqlerr-XXXXXX")
+                            TMPFILES+=("$PROTECTED_SNAPSHOT_FILE" "$PROTECTED_PSQL_ERR")
+                            echo "  Capturing protected-object ownership snapshot before any mutation..."
+                            if ! "$VENV_PYTHON" "$SCRIPT_DIR/database/grant_reconcile_gate.py" \
+                                    --dbname "$DB_NAME" \
+                                    --db-user "$DB_USER" \
+                                    --superuser "$PG_SUPERUSER" \
+                                    protected-snapshot >"$PROTECTED_SNAPSHOT_FILE" 2>"$PROTECTED_PSQL_ERR"; then
+                                echo -e "  ${CROSS_MARK} Failed to capture protected-object ownership snapshot"
+                                head -20 "$PROTECTED_PSQL_ERR" | sed 's/^/    /'
+                                SCHEMA_DIFF_SKIPPED=1
+                            fi
+
                             if [ "$SKIP_SUPERUSER_PHASE" -eq 1 ]; then
                                 echo -e "  ${WARNING} Skipping installer ownership transfer (superuser-only)"
-                                echo -e "  ${WARNING} Skipping explicit grant reconciliation (superuser-only)"
                                 _SKIPPED_SUPERUSER_STEPS+=("ownership transfer")
-                                _SKIPPED_SUPERUSER_STEPS+=("grant reconciliation")
                             else
                                 # Per-object ownership transfer (#666): pgschema applies as the
-                            # superuser, so new relations are owned by PG_SUPERUSER.
-                            # REASSIGN OWNED BY always fails on required system objects,
-                            # so transfer ownership object-by-object and skip the peer/FDW
-                            # bootstrap stack (foreign tables, FDW-backed views and their
-                            # dependencies).  Derivation is from the catalog, not names.
-                            if [ "$PG_SUPERUSER" != "$DB_USER" ]; then
-                                PROTECTED_SNAPSHOT_FILE=$(mktemp "$PGSCHEMA_SCRATCH_DIR/protected-snapshot-XXXXXX.json")
-                                PROTECTED_PSQL_ERR=$(mktemp "$PGSCHEMA_SCRATCH_DIR/protected-psqlerr-XXXXXX")
-                                TMPFILES+=("$PROTECTED_SNAPSHOT_FILE" "$PROTECTED_PSQL_ERR")
-                                echo "  Capturing protected-object ownership snapshot before transfer..."
-                                if ! "$VENV_PYTHON" "$SCRIPT_DIR/database/grant_reconcile_gate.py" \
-                                        --dbname "$DB_NAME" \
-                                        --db-user "$DB_USER" \
-                                        --superuser "$PG_SUPERUSER" \
-                                        protected-snapshot >"$PROTECTED_SNAPSHOT_FILE" 2>"$PROTECTED_PSQL_ERR"; then
-                                    echo -e "  ${CROSS_MARK} Failed to capture protected-object ownership snapshot"
-                                    head -20 "$PROTECTED_PSQL_ERR" | sed 's/^/    /'
-                                    SCHEMA_DIFF_SKIPPED=1
-                                fi
+                                # superuser, so new relations are owned by PG_SUPERUSER.
+                                # REASSIGN OWNED BY always fails on required system objects,
+                                # so transfer ownership object-by-object and skip the peer/FDW
+                                # bootstrap stack (foreign tables, FDW-backed views and their
+                                # dependencies).  Derivation is from the catalog, not names.
                                 _transfer_installer_ownership
                             fi
+
     
                             # Post-schema grant reconciliation (#452): pgschema deliberately
                             # ignores privilege steps, so explicit GRANT/REVOKE lines in
@@ -1712,6 +1740,9 @@ _run_schema_management() {
                             # Peer-shadowed relations (foreign tables/views managed by the
                             # peer FDW setup, #520) and their default <name>_id_seq sequences
                             # do not exist locally, so skip any GRANT/REVOKE that targets them.
+                            # When the superuser phase is skipped, filter_shadowed_grants.py
+                            # drops grants on objects not owned by DB_USER so the agent can
+                            # apply the rest (#756 / #1231 step 5).
                             echo "  Reconciling explicit schema grants..."
                             GRANT_ALL_COUNT=$(grep -cE '^[[:space:]]*(GRANT|REVOKE)[[:space:]]+' "$SCHEMA_FILE_TMP" 2>/dev/null || echo 0)
                             if [ "$GRANT_ALL_COUNT" -gt 0 ] 2>/dev/null; then
@@ -1742,20 +1773,20 @@ _run_schema_management() {
                                             head -20 "$GRANT_PSQL_ERR" | sed 's/^/    /'
                                             SCHEMA_DIFF_SKIPPED=1
                                         else
-                                            if _superuser_psql "$DB_NAME" -v ON_ERROR_STOP=1 -f - <"$GRANT_FILTERED_FILE" >/dev/null 2>"$GRANT_PSQL_ERR"; then
+                                            if _grant_reconcile_psql -f - <"$GRANT_FILTERED_FILE" >/dev/null 2>"$GRANT_PSQL_ERR"; then
                                                 echo -e "  ${CHECK_MARK} Applied $GRANT_COUNT explicit grant/revoke statement(s)"
                                                 echo "  Verifying DB_USER privileges after reconciliation..."
                                                 if "$VENV_PYTHON" "$SCRIPT_DIR/database/grant_reconcile_gate.py" --dbname "$DB_NAME" --db-user "$DB_USER" verify "$GRANT_SNAPSHOT_FILE" 2>"$GRANT_PSQL_ERR"; then
                                                     echo -e "  ${CHECK_MARK} DB_USER privilege gate passed"
-                                                    echo "  Running absolute DB_USER privilege check..."
+                                                    echo "  Running protected-object ownership gate..."
                                                     PROTECTED_CHECK_ARGS=()
                                                     if [ -n "${PROTECTED_SNAPSHOT_FILE:-}" ] && [ -s "$PROTECTED_SNAPSHOT_FILE" ]; then
                                                         PROTECTED_CHECK_ARGS+=(--protected-snapshot "$PROTECTED_SNAPSHOT_FILE")
                                                     fi
                                                     if "$VENV_PYTHON" "$SCRIPT_DIR/database/grant_reconcile_gate.py" --dbname "$DB_NAME" --db-user "$DB_USER" --superuser "$PG_SUPERUSER" check "${PROTECTED_CHECK_ARGS[@]}" 2>"$GRANT_PSQL_ERR"; then
-                                                        echo -e "  ${CHECK_MARK} Absolute DB_USER privilege check passed"
+                                                        echo -e "  ${CHECK_MARK} Protected-object ownership gate passed"
                                                     else
-                                                        echo -e "  ${CROSS_MARK} Absolute DB_USER privilege check failed"
+                                                        echo -e "  ${CROSS_MARK} Protected-object ownership gate failed"
                                                         head -40 "$GRANT_PSQL_ERR" | sed 's/^/    /'
                                                         SCHEMA_DIFF_SKIPPED=1
                                                     fi
@@ -1791,7 +1822,6 @@ _run_schema_management() {
                                 fi
                             else
                                 echo -e "  ${INFO} No explicit grant/revoke statements found"
-                            fi
                             fi
                         else
                             echo -e "  ${CROSS_MARK} Schema apply failed (exit $APPLY_EXIT)"
@@ -2242,7 +2272,7 @@ fi
 # Fail fast with a clear error before any schema change if the direct
 # superuser connection cannot be established.
 if [ "$SKIP_SUPERUSER_PHASE" -eq 1 ]; then
-    echo -e "  ${INFO} Superuser phase skipped (prep already done)"
+    echo -e "  ${INFO} Superuser phase skipped (no superuser credentials or PG_SUPERUSER is not a superuser)"
 elif [ "$PG_SUPERUSER" = "$DB_USER" ]; then
     SUPERUSER_CHECK_ROLE="$DB_USER"
     SUPERUSER_CHECK=$(_superuser_psql postgres -tAc \

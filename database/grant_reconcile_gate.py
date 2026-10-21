@@ -210,15 +210,6 @@ def _protected_owner_snapshot(cur, superuser: str) -> Dict[_OwnerKey, str]:
     return snapshot
 
 
-def _is_superuser_cur(cur, user: str) -> bool:
-    """Return True if ``user`` is a PostgreSQL superuser according to the catalog."""
-    if not user:
-        return False
-    cur.execute("SELECT rolsuper FROM pg_roles WHERE rolname = %s", (user,))
-    row = cur.fetchone()
-    return bool(row and row[0])
-
-
 def _check_protected_ownership(
     cur,
     superuser: str,
@@ -350,29 +341,19 @@ def _check_cmd(args) -> int:
         for key, owner in raw.items():
             kind, name = key.split(":", 1)
             protected_snapshot[(kind, name)] = owner
+    if not protected_snapshot:
+        print(
+            "ERROR: --protected-snapshot is required for the protected-owner gate",
+            file=sys.stderr,
+        )
+        return 1
     conn = _connect(args.dbname)
     try:
         with conn.cursor() as cur:
             missing = _check_privileges(cur, args.db_user, args.superuser)
-            if protected_snapshot:
-                changed, drift = _check_protected_ownership(
-                    cur, args.superuser, protected_snapshot
-                )
-            elif _is_superuser_cur(cur, args.superuser):
-                current = _protected_owner_snapshot(cur, args.superuser)
-                changed = [
-                    (key, owner, f"<not owned by {args.superuser}>")
-                    for key, owner in current.items()
-                    if owner != args.superuser
-                ]
-                drift = []
-            else:
-                print(
-                    f"ERROR: --superuser '{args.superuser}' is not a PostgreSQL superuser; "
-                    "provide --protected-snapshot for a relative ownership check",
-                    file=sys.stderr,
-                )
-                return 1
+            changed, drift = _check_protected_ownership(
+                cur, args.superuser, protected_snapshot
+            )
     finally:
         conn.close()
     failed = False
@@ -386,16 +367,10 @@ def _check_cmd(args) -> int:
             print(f'  "{schema}"."{name}" {priv}', file=sys.stderr)
     if changed:
         failed = True
-        if protected_snapshot:
-            print(
-                "ERROR: protected object owner(s) changed during the run:",
-                file=sys.stderr,
-            )
-        else:
-            print(
-                f"ERROR: protected object owner(s) not owned by superuser '{args.superuser}':",
-                file=sys.stderr,
-            )
+        print(
+            "ERROR: protected object owner(s) changed during the run:",
+            file=sys.stderr,
+        )
         for (kind, name), before, after in changed:
             print(f"  [{kind}] {name}: {before} -> {after}", file=sys.stderr)
     if drift:

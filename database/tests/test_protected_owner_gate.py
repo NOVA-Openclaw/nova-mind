@@ -74,7 +74,6 @@ def test_non_super_with_snapshot_passes_when_unchanged(fake_conn, monkeypatch, t
             ("event trigger", "schema_change_trigger"): "postgres",
         },
     )
-    monkeypatch.setattr(grg, "_is_superuser_cur", lambda _cur, _user: False)
 
     args = _make_args(superuser="nova", protected_snapshot=str(snap_path))
     err = io.StringIO()
@@ -87,10 +86,9 @@ def test_non_super_with_snapshot_passes_when_unchanged(fake_conn, monkeypatch, t
     assert "OK: DB_USER 'nova' has all required privileges" in err_text
 
 
-def test_non_super_without_snapshot_refuses_absolute_check(fake_conn, monkeypatch):
-    """Default non-super role without snapshot: gate refuses the misleading absolute check."""
+def test_missing_snapshot_refuses_check(fake_conn, monkeypatch):
+    """The gate always requires a protected-owner snapshot."""
     monkeypatch.setattr(grg, "_check_privileges", lambda _cur, _db_user, _superuser: [])
-    monkeypatch.setattr(grg, "_is_superuser_cur", lambda _cur, _user: False)
 
     args = _make_args(superuser="nova", protected_snapshot=None)
     err = io.StringIO()
@@ -99,32 +97,7 @@ def test_non_super_without_snapshot_refuses_absolute_check(fake_conn, monkeypatc
 
     assert rc == 1
     err_text = err.getvalue()
-    assert "'nova' is not a PostgreSQL superuser" in err_text
-    assert "provide --protected-snapshot" in err_text
-    assert "changed during the run" not in err_text
-
-
-def test_super_without_snapshot_reports_actual_owners(fake_conn, monkeypatch):
-    """Real superuser without snapshot: absolute check names the actual owner."""
-    monkeypatch.setattr(grg, "_check_privileges", lambda _cur, _db_user, _superuser: [])
-    monkeypatch.setattr(grg, "_is_superuser_cur", lambda _cur, _user: True)
-    monkeypatch.setattr(
-        grg,
-        "_protected_owner_snapshot",
-        lambda _cur, _superuser: {
-            ("event trigger", "schema_change_trigger"): "nova",
-        },
-    )
-
-    args = _make_args(superuser="postgres", protected_snapshot=None)
-    err = io.StringIO()
-    with patch.object(sys, "stderr", err):
-        rc = grg._check_cmd(args)
-
-    assert rc == 1
-    err_text = err.getvalue()
-    assert "not owned by superuser 'postgres'" in err_text
-    assert "nova -> <not owned by postgres>" in err_text
+    assert "--protected-snapshot is required" in err_text
     assert "changed during the run" not in err_text
 
 
@@ -142,7 +115,6 @@ def test_snapshot_compare_detects_actual_change(fake_conn, monkeypatch, tmp_path
             ("event trigger", "schema_change_trigger"): "nova",
         },
     )
-    monkeypatch.setattr(grg, "_is_superuser_cur", lambda _cur, _user: False)
 
     args = _make_args(superuser="nova", protected_snapshot=str(snap_path))
     err = io.StringIO()

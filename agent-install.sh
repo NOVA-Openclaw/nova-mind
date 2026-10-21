@@ -877,7 +877,7 @@ install_metacognition_plugin() {
         for sql_file in "${mig_files[@]}"; do
             local mig_name
             mig_name=$(basename "$sql_file")
-            if _superuser_psql "$DB_NAME" -f "$sql_file" >/dev/null 2>&1; then
+            if psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 -f "$sql_file" >/dev/null 2>&1; then
                 echo -e "    ${CHECK_MARK} Migration: $mig_name"
             else
                 echo -e "    ${WARNING} Migration failed: $mig_name"
@@ -1091,7 +1091,7 @@ COMPLETION_LOG_RECONCILE_CRON_ENTRY='*/5 * * * * '"$COMPLETION_LOG_RECONCILE_CRO
 # Superuser credentials are session-only (never persisted).  The password is
 # passed only via the PGPASSWORD env var scoped to a single command so it
 # never appears on a command line, in a file, in a log, or in set -x output.
-PG_SUPERUSER="${PG_SUPERUSER:-$DB_USER}"
+PG_SUPERUSER="${PG_SUPERUSER:-postgres}"
 PG_SUPERUSER_HOST="${PG_SUPERUSER_HOST:-/var/run/postgresql}"
 
 # Run a command with PGPASSWORD set to the superuser password, temporarily
@@ -1105,56 +1105,6 @@ _run_with_superuser_secret() {
         set -x
     fi
     return $rc
-}
-
-_superuser_psql() {
-    # Runs psql as PG_SUPERUSER for DDL operations.
-    # Falls back to the agent's own DB role when the two are the same.
-    local db="${1:-$DB_NAME}"
-    shift || true
-    if [ "$PG_SUPERUSER" = "$DB_USER" ]; then
-        psql -U "$DB_USER" -d "$db" "$@"
-    else
-        _run_with_superuser_secret psql \
-            -h "$PG_SUPERUSER_HOST" -U "$PG_SUPERUSER" -d "$db" "$@"
-    fi
-}
-
-_superuser_createdb() {
-    # Runs createdb as PG_SUPERUSER.
-    if [ "$PG_SUPERUSER" = "$DB_USER" ]; then
-        createdb -U "$DB_USER" "$@"
-    else
-        _run_with_superuser_secret createdb \
-            -h "$PG_SUPERUSER_HOST" -U "$PG_SUPERUSER" "$@"
-    fi
-}
-
-_superuser_pgschema() {
-    # Runs pgschema as PG_SUPERUSER for plan/apply.
-    if [ "$PG_SUPERUSER" = "$DB_USER" ]; then
-        "$PGSCHEMA_BIN" "$@"
-    else
-        _run_with_superuser_secret "$PGSCHEMA_BIN" "$@"
-    fi
-}
-
-# Verify that a direct connection to PostgreSQL as PG_SUPERUSER works.
-# Used for fail-fast before any schema steps (#743).
-_verify_superuser_connection() {
-    if [ "$PG_SUPERUSER" = "$DB_USER" ]; then
-        return 0
-    fi
-    # Check for a password without expanding it under xtrace.
-    local old_xtrace=0
-    [[ $- == *x* ]] && old_xtrace=1 && set +x
-    local password_set=1
-    [ -n "${PG_SUPERUSER_PASSWORD:-${PGPASSWORD:-}}" ] || password_set=0
-    [ "$old_xtrace" -eq 1 ] && set -x
-    if [ "$password_set" -eq 0 ]; then
-        return 1
-    fi
-    _superuser_psql postgres -tAc "SELECT 1" >/dev/null 2>&1
 }
 
 # Required PostgreSQL extensions derived from schema.sql usage. schema.sql
@@ -1181,77 +1131,8 @@ _check_agent_credentials() {
     psql -U "$DB_USER" -d postgres -tAc "SELECT 1" >/dev/null 2>&1
 }
 
-# Check whether a named role is a PostgreSQL superuser.  Connects as DB_USER
-# (which is always available) and returns true only when the catalog reports
-# rolsuper = t.  Used to decide the actual capability of PG_SUPERUSER, not
-# just whether its name differs from DB_USER (#756).
-_check_role_superuser() {
-    local role="$1"
-    local result
-    result=$(psql -U "$DB_USER" -d postgres -tAc \
-        "SELECT rolsuper FROM pg_roles WHERE rolname = '$role'" 2>/dev/null | tr -d '[:space:]')
-    [ "$result" = "t" ]
-}
-
 # Check whether the superuser-only prep has already been completed so the
-# installer can skip the superuser phase when no superuser password is given.
-# Verifies: target DB exists and is owned by DB_USER; required extensions exist.
-_check_superuser_prep_done() {
-    local db_owner
-    db_owner=$(psql -U "$DB_USER" -d postgres -tAc \
-        "SELECT pg_catalog.pg_get_userbyid(datdba) FROM pg_catalog.pg_database WHERE datname = '$DB_NAME'" 2>/dev/null | tr -d '[:space:]')
-    if [ "$db_owner" != "$DB_USER" ]; then
-        return 1
-    fi
-    local ext present
-    for ext in "${_INSTALLER_EXTENSIONS[@]}"; do
-        present=$(psql -U "$DB_USER" -d "$DB_NAME" -tAc \
-            "SELECT 1 FROM pg_extension WHERE extname = '$ext'" 2>/dev/null | tr -d '[:space:]')
-        if [ "$present" != "1" ]; then
-            return 1
-        fi
-    done
-    return 0
-}
-
-# Halt when agent credentials are missing or invalid.
-_halt_agent_credentials_error() {
-    echo "" >&2
-    echo -e "  ${CROSS_MARK} Cannot connect to PostgreSQL as agent role '$DB_USER'" >&2
-    echo "      The role must already exist and the password must be correct." >&2
-    echo "      Common causes: missing role, wrong password, or pg_hba.conf rejection." >&2
-    echo "" >&2
-    echo "      Place the password in one of:" >&2
-    echo "        - ~/.openclaw/postgres.json (password field)" >&2
-    echo "        - ~/.pgpass" >&2
-    echo "        - PGPASSWORD environment variable" >&2
-    echo "" >&2
-    echo "      Ask a DBA to run the following prep SQL as a PostgreSQL superuser:" >&2
-    echo "" >&2
-    _print_superuser_sql >&2
-    echo "" >&2
-    exit 1
-}
-
-# Halt when a distinct superuser password is required but not provided.
-_halt_missing_superuser_password() {
-    echo "" >&2
-    echo -e "  ${CROSS_MARK} Superuser password is required but not provided" >&2
-    echo "      PG_SUPERUSER='$PG_SUPERUSER' differs from the agent role '$DB_USER'." >&2
-    echo "" >&2
-    echo "      Provide the superuser password via one of:" >&2
-    echo "        - PG_SUPERUSER_PASSWORD environment variable" >&2
-    echo "        - Interactive shell-install.sh prompt" >&2
-    echo "" >&2
-    echo "      Or ask a DBA to run the prep SQL out of band as a PostgreSQL superuser:" >&2
-    echo "" >&2
-    _print_superuser_sql >&2
-    echo "" >&2
-    exit 1
-}
-
-# Run the required agent credential check and decide whether the superuser
-# phase can be skipped. Exits on failure.
+# Run the required agent credential check. Exits on failure.
 _run_credential_and_superuser_checks() {
     echo ""
     echo "Checking agent credentials..."
@@ -1259,94 +1140,29 @@ _run_credential_and_superuser_checks() {
         _halt_agent_credentials_error
     fi
     echo -e "  ${CHECK_MARK} Agent credentials verified for '$DB_USER'"
-
-    if [ "$PG_SUPERUSER" != "$DB_USER" ]; then
-        if [ -z "${PG_SUPERUSER_PASSWORD:-}" ]; then
-            if _check_superuser_prep_done; then
-                echo -e "  ${INFO} Superuser prep already done; skipping superuser-only reconciliation steps"
-                SKIP_SUPERUSER_PHASE=1
-            else
-                _halt_missing_superuser_password
-            fi
-        fi
-    elif ! _check_role_superuser "$PG_SUPERUSER"; then
-        echo -e "  ${INFO} PG_SUPERUSER='$PG_SUPERUSER' is not a PostgreSQL superuser; skipping superuser-only steps"
-        SKIP_SUPERUSER_PHASE=1
-    fi
 }
 
-# Run a psql DDL operation as the appropriate role for the current schema phase.
-# When SKIP_SUPERUSER_PHASE=1, run as DB_USER (the agent owns the DB); otherwise
-# run as PG_SUPERUSER.
+# Run a psql DDL operation as DB_USER.  The installer never performs schema
+# work as a PostgreSQL superuser (#756).
 _schema_ddl_psql() {
-    if [ "$SKIP_SUPERUSER_PHASE" -eq 1 ]; then
-        psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 "$@"
-    else
-        _superuser_psql "$DB_NAME" "$@"
-    fi
+    psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 "$@"
 }
 
-# Run explicit grant/reconcile psql as the appropriate role for the current phase.
-# When SKIP_SUPERUSER_PHASE=1, run as DB_USER so a non-superuser agent can apply
-# only the grants on objects it owns (#756); otherwise run as PG_SUPERUSER.
+# Run explicit grant/reconcile psql as DB_USER (#756).
 _grant_reconcile_psql() {
-    if [ "$SKIP_SUPERUSER_PHASE" -eq 1 ]; then
-        psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 "$@"
-    else
-        _superuser_psql "$DB_NAME" -v ON_ERROR_STOP=1 "$@"
-    fi
+    psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 "$@"
 }
 
-# Run pgschema plan/apply as the appropriate role for the current schema phase.
+# Run pgschema plan/apply as DB_USER.  The installer never performs schema
+# work as a PostgreSQL superuser (#756).
 _schema_pgschema() {
-    if [ "$SKIP_SUPERUSER_PHASE" -eq 1 ]; then
-        "$PGSCHEMA_BIN" "$@"
-    else
-        _superuser_pgschema "$@"
-    fi
+    "$PGSCHEMA_BIN" "$@"
 }
 
-# Transfer ownership of installer-created objects from PG_SUPERUSER to DB_USER.
-# Uses database/fix_installer_ownership.py to derive the list from the catalog
-# and skips the peer/FDW bootstrap stack (#666).
+# No-op placeholder: ownership transfer was removed because the installer no
+# longer runs schema work as a superuser (#756).
 _transfer_installer_ownership() {
-    echo "  Transferring ownership of installer-created objects to '$DB_USER'..."
-    local ownership_sql_file ownership_err ownership_count
-    ownership_sql_file=$(mktemp "$PGSCHEMA_SCRATCH_DIR/ownership-XXXXXX.sql")
-    ownership_err=$(mktemp "$PGSCHEMA_SCRATCH_DIR/ownership-err-XXXXXX")
-    TMPFILES+=("$ownership_sql_file" "$ownership_err")
-    if "$VENV_PYTHON" "$SCRIPT_DIR/database/fix_installer_ownership.py" \
-            --dbname "$DB_NAME" \
-            --db-user "$DB_USER" \
-            --superuser "$PG_SUPERUSER" \
-            plan >"$ownership_sql_file" 2>"$ownership_err"; then
-        if [ -s "$ownership_err" ]; then
-            while IFS= read -r line; do
-                echo -e "  ${INFO} $line"
-            done < "$ownership_err"
-        fi
-        ownership_count=$(grep -cE '^[[:space:]]*ALTER[[:space:]]+' "$ownership_sql_file" 2>/dev/null || echo 0)
-        if [ "$ownership_count" -gt 0 ] 2>/dev/null; then
-            if _superuser_psql "$DB_NAME" -v ON_ERROR_STOP=1 -f "$ownership_sql_file" >/dev/null 2>"$ownership_err"; then
-                echo -e "  ${CHECK_MARK} Ownership transferred for $ownership_count object(s)"
-            else
-                echo -e "  ${CROSS_MARK} Ownership transfer failed"
-                if [ -s "$ownership_err" ]; then
-                    echo "  psql errors (first ~20 lines):"
-                    head -20 "$ownership_err" | sed 's/^/    /'
-                fi
-                SCHEMA_DIFF_SKIPPED=1
-            fi
-        else
-            echo -e "  ${INFO} No installer-created objects need ownership transfer"
-        fi
-    else
-        echo -e "  ${CROSS_MARK} Failed to plan ownership transfer"
-        if [ -s "$ownership_err" ]; then
-            head -20 "$ownership_err" | sed 's/^/    /'
-        fi
-        SCHEMA_DIFF_SKIPPED=1
-    fi
+    return 0
 }
 
 # Ensure a ~/.pgpass entry exists for a given connection.
@@ -1376,31 +1192,7 @@ _run_schema_management() {
     # These are reported in a single visible WARNING at the end.
     _SKIPPED_SUPERUSER_STEPS=()
     
-    # -- Extensions (superuser only) --
-    if [ "$SKIP_SUPERUSER_PHASE" -eq 1 ]; then
-        echo -e "  ${WARNING} Skipping CREATE EXTENSION (superuser-only; verified present by DBA prep)"
-        _SKIPPED_SUPERUSER_STEPS+=("CREATE EXTENSION")
-    else
-        echo "  Ensuring extensions..."
-        if [ ${#_INSTALLER_EXTENSIONS[@]} -gt 0 ]; then
-            for ext in "${_INSTALLER_EXTENSIONS[@]}"; do
-                if _superuser_psql "$DB_NAME" -tAc "SELECT 1 FROM pg_extension WHERE extname = '$ext'" | grep -q 1; then
-                    echo -e "  ${CHECK_MARK} Extension '$ext' already installed"
-                else
-                    if _superuser_psql "$DB_NAME" -c "CREATE EXTENSION IF NOT EXISTS \"$ext\";" >/dev/null 2>&1; then
-                        echo -e "  ${CHECK_MARK} Extension '$ext' installed"
-                    else
-                        echo -e "  ${CROSS_MARK} Extension '$ext' not installed — requires superuser"
-                        SCHEMA_DIFF_SKIPPED=1
-                    fi
-                fi
-            done
-        else
-            echo -e "  ${INFO} No extensions defined in schema.sql"
-        fi
-    fi
-    
-    # -- Pre-migrations (run as the active schema role) --
+    # -- Pre-migrations (run as DB_USER) --
     PRE_MIGRATIONS_DIR="$SCRIPT_DIR/database/pre-migrations"
     if [ -d "$PRE_MIGRATIONS_DIR" ]; then
         PRE_MIGRATION_FILES=()
@@ -1593,7 +1385,7 @@ _run_schema_management() {
         if [ "$SKIP_SUPERUSER_PHASE" -eq 1 ]; then
             echo "  Running pgschema plan (as DB_USER $DB_USER)..."
         else
-            echo "  Running pgschema plan (as superuser $PG_SUPERUSER)..."
+            echo "  Running pgschema plan (as DB_USER $DB_USER)..."
         fi
         PLAN_EXIT=0
         _schema_pgschema plan \
@@ -1713,27 +1505,13 @@ _run_schema_management() {
                             if ! "$VENV_PYTHON" "$SCRIPT_DIR/database/grant_reconcile_gate.py" \
                                     --dbname "$DB_NAME" \
                                     --db-user "$DB_USER" \
-                                    --superuser "$PG_SUPERUSER" \
+                                    --superuser "$DB_USER" \
                                     protected-snapshot >"$PROTECTED_SNAPSHOT_FILE" 2>"$PROTECTED_PSQL_ERR"; then
                                 echo -e "  ${CROSS_MARK} Failed to capture protected-object ownership snapshot"
                                 head -20 "$PROTECTED_PSQL_ERR" | sed 's/^/    /'
                                 SCHEMA_DIFF_SKIPPED=1
                             fi
 
-                            if [ "$SKIP_SUPERUSER_PHASE" -eq 1 ]; then
-                                echo -e "  ${WARNING} Skipping installer ownership transfer (superuser-only)"
-                                _SKIPPED_SUPERUSER_STEPS+=("ownership transfer")
-                            else
-                                # Per-object ownership transfer (#666): pgschema applies as the
-                                # superuser, so new relations are owned by PG_SUPERUSER.
-                                # REASSIGN OWNED BY always fails on required system objects,
-                                # so transfer ownership object-by-object and skip the peer/FDW
-                                # bootstrap stack (foreign tables, FDW-backed views and their
-                                # dependencies).  Derivation is from the catalog, not names.
-                                _transfer_installer_ownership
-                            fi
-
-    
                             # Post-schema grant reconciliation (#452): pgschema deliberately
                             # ignores privilege steps, so explicit GRANT/REVOKE lines in
                             # schema.sql must be applied separately to survive fresh installs.
@@ -1783,7 +1561,7 @@ _run_schema_management() {
                                                     if [ -n "${PROTECTED_SNAPSHOT_FILE:-}" ] && [ -s "$PROTECTED_SNAPSHOT_FILE" ]; then
                                                         PROTECTED_CHECK_ARGS+=(--protected-snapshot "$PROTECTED_SNAPSHOT_FILE")
                                                     fi
-                                                    if "$VENV_PYTHON" "$SCRIPT_DIR/database/grant_reconcile_gate.py" --dbname "$DB_NAME" --db-user "$DB_USER" --superuser "$PG_SUPERUSER" check "${PROTECTED_CHECK_ARGS[@]}" 2>"$GRANT_PSQL_ERR"; then
+                                                    if "$VENV_PYTHON" "$SCRIPT_DIR/database/grant_reconcile_gate.py" --dbname "$DB_NAME" --db-user "$DB_USER" --superuser "$DB_USER" check "${PROTECTED_CHECK_ARGS[@]}" 2>"$GRANT_PSQL_ERR"; then
                                                         echo -e "  ${CHECK_MARK} Protected-object ownership gate passed"
                                                     else
                                                         echo -e "  ${CROSS_MARK} Protected-object ownership gate failed"
@@ -2214,7 +1992,7 @@ if [ "$PRINT_SUPERUSER_SQL" -eq 1 ]; then
     exit 0
 fi
 
-SKIP_SUPERUSER_PHASE=0
+SKIP_SUPERUSER_PHASE=1
 _run_credential_and_superuser_checks
 
 # ============================================
@@ -2249,73 +2027,6 @@ else
     echo -e "  ${CROSS_MARK} PostgreSQL service not running"
     echo "  Start: systemctl start postgresql"
     exit 1
-fi
-
-# Superuser DDL capability check (#661 / #743): agent-install.sh run standalone
-# (skipping shell-install.sh's interactive prompt) leaves PG_SUPERUSER
-# unset, and load_pg_superuser_env's fallback resolves it to the agent's
-# own DB_USER (see lib/pg-env.sh). schema.sql previously contained
-# ALTER DEFAULT PRIVILEGES FOR ROLE nova statements requiring the
-# executing role to be a superuser or a member of role nova; #659 phase 1
-# strips those at dump time, which removes THAT specific requirement.
-# But other DDL in the schema/pre-migration path can still require a real
-# superuser on some hosts (e.g. CREATE EXTENSION, if the schema ever
-# declares one -- see the extensions step at line ~1370 below). Warn
-# loudly HERE -- before database creation, not buried at a DDL failure
-# many stages later -- whenever PG_SUPERUSER resolves to a role that is
-# not an actual superuser. This is a warning, not a hard abort: #659
-# phase 1 means most fresh installs now succeed even without a real
-# superuser, so failing closed here would block installs that no longer
-# need superuser privilege at all.
-#
-# #743: when PG_SUPERUSER differs from DB_USER, the password is required.
-# Fail fast with a clear error before any schema change if the direct
-# superuser connection cannot be established.
-if [ "$SKIP_SUPERUSER_PHASE" -eq 1 ]; then
-    echo -e "  ${INFO} Superuser phase skipped (no superuser credentials or PG_SUPERUSER is not a superuser)"
-elif [ "$PG_SUPERUSER" = "$DB_USER" ]; then
-    SUPERUSER_CHECK_ROLE="$DB_USER"
-    SUPERUSER_CHECK=$(_superuser_psql postgres -tAc \
-        "SELECT CASE WHEN EXISTS(SELECT 1 FROM pg_roles WHERE rolname = '$SUPERUSER_CHECK_ROLE')
-             THEN (SELECT rolsuper FROM pg_roles WHERE rolname = '$SUPERUSER_CHECK_ROLE')
-             ELSE NULL
-         END" \
-        2>/dev/null | tr -d '[:space:]')
-    if [ "$SUPERUSER_CHECK" = "t" ]; then
-        echo -e "  ${CHECK_MARK} PG_SUPERUSER=$SUPERUSER_CHECK_ROLE is a PostgreSQL superuser"
-    elif [ "$SUPERUSER_CHECK" = "f" ]; then
-        echo -e "  ${WARNING} PG_SUPERUSER=$SUPERUSER_CHECK_ROLE is not a PostgreSQL superuser"
-        echo "      DDL requiring superuser (e.g. CREATE EXTENSION) will fail if the schema requires it."
-    else
-        echo -e "  ${WARNING} Could not verify PG_SUPERUSER role privileges (role '$SUPERUSER_CHECK_ROLE' may not exist yet)"
-    fi
-else
-    SUPERUSER_CHECK_ROLE="$PG_SUPERUSER"
-    if ! _verify_superuser_connection; then
-        if [ -z "$PG_SUPERUSER_PASSWORD" ]; then
-            echo -e "  ${CROSS_MARK} PG_SUPERUSER='$PG_SUPERUSER' is set but PG_SUPERUSER_PASSWORD is empty"
-        else
-            echo -e "  ${CROSS_MARK} Cannot connect to PostgreSQL as PG_SUPERUSER='$PG_SUPERUSER' on host '$PG_SUPERUSER_HOST'"
-        fi
-        echo "      Provide the superuser password via PG_SUPERUSER_PASSWORD, or run via shell-install.sh."
-        exit 1
-    fi
-    SUPERUSER_CHECK=$(_superuser_psql postgres -tAc \
-        "SELECT CASE WHEN EXISTS(SELECT 1 FROM pg_roles WHERE rolname = '$SUPERUSER_CHECK_ROLE')
-             THEN (SELECT rolsuper FROM pg_roles WHERE rolname = '$SUPERUSER_CHECK_ROLE')
-             ELSE NULL
-         END" \
-        2>/dev/null | tr -d '[:space:]')
-    if [ "$SUPERUSER_CHECK" = "f" ]; then
-        echo -e "  ${WARNING} PG_SUPERUSER=$SUPERUSER_CHECK_ROLE is not a PostgreSQL superuser"
-        echo "      DDL requiring superuser (e.g. CREATE EXTENSION) will fail if the schema requires it."
-        echo "      Export PG_SUPERUSER=postgres (or run via shell-install.sh) if installation fails later"
-        echo "      at a DDL step."
-    elif [ -z "$SUPERUSER_CHECK" ]; then
-        echo -e "  ${WARNING} Could not verify PG_SUPERUSER role privileges (role '$SUPERUSER_CHECK_ROLE' may not exist yet)"
-    else
-        echo -e "  ${CHECK_MARK} PG_SUPERUSER=$SUPERUSER_CHECK_ROLE is a PostgreSQL superuser"
-    fi
 fi
 
 # jq
@@ -2921,33 +2632,78 @@ else
     echo -e "  ${CHECK_MARK} OPENAI_API_KEY set: ${OPENAI_API_KEY:0:8}..."
 fi
 
-# --- Database setup (superuser phase) ---
-if [ "$SKIP_SUPERUSER_PHASE" -eq 0 ]; then
-    echo ""
-    echo "Database setup..."
+# --- Bootstrap check (superuser only when role or database is missing) ---
+# The installer performs all schema/grant/gate work as DB_USER.  The postgres
+# superuser is invoked only on first run, and only to create the agent role
+# and/or database when they do not yet exist (#756).
+_bootstrap_precheck_passes() {
+    local role_exists db_exists
+    role_exists=$(psql -U "$DB_USER" -d postgres -tAc "SELECT 1 FROM pg_roles WHERE rolname = '$DB_USER'" 2>/dev/null | tr -d '[:space:]')
+    db_exists=$(psql -U "$DB_USER" -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname = '$DB_NAME'" 2>/dev/null | tr -d '[:space:]')
+    [ "$role_exists" = "1" ] && [ "$db_exists" = "1" ]
+}
 
-    if psql -U "$DB_USER" -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname = '$DB_NAME'" | grep -q 1 2>/dev/null; then
-        echo -e "  ${CHECK_MARK} Database '$DB_NAME' exists"
-        db_owner=$(psql -U "$DB_USER" -d postgres -tAc "SELECT pg_catalog.pg_get_userbyid(datdba) FROM pg_catalog.pg_database WHERE datname = '$DB_NAME'" 2>/dev/null | tr -d '[:space:]')
-        if [ "$db_owner" != "$DB_USER" ]; then
-            echo -e "  ${WARNING} Database '$DB_NAME' is owned by '$db_owner', not '$DB_USER'; leaving unchanged"
-        else
-            echo -e "  ${CHECK_MARK} Database '$DB_NAME' is owned by '$DB_USER'"
-        fi
-        if psql -U "$DB_USER" -d "$DB_NAME" -c '\q' 2>/dev/null; then
-            echo -e "  ${CHECK_MARK} Database connection verified"
-        else
-            echo -e "  ${CROSS_MARK} Cannot connect to database '$DB_NAME'"
+_halt_bootstrap_credentials_error() {
+    echo "" >&2
+    echo -e "  ${CROSS_MARK} Agent role '$DB_USER' or database '$DB_NAME' does not exist" >&2
+    echo "      To bootstrap automatically, provide PostgreSQL superuser credentials:" >&2
+    echo "        PG_SUPERUSER=postgres PG_SUPERUSER_PASSWORD=<secret>" >&2
+    echo "" >&2
+    echo "      Or ask a DBA to run the following prep SQL as a PostgreSQL superuser:" >&2
+    echo "" >&2
+    _print_superuser_sql >&2
+    echo "" >&2
+    exit 1
+}
+
+_bootstrap_role_and_database() {
+    local role_exists db_exists
+    role_exists=$(psql -U "$DB_USER" -d postgres -tAc "SELECT 1 FROM pg_roles WHERE rolname = '$DB_USER'" 2>/dev/null | tr -d '[:space:]')
+    db_exists=$(psql -U "$DB_USER" -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname = '$DB_NAME'" 2>/dev/null | tr -d '[:space:]')
+
+    if [ "$role_exists" = "1" ] && [ "$db_exists" = "1" ]; then
+        echo -e "  ${CHECK_MARK} Agent role and database exist"
+        return 0
+    fi
+
+    if [ -z "${PG_SUPERUSER_PASSWORD:-}" ]; then
+        _halt_bootstrap_credentials_error
+    fi
+
+    echo ""
+    echo "Bootstrapping agent role and database as '$PG_SUPERUSER'..."
+
+    if [ "$role_exists" != "1" ]; then
+        _run_with_superuser_secret psql -h "$PG_SUPERUSER_HOST" -U "$PG_SUPERUSER" -d postgres -c \
+            "CREATE ROLE $DB_USER LOGIN PASSWORD '$PGPASSWORD';" >/dev/null 2>&1 || {
+            echo -e "  ${CROSS_MARK} Failed to create agent role '$DB_USER'"
             exit 1
-        fi
-    else
-        echo "  Creating database '$DB_NAME' with owner '$DB_USER'..."
-        _superuser_createdb -O "$DB_USER" "$DB_NAME" 2>/dev/null || {
+        }
+        echo -e "  ${CHECK_MARK} Created agent role '$DB_USER'"
+    fi
+
+    if [ "$db_exists" != "1" ]; then
+        _run_with_superuser_secret psql -h "$PG_SUPERUSER_HOST" -U "$PG_SUPERUSER" -d postgres -c \
+            "CREATE DATABASE $DB_NAME OWNER $DB_USER;" >/dev/null 2>&1 || {
             echo -e "  ${CROSS_MARK} Failed to create database '$DB_NAME'"
             exit 1
         }
-        echo -e "  ${CHECK_MARK} Database '$DB_NAME' created"
+        echo -e "  ${CHECK_MARK} Created database '$DB_NAME'"
     fi
+
+    local ext
+    for ext in "${_INSTALLER_EXTENSIONS[@]}"; do
+        _run_with_superuser_secret psql -h "$PG_SUPERUSER_HOST" -U "$PG_SUPERUSER" -d "$DB_NAME" -c \
+            "CREATE EXTENSION IF NOT EXISTS \"$ext\";" >/dev/null 2>&1 || {
+            echo -e "  ${CROSS_MARK} Failed to create extension '$ext'"
+            exit 1
+        }
+        echo -e "  ${CHECK_MARK} Extension '$ext' installed"
+    done
+}
+
+if ! _bootstrap_precheck_passes; then
+    _bootstrap_role_and_database
 fi
 
 # --- Python virtual environment ---

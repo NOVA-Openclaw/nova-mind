@@ -64,10 +64,10 @@ load_pg_env() {
 # load_pg_superuser_env — session-only superuser credentials for DDL operations.
 # These are NOT persisted to postgres.json. Set them via environment before
 # calling agent-install.sh (e.g. shell-install.sh prompts for them).
+# Superuser credentials are optional and used ONLY for bootstrap (#756).
 load_pg_superuser_env() {
-  # Resolve superuser: explicit env var → same as agent user → current unix user
-  local superuser="${PG_SUPERUSER:-${PGUSER:-$(whoami)}}"
-  local superuser_pass="${PG_SUPERUSER_PASSWORD:-${PGPASSWORD:-}}"
+  local superuser="${PG_SUPERUSER:-}"
+  local superuser_pass="${PG_SUPERUSER_PASSWORD:-}"
   local superuser_host="${PG_SUPERUSER_HOST:-/var/run/postgresql}"
 
   export PG_SUPERUSER="$superuser"

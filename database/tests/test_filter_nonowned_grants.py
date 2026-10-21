@@ -158,3 +158,76 @@ def test_owner_revoke_still_skipped_before_non_owned_check(monkeypatch, captured
     assert out.strip() == ""
     assert "owner/DB_USER REVOKE" in err
     assert "Kept 0" in err
+
+
+def test_named_role_revoke_on_table_is_dropped(monkeypatch, captured):
+    """Stale REVOKE from a former owner is dropped (#759)."""
+    owners = {("public", "t"): "nova"}
+    stdin = "REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE t FROM newhart;\n"
+    rc, out, err = _run_filter(monkeypatch, stdin, owners, is_super=False)
+    assert rc == 0
+    assert out.strip() == ""
+    assert "named-role REVOKE" in err
+    assert "newhart" in err
+    assert "Kept 0" in err
+
+
+def test_named_role_revoke_on_sequence_is_dropped(monkeypatch, captured):
+    owners = {("public", "t_id_seq"): "nova"}
+    stdin = "REVOKE USAGE, SELECT, UPDATE ON SEQUENCE t_id_seq FROM newhart;\n"
+    rc, out, err = _run_filter(monkeypatch, stdin, owners, is_super=False)
+    assert rc == 0
+    assert out.strip() == ""
+    assert "named-role REVOKE" in err
+    assert "Kept 0" in err
+
+
+def test_revoke_from_public_on_table_is_kept(monkeypatch, captured):
+    """REVOKE ... FROM PUBLIC is intentionally preserved."""
+    owners = {("public", "t"): "nova"}
+    stdin = "REVOKE INSERT, UPDATE ON TABLE t FROM PUBLIC;\n"
+    rc, out, err = _run_filter(monkeypatch, stdin, owners, is_super=False)
+    assert rc == 0
+    assert "REVOKE INSERT, UPDATE ON TABLE t FROM PUBLIC" in out
+    assert "SKIPPED" not in err
+    assert "Kept 1" in err
+
+
+def test_allowlisted_named_role_revoke_is_kept(monkeypatch, captured):
+    """An intentional restrictive revoke in the allowlist passes through."""
+    owners = {("public", "t"): "nova"}
+    allow = (
+        "table",
+        "public",
+        "t",
+        frozenset(["newhart"]),
+        frozenset(["select", "update"]),
+        "documented intentional denylist in #381",
+    )
+    monkeypatch.setattr(fsg, "_INTENTIONAL_REVOKE_ALLOWLIST", [allow])
+    stdin = "REVOKE SELECT, UPDATE ON TABLE t FROM newhart;\n"
+    rc, out, err = _run_filter(monkeypatch, stdin, owners, is_super=False)
+    assert rc == 0
+    assert "REVOKE SELECT, UPDATE ON TABLE t FROM newhart" in out
+    assert "SKIPPED" not in err
+    assert "Kept 1" in err
+
+
+def test_allowlist_does_not_cover_unlisted_privilege(monkeypatch, captured):
+    """A statement with both allowlisted and unlisted privileges is dropped."""
+    owners = {("public", "t"): "nova"}
+    allow = (
+        "table",
+        "public",
+        "t",
+        frozenset(["newhart"]),
+        frozenset(["select"]),
+        "documented intentional denylist in #381",
+    )
+    monkeypatch.setattr(fsg, "_INTENTIONAL_REVOKE_ALLOWLIST", [allow])
+    stdin = "REVOKE SELECT, DELETE ON TABLE t FROM newhart;\n"
+    rc, out, err = _run_filter(monkeypatch, stdin, owners, is_super=False)
+    assert rc == 0
+    assert out.strip() == ""
+    assert "named-role REVOKE" in err
+    assert "Kept 0" in err

@@ -14,6 +14,14 @@ Additionally, REVOKE statements that would strip privileges from the target
 relation's owner or from the target database's agent user (``DB_USER``) are
 skipped (#590).  Ownership is derived from the catalog, not from role names.
 
+Base-privilege reconciliation is additive, so REVOKE statements that strip
+base privileges (SELECT/INSERT/UPDATE/DELETE/TRUNCATE/REFERENCES/TRIGGER on
+tables and views, USAGE/SELECT/UPDATE on sequences) from named roles are also
+skipped, because they are almost always pg_dump owner-ACL residue from a
+former owner (#759).  REVOKE ... FROM PUBLIC is kept, and an explicit
+allowlist can permit intentional restrictive revokes when documented in an
+issue (see #381).
+
 When ``DB_USER`` is not a PostgreSQL superuser, GRANT/REVOKE statements that
 target objects not owned by ``DB_USER`` are also skipped, because a non-owner
 cannot grant privileges on those objects.
@@ -25,9 +33,19 @@ import argparse
 import os
 import re
 import sys
-from typing import Dict, Tuple
+from typing import Dict, FrozenSet, Tuple
 
 import psycopg2
+
+# Intentional restrictive revokes that are allowed to pass through the filter
+# despite targeting named roles on tables/sequences.  Each entry is a tuple of
+# (kind, schema, name, roles, privileges, reason).  kind is the lower-case
+# object keyword ("table" or "sequence").  schema and name are lower-case,
+# unquoted identifiers.  roles and privileges are frozensets of lower-case
+# identifiers; an empty set means "any".  Add entries only when documented in
+# an issue (see #381).
+_IntentionalRevoke = Tuple[str, str, str, FrozenSet[str], FrozenSet[str], str]
+_INTENTIONAL_REVOKE_ALLOWLIST: list[_IntentionalRevoke] = []
 
 GRANT_REVOKE_RE = re.compile(
     r"^\s*(GRANT|REVOKE)\b",
@@ -44,6 +62,12 @@ TARGET_RE = re.compile(
 
 FROM_RE = re.compile(
     r"\bFROM\s+(.+?)(?:\s+(?:CASCADE|RESTRICT))?\s*;?\s*$",
+    re.IGNORECASE,
+)
+
+# Privileges between REVOKE and ON, e.g. "DELETE, INSERT, SELECT, UPDATE".
+REVOKE_PRIV_RE = re.compile(
+    r"^\s*REVOKE\s+(.*?)\s+\bON\b",
     re.IGNORECASE,
 )
 
@@ -89,6 +113,70 @@ def _target_objects(line: str) -> list[Tuple[str, str]]:
             if name:
                 objects.append((schema, name))
     return objects
+
+
+def _parse_privileges(line: str) -> set[str]:
+    """Return the lower-case privilege names revoked by a REVOKE statement.
+
+    ``ALL`` / ``ALL PRIVILEGES`` is returned as an empty set (meaning all
+    base privileges for allowlist matching).
+    """
+    match = REVOKE_PRIV_RE.search(line)
+    if not match:
+        return set()
+    text = match.group(1)
+    text = re.sub(r"GRANT\s+OPTION\s+FOR\s+", "", text, flags=re.IGNORECASE).strip()
+    if re.fullmatch(r"ALL(?:\s+PRIVILEGES)?", text, re.IGNORECASE):
+        return set()
+    privs: set[str] = set()
+    for part in _SPLIT_RE.split(text):
+        p = _normalize_identifier(part)
+        if p:
+            privs.add(p)
+    return privs
+
+
+def _allowlist_matches(
+    objects: list[Tuple[str, str]],
+    from_roles: list[str],
+    privs: set[str],
+) -> bool:
+    """Return True if every (object, role, privilege) triple is allowlisted."""
+    if not _INTENTIONAL_REVOKE_ALLOWLIST:
+        return False
+    # Build the set of triples that must be covered.
+    required: set[Tuple[str, str, str, str]] = set()
+    for schema, name in objects:
+        for role in from_roles:
+            if role == "public":
+                continue
+            if privs:
+                for priv in privs:
+                    required.add((schema, name, role, priv))
+            else:
+                # ALL privileges: require a catch-all allowlist entry.
+                required.add((schema, name, role, "*"))
+    if not required:
+        return False
+    covered: set[Tuple[str, str, str, str]] = set()
+    for kind, schema, name, roles, a_privs, _reason in _INTENTIONAL_REVOKE_ALLOWLIST:
+        for obj_schema, obj_name in objects:
+            if schema != obj_schema or name != obj_name:
+                continue
+            for role in from_roles:
+                if role == "public":
+                    continue
+                if roles and role not in roles:
+                    continue
+                if a_privs:
+                    for priv in a_privs:
+                        covered.add((obj_schema, obj_name, role, priv))
+                else:
+                    # Any privilege: cover all required for this object/role.
+                    for req in list(required):
+                        if req[:3] == (obj_schema, obj_name, role):
+                            covered.add(req)
+    return required <= covered
 
 
 def _target_roles(line: str) -> list[str]:
@@ -231,6 +319,9 @@ def main(argv: list[str] | None = None) -> int:
 
         if skip_name is None and line.lstrip().upper().startswith("REVOKE"):
             from_roles = _target_roles(line)
+            # Owner/DB_USER revokes are the most specific skip reason; keep
+            # that reporting even though the named-role table check below would
+            # also catch them.
             if db_user in from_roles:
                 skip_name = f"DB_USER '{db_user}'"
             else:
@@ -239,6 +330,23 @@ def main(argv: list[str] | None = None) -> int:
                     if owner and owner in from_roles:
                         skip_name = f"owner '{owner}'"
                         break
+
+            # Base-privilege reconciliation is additive.  Drop REVOKEs that strip
+            # base DML from named roles on tables/views/sequences, because these
+            # are almost always pg_dump owner-ACL residue from a former owner
+            # (#759).  Keep REVOKE ... FROM PUBLIC and allowlisted intentional
+            # restrictive revokes.
+            if skip_name is None and from_roles and from_roles != ["public"]:
+                all_table_like = True
+                for match in TARGET_RE.finditer(line):
+                    kind = match.group(1).lower().replace(" ", "")
+                    if kind not in {"table", "sequence"}:
+                        all_table_like = False
+                        break
+                if all_table_like and objects:
+                    privs = _parse_privileges(line)
+                    if not _allowlist_matches(objects, from_roles, privs):
+                        skip_name = f"named-role REVOKE ({', '.join(from_roles)})"
 
         # Non-superusers cannot grant/revoke privileges on objects they do
         # not own, so skip those statements entirely.
@@ -261,6 +369,12 @@ def main(argv: list[str] | None = None) -> int:
         if name.startswith("owner ") or name.startswith("DB_USER "):
             print(
                 f"SKIPPED: {count} owner/DB_USER REVOKE statement(s) ({name})",
+                file=sys.stderr,
+            )
+        elif name.startswith("named-role REVOKE "):
+            print(
+                f"SKIPPED: {count} named-role REVOKE statement(s) on "
+                f"tables/sequences ({name})",
                 file=sys.stderr,
             )
         elif name.startswith("non-owned object "):

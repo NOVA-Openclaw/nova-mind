@@ -1,19 +1,25 @@
 #!/usr/bin/env python3
 """Post-reconciliation privilege gate for the target database agent user.
 
-Captures a snapshot of required table/sequence privileges held by DB_USER on
-relations it owns, verifies that no privilege was lost after grant
-reconciliation (#590), and performs an absolute "after" check that DB_USER has
-the required privileges on every relation it owns plus every relation the
-installer run created (i.e., objects still owned by the superuser that are not
-part of the peer/FDW exclusion set) (#666 / #1231).
+Captures a per-grantee snapshot of table/sequence privileges on relations
+owned by DB_USER, verifies that no grantee lost a privilege after grant
+reconciliation (#590 / #759), and performs an absolute "after" check that
+DB_USER has the required privileges on every relation it owns plus every
+relation the installer run created (i.e., objects still owned by the superuser
+that are not part of the peer/FDW exclusion set) (#666 / #1231).
 
-Required privileges by relkind:
+Required privileges for the absolute check command by relkind:
   r, p  -> SELECT, INSERT, UPDATE, DELETE
   v, m, f -> SELECT
   S     -> USAGE, SELECT, UPDATE
 
-Any missing privilege prints the (relation, privilege) list and exits non-zero.
+The snapshot/verify gate monitors a broader set (SELECT/INSERT/UPDATE/DELETE/
+TRUNCATE/REFERENCES/TRIGGER for table-like objects, USAGE/SELECT/UPDATE for
+sequences) so that filter_shadowed_grants.py's additive base-privilege
+reconciliation cannot silently strip privileges from any grantee (#759).
+
+Any missing privilege prints the (grantee, relation, privilege) list and exits
+non-zero.
 """
 
 from __future__ import annotations
@@ -26,7 +32,7 @@ from typing import Dict, List, Set, Tuple
 
 import psycopg2
 
-# Required privileges for the gate.  Keys match pg_class.relkind.
+# Required privileges for the absolute check command.  Keys match pg_class.relkind.
 _PRIVS_BY_KIND: Dict[str, List[Tuple[str, str]]] = {
     "r": [("SELECT", "has_table"), ("INSERT", "has_table"), ("UPDATE", "has_table"), ("DELETE", "has_table")],
     "p": [("SELECT", "has_table"), ("INSERT", "has_table"), ("UPDATE", "has_table"), ("DELETE", "has_table")],
@@ -34,6 +40,17 @@ _PRIVS_BY_KIND: Dict[str, List[Tuple[str, str]]] = {
     "m": [("SELECT", "has_table")],
     "f": [("SELECT", "has_table")],
     "S": [("USAGE", "has_sequence"), ("SELECT", "has_sequence"), ("UPDATE", "has_sequence")],
+}
+
+# Privileges monitored by the no-loss snapshot/verify gate.  These cover the
+# base DML that filter_shadowed_grants.py now treats as additive-only (#759).
+_SNAPSHOT_PRIVS_BY_KIND: Dict[str, List[str]] = {
+    "r": ["SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"],
+    "p": ["SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"],
+    "v": ["SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"],
+    "m": ["SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"],
+    "f": ["SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"],
+    "S": ["USAGE", "SELECT", "UPDATE"],
 }
 
 
@@ -257,17 +274,65 @@ def _check_privileges(cur, db_user: str, superuser: str) -> List[Tuple[str, str,
     return missing
 
 
-def _snapshot(cur, db_user: str) -> Dict[str, Dict[str, bool]]:
-    snapshot: Dict[str, Dict[str, bool]] = {}
+def _unquote_ident(text: str) -> str:
+    """Unquote a PostgreSQL identifier from aclitem text.
+
+    Strips surrounding double quotes and unescapes doubled quotes.  Identifiers
+    that were not quoted in the catalog are returned unchanged.
+    """
+    text = text.strip()
+    if len(text) >= 2 and text[0] == text[-1] == '"':
+        return text[1:-1].replace('""', '"')
+    return text
+
+
+def _relation_grantees(cur, schema: str, name: str, _kind: str) -> List[str]:
+    """Return named grantees on a DB_USER-owned relation, excluding PUBLIC.
+
+    Uses ``pg_class.relacl`` directly so the gate works on PostgreSQL versions
+    that do not expose ``information_schema.sequence_privileges``.
+    """
+    cur.execute(
+        ""
+        "SELECT DISTINCT split_part(aclitem::text, '=', 1) AS grantee"
+        "  FROM pg_class c"
+        "  JOIN pg_namespace n ON n.oid = c.relnamespace"
+        "  LEFT JOIN LATERAL unnest(coalesce(c.relacl, ARRAY[]::aclitem[])) AS aclitem ON true"
+        " WHERE n.nspname = %s AND c.relname = %s"
+        "   AND split_part(aclitem::text, '=', 1) <> ''"
+        "",
+        (schema, name),
+    )
+    seen: set[str] = set()
+    grantees: List[str] = []
+    for row in cur.fetchall():
+        grantee = _unquote_ident(row[0])
+        if grantee and grantee not in seen:
+            seen.add(grantee)
+            grantees.append(grantee)
+    return grantees
+
+
+def _snapshot(cur, db_user: str) -> Dict[str, Dict[str, Dict[str, bool]]]:
+    """Return a per-grantee privilege snapshot for DB_USER-owned objects.
+
+    Outer key: grantee role name.  Middle key: quoted relation name.  Inner
+    key: privilege name.  Only privileges the grantee actually holds at the
+    time of the snapshot are recorded, so the verify step can detect any loss.
+    """
+    snapshot: Dict[str, Dict[str, Dict[str, bool]]] = {}
     for schema, name, kind in _owned_relations(cur, db_user):
         rel = f'"{schema}"."{name}"'
-        snapshot[rel] = {}
-        for priv, func in _PRIVS_BY_KIND.get(kind, []):
-            if func == "has_table":
-                cur.execute("SELECT has_table_privilege(%s, %s, %s)", (db_user, rel, priv))
-            else:
-                cur.execute("SELECT has_sequence_privilege(%s, %s, %s)", (db_user, rel, priv))
-            snapshot[rel][priv] = bool(cur.fetchone()[0])
+        for grantee in _relation_grantees(cur, schema, name, kind):
+            if grantee not in snapshot:
+                snapshot[grantee] = {}
+            snapshot[grantee][rel] = {}
+            for priv in _SNAPSHOT_PRIVS_BY_KIND.get(kind, []):
+                if kind == "S":
+                    cur.execute("SELECT has_sequence_privilege(%s, %s, %s)", (grantee, rel, priv))
+                else:
+                    cur.execute("SELECT has_table_privilege(%s, %s, %s)", (grantee, rel, priv))
+                snapshot[grantee][rel][priv] = bool(cur.fetchone()[0])
     return snapshot
 
 
@@ -300,24 +365,37 @@ def _snapshot_cmd(args) -> int:
 
 def _verify_cmd(args) -> int:
     with open(args.snapshot, "r", encoding="utf-8") as fh:
-        before: Dict[str, Dict[str, bool]] = json.load(fh)
+        before: Dict[str, Dict[str, Dict[str, bool]]] = json.load(fh)
     conn = _connect(args.dbname)
     try:
         with conn.cursor() as cur:
             after = _snapshot(cur, args.db_user)
     finally:
         conn.close()
-    lost: List[Tuple[str, str]] = []
-    for rel, privs in sorted(before.items()):
-        for priv, had in sorted(privs.items()):
-            if had and not after.get(rel, {}).get(priv, False):
-                lost.append((rel, priv))
+    lost: List[Tuple[str, str, str]] = []
+    for role, rels in sorted(before.items()):
+        if role not in after:
+            # Role was dropped; every privilege it held counts as lost.
+            for rel, privs in sorted(rels.items()):
+                for priv, had in sorted(privs.items()):
+                    if had:
+                        lost.append((role, rel, priv))
+            continue
+        for rel, privs in sorted(rels.items()):
+            for priv, had in sorted(privs.items()):
+                if had and not after[role].get(rel, {}).get(priv, False):
+                    lost.append((role, rel, priv))
     if lost:
-        print("ERROR: DB_USER lost privileges after reconciliation:", file=sys.stderr)
-        for rel, priv in lost:
-            print(f"  {rel} {priv}", file=sys.stderr)
+        print("ERROR: grantees lost privileges after reconciliation:", file=sys.stderr)
+        for role, rel, priv in lost:
+            print(f'  role "{role}" lost {priv} on {rel}', file=sys.stderr)
         return 1
-    print(f"OK: DB_USER '{args.db_user}' retained all {len(before)} owned relation privileges", file=sys.stderr)
+    total = sum(len(rels) for rels in before.values())
+    print(
+        f"OK: all grantees retained privileges on {total} "
+        f"DB_USER-owned relation(s)",
+        file=sys.stderr,
+    )
     return 0
 
 

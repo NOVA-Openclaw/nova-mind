@@ -1613,7 +1613,7 @@ _run_schema_management() {
                                         GRANT_PSQL_ERR=$(mktemp "$PGSCHEMA_SCRATCH_DIR/grants-psqlerr-XXXXXX")
                                         GRANT_SNAPSHOT_FILE=$(mktemp "$PGSCHEMA_SCRATCH_DIR/grants-snapshot-XXXXXX.json")
                                         TMPFILES+=("$GRANT_PSQL_ERR" "$GRANT_SNAPSHOT_FILE")
-                                        echo "  Capturing DB_USER privilege snapshot before reconciliation..."
+                                        echo "  Capturing per-grantee privilege snapshot before reconciliation..."
                                         if ! "$VENV_PYTHON" "$SCRIPT_DIR/database/grant_reconcile_gate.py" --dbname "$DB_NAME" --db-user "$DB_USER" snapshot >"$GRANT_SNAPSHOT_FILE" 2>"$GRANT_PSQL_ERR"; then
                                             echo -e "  ${CROSS_MARK} Failed to capture privilege snapshot"
                                             head -20 "$GRANT_PSQL_ERR" | sed 's/^/    /'
@@ -1623,7 +1623,7 @@ _run_schema_management() {
                                                 echo -e "  ${CHECK_MARK} Applied $GRANT_COUNT explicit grant/revoke statement(s)"
                                                 echo "  Verifying DB_USER privileges after reconciliation..."
                                                 if "$VENV_PYTHON" "$SCRIPT_DIR/database/grant_reconcile_gate.py" --dbname "$DB_NAME" --db-user "$DB_USER" verify "$GRANT_SNAPSHOT_FILE" 2>"$GRANT_PSQL_ERR"; then
-                                                    echo -e "  ${CHECK_MARK} DB_USER privilege gate passed"
+                                                    echo -e "  ${CHECK_MARK} No-loss privilege gate passed"
                                                     echo "  Running protected-object ownership gate..."
                                                     PROTECTED_CHECK_ARGS=()
                                                     if [ -n "${PROTECTED_SNAPSHOT_FILE:-}" ] && [ -s "$PROTECTED_SNAPSHOT_FILE" ]; then
@@ -1637,7 +1637,7 @@ _run_schema_management() {
                                                         SCHEMA_DIFF_SKIPPED=1
                                                     fi
                                                 else
-                                                    echo -e "  ${CROSS_MARK} DB_USER privilege gate failed"
+                                                    echo -e "  ${CROSS_MARK} No-loss privilege gate failed"
                                                     head -40 "$GRANT_PSQL_ERR" | sed 's/^/    /'
                                                     SCHEMA_DIFF_SKIPPED=1
                                                 fi

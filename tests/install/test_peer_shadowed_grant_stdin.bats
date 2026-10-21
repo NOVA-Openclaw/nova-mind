@@ -17,6 +17,10 @@ _setup() {
     printf '%s\n' 'load_pg_env() { :; }' 'load_pg_superuser_env() { :; }' >"$FAKE_REPO/lib/pg-env.sh"
     printf '%s\n' '# stub' >"$FAKE_REPO/lib/agent-chat-peer-detection.sh"
 
+    # Minimal postgres.json so the sourced installer can load environment.
+    mkdir -p "$FAKE_HOME/.openclaw"
+    printf '%s\n' '{' '  "host": "localhost",' '  "port": 5432,' '  "database": "test_memory",' '  "user": "nova",' '  "password": ""' '}' >"$FAKE_HOME/.openclaw/postgres.json"
+
     HOME="$FAKE_HOME" AGENT_INSTALL_TEST_MODE=1 source "$FAKE_REPO/agent-install.sh"
 
     VENV_PYTHON="$(command -v python3)"

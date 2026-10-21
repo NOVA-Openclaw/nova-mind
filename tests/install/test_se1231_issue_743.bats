@@ -231,6 +231,45 @@ EOF
     [ -f "$FAKE_HOME/.openclaw/postgres.json" ]
 }
 
+@test "TC-743-033: existing role/database with wrong agent credentials halts cleanly and exits 1" {
+    cat >"$STUB_BIN/psql" <<'EOF'
+#!/usr/bin/env bash
+# Role and database exist, but the agent credential check fails.
+if [[ "$*" == *"SELECT 1 FROM pg_roles WHERE rolname ="* ]]; then
+    echo 1
+    exit 0
+fi
+if [[ "$*" == *"SELECT 1 FROM pg_database WHERE datname ="* ]]; then
+    echo 1
+    exit 0
+fi
+if [[ "$*" == *"SELECT 1"* ]]; then
+    echo "psql: error: FATAL:  password authentication failed for user 'testuser'" >&2
+    exit 1
+fi
+exit 0
+EOF
+    chmod +x "$STUB_BIN/psql"
+
+    # pg_isready must succeed so the installer reaches the credential check.
+    cat >"$STUB_BIN/pg_isready" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+    chmod +x "$STUB_BIN/pg_isready"
+
+    run bash "$FAKE_REPO/agent-install.sh"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Cannot connect to PostgreSQL as agent role 'testuser'"* ]]
+    # This is a credentials error, not a bootstrap error; no prep SQL should be emitted.
+    [[ "$output" != *"CREATE ROLE testuser LOGIN PASSWORD"* ]]
+    [[ "$output" != *"CREATE DATABASE test_memory OWNER testuser"* ]]
+
+    # No mutation should have occurred in FAKE_HOME.
+    [ "$(find "$FAKE_HOME" -type f | wc -l)" -eq 1 ]
+    [ -f "$FAKE_HOME/.openclaw/postgres.json" ]
+}
+
 @test "TC-743-035: real password is never leaked in --print-superuser-sql or halt output" {
     source_installer_functions
 

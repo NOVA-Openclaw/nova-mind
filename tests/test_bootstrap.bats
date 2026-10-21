@@ -159,3 +159,20 @@ teardown() {
     grep -qF -- "-U nova -d postgres -tAc SELECT 1 FROM pg_roles" "$PSQL_LOG"
     grep -qF -- "-U nova -d postgres -tAc SELECT 1 FROM pg_database" "$PSQL_LOG"
 }
+
+@test "bootstrap mutation failure surfaces error and halts before later steps" {
+    ROLE_EXISTS=0
+    DB_EXISTS=0
+    PG_SUPERUSER=postgres
+    PG_SUPERUSER_PASSWORD=super-secret
+    BOOTSTRAP_MUTATIONS_OK=0
+    export ROLE_EXISTS DB_EXISTS PG_SUPERUSER PG_SUPERUSER_PASSWORD BOOTSTRAP_MUTATIONS_OK
+
+    run bash "$BATS_TEST_DIRNAME/../agent-install.sh" --verify-only
+
+    [ "$status" -eq 1 ]
+    grep -q "Failed to create agent role 'nova'" <<< "$output"
+    # The installer must exit before the prerequisites section.
+    ! grep -qF -- "Checking prerequisites" <<< "$output"
+    ! grep -qF -- "nova-mind verification" <<< "$output"
+}

@@ -33,10 +33,12 @@ GRANT USAGE ON SEQUENCE ai_models_id_seq TO argus;
 GRANT SELECT ON TABLE other_table TO public;
 SQL
     [ "$status" -eq 0 ]
-    [[ "$output" == *"Kept 3 grant/revoke statement(s)"* ]]
-    [[ "$output" == *"REVOKE SELECT ON TABLE ai_models FROM newhart"* ]]
+    # Without --shadowed-names the REVOKE is still dropped as a named-role
+    # base REVOKE (#759); the two GRANTs are kept.  3 - 1 = 2.
+    [[ "$output" == *"SKIPPED: 1 named-role REVOKE statement(s) on tables/sequences (named-role REVOKE (newhart))"* ]]
+    [[ "$output" == *"Kept 2 grant/revoke statement(s)"* ]]
+    [[ "$output" != *"REVOKE SELECT ON TABLE ai_models FROM newhart"* ]]
     [[ "$output" == *"GRANT USAGE ON SEQUENCE ai_models_id_seq TO argus"* ]]
-    [[ "$output" != *"SKIPPED"* ]]
 }
 
 @test "TC-1231h: grant reconciliation surfaces psql errors" {
@@ -49,6 +51,10 @@ SQL
     mkdir -p "$FAKE_REPO/lib"
     printf '%s\n' 'load_pg_env() { :; }' 'load_pg_superuser_env() { :; }' >"$FAKE_REPO/lib/pg-env.sh"
     printf '%s\n' '# stub' >"$FAKE_REPO/lib/agent-chat-peer-detection.sh"
+
+    # Minimal postgres.json so the sourced installer can load environment.
+    mkdir -p "$FAKE_HOME/.openclaw"
+    printf '%s\n' '{' '  "host": "localhost",' '  "port": 5432,' '  "database": "test_memory",' '  "user": "nova",' '  "password": ""' '}' >"$FAKE_HOME/.openclaw/postgres.json"
 
     HOME="$FAKE_HOME" AGENT_INSTALL_TEST_MODE=1 source "$FAKE_REPO/agent-install.sh"
 

@@ -58,10 +58,15 @@ _BASE_DML_PRIVS = {"select", "insert", "update", "delete"}
 # lower-case identifiers; "*" matches any.  privileges is a frozenset of
 # lower-case privilege names or "*" for any base-DML privilege.
 #
-# After inspecting the current database/schema.sql, every base-DML
-# REVOKE ... FROM <named role> line matches the owner-ACL residue pattern
-# described in nova-mind#759, so no production entries are required here.
-# The mechanism is unit-tested by monkeypatching this list.
+# Most dropped base-DML REVOKEs are owner-ACL residue from the patterns
+# described in nova-mind#759.  The REVOKEs on agent_actions, agent_domains,
+# agent_jobs, agent_modifications and agent_system_config look like an
+# intentional "READ-ONLY except Newhart" policy documented in
+# database/schema-reference.md, but that policy has drifted in production
+# (about 19 roles already hold DML there).  Because #759 is additive and
+# keeps live grants as they are, those restrictive REVOKEs are deliberately
+# NOT enforced here; the decision is tracked in nova-mind#761.  The
+# mechanism is unit-tested by monkeypatching this list.
 _ALLOWED_RESTRICTIVE_REVOKES: list[
     tuple[str, str, str, frozenset[str] | str, str]
 ] = []

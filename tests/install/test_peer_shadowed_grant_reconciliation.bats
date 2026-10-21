@@ -33,10 +33,14 @@ GRANT USAGE ON SEQUENCE ai_models_id_seq TO argus;
 GRANT SELECT ON TABLE other_table TO public;
 SQL
     [ "$status" -eq 0 ]
-    [[ "$output" == *"Kept 3 grant/revoke statement(s)"* ]]
-    [[ "$output" == *"REVOKE SELECT ON TABLE ai_models FROM newhart"* ]]
+    # With no shadowed names supplied, the ai_models grants are not skipped
+    # because of shadowing; the base-DML REVOKE is skipped additively (#759).
+    [[ "$output" == *"Kept 2 grant/revoke statement(s)"* ]]
     [[ "$output" == *"GRANT USAGE ON SEQUENCE ai_models_id_seq TO argus"* ]]
-    [[ "$output" != *"SKIPPED"* ]]
+    [[ "$output" == *"GRANT SELECT ON TABLE other_table TO public"* ]]
+    [[ "$output" == *"SKIPPED: 1 additive base-DML REVOKE statement(s)"* ]]
+    [[ "$output" != *"REVOKE SELECT ON TABLE ai_models FROM newhart"* ]]
+    [[ "$output" != *"peer-shadowed"* ]]
 }
 
 @test "TC-1231h: grant reconciliation surfaces psql errors" {

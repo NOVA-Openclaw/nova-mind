@@ -13,6 +13,10 @@ GRANT/REVOKE lines must not be reconciled against the local database.
 Additionally, REVOKE statements that would strip privileges from the target
 relation's owner or from the target database's agent user (``DB_USER``) are
 skipped (#590).  Ownership is derived from the catalog, not from role names.
+
+When ``DB_USER`` is not a PostgreSQL superuser, GRANT/REVOKE statements that
+target objects not owned by ``DB_USER`` are also skipped, because a non-owner
+cannot grant privileges on those objects.
 """
 
 from __future__ import annotations
@@ -125,7 +129,7 @@ def _dsn(dbname: str, superuser: bool = False) -> str:
 
 
 def _load_owner_map(dbname: str) -> Dict[Tuple[str, str], str]:
-    """Query the catalog for relation owners in the target database."""
+    """Query the catalog for relation and function owners in the target database."""
     conn = psycopg2.connect(_dsn(dbname))
     try:
         with conn.cursor() as cur:
@@ -137,10 +141,38 @@ def _load_owner_map(dbname: str) -> Dict[Tuple[str, str], str]:
                 "WHERE c.relkind IN ('r','v','m','S','f','p') "
                 "  AND n.nspname NOT IN ('pg_catalog','information_schema')"
             )
-            return {
+            owners = {
                 (_normalize_identifier(row[0]), _normalize_identifier(row[1])): _normalize_identifier(row[2])
                 for row in cur.fetchall()
             }
+            # Function grants are rare in schema.sql but must be covered when
+            # present.  The catalog stores argument types separately, so build
+            # a name that matches the FUNCTION target text (e.g. func()).
+            cur.execute(
+                "SELECT n.nspname, p.proname || '(' || "
+                "COALESCE(pg_get_function_identity_arguments(p.oid), '') || ')', r.rolname "
+                "FROM pg_proc p "
+                "JOIN pg_namespace n ON n.oid = p.pronamespace "
+                "JOIN pg_roles r ON r.oid = p.proowner "
+                "WHERE n.nspname NOT IN ('pg_catalog','information_schema')"
+            )
+            for row in cur.fetchall():
+                owners[(_normalize_identifier(row[0]), _normalize_identifier(row[1]))] = _normalize_identifier(row[2])
+            return owners
+    finally:
+        conn.close()
+
+
+def _is_superuser(dbname: str, db_user: str) -> bool:
+    """Return True if db_user is a PostgreSQL superuser in dbname."""
+    if not db_user:
+        return False
+    conn = psycopg2.connect(_dsn(dbname))
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT rolsuper FROM pg_roles WHERE rolname = %s", (db_user,))
+            row = cur.fetchone()
+            return bool(row and row[0])
     finally:
         conn.close()
 
@@ -171,8 +203,10 @@ def main(argv: list[str] | None = None) -> int:
     db_user = args.db_user.lower()
 
     owner_map: Dict[Tuple[str, str], str] = {}
+    is_db_super = False
     if db_user and args.dbname:
         try:
+            is_db_super = _is_superuser(args.dbname, db_user)
             owner_map = _load_owner_map(args.dbname)
         except psycopg2.Error as exc:
             print(f"ERROR: cannot load relation owners: {exc}", file=sys.stderr)
@@ -206,6 +240,16 @@ def main(argv: list[str] | None = None) -> int:
                         skip_name = f"owner '{owner}'"
                         break
 
+        # Non-superusers cannot grant/revoke privileges on objects they do
+        # not own, so skip those statements entirely.
+        if skip_name is None and not is_db_super and objects:
+            for obj in objects:
+                owner = owner_map.get(obj)
+                if owner and owner != db_user:
+                    schema, name = obj
+                    skip_name = f"non-owned object '{schema}.{name}' (owner '{owner}')"
+                    break
+
         if skip_name is not None:
             skipped[skip_name] = skipped.get(skip_name, 0) + 1
         else:
@@ -217,6 +261,11 @@ def main(argv: list[str] | None = None) -> int:
         if name.startswith("owner ") or name.startswith("DB_USER "):
             print(
                 f"SKIPPED: {count} owner/DB_USER REVOKE statement(s) ({name})",
+                file=sys.stderr,
+            )
+        elif name.startswith("non-owned object "):
+            print(
+                f"SKIPPED: {count} grant/revoke statement(s) for {name}",
                 file=sys.stderr,
             )
         else:

@@ -1767,8 +1767,17 @@ _run_schema_management() {
                                             else
                                                 echo -e "  ${CROSS_MARK} Grant reconciliation failed"
                                                 if [ -s "$GRANT_PSQL_ERR" ]; then
-                                                    echo "  psql errors (first ~20 lines):"
-                                                    head -20 "$GRANT_PSQL_ERR" | sed 's/^/    /'
+                                                    local _error_lines _warning_count
+                                                    _error_lines=$(grep -n '^ERROR:' "$GRANT_PSQL_ERR" || true)
+                                                    _warning_count=$(grep -c '^WARNING:' "$GRANT_PSQL_ERR" 2>/dev/null || echo 0)
+                                                    if [ -n "$_error_lines" ]; then
+                                                        echo "  psql errors:"
+                                                        echo "$_error_lines" | head -20 | sed 's/^/    /'
+                                                    fi
+                                                    if [ "$_warning_count" -gt 0 ]; then
+                                                        echo "  ($_warning_count WARNING line(s) omitted; see full log below)"
+                                                    fi
+                                                    echo "  Full stderr preserved at: $GRANT_PSQL_ERR"
                                                 fi
                                                 SCHEMA_DIFF_SKIPPED=1
                                             fi

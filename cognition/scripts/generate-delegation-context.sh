@@ -15,7 +15,15 @@
 # query from silently truncating the document.
 
 OUTPUT_FILE="${1:-$HOME/.openclaw/workspace/DELEGATION_CONTEXT.md}"
-DB_NAME="${DELEGATION_CONTEXT_DB_NAME:-nova_memory}"
+
+# Load shared agent DB resolver. Explicit env/config wins; otherwise
+# "$(whoami)_memory". Issue: nova-mind #775.
+PG_ENV_SH="$HOME/.openclaw/lib/pg-env.sh"
+if [ -f "$PG_ENV_SH" ]; then
+    # shellcheck source=../../lib/pg-env.sh
+    source "$PG_ENV_SH"
+fi
+DB_NAME="${DELEGATION_CONTEXT_DB_NAME:-$(resolve_agent_db)}"
 DB_USER="${DELEGATION_CONTEXT_DB_USER:-$(whoami)}"
 DB_HOST="${DELEGATION_CONTEXT_DB_HOST:-localhost}"
 DB_PORT="${DELEGATION_CONTEXT_DB_PORT:-5432}"
@@ -38,10 +46,10 @@ run_psql() {
 }
 
 # Write the document header, truncating any previous content.
-cat > "$OUTPUT_FILE" << 'EOF'
+cat > "$OUTPUT_FILE" << EOF
 # Delegation Context
 
-Generated from nova_memory database.
+Generated from ${DB_NAME} database.
 
 EOF
 
@@ -214,7 +222,7 @@ fi
 # Footer
 # -----------------------------------------------------------------------------
 echo "---" >> "$OUTPUT_FILE"
-echo "*Auto-generated from nova_memory database. Do not edit manually.*" >> "$OUTPUT_FILE"
+echo "*Auto-generated from ${DB_NAME} database. Do not edit manually.*" >> "$OUTPUT_FILE"
 
 echo "Generated: $OUTPUT_FILE" >&2
 

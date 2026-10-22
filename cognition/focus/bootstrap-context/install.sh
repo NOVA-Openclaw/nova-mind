@@ -8,7 +8,22 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OPENCLAW_DIR="$HOME/.openclaw"
 HOOK_DIR="$OPENCLAW_DIR/hooks/db-bootstrap-context"
 FALLBACK_DIR="$OPENCLAW_DIR/bootstrap-fallback"
-DB_NAME="${DB_NAME:-nova_memory}"
+
+# Load shared agent DB resolver. Explicit PGDATABASE/postgres.json wins;
+# otherwise the DB is "$(whoami)_memory". Issue: nova-mind #775.
+PG_ENV_SH="$OPENCLAW_DIR/lib/pg-env.sh"
+if [ -f "$PG_ENV_SH" ]; then
+    # shellcheck source=../../lib/pg-env.sh
+    source "$PG_ENV_SH"
+fi
+DB_NAME="${DB_NAME:-$(resolve_agent_db)}"
+
+# Sanity: never silently connect as the postgres superuser.
+DB_USER="${DB_USER:-$(whoami)}"
+if [ "$DB_USER" = "postgres" ]; then
+    echo "❌ Error: This installer must run as the agent peer, not postgres." >&2
+    exit 1
+fi
 
 echo "=== Bootstrap Context System Installation ==="
 echo ""

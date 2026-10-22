@@ -9,8 +9,8 @@ Type=simple
 User=nova
 Group=nova
 WorkingDirectory=/home/nova/workspace
-Environment=NOVA_DB=nova_memory
-Environment=NOVA_DB_USER=nova
+Environment=NOVA_DB=%u_memory
+Environment=NOVA_DB_USER=%u
 Environment=NOVA_DB_HOST=localhost
 Environment=OPENCLAW_GATEWAY=http://localhost:18789
 EnvironmentFile=-/home/nova/.config/openclaw/env

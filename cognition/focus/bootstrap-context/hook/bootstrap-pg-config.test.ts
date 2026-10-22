@@ -15,6 +15,7 @@ import path from "node:path";
 import {
   detectBootstrapOverride,
   pgEnvUnavailableWarning,
+  bootstrapForeignDbWarning,
 } from "./bootstrap-pg-config.ts";
 
 function writeJson(filePath: string, data: unknown) {
@@ -119,5 +120,60 @@ describe("pgEnvUnavailableWarning", () => {
       /bootstrap override cannot be applied/,
     );
     assert.match(msg, /ENOENT/);
+  });
+});
+
+describe("bootstrapForeignDbWarning", () => {
+  it("returns undefined when no bootstrap database is configured", () => {
+    const msg = bootstrapForeignDbWarning(undefined, "graybeard_memory");
+    assert.strictEqual(msg, undefined);
+  });
+
+  it("returns undefined when bootstrap database matches the agent's own DB", () => {
+    const msg = bootstrapForeignDbWarning("graybeard_memory", "graybeard_memory");
+    assert.strictEqual(msg, undefined);
+  });
+
+  it("returns a loud warning when bootstrap database targets a foreign DB", () => {
+    const msg = bootstrapForeignDbWarning("nova_memory", "graybeard_memory");
+    assert.ok(msg);
+    assert.match(msg, /DEPRECATED/);
+    assert.match(msg, /nova_memory/);
+    assert.match(msg, /graybeard_memory/);
+    assert.match(msg, /#775/);
+  });
+});
+
+describe("detectBootstrapOverride exposes database", { concurrency: false }, () => {
+  let tmpDir: string;
+  let homeDir: string;
+
+  before(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "bootstrap-cfg-db-test-"));
+    homeDir = path.join(tmpDir, "home");
+  });
+
+  after(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("returns the bootstrap database value when present", () => {
+    writeJson(path.join(homeDir, ".openclaw", "postgres.json"), {
+      database: "graybeard_memory",
+      bootstrap: { database: "nova_memory" },
+    });
+    const result = detectBootstrapOverride(homeDir);
+    assert.strictEqual(result.configured, true);
+    assert.strictEqual(result.database, "nova_memory");
+  });
+
+  it("returns undefined database when bootstrap section omits it", () => {
+    writeJson(path.join(homeDir, ".openclaw", "postgres.json"), {
+      database: "graybeard_memory",
+      bootstrap: { host: "localhost" },
+    });
+    const result = detectBootstrapOverride(homeDir);
+    assert.strictEqual(result.configured, true);
+    assert.strictEqual(result.database, undefined);
   });
 });

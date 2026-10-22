@@ -21,6 +21,10 @@ PG_ENV="${HOME}/.openclaw/lib/pg-env.sh"
 [ -f "$ENV_LOADER" ] && source "$ENV_LOADER" && load_openclaw_env
 [ -f "$PG_ENV" ] && source "$PG_ENV" && load_pg_env 2>/dev/null || true
 
+# After load_pg_env, PGDATABASE is set if it was configured; resolve_agent_db
+# fills in "$(whoami)_memory" otherwise. Issue: nova-mind #775.
+DB="${PGDATABASE:-$(resolve_agent_db)}"
+
 # Flock lock file
 LOCK_FILE="${HOME}/.openclaw/run/extraction-replay.lock"
 mkdir -p "$(dirname "$LOCK_FILE")"
@@ -36,6 +40,7 @@ fi
 BATCH_LIMIT="${EXTRACTION_REPLAY_BATCH_LIMIT:-10}"
 MAX_RETRIES="${EXTRACTION_REPLAY_MAX_RETRIES:-5}"
 EXTRACT_SCRIPT="${EXTRACTION_SCRIPT_PATH_OVERRIDE:-${HOME}/.openclaw/scripts/extract_memories.py}"
+
 
 # Resolve the Python interpreter for extract_memories.py.
 # Resolution order (first match wins):
@@ -90,8 +95,6 @@ fi
 if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
     echo "[extraction-replay] WARNING: ANTHROPIC_API_KEY not set — extractions will likely fail" >&2
 fi
-
-DB="${PGDATABASE:-nova_memory}"
 
 # Helper: run psql with the configured database.
 psql_run() {

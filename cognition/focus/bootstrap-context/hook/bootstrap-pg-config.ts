@@ -22,6 +22,8 @@ export interface BootstrapOverrideStatus {
   configured: boolean;
   /** Keys present in the bootstrap object that are not valid PG fields. */
   unknownKeys: string[];
+  /** The database value from the bootstrap section, if any. */
+  database?: string;
 }
 
 /**
@@ -47,13 +49,19 @@ export function detectBootstrapOverride(homeDir: string): BootstrapOverrideStatu
       // loadPgEnv will warn about non-object section; we don't flag unknown keys here.
       return { configured: false, unknownKeys: [] };
     }
+    const sectionRecord = section as Record<string, unknown>;
     const unknownKeys: string[] = [];
-    for (const key of Object.keys(section as Record<string, unknown>)) {
+    for (const key of Object.keys(sectionRecord)) {
       if (!VALID_BOOTSTRAP_KEYS.has(key)) {
         unknownKeys.push(key);
       }
     }
-    return { configured: true, unknownKeys };
+    const database = sectionRecord.database;
+    return {
+      configured: true,
+      unknownKeys,
+      database: typeof database === "string" && database ? database : undefined,
+    };
   } catch (e) {
     return { configured: false, unknownKeys: [] };
   }
@@ -74,4 +82,29 @@ export function pgEnvUnavailableWarning(
     );
   }
   return `[bootstrap-context] Could not load pg-env.ts: ${error.message}`;
+}
+
+/**
+ * Deprecation warning for the postgres.json `bootstrap` database override.
+ *
+ * The bootstrap section was introduced in #330/#488 to let split agents query
+ * another peer's DB, but that is now the wrong default. Each agent must use
+ * its own `<user>_memory` DB. If the override still points elsewhere, emit a
+ * loud warning so operators can remove it.
+ *
+ * Issue: nova-mind #775
+ */
+export function bootstrapForeignDbWarning(
+  configuredDatabase: string | undefined,
+  ownDb: string,
+): string | undefined {
+  if (!configuredDatabase || configuredDatabase === ownDb) {
+    return undefined;
+  }
+  return (
+    `[bootstrap-context] DEPRECATED: postgres.json bootstrap override targets ` +
+    `foreign database '${configuredDatabase}' instead of this agent's own DB ` +
+    `'${ownDb}'. Remove the bootstrap section or set its database to '${ownDb}'. ` +
+    `See nova-mind #775.`
+  );
 }

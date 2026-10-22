@@ -15,7 +15,7 @@
 
 import pg from "pg";
 import { join } from "path";
-import { homedir } from "os";
+import { homedir, userInfo } from "os";
 
 const { Pool } = pg;
 
@@ -29,11 +29,15 @@ export interface PgConnectionConfig {
   password?: string;
 }
 
+function ownDb(): string {
+  return `${userInfo().username}_memory`;
+}
+
 const HARDCODED_DEFAULTS: PgConnectionConfig = {
   host: "localhost",
   port: 5432,
-  database: "nova_memory",
-  user: "nova",
+  database: ownDb(),
+  user: userInfo().username,
   password: undefined,
 };
 
@@ -71,12 +75,12 @@ function envFallbackConfig(): PgConnectionConfig {
 export async function loadPgConfig(): Promise<PgConnectionConfig> {
   try {
     const pgEnvPath = join(homedir(), ".openclaw", "lib", "pg-env.ts");
-    const { loadPgEnv } = await import(pgEnvPath);
+    const { loadPgEnv, resolveAgentDatabase } = await import(pgEnvPath);
     const config = loadPgEnv() as PgConnectionConfig;
     return {
       host: config.host || HARDCODED_DEFAULTS.host,
       port: config.port || HARDCODED_DEFAULTS.port,
-      database: config.database || HARDCODED_DEFAULTS.database,
+      database: resolveAgentDatabase(config.database, userInfo().username),
       user: config.user || HARDCODED_DEFAULTS.user,
       password: config.password,
     };

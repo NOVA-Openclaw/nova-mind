@@ -9,13 +9,14 @@ Type=simple
 User=nova
 Group=nova
 WorkingDirectory=/home/nova/workspace
-Environment=NOVA_DB=%u_memory
-Environment=NOVA_DB_USER=%u
+# %u expands to the service manager's user (root) in system units, not User=.
+# Do NOT use %u in Environment= lines. Instead, resolve the agent DB at exec
+# time under User=nova via lib/pg-env.sh.
 Environment=NOVA_DB_HOST=localhost
 Environment=OPENCLAW_GATEWAY=http://localhost:18789
 EnvironmentFile=-/home/nova/.config/openclaw/env
 
-ExecStart=/home/nova/workspace/scripts/agent-spawner.py
+ExecStart=/bin/bash -c 'PG_ENV="/home/nova/workspace/lib/pg-env.sh"; [ -f "$PG_ENV" ] && source "$PG_ENV" && load_pg_env 2>/dev/null || true; export NOVA_DB="${NOVA_DB:-$(resolve_agent_db)}"; export NOVA_DB_USER="${NOVA_DB_USER:-$(whoami)}"; exec /home/nova/workspace/scripts/agent-spawner.py'
 Restart=on-failure
 RestartSec=10
 

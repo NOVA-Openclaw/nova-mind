@@ -9,10 +9,20 @@
 
 set -e
 
-# Load OpenClaw environment (API keys from openclaw.json)
+# Load OpenClaw environment (API keys from openclaw.json) and PostgreSQL env.
 ENV_LOADER="${HOME}/.openclaw/lib/env-loader.sh"
+PG_ENV="${HOME}/.openclaw/lib/pg-env.sh"
 # shellcheck source=/dev/null
 [ -f "$ENV_LOADER" ] && source "$ENV_LOADER" && load_openclaw_env
+if [ -f "$PG_ENV" ]; then
+    # shellcheck source=/dev/null
+    source "$PG_ENV" || true
+    load_pg_env 2>/dev/null || true
+fi
+
+# After load_pg_env, PGDATABASE is set if configured; resolve_agent_db fills
+# in "$(whoami)_memory" otherwise. Issue: nova-mind #775.
+DB="${PGDATABASE:-$(resolve_agent_db)}"
 
 # ─────────────────────────────────────────────────────────────
 # Ingest daily memory/*.md files into DB (content only), then delete
@@ -39,7 +49,7 @@ if [ -d "$MEMORY_MD_DIR" ]; then
         value_escaped="${md_content//\'/''}"
         value_truncated="${value_escaped:0:4000}"
 
-        if psql nova_memory -q -c "
+        if psql "$DB" -q -c "
             INSERT INTO entity_facts (entity_id, key, value, source)
             SELECT id, '$key_escaped',
                    '$value_truncated',

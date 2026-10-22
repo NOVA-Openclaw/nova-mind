@@ -532,7 +532,9 @@ _generate_agents_json() {
                                 ? { primary: row.model, fallbacks: [...row.fallback_models] }
                                 : row.model };
 
-                            if (row.is_default === true) entry.default = true;
+                            // #770 — legacy default marker is never emitted under
+                            // agents.ownership=explicit; system agent comes from
+                            // agents.systemAgent.
 
                             if (typeof row.thinking === "string" && row.thinking.length > 0 &&
                                 VALID_THINKING_DEFAULTS.has(row.thinking)) {
@@ -585,7 +587,9 @@ _generate_agents_json() {
                                 else .model
                                 end
                             )}
-                            + (if .is_default == true then {default: true} else {} end)
+                            # #770 — legacy default marker is never emitted under
+                            # agents.ownership=explicit; system agent comes from
+                            # agents.systemAgent.
                             + (if (.allowed_subagents | type) == "array" and (.allowed_subagents | length) > 0
                                 then {subagents: {allowAgents: (.allowed_subagents | sort)}}
                                 else {} end)

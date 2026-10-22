@@ -33,3 +33,31 @@ CATCHUP_SCRIPT="$REPO_ROOT/memory/scripts/memory-catchup.sh"
     [ "$status" -ne 0 ]
     [ -z "$output" ]
 }
+
+@test "TC-775-005: agent-spawner.service uses deployed pg-env.sh path" {
+    run grep -E '^ExecStart=' "$SERVICE_FILE"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"/home/nova/.openclaw/lib/pg-env.sh"* ]]
+    [[ "$output" != *"/home/nova/workspace/lib/pg-env.sh"* ]]
+}
+
+@test "TC-775-006: resolution is not swallowed by || true" {
+    run grep -E 'resolve_agent_db.*\|\|[[:space:]]*true' "$SERVICE_FILE"
+    [ "$status" -ne 0 ]
+    [ -z "$output" ]
+}
+
+@test "TC-775-007: empty NOVA_DB guard exists" {
+    run grep -E '\[ -z "\$NOVA_DB" \]' "$SERVICE_FILE"
+    [ "$status" -eq 0 ]
+}
+
+@test "TC-775-008: ExecStart fails closed when pg-env.sh is missing" {
+    tmp_home=$(mktemp -d)
+    cmd=$(sed -n "s/^ExecStart=\/bin\/bash -c '//;s/'$//p" "$SERVICE_FILE")
+    cmd="${cmd//\/home\/nova\/\.openclaw\/lib\/pg-env\.sh/$tmp_home/.openclaw/lib/pg-env.sh}"
+    run env -i HOME="$tmp_home" PATH="/usr/bin:/bin" bash -c "$cmd"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"NOVA_DB unresolved"* ]]
+    rm -rf "$tmp_home"
+}

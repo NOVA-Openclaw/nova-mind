@@ -46,6 +46,29 @@ const DEFAULTS: Record<string, string | (() => string)> = {
 };
 
 /**
+ * Resolve the canonical agent database name.
+ *
+ * The cognition and memory fallback DB is `<agent>_memory`, derived from the
+ * agent's own OS/pg user name (peers: nova, graybeard, newhart, victoria).
+ * Subagents run as the parent user, so this resolves to the parent's DB.
+ *
+ * Precedence:
+ *   1. An explicit database already resolved from config/env.
+ *   2. PGDATABASE environment variable.
+ *   3. `<username>_memory`, where username defaults to the current OS user.
+ *
+ * Issue: nova-mind #775
+ */
+export function resolveAgentDatabase(
+  preferred?: string | null,
+  username?: string
+): string {
+  if (preferred) return preferred;
+  if (process.env.PGDATABASE) return process.env.PGDATABASE;
+  return `${username ?? userInfo().username}_memory`;
+}
+
+/**
  * Load PostgreSQL config with per-field resolution: section → ENV → config file → defaults.
  *
  * Returns connection config object suitable for pg.Client / pg.Pool constructor,

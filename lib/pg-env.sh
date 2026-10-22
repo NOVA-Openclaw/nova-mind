@@ -61,6 +61,31 @@ load_pg_env() {
   fi
 }
 
+# Resolve the canonical agent database name.
+#
+# The cognition and memory fallback DB is `<agent>_memory`, derived from the
+# agent's own OS/pg user name (peers: nova, graybeard, newhart, victoria).
+# Subagents run as the parent user, so this resolves to the parent's DB.
+#
+# Precedence:
+#   1. An explicit database passed as $1 (e.g. already resolved from config/env).
+#   2. PGDATABASE environment variable.
+#   3. "$(whoami)_memory"
+#
+# Issue: nova-mind #775
+resolve_agent_db() {
+  local preferred_db="${1:-}"
+  if [ -n "$preferred_db" ]; then
+    printf '%s' "$preferred_db"
+    return
+  fi
+  if [ -n "${PGDATABASE:-}" ]; then
+    printf '%s' "$PGDATABASE"
+    return
+  fi
+  printf '%s' "$(whoami)_memory"
+}
+
 # load_pg_superuser_env — session-only superuser credentials for DDL operations.
 # These are NOT persisted to postgres.json. Set them via environment before
 # calling agent-install.sh (e.g. shell-install.sh prompts for them).

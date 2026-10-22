@@ -9,6 +9,10 @@ workflow:
     requirements: ""
     agent_name: ""
     requester: "nova"
+    # Template: set to the running agent's own DB (<agent>_memory).
+    # Default preserves historical nova behavior; the invoking agent must
+    # override this when running on another peer. Issue: nova-mind #775.
+    agent_db: "${requester}_memory"
   
   steps:
     # Step 1: Design the agent
@@ -51,7 +55,7 @@ workflow:
       type: "database"
       operation: "execute_file"
       file: "$sql_file"
-      database: "nova_memory"
+      database: "$agent_db"
       outputs:
         - agent_id: "$result.id"
       retry:

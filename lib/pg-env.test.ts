@@ -7,12 +7,12 @@
  * Run: npx tsx --test lib/pg-env.test.ts
  */
 
-import { describe, it, before, after } from "node:test";
+import { describe, it, before, beforeEach, after, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { loadPgEnv } from "./pg-env.js";
+import { loadPgEnv, resolveAgentDatabase } from "./pg-env.js";
 
 const PG_VARS = ["PGHOST", "PGPORT", "PGDATABASE", "PGUSER", "PGPASSWORD"] as const;
 
@@ -669,5 +669,44 @@ describe("Regression: agent_chat database wins over gateway PGDATABASE", { concu
   it("uses agent_chat section database instead of process.env.PGDATABASE", () => {
     const cfg = loadPgEnv(configPath, "agent_chat");
     assert.strictEqual(cfg.database, "agent_chat_staging");
+  });
+});
+
+describe("resolveAgentDatabase", { concurrency: false }, () => {
+  let savedEnv: Record<string, string | undefined>;
+
+  beforeEach(() => {
+    savedEnv = clearPgEnv();
+  });
+
+  afterEach(() => {
+    restorePgEnv(savedEnv);
+  });
+
+  it("returns graybeard_memory for user graybeard with no env/config", () => {
+    assert.strictEqual(resolveAgentDatabase(undefined, "graybeard"), "graybeard_memory");
+  });
+
+  it("returns nova_memory for user nova with no env/config", () => {
+    assert.strictEqual(resolveAgentDatabase(undefined, "nova"), "nova_memory");
+  });
+
+  it("prefers explicit config database over fallback", () => {
+    assert.strictEqual(resolveAgentDatabase("explicit_db", "graybeard"), "explicit_db");
+  });
+
+  it("prefers PGDATABASE env over fallback when no explicit config", () => {
+    process.env.PGDATABASE = "env_memory";
+    assert.strictEqual(resolveAgentDatabase(undefined, "graybeard"), "env_memory");
+  });
+
+  it("prefers explicit config over PGDATABASE env", () => {
+    process.env.PGDATABASE = "env_memory";
+    assert.strictEqual(resolveAgentDatabase("explicit_db", "graybeard"), "explicit_db");
+  });
+
+  it("falls back to current OS user when no args", () => {
+    const expected = `${os.userInfo().username}_memory`;
+    assert.strictEqual(resolveAgentDatabase(), expected);
   });
 });

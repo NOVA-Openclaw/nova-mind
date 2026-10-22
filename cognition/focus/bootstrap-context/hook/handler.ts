@@ -14,30 +14,39 @@ import { homedir, userInfo } from 'os';
 import {
   detectBootstrapOverride,
   pgEnvUnavailableWarning,
+  bootstrapForeignDbWarning,
 } from './bootstrap-pg-config.ts';
 
 // Load PG config from postgres.json without polluting process.env.
-// An optional `bootstrap` section overrides the primary DB for bootstrap
-// context lookups, allowing split agents (e.g. newhart → newhart_memory)
-// to still query agent_bootstrap_context from nova_memory.
+// The optional `bootstrap` section is DEPRECATED (#775): each agent must load
+// bootstrap context from its own `<user>_memory` database. A bootstrap override
+// that targets any other database is logged as a loud warning.
 // See: https://github.com/NOVA-Openclaw/nova-mind/issues/330
 // See: https://github.com/NOVA-Openclaw/nova-mind/issues/488
+// See: https://github.com/NOVA-Openclaw/nova-mind/issues/775
 const pgEnvPath = join(homedir(), '.openclaw', 'lib', 'pg-env.ts');
+const osUser = userInfo().username;
+const ownDb = `${osUser}_memory`;
 let pgConfig: { host?: string; port?: number; database?: string; user?: string; password?: string } = {
   host: 'localhost',
   port: 5432,
-  database: 'nova_memory',
-  user: userInfo().username,
+  database: ownDb,
+  user: osUser,
 };
 
 const bootstrapOverride = detectBootstrapOverride(homedir());
 
 try {
-  const { loadPgEnv } = await import(pgEnvPath);
+  const { loadPgEnv, resolveAgentDatabase } = await import(pgEnvPath);
   pgConfig = loadPgEnv(undefined, 'bootstrap');
+  const foreignWarning = bootstrapForeignDbWarning(bootstrapOverride.database, ownDb);
+  if (foreignWarning) {
+    console.warn(foreignWarning);
+  }
   for (const key of bootstrapOverride.unknownKeys) {
     console.warn(`[bootstrap-context] Unknown key "${key}" in postgres.json bootstrap section — ignoring`);
   }
+  pgConfig.database = resolveAgentDatabase(pgConfig.database, osUser);
 } catch (e) {
   console.warn(pgEnvUnavailableWarning(bootstrapOverride.configured, e as Error));
 }
@@ -115,6 +124,8 @@ async function loadFromDatabase(agentName: string): Promise<DbResult> {
       console.warn('[bootstrap-context] Database connection refused - falling back to static files');
     } else if ((error as any).code === '42883') {
       console.warn('[bootstrap-context] Function get_agent_bootstrap not found - database schema may need updating');
+    } else if ((error as any).code === '42501') {
+      console.error(`[bootstrap-context] Permission denied for agent_bootstrap_context in database '${pgConfig.database}' - check grants. Falling back to static files.`);
     } else {
       console.error('[bootstrap-context] Database query failed:', error);
     }
@@ -191,7 +202,7 @@ Your bootstrap context system is not functioning properly.
 You are an AI agent in the NOVA system. Your full context could not be loaded.
 Operate in safe mode until context is restored.
 
-**Database:** nova_memory
+**Database:** ${ownDb}
 **Table:** agent_bootstrap_context
 **Hook:** ~/.openclaw/hooks/db-bootstrap-context/
 `

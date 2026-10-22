@@ -13,10 +13,11 @@ process.stdin.setEncoding("utf8");
 process.stdin.on("data", c => input += c);
 process.stdin.on("end", () => {
     const rows = JSON.parse(input);
-    const list = [];
+    const entries = {};
     for (const row of rows) {
-        const entry = { id: row.id, model: row.model };
-        if (row.default === true) entry.default = true;
+        // #770 — legacy default marker is never emitted under agents.ownership=explicit.
+        const entry = { model: row.model };
+        if (typeof row.thinking === "string" && row.thinking.length > 0) entry.thinkingDefault = row.thinking;
         if (row.subagents) entry.subagents = row.subagents;
         if (row.heartbeat) {
             const hb = { every: row.heartbeat.every };
@@ -24,10 +25,13 @@ process.stdin.on("end", () => {
             if (row.heartbeat.to) hb.to = row.heartbeat.to;
             entry.heartbeat = hb;
         }
-        list.push(entry);
+        entries[row.id] = entry;
     }
-    list.sort((a, b) => a.id.localeCompare(b.id));
-    process.stdout.write(JSON.stringify(list, null, 2) + "\n");
+    const sorted = {};
+    for (const key of Object.keys(entries).sort((a, b) => a.localeCompare(b))) {
+        sorted[key] = entries[key];
+    }
+    process.stdout.write(JSON.stringify(sorted, null, 2) + "\n");
 });
 '
 
@@ -38,7 +42,7 @@ PG_ORDERED_INPUT='[
   {
     "id": "nova",
     "model": "anthropic/claude-opus-4",
-    "default": true,
+    "thinking": "high",
     "heartbeat": {
       "to": "channel:1234",
       "every": "5m",
@@ -53,7 +57,7 @@ PG_ORDERED_INPUT='[
 # Installer output (reconstruction + sort + Node JSON.stringify)
 INSTALLER_OUT="$(printf '%s' "$PG_ORDERED_INPUT" | node -e "$INSTALLER_NODE_SCRIPT")"
 
-# Plugin output (buildAgentsList from the same raw DB row shape)
+# Plugin output (buildAgentsList().entries from the same raw DB row shape)
 PLUGIN_OUT="$(cd "$PLUGIN_DIR" && npx tsx -e '
 import { buildAgentsList } from "./src/sync.ts";
 const rows = [
@@ -72,7 +76,7 @@ const rows = [
   },
 ];
 const data = buildAgentsList(rows);
-process.stdout.write(JSON.stringify(data, null, 2) + "\n");
+process.stdout.write(JSON.stringify(data.entries, null, 2) + "\n");
 ')"
 
 INSTALLER_FILE="$(mktemp)"

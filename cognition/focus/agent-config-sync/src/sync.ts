@@ -48,9 +48,14 @@ export type AgentRow = {
 
 type HeartbeatConfig = { every?: string; target?: string; to?: string; isolatedSession?: boolean };
 
-/** Value shape for a single agent inside `agents.entries`. */
+/** Value shape for a single agent inside `agents.entries`.
+ *
+ * Note: the legacy `default` marker is intentionally NOT emitted. Under
+ * OpenClaw 2026.9.x `agents.ownership=explicit`, the system agent is
+ * determined by `agents.systemAgent`; emitting `default: true` here would
+ * make the gateway config invalid.
+ */
 export type AgentEntryConfig = {
-  default?: true;
   model: string | { primary: string; fallbacks: string[] };
   thinkingDefault?: string;
   subagents?: { allowAgents: string[] };
@@ -250,7 +255,8 @@ function warnIfUnknownProviderPrefixes(
  * - Rows with a missing/NULL model are skipped (TC-707-009)
  * - Rows with malformed `fallback_models` are skipped or normalized (TC-707-008)
  * - Rows with an invalid agent id are skipped (defensive)
- * - `default: true` included ONLY when is_default = true (key omitted otherwise)
+ * - Legacy `default` marker is NEVER emitted (system agent comes from
+ *   `agents.systemAgent` / ownership=explicit)
  * - Empty or NULL fallback_models → string model form (not object)
  * - DB `thinking` column mapped to `thinkingDefault` when it is a valid
  *   schema enum value; key omitted when null, empty, or unknown
@@ -314,17 +320,13 @@ export function buildAgentsList(
 
     const hasFallbacks = fallbackModels.length > 0;
 
-    // Build entry value (no `id` — the object key IS the id)
+    // Build entry value (no `id` — the object key IS the id; no `default` —
+    // system agent is determined by agents.systemAgent under ownership=explicit)
     const entry: AgentEntryConfig = {
       model: hasFallbacks
         ? { primary: row.model, fallbacks: fallbackModels }
         : row.model,
     };
-
-    // Include `"default": true` ONLY when is_default is explicitly true
-    if (row.is_default === true) {
-      entry.default = true;
-    }
 
     // #660 — Map DB `thinking` → `thinkingDefault` when it is a valid schema enum value.
     // Null, empty, unknown, wrong-type, mixed-case, or whitespace-padded values are omitted.
@@ -400,7 +402,6 @@ export function validateAgentsEntries(
   }
 
   const normalizedIds = new Map<string, string>();
-  let defaultCount = 0;
 
   for (const id of keys) {
     if (!AGENT_ID_REGEX.test(id)) {
@@ -445,14 +446,6 @@ export function validateAgentsEntries(
     } else {
       throw new Error(
         `agents.entries["${id}"].model must be a string or an object with primary/fallbacks`,
-      );
-    }
-
-    if (entry.default === true) {
-      defaultCount += 1;
-    } else if (entry.default !== undefined) {
-      throw new Error(
-        `agents.entries["${id}"].default must be true or omitted (got ${entry.default})`,
       );
     }
 
@@ -501,11 +494,6 @@ export function validateAgentsEntries(
     normalizedIds.set(normalized, id);
   }
 
-  if (defaultCount > 1) {
-    throw new Error(
-      `agents.entries must contain at most one default=true entry (found ${defaultCount})`,
-    );
-  }
 }
 
 // ── Query ───────────────────────────────────────────────────────────────────

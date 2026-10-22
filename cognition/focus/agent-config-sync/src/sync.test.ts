@@ -102,8 +102,12 @@ describe("TC-244-U-01: NOVA session — self as default, NOVA's subagents only",
 
   const { entries: result } = buildAgentsList(novaRows);
 
-  it("nova entry has default: true", () => {
-    assert.strictEqual(result["nova"]?.default, true);
+  it("nova entry has no default key", () => {
+    assert.strictEqual(result["nova"]?.default, undefined);
+    assert.ok(
+      !Object.prototype.hasOwnProperty.call(result["nova"], "default"),
+      "default key must not be emitted under ownership=explicit",
+    );
   });
 
   it("coder entry has no default key", () => {
@@ -188,8 +192,12 @@ describe("TC-244-U-02: Newhart session — self as default, Newhart's subagents 
 
   const { entries: result } = buildAgentsList(newhartRows);
 
-  it("newhart entry has default: true", () => {
-    assert.strictEqual(result["newhart"]?.default, true);
+  it("newhart entry has no default key", () => {
+    assert.strictEqual(result["newhart"]?.default, undefined);
+    assert.ok(
+      !Object.prototype.hasOwnProperty.call(result["newhart"], "default"),
+      "default key must not be emitted under ownership=explicit",
+    );
   });
 
   it("coder entry has no default key", () => {
@@ -301,21 +309,26 @@ describe("TC-244-U-03: Mutual exclusion — NOVA and Newhart never see each othe
     );
   });
 
-  it("each list has exactly one entry with default: true", () => {
+  it("no list contains any entry with default: true", () => {
     const novaDefaults = Object.values(novaResult).filter((e) => e.default === true);
     const newhartDefaults = Object.values(newhartResult).filter((e) => e.default === true);
-    assert.strictEqual(novaDefaults.length, 1);
-    assert.strictEqual(newhartDefaults.length, 1);
+    assert.strictEqual(novaDefaults.length, 0);
+    assert.strictEqual(newhartDefaults.length, 0);
   });
 
-  it("nova is default in NOVA's list", () => {
-    assert.strictEqual(novaResult["nova"]?.default, true);
+  it("nova entry has no default key in NOVA's list", () => {
+    assert.strictEqual(novaResult["nova"]?.default, undefined);
+    assert.ok(
+      !Object.prototype.hasOwnProperty.call(novaResult["nova"], "default"),
+      "default key must not be emitted under ownership=explicit",
+    );
   });
 
-  it("newhart is default in Newhart's list", () => {
-    assert.strictEqual(
-      newhartResult["newhart"]?.default,
-      true,
+  it("newhart entry has no default key in Newhart's list", () => {
+    assert.strictEqual(newhartResult["newhart"]?.default, undefined);
+    assert.ok(
+      !Object.prototype.hasOwnProperty.call(newhartResult["newhart"], "default"),
+      "default key must not be emitted under ownership=explicit",
     );
   });
 });
@@ -426,7 +439,7 @@ describe("TC-244-U-05: Row with is_default = null emits no `default` key", () =>
     assert.strictEqual(entry.default, undefined);
   });
 
-  it("only is_default = true produces default: true", () => {
+  it("is_default = true also emits no default key", () => {
     const trueRow: AgentRow[] = [
       {
         name: "trueagent",
@@ -439,10 +452,10 @@ describe("TC-244-U-05: Row with is_default = null emits no `default` key", () =>
       },
     ];
     const { entries: trueResult } = buildAgentsList(trueRow);
-    assert.strictEqual(trueResult["trueagent"]?.default, true);
+    assert.strictEqual(trueResult["trueagent"]?.default, undefined);
     assert.ok(
-      Object.prototype.hasOwnProperty.call(trueResult["trueagent"], "default"),
-      "default key must be present when is_default is true",
+      !Object.prototype.hasOwnProperty.call(trueResult["trueagent"], "default"),
+      "default key must not be emitted even when is_default is true",
     );
   });
 });
@@ -2080,9 +2093,13 @@ describe("TC-707-001: buildAgentsList emits keyed-object agents.entries shape", 
     }
   });
 
-  it("default marker is preserved on the keyed value", () => {
-    assert.strictEqual(result["beta"]?.default, true);
-    assert.strictEqual(result["alpha"]?.default, undefined);
+  it("no default marker is emitted on any keyed value", () => {
+    for (const [id, entry] of Object.entries(result)) {
+      assert.ok(
+        !Object.prototype.hasOwnProperty.call(entry, "default"),
+        `entry ${id} must not have a default field`,
+      );
+    }
   });
 
   it("model object shape is preserved", () => {
@@ -2461,5 +2478,105 @@ describe("TC-707-013: cutover drift report detects model drift and new agents", 
       reportLines.some((line) => line.includes("nova") && line.includes("openrouter")),
       "report must surface nova's model drift",
     );
+  });
+});
+
+// ── TC-770-U-01: Regression — generated agents.json must never contain a default key ──
+
+describe("TC-770-U-01: generated agents.json must never contain a legacy default key", () => {
+  it("single default-marked row produces JSON with no 'default' key", () => {
+    const rows: AgentRow[] = [
+      {
+        name: "nova",
+        model: "anthropic/claude-opus-4",
+        fallback_models: null,
+        thinking: "high",
+        instance_type: "primary",
+        is_default: true,
+        allowed_subagents: ["gem", "coder"],
+      },
+    ];
+    const { entries: result } = buildAgentsList(rows);
+    const jsonStr = JSON.stringify(result, null, 2);
+
+    assert.ok(
+      !jsonStr.includes('"default"'),
+      `serialized agents.json must not contain a "default" key; got: ${jsonStr}`,
+    );
+    assert.doesNotThrow(() => validateAgentsEntries(result));
+  });
+
+  it("mixed fleet with one is_default=true produces no default key anywhere", () => {
+    const rows: AgentRow[] = [
+      {
+        name: "nova",
+        model: "anthropic/claude-opus-4",
+        fallback_models: null,
+        thinking: "high",
+        instance_type: "primary",
+        is_default: true,
+        allowed_subagents: ["gem", "coder"],
+      },
+      {
+        name: "coder",
+        model: "anthropic/claude-sonnet-4",
+        fallback_models: null,
+        thinking: "medium",
+        instance_type: "subagent",
+        is_default: false,
+        allowed_subagents: null,
+      },
+      {
+        name: "gem",
+        model: "google/gemini-flash",
+        fallback_models: null,
+        thinking: null,
+        instance_type: "subagent",
+        is_default: false,
+        allowed_subagents: null,
+      },
+    ];
+    const { entries: result } = buildAgentsList(rows);
+    const jsonStr = JSON.stringify(result, null, 2);
+
+    assert.ok(
+      !jsonStr.includes('"default"'),
+      `serialized agents.json must not contain a "default" key; got: ${jsonStr}`,
+    );
+    for (const [id, entry] of Object.entries(result)) {
+      assert.ok(
+        !Object.prototype.hasOwnProperty.call(entry, "default"),
+        `entry '${id}' must not have a default field`,
+      );
+    }
+    assert.doesNotThrow(() => validateAgentsEntries(result));
+  });
+
+  it("atomic write of generated entries produces a file with no default key", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "sync-770-test-"));
+    try {
+      const filePath = path.join(tmpDir, "agents.json");
+      const rows: AgentRow[] = [
+        {
+          name: "nova",
+          model: "anthropic/claude-opus-4",
+          fallback_models: null,
+          thinking: "high",
+          instance_type: "primary",
+          is_default: true,
+          allowed_subagents: ["gem"],
+        },
+      ];
+      const { entries } = buildAgentsList(rows);
+      await writeAgentsJsonAtomically(filePath, entries);
+
+      const written = fs.readFileSync(filePath, "utf-8");
+      assert.ok(
+        !written.includes('"default"'),
+        `written agents.json must not contain a "default" key; got: ${written}`,
+      );
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 });

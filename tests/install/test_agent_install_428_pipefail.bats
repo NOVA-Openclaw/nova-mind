@@ -42,11 +42,13 @@ _install_stub_psql() {
 # If called with the old large-list pattern, emit >64 KiB of database names.
 for arg in "$@"; do
     if [ "$arg" = "-lqt" ]; then
-        # 2000 lines of ~40 bytes each ≈ 80 KiB, includes the target DB.
+        # Emit the target DB early, then enough trailing rows to exceed the
+        # 64 KiB pipe buffer. When grep -q matches test_memory and exits,
+        # psql still has rows to write and gets SIGPIPE under pipefail.
+        printf '  test_memory                   | postgres | UTF8     | en_US.utf8 | en_US.utf8 | \n'
         for i in $(seq 1 2000); do
             printf '  db_%08d                       | postgres | UTF8     | en_US.utf8 | en_US.utf8 | \n' "$i"
         done
-        printf '  test_memory                   | postgres | UTF8     | en_US.utf8 | en_US.utf8 | \n'
         exit 0
     fi
 done
@@ -91,13 +93,15 @@ _source_verify_schema() {
     DB_NAME="${PGDATABASE:-${DB_USER//-/_}_memory}"
     SCRIPT_DIR="$FAKE_REPO"
 
-    # Extract verify_schema from the installer and evaluate it.
+    # Extract verify_schema from the installer and evaluate it with the same
+    # shell options as agent-install.sh so pipefail failures propagate.
     local func
     func=$(awk '/^verify_schema\(\) \{/,/^\}$/' "$script")
     if [ -z "$func" ]; then
         echo "verify_schema not found in installer" >&2
         return 1
     fi
+    set -euo pipefail
     eval "$func"
 }
 

@@ -406,12 +406,17 @@ _seed_peer_fixture() {
     local FIXTURE
     FIXTURE=$(mktemp)
 
+    # The template DB may have postgres_fdw installed but not grant USAGE on
+    # the wrapper to nova.  Detect that before trying to create a server and
+    # fall back to a view-only peer shape.  A VIEW alone is enough to make
+    # detect_peer_shadowed.py switch into peer mode for #792's gating tests.
+    local fdw_usable
+    fdw_usable=$(psql -U nova -d "$DB" -tAc "SELECT CASE WHEN has_foreign_data_wrapper_privilege(current_user,'postgres_fdw','USAGE') THEN 1 ELSE 0 END;")
+    if [ "$fdw_usable" != "1" ]; then
+        echo "TC-792 peer fixture: postgres_fdw USAGE not granted; using view-only peer shape" >&3
+    fi
+
     cat > "$FIXTURE" <<'SQL'
-CREATE EXTENSION IF NOT EXISTS postgres_fdw;
-DO $$
-BEGIN
-    EXECUTE format('CREATE SERVER loopback FOREIGN DATA WRAPPER postgres_fdw OPTIONS (host %L, dbname %L)', 'localhost', current_database());
-END $$;
 CREATE TABLE agent_bootstrap_context_local (
     id serial PRIMARY KEY,
     context_type text NOT NULL,
@@ -423,6 +428,19 @@ CREATE TABLE agent_bootstrap_context_local (
     updated_by text DEFAULT CURRENT_USER,
     agent_name text
 );
+SQL
+
+    if [ "$fdw_usable" = "1" ]; then
+        cat >> "$FIXTURE" <<'SQL'
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname='postgres_fdw') THEN
+    CREATE EXTENSION postgres_fdw;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_foreign_server WHERE srvname='loopback') THEN
+    EXECUTE format('CREATE SERVER loopback FOREIGN DATA WRAPPER postgres_fdw OPTIONS (host %L, dbname %L)', 'localhost', current_database());
+  END IF;
+END $$;
 CREATE FOREIGN TABLE nova_bootstrap_context (
     id int,
     context_type text,
@@ -443,6 +461,13 @@ CREATE VIEW agent_bootstrap_context AS
       FROM agent_bootstrap_context_local
      WHERE context_type <> ALL(ARRAY['UNIVERSAL','GLOBAL']);
 SQL
+    else
+        cat >> "$FIXTURE" <<'SQL'
+CREATE VIEW agent_bootstrap_context AS
+    SELECT id, context_type, domain_names, file_key, content, description, updated_at, updated_by, agent_name
+      FROM agent_bootstrap_context_local;
+SQL
+    fi
 
     if [ "$HAS_FUNCTIONS" -eq 1 ]; then
         cat >> "$FIXTURE" <<'SQL'
@@ -559,9 +584,9 @@ _seed_victoria_trading_fixture() {
 
     if [ -n "$OWNER_ROLE" ]; then
         {
-            # Attempt grant silently; if nova lacks ADMIN OPTION the SET ROLE
-            # below still works as long as membership was verified beforehand.
-            echo "DO \$\$BEGIN EXECUTE 'GRANT \"$OWNER_ROLE\" TO nova'; EXCEPTION WHEN insufficient_privilege THEN NULL; END\$\$;"
+            # The owner role needs CREATE on public to create the fixture
+            # objects.  Nova is the DB owner, so it can grant that.
+            echo "GRANT CREATE ON SCHEMA public TO \"$OWNER_ROLE\";"
             echo "SET ROLE \"$OWNER_ROLE\";"
             cat "$FIXTURE"
         } > "${FIXTURE}.owned"
@@ -575,6 +600,19 @@ _seed_victoria_trading_fixture() {
 # Seed non-trivial row counts with FK linkage.
 # Args: DB_NAME
 _seed_victoria_trading_rows() {
+    local DB="$1"
+    # The hand-built fixture and the real dump from victoria_memory have
+    # different column shapes.  Detect which one is loaded and seed accordingly.
+    local is_real_shape
+    is_real_shape=$(psql -U nova -d "$DB" -tAc "SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='portfolios' AND column_name='portfolio_id' LIMIT 1;")
+    if [ "$is_real_shape" = "1" ]; then
+        _seed_victoria_trading_rows_real "$DB"
+    else
+        _seed_victoria_trading_rows_handbuilt "$DB"
+    fi
+}
+
+_seed_victoria_trading_rows_handbuilt() {
     local DB="$1"
     psql -U nova -d "$DB" -v ON_ERROR_STOP=1 <<'SQL' >/dev/null
 INSERT INTO portfolios (name) VALUES ('alpha'), ('beta'), ('gamma');
@@ -595,13 +633,43 @@ SELECT id, (random() * 1000)::numeric,
 SQL
 }
 
-# Skip a peer-mode test if the postgres_fdw extension cannot be created in
-# the scratch DB (requires superuser privileges on most hosts).
-_skip_unless_fdw() {
+_seed_victoria_trading_rows_real() {
     local DB="$1"
-    if ! psql -U nova -d "$DB" -c "CREATE EXTENSION IF NOT EXISTS postgres_fdw;" >/dev/null 2>&1; then
-        skip "postgres_fdw extension unavailable (superuser required for peer fixture)"
-    fi
+    psql -U nova -d "$DB" -v ON_ERROR_STOP=1 <<'SQL' >/dev/null
+-- The real schema has FKs from instruments to portfolio_asset_classes and
+-- from positions/trades/cash_ledger to portfolios/instruments.  Seed a
+-- small, self-consistent graph that satisfies the table CHECK constraints.
+INSERT INTO portfolio_asset_classes (code, name) VALUES ('STOCK', 'Stocks');
+INSERT INTO portfolios (slug, name, mode) VALUES
+    ('alpha', 'Alpha', 'paper'),
+    ('beta', 'Beta', 'paper'),
+    ('gamma', 'Gamma', 'paper');
+INSERT INTO instruments (symbol, asset_class, name) VALUES
+    ('AAPL', 'STOCK', 'Apple Inc.'),
+    ('MSFT', 'STOCK', 'Microsoft Corp.'),
+    ('GOOGL', 'STOCK', 'Alphabet Inc.'),
+    ('TSLA', 'STOCK', 'Tesla Inc.'),
+    ('NVDA', 'STOCK', 'NVIDIA Corp.');
+INSERT INTO positions (instrument_id, quantity, cost_basis, opened_at, portfolio_id)
+SELECT i.instrument_id, (random() * 100)::numeric, (random() * 1000)::numeric, now(), p.portfolio_id
+  FROM portfolios p, instruments i;
+DELETE FROM positions WHERE id > 10;
+INSERT INTO trades (executed_at, instrument_id, side, quantity, source, portfolio_id)
+SELECT now(), pos.instrument_id,
+       CASE WHEN random() < 0.5 THEN 'buy' ELSE 'sell' END,
+       (random() * 10)::numeric, 'seed', pos.portfolio_id
+  FROM generate_series(1,3) g, positions pos;
+INSERT INTO cash_ledger (delta, portfolio_id)
+SELECT (random() * 1000)::numeric, portfolio_id
+  FROM generate_series(1,5) g, portfolios;
+SQL
+}
+
+# The fixture itself tolerates a postgres_fdw installation that does not
+# grant USAGE to nova by falling back to a view-only peer shape.  Do not
+# skip gating tests just because the FDW server cannot be created.
+_skip_unless_fdw() {
+    return 0
 }
 
 # Apply database/schema.sql to a scratch DB using the additive pipeline (no
@@ -621,6 +689,9 @@ _apply_schema_sql_to_db() {
     cp "$REPO_ROOT/database/schema.sql" "$SCRATCH/schema.sql"
     cp "$REPO_ROOT/database/.pgschemaignore" "$SCRATCH/.pgschemaignore"
 
+    # Use the target DB as the plan DB so the resulting DB matches schema.sql
+    # exactly.  Using nova_memory would propagate any drift in nova_memory
+    # (e.g. an extra table comment) into later drift-detect steps.
     (
         cd "$SCRATCH" || exit 1
         pgschema plan \
@@ -630,7 +701,7 @@ _apply_schema_sql_to_db() {
             --schema public \
             --file schema.sql \
             --plan-host /var/run/postgresql \
-            --plan-db nova_memory \
+            --plan-db "$DB" \
             --plan-user nova \
             --output-json "$PLAN" \
             --no-color >/dev/null 2>&1
@@ -755,7 +826,10 @@ _run_full_installer_pipeline() {
             }
     fi
 
-    # Plan.
+    # Plan.  Use the target DB as the plan DB (matches agent-install.sh).
+    # Using nova_memory here produced a source_fingerprint mismatch on the
+    # apply step whenever the scratch DB contained drift-seeded objects that
+    # survived stripping.
     (
         cd "$SCRATCH" || exit 1
         pgschema plan \
@@ -765,7 +839,7 @@ _run_full_installer_pipeline() {
             --schema public \
             --file schema.sql \
             --plan-host /var/run/postgresql \
-            --plan-db nova_memory \
+            --plan-db "$DB" \
             --plan-user nova \
             --output-json "$PLAN" \
             --no-color >/dev/null 2>&1
@@ -816,18 +890,29 @@ _run_full_installer_pipeline() {
         return 1
     fi
 
-    # Apply.
-    pgschema apply \
-        --host /var/run/postgresql \
-        --user nova \
-        --db "$DB" \
-        --schema public \
-        --plan "$FILTERED" \
-        --auto-approve \
-        --no-color >/dev/null 2>&1
-    local apply_status=$?
+    # Apply only if there are non-privilege steps.  When all steps were
+    # stripped (e.g. the only drift is ignored peer/Victoria objects), the
+    # filtered plan is empty and pgschema apply would fail with a source
+    # fingerprint mismatch because the DB still contains those ignored
+    # objects.  agent-install.sh makes the same skip-when-empty decision.
+    local total_steps
+    total_steps=$(jq '[(.groups // [])[] | .steps[] | select(.type != "privilege")] | length' "$FILTERED" 2>/dev/null || echo 0)
+    if [ "$total_steps" -gt 0 ]; then
+        pgschema apply \
+            --host /var/run/postgresql \
+            --user nova \
+            --db "$DB" \
+            --schema public \
+            --plan "$FILTERED" \
+            --auto-approve \
+            --no-color >/dev/null 2>&1
+        local apply_status=$?
+        rm -rf "$SCRATCH"
+        return $apply_status
+    fi
+
     rm -rf "$SCRATCH"
-    return $apply_status
+    return 0
 }
 
 # Build fixture SQL.  Primary path: a shared schema-only dump of Victoria's
@@ -836,6 +921,13 @@ _run_full_installer_pipeline() {
 # run directly against that DB.  We still probe victoria_memory via pg_class
 # (which is visibility-agnostic) to confirm the tables exist there, but we
 # never read their DDL from the live DB.
+#
+# Why the helper previously printed "file absent": the shared dump is owned
+# by graybeard:agents with mode 640.  Nova is in the agents group, but a
+# shell started before that group membership became effective can see the
+# file via stat (so -s/-f succeed) yet cannot read it (so grep/cat fail).
+# Using -r (readable) catches the real condition instead of relying on size.
+#
 # Args: OUT_FILE
 # Returns 0 if the shared dump was used, 1 if fallback was used.
 _build_victoria_fixture_sql() {
@@ -848,17 +940,50 @@ _build_victoria_fixture_sql() {
     found=$(PGDATABASE=victoria_memory psql -U nova -h /var/run/postgresql -tAc "SELECT COUNT(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind='r' AND c.relname IN ($(printf "'%s'," "${VICTORIA_TRADING_TABLES[@]}" | sed 's/,$//'));")
     echo "TC-792-024: pg_class probe found $found victoria_memory trading table(s)" >&3
 
-    if [ -s "$SHARED_DUMP" ] && grep -q 'CREATE TABLE' "$SHARED_DUMP"; then
+    local used_real=1
+    if [ -r "$SHARED_DUMP" ] && [ -s "$SHARED_DUMP" ] && grep -q 'CREATE TABLE' "$SHARED_DUMP"; then
         cat "$SHARED_DUMP" > "$OUT"
+        # The dump preserves the original owner role (victoria).  Nova is not
+        # a member of that role here, so the OWNER TO clauses would fail to
+        # load.  Strip them from the scratch copy only; the shared file is
+        # left untouched.
+        sed -i -E '/^ALTER (TABLE|SEQUENCE|FUNCTION|TRIGGER|PROCEDURE|ROUTINE|DOMAIN|TYPE|SCHEMA|DATABASE|LARGE OBJECT) .* OWNER TO /d' "$OUT"
         echo "TC-792-024: using shared schema dump $SHARED_DUMP" >&3
-        return 0
+    else
+        {
+            echo "-- FALLBACK: hand-built fixture (real schema dump not available)"
+            _victoria_trading_ddl
+        } > "$OUT"
+        echo "FALLBACK: hand-built fixture (real schema dump not available)" >&3
+        used_real=0
     fi
 
-    {
-        echo "-- FALLBACK: hand-built fixture (real schema dump not available)"
-        _victoria_trading_ddl
-    } > "$OUT"
-    echo "FALLBACK: hand-built fixture (real schema dump not available)" >&3
+    # The shared dump currently ships the four trigger definitions but not the
+    # trigger functions they call.  Create minimal stub functions so the fixture
+    # loads; never modify the shared file itself.
+    if [ "$used_real" -eq 1 ]; then
+        local missing=()
+        for fn in open_orders_touch victoria_order_adjustments_immutable victoria_trades_immutable assert_cash_ledger_balance_chain; do
+            if ! grep -qE "CREATE\s+(OR\s+REPLACE\s+)?FUNCTION\s+.*\b${fn}\s*\(" "$OUT"; then
+                missing+=("$fn")
+            fi
+        done
+        if [ "${#missing[@]}" -gt 0 ]; then
+            local stubs
+            stubs=$(mktemp)
+            {
+                echo "-- STUBBED trigger functions (shared dump is missing the bodies):"
+                for fn in "${missing[@]}"; do
+                    echo "CREATE OR REPLACE FUNCTION public.${fn}() RETURNS trigger LANGUAGE plpgsql AS \$\$ BEGIN RETURN COALESCE(NEW, OLD); END; \$\$;"
+                done
+                echo ""
+                cat "$OUT"
+            } > "$stubs"
+            mv "$stubs" "$OUT"
+            echo "STUBBED trigger functions: ${missing[*]}" >&3
+        fi
+        return 0
+    fi
     return 1
 }
 

@@ -15,7 +15,7 @@ This document designs test cases only. It does not assert pass/fail for code tha
 |---|---|---|
 | AC1 | `git grep -nE 'trades\|cash_ledger\|portfolios\|positions\|instruments' database/.pgschemaignore*` returns nothing | TC-792-001, TC-792-002 |
 | AC2 | Fresh install on empty DB: all schema.sql objects created, exit 0, zero destructive ops | TC-792-010, TC-792-011 |
-| AC3 | Drift-seeded peer install (Victoria-shaped): exit 0, additive objects land, row counts unchanged, no 42809 | TC-792-020, TC-792-021, TC-792-022, TC-792-023 |
+| AC3 | Drift-seeded peer install (Victoria-shaped): exit 0, additive objects land, row counts unchanged, no 42809 | TC-792-020, TC-792-021, TC-792-022, TC-792-023, TC-792-024, TC-792-025 |
 | AC4 | Existing managed table missing a column gets the column added (ruling A) | TC-792-030, TC-792-031 |
 | AC5 | Docs describe the additive contract; reconciled with #693 | TC-792-040, TC-792-041 |
 
@@ -23,16 +23,20 @@ Additional requested coverage (Step 2 edge cases + task brief) not tied to a sin
 
 | Area | Test IDs |
 |---|---|
+| Fixture realism: real schema-only dump of Victoria objects (R1, Step 4 review) | TC-792-024 |
+| Ownership: Victoria tables owned by a role other than DB_USER (R2, Step 4 review) | TC-792-025 |
 | Adversarial: malformed TOML ignore file | TC-792-050, TC-792-051 |
 | Adversarial: ignore pattern matching nothing | TC-792-052 |
 | Adversarial: local table name collides with a schema.sql table (ordinary table, not view/FDW) | TC-792-053 |
 | Adversarial: plan step with unexpected `operation` value | TC-792-054, TC-792-055 |
 | Adversarial: plan step with unexpected `type` value | TC-792-056 |
-| Config-to-runtime seam (real installer schema stage against a real Postgres DB) | TC-792-020, TC-792-021, TC-792-060, TC-792-070 |
+| Config-to-runtime seam (real installer schema stage against a real Postgres DB) | TC-792-020, TC-792-021, TC-792-024, TC-792-025, TC-792-050, TC-792-052, TC-792-060, TC-792-070 |
 | Non-drop lossy alters (ALTER COLUMN TYPE narrowing, SET NOT NULL) — known-gap investigation | TC-792-060, TC-792-061, TC-792-062 |
 | #686 phantom CHECK drop+recreate after strip | TC-792-070, TC-792-071 |
 | Dependent objects (indexes, sequences, triggers, FKs) of newly un-ignored tables | TC-792-080, TC-792-081 |
 | Regression: existing peer/FDW and additive-apply suites must still pass unmodified | TC-792-090 |
+
+**GATING vs. RECORD-ONLY (added per Step 4 review R4):** every test in this document is GATING (must pass for #792 to merge) **except** the following, which are RECORD-ONLY (characterize pre-existing, out-of-#792's-scope behavior; their outcome is documented and linked to a follow-up issue, never written as an expected-failure that blocks the PR): all of section 7 (TC-792-060, TC-792-061, TC-792-062), TC-792-070 (section 8), and TC-792-050, TC-792-054, TC-792-055, TC-792-056 (section 10). Note TC-792-071 is GATING despite being in the same #686-themed section as TC-792-070 — see section 8's classification note for why the two are split. Every other test ID in this document, including the newly-added TC-792-024/TC-792-025, is GATING.
 
 ---
 
@@ -58,8 +62,13 @@ Additional requested coverage (Step 2 edge cases + task brief) not tied to a sin
 **Steps:** Use `python3 -c "import tomllib; tomllib.load(open(p,'rb'))"` (py3.11+) or the repo's existing TOML parsing path, against both files post-edit.
 **Expected:** no exception. Catches a hand-edit that leaves a dangling comma, unclosed bracket, or orphaned section header after deleting the Victoria array entries.
 
-### TC-792-005 — `.pgschemaignore-peer` stays in sync with the base file's non-Victoria, non-federation entries (new, bats)
-**Rationale:** the peer file's header comment says "Keep this file in sync with database/.pgschemaignore". Diff the `[tables]` arrays of both files after removal, excluding the peer-only federation names, and assert they're identical (currently both start from the same Victoria+`*_local` list; after this fix both should reduce to just `*_local` on the `[tables]` side, modulo the peer file's extra federation entries).
+### TC-792-005 — `.pgschemaignore-peer` stays in sync with the base file's non-Victoria, non-federation entries, across ALL sections (new, bats)
+**Rationale (revised per Step 4 review R6):** the peer file's header comment says "Keep this file in sync with database/.pgschemaignore". The original draft of this test only diffed the `[tables]` arrays. `.pgschemaignore-peer` also has `[views]`, `[functions]`, and `[triggers]` sections (the base `.pgschemaignore` only has `[tables]`), and a Victoria-specific cleanup that only touches `[tables]` while missing a stray Victoria reference in one of those other sections would still fail AC1's spirit even if the literal AC1 grep command (which only checks the two files as flat text, not section-aware) happens to pass.
+**Steps:**
+1. **`[tables]`:** diff the `[tables]` arrays of both files after removal, excluding the peer-only federation names (`nova_bootstrap_context`), and assert they're identical (currently both start from the same Victoria+`*_local` list; after this fix both should reduce to just `*_local` on the `[tables]` side, modulo the peer file's extra federation entry).
+2. **`[views]`, `[functions]`, `[triggers]` (peer file only, base file has no such sections):** grep each section body for any of the Victoria table/pattern names from TC-792-001's list. Assert zero matches in any of the three sections (Victoria never had view/function/trigger entries to begin with, but this guards against a future edit accidentally introducing one, and against the implementer "fixing" `[tables]` while leaving a stray Victoria string elsewhere).
+3. **Federation entries unchanged:** assert `[views]` still has its (currently empty, dynamically-injected-at-runtime) structure intact, `[functions]` still contains exactly `bootstrap_context_view_*` and `protect_bootstrap_context_writes_v2`, and `[triggers]` still contains exactly `protect_bootstrap_context`, `heartbeat_content_changed`, `zz_touch_updated_at` — i.e. the Victoria-focused edit must not collaterally touch the federation-only sections at all (byte-for-byte, outside the `[tables]` array).
+**Expected:** all three assertions pass. This test is GATING (AC1-adjacent — a section-blind pass of the literal AC1 grep must not be mistaken for a complete cleanup).
 
 ---
 
@@ -123,21 +132,41 @@ These are the most important tests in this set: they run the **real** installer 
 **Setup:** Same as TC-792-020 but all Victoria tables created with zero rows.
 **Expected:** same invariants hold. Exists to make sure the "non-zero row count" emphasis in TC-792-020 isn't hiding a bug that only manifests when COUNT(*) is nonzero (e.g. an accidental `DELETE` instead of a true structural no-op) — this is the inverse boundary probe.
 
+### TC-792-024 — Fixture built from a real schema-only dump of Victoria's trading objects, not hand-built (new, bats, live PG) — GATING
+**Added per Step 4 review (R1): "well-formed fixtures certify mistakes."** TC-792-020/022/080's hand-built fixture only contains what the test author thought to include. A real peer's schema carries things a hand-built fixture won't: views/functions that reference the trading tables, enum types, sequences with non-default ownership/grants, and (per R2 below) non-default table owners — any of which could interact with `strip_destructive.py`'s type/path matching in ways the synthetic fixture can't surface.
+**Setup (primary):**
+1. Obtain a schema-only (`pg_dump -s`, no data, read-only — `pg_dump` never writes to the source DB) dump of Victoria's trading objects: `pg_dump -s --table=portfolios --table=trades --table=positions --table=cash_ledger --table=instruments ... victoria_memory > victoria-trading-schema-only.sql`. Do **not** pass `--no-owner` — real ownership must be preserved so this fixture can also back TC-792-025 (R2).
+2. If the executing agent/role cannot connect to `victoria_memory` (expected on most hosts — cross-agent DB access is not routinely granted): **request the dump from Graybeard** rather than attempting direct access, and note in the PR/implementation notes who supplied it and when. Do not attempt to work around a connection failure by elevating privileges or using stored credentials outside the normal request flow.
+3. Load the dumped DDL into the scratch peer DB (replacing the hand-built `CREATE TABLE` statements in TC-792-020's setup), then seed realistic non-trivial row counts into it exactly as TC-792-020 does (the dump is schema-only; row seeding still happens locally, in the scratch DB, under this test's control).
+4. If the dump cannot be obtained in time for a given test run (Graybeard unavailable, access not yet granted, etc.), **fall back to the TC-792-020 hand-built fixture** and record in the test output that this run used the fallback, not the real-schema fixture — so a passing CI run is never silently mistaken for having exercised the real-schema path.
+**Steps:** run the identical TC-792-020 pipeline and assertions (row-count + object-inventory before/after) against this richer fixture.
+**Expected:** same invariants as TC-792-020 (zero row loss, exit 0, no 42809, inventory diff limited to additive schema.sql deltas) — but now also covering any view/function/enum/sequence-ownership interaction the hand-built fixture couldn't exercise. **Classification: GATING once a real or fallback fixture is available** — if the real dump reveals a failure mode the hand-built fixture didn't (e.g. a Victoria-side view referencing a trading table trips an unexpected plan step), that is a genuine #792 regression risk, not a pre-existing/out-of-scope gap, and must be fixed before merge.
+
+### TC-792-025 — Victoria tables owned by a second role, distinct from the installer's DB_USER (new, bats, live PG) — GATING
+**Added per Step 4 review (R2).** In a real peer the trading tables may not be owned by the role the installer connects as (e.g. created by an earlier manual script, a different login, or a legacy migration under a different role than the current agent's DB_USER). `strip_destructive.py`'s ownership gate (`_step_targets_non_owned`, exercised via `--db-user`+live resolver, which the installer always supplies — see `agent-install.sh`'s `STRIP_ARGS`) runs *before* the universal drop-strip check, so a non-owned Victoria table's DROP step is actually excluded via the `nonowned:` path, not the `drop` path. This test exercises that path directly on the newly-un-ignored objects, tying into the existing #590/#759 ownership-gate suites (`tests/install/test_issue_590_owner_revokes.bats`, `tests/install/test_issue_759_nonowned_revokes.bats`) rather than re-deriving that mechanism from scratch.
+**Setup:** Reuse the TC-792-020 (or TC-792-024, once available) fixture, but create the Victoria trading tables under a second role (e.g. `CREATE ROLE victoria_app; ... GRANT victoria_app TO nova;` then `SET ROLE victoria_app;` before the `CREATE TABLE` statements, or equivalent `ALTER TABLE ... OWNER TO victoria_app` after creation) so they are owned by `victoria_app`, not the installer's `DB_USER` (`nova`).
+**Steps:** run the real pipeline with `--db-user nova` and a live resolver (exactly as the installer invokes it), with `--log-exclusions` enabled.
+**Expected:**
+- Every step touching a `victoria_app`-owned Victoria table/index/constraint/trigger is excluded from the filtered plan — confirm via the exclusion log that at least some of them are tagged `nonowned:...` (ownership-gate path), not just `drop` (universal drop-strip path), proving the ownership gate — not only the drop-strip — is doing real work here.
+- `plan_check_superuser.py`'s post-strip gate (which fails closed if any remaining step targets a non-owned object) passes, since all `victoria_app`-owned steps were already removed.
+- Apply succeeds; same zero-row-loss / inventory-unchanged invariants as TC-792-020, now proven under a non-default-owner peer, which is the realistic case R2 is concerned about.
+**Classification: GATING** — ownership mismatches on peer-local tables are a normal, expected real-world condition (that's exactly why #590/#759 exist), not a hypothetical edge case; #792 must not regress this for the newly-un-ignored Victoria objects.
+
 ---
 
 ## 5. Ruling A: missing column gets added (AC4)
 
-### TC-792-030 — Existing managed table missing a column: column is added, data survives (new, bats, live PG)
-**Setup:** Pick a real schema.sql table (not a throwaway fixture table, to prove this against the actual shipped schema — e.g. `agent_bootstrap_context`, which is also exercised elsewhere in the peer suite so a regression here is doubly visible). Create it manually via a copy of its `CREATE TABLE` from schema.sql with one column removed (e.g. drop `description`), insert a handful of rows into the remaining columns.
+### TC-792-030 — Existing managed table missing a column: column is added, data survives (new, bats, live PG) — GATING
+**Setup (revised per Step 4 review R3):** the original draft targeted `agent_bootstrap_context` — a bad choice, because in peer mode (the mode most of this document's other live tests exercise) it is a **VIEW**, not a table, so an AC4 test built on it would either silently run against the wrong relation kind or only be valid in standalone mode, and its `description` column was cited as an example rather than a column actually verified to exist. Use **`extraction_failures`** instead: a plain, ordinary managed table (never declared as a VIEW/FOREIGN TABLE on any known peer, and not part of the `.pgschemaignore`/`-peer` federation-only entries, so it is never peer-shadowed in either install mode), and the column **`sender_name text`** — confirmed present in `database/schema.sql` at the pinned commit `cc33935e6b41dd4b0d74aab993777f72ac8f1dea` (`CREATE TABLE IF NOT EXISTS extraction_failures (... sender_name text, ...)`, nullable, no default). Create the table manually via a copy of its `CREATE TABLE` from schema.sql with `sender_name` removed, insert a handful of rows into the remaining columns (e.g. populate `session_key`, `content`, `status`).
 **Steps:** Run the real plan→reorder→strip→apply chain with the full, unmodified schema.sql as the desired state.
 **Expected:**
-- Plan contains an `operation: "alter"`, `type: "table.column"` step adding the missing column (not `"drop"`).
+- Plan contains an `operation: "alter"`, `type: "table.column"` step adding `sender_name` (not `"drop"`).
 - Strip step does **not** remove it (only drops are stripped).
-- Apply succeeds; `information_schema.columns` shows the column present afterward; pre-existing rows' other columns are untouched and the new column is NULL (or its schema.sql default) for existing rows.
+- Apply succeeds; `information_schema.columns` shows `sender_name` present afterward; pre-existing rows' other columns are untouched and `sender_name` is NULL for existing rows (it has no default in schema.sql).
 **This is the literal text of AC4** — kept as its own dedicated test rather than folded into TC-792-020, because AC4 is independently checkable and should have a traceable pass/fail of its own in the PR.
 
-### TC-792-031 — Missing column with a NOT NULL + DEFAULT in schema.sql (new, bats, live PG)
-**Setup:** Same as TC-792-030, but the missing column in schema.sql is declared `NOT NULL DEFAULT <value>`.
+### TC-792-031 — Missing column with a NOT NULL + DEFAULT in schema.sql (new, bats, live PG) — GATING
+**Setup:** Same `extraction_failures` table as TC-792-030, but this time remove `retry_count` (schema.sql declares it `integer DEFAULT 0 NOT NULL` — a real NOT NULL+DEFAULT column, verified at the same pinned commit) instead of `sender_name`.
 **Expected:** apply succeeds (Postgres backfills the default for existing rows in a single-pass `ADD COLUMN ... NOT NULL DEFAULT ...`, which is additive, not destructive); existing rows get the default value. Distinguishes "missing column, trivially additive" from "missing column whose constraint could theoretically fail on existing data" (it can't fail here because DEFAULT backfills it, but the step 2 "never destructively alter" framing makes this worth confirming explicitly rather than assuming).
 
 ---
@@ -159,15 +188,17 @@ These are the most important tests in this set: they run the **real** installer 
 
 ## 7. Non-drop lossy alters — known-gap investigation (Step 2 edge case)
 
+**Classification policy for this section (added per Step 4 review R4): all tests in section 7 are RECORD-ONLY.** They characterize a pre-existing gap in `strip_destructive.py` that predates #792 and is not introduced or worsened by removing the Victoria ignore entries. A RECORD-ONLY test's job is to assert and document *current, observed* behavior (does the gap exist, and what exactly happens) — it must pass regardless of which way that behavior goes, and must never be written as an expected-failure that blocks the PR. If any RECORD-ONLY test in this section cannot be made to pass as a pure characterization (i.e. its assertions are inherently about an unresolved outcome), restructure it to record the finding as a comment/log line plus a linked follow-up issue reference, not as a pass/fail gate. None of section 7 blocks #792 from merging.
+
 Ruling A says "never destructively alter." The code only strips steps where `operation == "drop"` (see `strip_destructive.py::strip_destructive`, the `if step.get("operation") == "drop":` branch). Nothing inspects `ALTER COLUMN ... TYPE` (narrowing) or `ALTER COLUMN ... SET NOT NULL` steps, which pgschema plans with `operation: "alter"`, not `"drop"`. These tests exist to **empirically confirm** whether such steps can appear and whether anything downstream (pgschema's own apply, a Postgres-side failure, or some other gate) incidentally stops them — per the Step 2 instruction, if nothing does, this is reported as a known gap with a follow-up recommendation, not folded into #792's scope.
 
-### TC-792-060 — Column type narrowing is planned as `operation: "alter"`, not stripped (new, bats, live PG)
+### TC-792-060 — Column type narrowing is planned as `operation: "alter"`, not stripped (new, bats, live PG) — RECORD-ONLY
 **Setup:** Create a local copy of a simple table with a `text` column holding short values (e.g. `CREATE TABLE t (id serial PRIMARY KEY, code text); INSERT ... VALUES ('AB'), ('CD');`). Desired schema (a throwaway schema.sql-like file, not the real one, to keep this isolated) declares the same column as `varchar(1)` — narrower than the existing data in a way Postgres would normally reject if any row didn't fit, but accept if it does (so the test proves the *mechanism*, independent of whether a given narrowing happens to be safe for the current data).
 **Steps:** `pgschema plan` → inspect the raw plan JSON for the step touching `t.code`.
 **Expected finding:** the step's `operation` is `"alter"` (confirm by direct inspection — do not assume), and `strip_destructive.py` does not remove it (confirm by running the stripper and checking the step survives).
 **If confirmed:** mark as **KNOWN GAP** (see section 7 gap summary below) — do not attempt to fix within #792.
 
-### TC-792-061 — SET NOT NULL on a column with existing NULLs (new, bats, live PG)
+### TC-792-061 — SET NOT NULL on a column with existing NULLs (new, bats, live PG) — RECORD-ONLY
 **Setup:** Table with a nullable column containing at least one actual `NULL` row. Desired schema declares that column `NOT NULL`.
 **Steps:** run plan → reorder → strip → apply.
 **Expected finding (two possible outcomes, both worth recording):**
@@ -175,7 +206,7 @@ Ruling A says "never destructively alter." The code only strips steps where `ope
 - (b) if the column has no NULLs currently but gets one later, or if `pgschema` sequences the `SET NOT NULL` step such that it is evaluated on a value distribution the test didn't anticipate, confirm whether it's the row data or the step filtering that is the actual backstop.
 **Record the observed outcome in the implementation notes** — this determines whether the known-gap writeup should say "data-loss risk" (type narrowing, which can silently truncate/round without error if the cast happens to succeed) vs. "this specific case loudly fails but still isn't *filtered*" (NOT NULL against incompatible data).
 
-### TC-792-062 — Column type narrowing that silently succeeds and loses precision (new, bats, live PG)
+### TC-792-062 — Column type narrowing that silently succeeds and loses precision (new, bats, live PG) — RECORD-ONLY
 **Setup:** `numeric(10,4)` column with a value like `123.4567`; desired schema narrows to `numeric(10,2)`.
 **Steps:** run the full pipeline.
 **Expected finding:** if `pgschema apply` succeeds, confirm the value was silently rounded/truncated (`123.46` or similar) — this is the concrete "silent data loss, nothing stops it" case Step 2 asked about. **This is the strongest evidence for the follow-up issue**, since (unlike TC-792-061) there is no Postgres-side error to rely on as an incidental backstop.
@@ -187,9 +218,11 @@ Ruling A says "never destructively alter." The code only strips steps where `ope
 
 ## 8. #686 phantom CHECK drop+recreate after strip (Step 2 edge case)
 
+**Classification policy for this section (added per Step 4 review R4):** the two tests below are NOT both the same classification, despite both being about #686. **TC-792-070 is RECORD-ONLY** — it characterizes a pre-existing pgschema/strip_destructive interaction (the #686 bug plus the post-strip collision risk) that predates #792 and is independent of the ignore-list change; its outcome (apply succeeds or fails) is to be recorded and linked to #686's follow-up, not treated as a #792 merge gate. **TC-792-071 is GATING** — it is the test that specifically confirms #792's own change (removing the Victoria ignore entries) does not newly expose any Victoria table to the #686 collision mode; if that confirmation fails (i.e. a Victoria table *can* trigger a constraint-level phantom diff once un-ignored), that would be a genuine #792 regression and must block merge.
+
 Background: #686 documents that pgschema fails to canonicalize `CHECK (col IN (...))` vs. the Postgres-stored `CHECK (col = ANY (ARRAY[...]))` form, manufacturing a phantom DROP+CREATE for semantically-identical constraints. Pre-migration `008-drop-stale-extraction-failures-check.sql` already works around this for `extraction_failures` specifically by dropping the stale constraint *before* pgschema plans, so by plan time the constraint is simply missing and pgschema emits a clean `operation: "create"` (ADD CONSTRAINT), no drop+recreate collision. Step 2 asks us to confirm the general case (no pre-migration guard present) still applies cleanly once `strip_destructive` strips the DROP half.
 
-### TC-792-070 — Reproduce #686 shape on a fresh constraint with no pre-migration guard (new, bats, live PG)
+### TC-792-070 — Reproduce #686 shape on a fresh constraint with no pre-migration guard (new, bats, live PG) — RECORD-ONLY
 **Setup:** Create a table with a CHECK constraint in the Postgres-canonicalized `= ANY (ARRAY[...])` form (to force pgschema to see a diff against an `IN (...)`-authored desired schema), e.g.:
 ```sql
 CREATE TABLE t792 (id serial PRIMARY KEY, status text);
@@ -205,7 +238,7 @@ Desired schema (throwaway, isolated schema.sql fragment) declares: `CONSTRAINT t
 - If apply **fails** (expected naive outcome: Postgres `42710 duplicate_object`, "constraint `t792_status_check` for relation `t792` already exists"): this is a genuine collision. Since it's not unique to Victoria tables and not introduced by #792's ignore-list change, **do not expand #792's scope to fix it**; record as a second known gap distinct from section 7, cross-reference #686, and recommend the follow-up there explicitly cover "post-strip ADD CONSTRAINT collision when the matching DROP was stripped," since #686's own suggested fixes (canonicalize CHECK exprs, or author schema.sql in canonical form) don't mention this specific collision mode.
 **Why this belongs in #792's test design even though the fix lives in #686:** removing the Victoria ignore entries means more tables are now planned (not skipped wholesale), which statistically increases the chance of hitting a phantom-CHECK-diff on some currently-ignored Victoria constraint that nova-mind doesn't control the DDL for. This test's job is to make sure #792 doesn't make a *latent* #686 collision newly reachable on a real peer. See TC-792-071.
 
-### TC-792-071 — #686 collision specifically on a (formerly-ignored) Victoria-shaped constraint (new, bats, live PG)
+### TC-792-071 — #686 collision specifically on a (formerly-ignored) Victoria-shaped constraint (new, bats, live PG) — GATING
 **Setup:** Extend the TC-792-020 Victoria fixture: add a CHECK constraint on one of the seeded trading tables (e.g. `trades.side`) authored in the DB in canonicalized `= ANY(ARRAY[...])` form, while schema.sql (hypothetically, if it ever grows a managed table with an overlapping name — this is a defensive/forward-looking test) would author it as `IN (...)`. Since schema.sql does **not** currently declare any Victoria table, the realistic version of this test is: confirm that because Victoria tables are *not* in schema.sql, pgschema's diff for them is purely "exists but undeclared" (→ DROP TABLE, universally stripped), **not** a column/constraint-level diff — so the #686 collision mode cannot actually trigger on tables schema.sql doesn't declare at all, only on tables schema.sql *does* declare with a phantom CHECK mismatch (i.e., TC-792-070's scenario, which is about any managed table in general, not Victoria specifically).
 **Expected:** confirms the #686 collision risk is orthogonal to #792 — it can occur on any schema.sql-managed table with a phantom-diffing CHECK constraint, Victoria-related or not, and #792 removing the ignore entries does not newly expose Victoria tables to it (because Victoria tables remain entirely outside schema.sql). **This narrows TC-792-070's finding down to "pre-existing general risk, not a #792 regression," which is the key fact for the run log.**
 
@@ -229,7 +262,8 @@ Desired schema (throwaway, isolated schema.sql fragment) declares: `CONSTRAINT t
 
 ## 10. Adversarial inputs at the ignore-file and plan-JSON seams
 
-### TC-792-050 — Malformed TOML ignore file: pgschema's own behavior (new, bats, live PG — config-to-runtime seam)
+### TC-792-050 — Malformed TOML ignore file: pgschema's own behavior (new, bats, live PG — config-to-runtime seam) — RECORD-ONLY
+**Classification note (R4):** `.pgschemaignore` is explicitly documented (see the file's own header comment) as a "secondary/legacy guard" since #498 — the primary safety mechanism is the universal drop-strip in `strip_destructive.py`, which does not depend on the ignore file parsing correctly at all. So even if pgschema fails open on malformed TOML, Victoria/agent-local tables are still protected by the drop-strip; this test characterizes a defense-in-depth question about a secondary layer, not a #792 merge blocker.
 **Setup:** Copy `.pgschemaignore` to a scratch dir, corrupt it (unterminated string: `"portfolios` with no closing quote, or an unclosed `[tables]` array missing `]`).
 **Steps:** Run `pgschema plan` directly from that scratch dir (cwd-based auto-discovery, matching the installer's own mechanism) against any live DB.
 **Expected / confirm-and-record (this is a third-party tool behavior question, must be verified empirically, not assumed):**
@@ -240,9 +274,10 @@ Desired schema (throwaway, isolated schema.sql fragment) declares: `CONSTRAINT t
 **Setup:** Call `_inject_section` (or the CLI) against a `.pgschemaignore`-style file with a `[tables]` section opened but never closed (`patterns = [` with no matching `]` anywhere in the file).
 **Expected:** reuses the already-implemented guard — `print(f"ERROR: malformed [{section}] section...")`, `sys.exit(2)`. **This behavior exists today but has no unit test** (confirmed: `grep -rl inject_peer_shadowed_ignores tests/` only finds it referenced from the #608 bats integration fixtures, never a dedicated `test_inject_peer_shadowed_ignores.py`). Add one. Also cover: mismatched `--names`/`--relkinds` lengths (CLI already errors with exit 2 — add a unit test), and an unknown relkind value (already errors — add a unit test for that branch too).
 
-### TC-792-052 — Ignore pattern matches nothing (new, pytest, no DB)
-**Setup:** `.pgschemaignore` with `patterns = ["definitely_not_a_real_table_xyz"]` and no other entries.
-**Steps:** Run `pgschema plan` against a DB with no such table.
+### TC-792-052 — Ignore pattern matches nothing (new, bats, live PG — config-to-runtime seam) — GATING
+**Label corrected per Step 4 review R5:** this is a live-pgschema test, not a pytest/no-DB unit test (the original label was wrong — it invokes `pgschema plan` against a real database, same harness shape as TC-792-050's scratch-dir pattern, not `strip_destructive()`'s Python API).
+**Setup:** Scratch dir with a `.pgschemaignore` containing `patterns = ["definitely_not_a_real_table_xyz"]` and no other entries, copied in exactly as the installer does (TC-792-050's scratch-dir convention).
+**Steps:** Run `pgschema plan` (live binary, live scratch DB — reuse `_make_test_db`/`_drop_test_db`) against a DB with no such table.
 **Expected:** no error, no effect — the pattern is simply unused. Confirms that over-conservative leftover patterns (e.g. if a future cleanup forgets to remove a stale name) degrade gracefully rather than erroring, which also means **silent pattern drift is undetectable without an explicit test** — recommend (not scope-expanding, just a note for the follow-up docs) that TC-792-001-style "every pattern in the ignore file actually matches something in the fixture/live schema" could be a useful CI check later, since this test demonstrates the opposite is cheap to introduce accidentally.
 
 ### TC-792-053 — Local table name collides with a schema.sql table (ordinary table, not view/FDW) (new, bats, live PG)
@@ -254,17 +289,17 @@ Desired schema (throwaway, isolated schema.sql fragment) declares: `CONSTRAINT t
 - Columns the local table has that schema.sql doesn't declare: pgschema would plan a `DROP COLUMN` — confirm it is stripped (universal drop-stripping) and the extra column survives.
 - Any column present in both with an incompatible type: this is exactly the section 7 lossy-alter gap, now in a "collides with a real managed table" setting rather than an isolated throwaway table — if the earlier section 7 tests confirmed the gap exists, this test demonstrates its real-world trigger condition (an operator's local table organically named the same as a future schema.sql table) rather than a synthetic one, which matters for severity assessment in the follow-up issue.
 
-### TC-792-054 — Plan step with an unexpected `operation` value: case mismatch (new, pytest, no DB)
+### TC-792-054 — Plan step with an unexpected `operation` value: case mismatch (new, pytest, no DB) — RECORD-ONLY
 **Setup:** Hand-craft a plan JSON step with `"operation": "DROP"` (uppercase) instead of `"drop"`.
 **Steps:** Run `strip_destructive()` (direct Python call, following `tests/test_strip_destructive.py`'s existing pattern) against this plan.
 **Expected / confirm-and-record:** since `strip_destructive.py` does `step.get("operation") == "drop"` as an exact, case-sensitive string compare, a `"DROP"`-cased step is **not** matched and would be kept. Confirm this is indeed the observed behavior (it should be, by code inspection, but per the task's adversarial-input requirement this must be demonstrated by a passing/failing test, not just read off the source). **If pgschema itself only ever emits lowercase `"drop"`** (verify against a real plan JSON sample captured from any other live test in this document), this is a defense-in-depth gap rather than an exploitable one today — record as a minor known gap (case-insensitive compare would be a one-line, low-risk hardening, but is out of #792's stated scope unless the implementer judges it trivial enough to bundle; if so, note it as an opportunistic fix, not a scope expansion).
 
-### TC-792-055 — Plan step with an unrecognized `operation` value entirely (new, pytest, no DB)
+### TC-792-055 — Plan step with an unrecognized `operation` value entirely (new, pytest, no DB) — RECORD-ONLY
 **Setup:** Step with `"operation": "truncate"` or `"operation": null` or the key omitted entirely, carrying a destructive-looking `sql` field (e.g. `"sql": "DROP TABLE public.x;"`) that disagrees with its own `operation` metadata.
 **Steps:** Run `strip_destructive()`.
 **Expected / confirm-and-record:** the function only inspects the `operation` field, never the `sql` text — so a step whose `operation` doesn't literally equal `"drop"` is kept regardless of what its `sql` actually does. This is the **most significant** adversarial finding in this category: it means `strip_destructive.py` trusts pgschema's own `operation` labeling completely, with zero independent verification against the SQL text. Record as a **known gap**: "strip_destructive.py has no defense against a plan step whose declared `operation` disagrees with its `sql` payload (e.g. a future pgschema bug, a hand-edited plan file, or plan-file tampering between `plan` and `apply`)." Recommend as a follow-up (not #792 scope): a lightweight SQL-text sanity check (e.g. regex for leading `DROP`/`TRUNCATE`/`ALTER ... DROP`/`ALTER ... TYPE` keywords) cross-validated against the declared `operation`, failing closed (treat as a drop) on disagreement. This is a generic plan-JSON trust-boundary gap, not something #792's ignore-list change introduces — same "don't grow #792's scope" logic as section 7.
 
-### TC-792-056 — Plan step with an unexpected `type` value (new, pytest, no DB)
+### TC-792-056 — Plan step with an unexpected `type` value (new, pytest, no DB) — RECORD-ONLY
 **Setup:** Step with `"operation": "create"`, a valid-looking `path`, but `"type": "materialized_view_refresh"` (not a key in `_NONOWNED_TYPE_CATEGORY`), combined with `db_user`+`resolver` supplied (so the non-owned-object check path is exercised).
 **Steps:** Run `strip_destructive(plan, db_user="nova", resolver=<stub>)`.
 **Expected:** `_resolve_step_owners` returns `None` for the unrecognized type (falls through `_NONOWNED_TYPE_CATEGORY.get(stype, (None, ()))` → `category is None` → `return None`), so the non-owned-object gate is silently skipped for this step — it is kept regardless of actual ownership. Confirm this is observed behavior. **Known gap, same category as TC-792-055:** an unrecognized `type` bypasses both the drop-strip's type-sensitivity (N/A here since drop-strip doesn't key on type at all) and the ownership gate. Since this requires `db_user`+`resolver` to even be reachable, and #792's own ignore-list change doesn't touch `_NONOWNED_TYPE_CATEGORY` or introduce new step types, this is pre-existing and out of #792's scope — fold into the same follow-up recommendation as TC-792-055 rather than filing a third, overlapping issue.

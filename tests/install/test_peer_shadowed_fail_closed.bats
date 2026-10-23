@@ -34,8 +34,8 @@ _source_installer_peer_functions() {
     printf '%s\n' '{' '  "host": "localhost",' '  "port": 5432,' '  "database": "test_memory",' '  "user": "testuser",' '  "password": ""' '}' >"$fake_home/.openclaw/postgres.json"
 
     cp "$REPO_ROOT/agent-install.sh" "$fake_repo/agent-install.sh"
-    mkdir -p "$fake_repo/lib"
-    printf '%s\n' 'load_pg_env() { :; }' 'load_pg_superuser_env() { :; }' >"$fake_repo/lib/pg-env.sh"
+    mkdir -p "$fake_repo/memory/lib" "$fake_repo/lib"
+    printf '%s\n' 'load_pg_env() { :; }' 'load_pg_superuser_env() { :; }' >"$fake_repo/memory/lib/pg-env.sh"
     printf '%s\n' '# stub' >"$fake_repo/lib/agent-chat-peer-detection.sh"
     mkdir -p "$fake_repo/database"
     cp "$REPO_ROOT/database/schema.sql" "$fake_repo/database/schema.sql"

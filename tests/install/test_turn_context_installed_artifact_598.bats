@@ -19,12 +19,13 @@ setup() {
     FAKE_REPO="$SCRATCH/repo"
 
     mkdir -p "$SCRATCH/.openclaw"
+    printf '%s\n' '{' '  "host": "localhost",' '  "port": 5432,' '  "database": "test_memory",' '  "user": "testuser",' '  "password": ""' '}' >"$SCRATCH/.openclaw/postgres.json"
     cp -r "$REPO_ROOT/memory/plugins/turn-context" "$SOURCE"
 
-    mkdir -p "$FAKE_REPO/lib"
+    mkdir -p "$FAKE_REPO/memory/lib" "$FAKE_REPO/lib"
     INSTALL_SCRIPT="${AGENT_INSTALL_SCRIPT:-$REPO_ROOT/agent-install.sh}"
     cp "$INSTALL_SCRIPT" "$FAKE_REPO/agent-install.sh"
-    printf '%s\n' 'load_pg_env() { :; }' 'load_pg_superuser_env() { :; }' >"$FAKE_REPO/lib/pg-env.sh"
+    printf '%s\n' 'load_pg_env() { :; }' 'load_pg_superuser_env() { :; }' >"$FAKE_REPO/memory/lib/pg-env.sh"
     printf '%s\n' '# stub' >"$FAKE_REPO/lib/agent-chat-peer-detection.sh"
 }
 

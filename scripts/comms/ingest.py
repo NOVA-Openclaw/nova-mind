@@ -49,7 +49,7 @@ class IngestError(Exception):
 
 def _load_pg_config() -> dict[str, Any]:
     """Load PostgreSQL connection params from lib/pg_env.py, respecting ENV."""
-    lib_dir = REPO_ROOT / "lib"
+    lib_dir = REPO_ROOT / "memory" / "lib"
     if str(lib_dir) not in sys.path:
         sys.path.insert(0, str(lib_dir))
     import pg_env  # noqa: E402

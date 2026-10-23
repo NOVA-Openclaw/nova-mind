@@ -24,8 +24,8 @@ setup() {
     # Copy the installer and stub its sourced libs so we can source it
     # without a real PostgreSQL environment.
     cp "$REPO_ROOT/agent-install.sh" "$FAKE_REPO/agent-install.sh"
-    mkdir -p "$FAKE_REPO/lib"
-    printf '%s\n' 'load_pg_env() { :; }' 'load_pg_superuser_env() { :; }' >"$FAKE_REPO/lib/pg-env.sh"
+    mkdir -p "$FAKE_REPO/memory/lib" "$FAKE_REPO/lib"
+    printf '%s\n' 'load_pg_env() { :; }' 'load_pg_superuser_env() { :; }' >"$FAKE_REPO/memory/lib/pg-env.sh"
     printf '%s\n' '# stub' >"$FAKE_REPO/lib/agent-chat-peer-detection.sh"
 
     export HOME="$FAKE_HOME"
@@ -39,6 +39,39 @@ teardown() {
 source_installer_functions() {
     # shellcheck disable=SC1090
     source "$FAKE_REPO/agent-install.sh"
+}
+
+# TC-789 assertion helpers (reused for both positive and mutation tests).
+_assert_789_001() {
+    local repo_root="$1"
+    local home_dir="$2"
+    local saved_home="$HOME"
+    export HOME="$home_dir"
+    export AGENT_INSTALL_TEST_MODE=1
+    # Clear positional parameters so agent-install.sh's argument parser
+    # does not see the helper arguments when sourced.
+    set --
+    # shellcheck disable=SC1090
+    source "$repo_root/agent-install.sh"
+    install_lib_files
+    [ -f "$home_dir/.openclaw/lib/pg-env.sh" ]
+    grep -q 'resolve_agent_db()' "$home_dir/.openclaw/lib/pg-env.sh"
+    export HOME="$saved_home"
+}
+
+_assert_789_002() {
+    local repo_root="$1"
+    local home_dir="$2"
+    local saved_home="$HOME"
+    export HOME="$home_dir"
+    export AGENT_INSTALL_TEST_MODE=1
+    set --
+    # shellcheck disable=SC1090
+    source "$repo_root/agent-install.sh"
+    install_lib_files
+    [ -f "$home_dir/.openclaw/lib/pg-env.ts" ]
+    grep -q 'export function resolveAgentDatabase' "$home_dir/.openclaw/lib/pg-env.ts"
+    export HOME="$saved_home"
 }
 
 # ─── #722 TypeScript dependency install ─────────────────────────────────────
@@ -140,5 +173,60 @@ source_installer_functions() {
     [ "$status" -eq 0 ]
     [[ "$output" == *"Set gateway.reload.mode = \"hybrid\""* ]]
     [ "$(jq -r '.gateway.reload.mode' "$config")" = "hybrid" ]
+}
+
+@test "TC-789-001: install_lib_files deploys pg-env.sh with resolve_agent_db" {
+    run _assert_789_001 "$REPO_ROOT" "$HOME"
+    [ "$status" -eq 0 ]
+}
+
+@test "TC-789-002: install_lib_files deploys pg-env.ts exporting resolveAgentDatabase" {
+    run _assert_789_002 "$REPO_ROOT" "$HOME"
+    [ "$status" -eq 0 ]
+}
+
+@test "TC-789-003: stale source fails TC-789-001/002; real source passes" {
+    local stale_home stale_repo real_home
+    stale_home="$(mktemp -d)"
+    stale_repo="$(mktemp -d)"
+    real_home="$(mktemp -d)"
+    mkdir -p "$stale_home/.openclaw" "$stale_repo/memory/lib" "$stale_repo/lib"
+    mkdir -p "$real_home/.openclaw"
+    cp "$REPO_ROOT/agent-install.sh" "$stale_repo/agent-install.sh"
+
+    # Simulate the pre-fix memory/lib copy: no resolve_agent_db / resolveAgentDatabase.
+    cat >"$stale_repo/memory/lib/pg-env.sh" <<'STALEEOF'
+#!/bin/bash
+load_pg_env() { :; }
+load_pg_superuser_env() { :; }
+STALEEOF
+    cat >"$stale_repo/memory/lib/pg-env.ts" <<'STALEEOF'
+export function loadPgEnv() {}
+STALEEOF
+    printf '%s\n' '# stub' >"$stale_repo/memory/lib/env-loader.sh"
+    printf '%s\n' '# stub' >"$stale_repo/memory/lib/env_loader.py"
+    printf '%s\n' '# stub' >"$stale_repo/memory/lib/pg_env.py"
+    printf '%s\n' '# stub' >"$stale_repo/lib/agent-chat-peer-detection.sh"
+
+    cat >"$stale_home/.openclaw/postgres.json" <<'STALEEOF'
+{"host":"localhost","port":5432,"database":"test_memory","user":"testuser","password":""}
+STALEEOF
+    cat >"$real_home/.openclaw/postgres.json" <<'STALEEOF'
+{"host":"localhost","port":5432,"database":"test_memory","user":"testuser","password":""}
+STALEEOF
+
+    # Stale source: TC-789-001/002 assertions must fail.
+    run _assert_789_001 "$stale_repo" "$stale_home"
+    [ "$status" -ne 0 ]
+    run _assert_789_002 "$stale_repo" "$stale_home"
+    [ "$status" -ne 0 ]
+
+    # Real source: TC-789-001/002 assertions must pass.
+    run _assert_789_001 "$REPO_ROOT" "$real_home"
+    [ "$status" -eq 0 ]
+    run _assert_789_002 "$REPO_ROOT" "$real_home"
+    [ "$status" -eq 0 ]
+
+    rm -rf "$stale_home" "$stale_repo" "$real_home"
 }
 

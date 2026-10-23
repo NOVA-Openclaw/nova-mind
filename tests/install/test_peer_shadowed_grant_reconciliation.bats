@@ -50,8 +50,8 @@ SQL
     cp "$REPO_ROOT/agent-install.sh" "$FAKE_REPO/agent-install.sh"
     cp "$REPO_ROOT/database/schema.sql" "$FAKE_REPO/database/schema.sql"
     cp "$REPO_ROOT/database/filter_shadowed_grants.py" "$FAKE_REPO/database/filter_shadowed_grants.py"
-    mkdir -p "$FAKE_REPO/lib"
-    printf '%s\n' 'load_pg_env() { :; }' 'load_pg_superuser_env() { :; }' >"$FAKE_REPO/lib/pg-env.sh"
+    mkdir -p "$FAKE_REPO/memory/lib" "$FAKE_REPO/lib"
+    printf '%s\n' 'load_pg_env() { :; }' 'load_pg_superuser_env() { :; }' >"$FAKE_REPO/memory/lib/pg-env.sh"
     printf '%s\n' '# stub' >"$FAKE_REPO/lib/agent-chat-peer-detection.sh"
 
     HOME="$FAKE_HOME" AGENT_INSTALL_TEST_MODE=1 source "$FAKE_REPO/agent-install.sh"

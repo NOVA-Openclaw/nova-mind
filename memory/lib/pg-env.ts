@@ -10,6 +10,18 @@ import { readFileSync } from "fs";
 import { homedir, userInfo } from "os";
 import { join } from "path";
 
+/**
+ * PostgreSQL connection options interface that matches
+ * the pg.Client constructor options.
+ */
+export interface PgConnectionConfig {
+  host?: string;
+  port?: number;
+  database?: string;
+  user?: string;
+  password?: string;
+}
+
 interface PgConfig {
   host?: string | null;
   port?: string | number | null;
@@ -19,7 +31,7 @@ interface PgConfig {
   [key: string]: unknown;
 }
 
-const FIELD_MAP: Array<[keyof PgConfig, string]> = [
+const FIELD_MAP: Array<[keyof PgConnectionConfig, string]> = [
   ["host", "PGHOST"],
   ["port", "PGPORT"],
   ["database", "PGDATABASE"],
@@ -34,15 +46,27 @@ const DEFAULTS: Record<string, string | (() => string)> = {
 };
 
 /**
- * PostgreSQL connection options interface that matches
- * the pg.Client constructor options.
+ * Resolve the canonical agent database name.
+ *
+ * The cognition and memory fallback DB is `<agent>_memory`, derived from the
+ * agent's own OS/pg user name, with '-' normalized to '_'.
+ * Subagents run as the parent user, so this resolves to the parent's DB.
+ *
+ * Precedence:
+ *   1. An explicit database already resolved from config/env.
+ *   2. PGDATABASE environment variable.
+ *   3. `<normalized_username>_memory`, where username defaults to the current OS user.
+ *
+ * Issue: nova-mind #775, #778
  */
-export interface PgConnectionConfig {
-  host?: string;
-  port?: number;
-  database?: string;
-  user?: string;
-  password?: string;
+export function resolveAgentDatabase(
+  preferred?: string | null,
+  username?: string
+): string {
+  if (preferred) return preferred;
+  if (process.env.PGDATABASE) return process.env.PGDATABASE;
+  const user = username ?? userInfo().username;
+  return `${user.replace(/-/g, "_")}_memory`;
 }
 
 /**

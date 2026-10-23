@@ -20,7 +20,7 @@ OUTPUT_FILE="${1:-$HOME/.openclaw/workspace/DELEGATION_CONTEXT.md}"
 # "$(whoami)_memory". Issue: nova-mind #775.
 PG_ENV_SH="$HOME/.openclaw/lib/pg-env.sh"
 if [ -f "$PG_ENV_SH" ]; then
-    # shellcheck source=../../lib/pg-env.sh
+    # shellcheck source=../../memory/lib/pg-env.sh
     source "$PG_ENV_SH"
 fi
 DB_NAME="${DELEGATION_CONTEXT_DB_NAME:-$(resolve_agent_db)}"

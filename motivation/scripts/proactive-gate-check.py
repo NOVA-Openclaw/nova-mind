@@ -40,7 +40,7 @@ except ImportError:
 # Load centralized PG config loader so agent_chat queries resolve to the
 # dedicated messaging DB while memory-DB queries keep flat/memory config.
 _PG_ENV_DIR = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "..", "..", "lib"
+    os.path.dirname(os.path.abspath(__file__)), "..", "..", "memory", "lib"
 )
 if os.path.isdir(_PG_ENV_DIR) and _PG_ENV_DIR not in sys.path:
     sys.path.insert(0, _PG_ENV_DIR)

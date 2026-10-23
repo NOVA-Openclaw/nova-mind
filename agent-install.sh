@@ -1025,7 +1025,7 @@ _resolve_peer_shadowed_relations() {
 # ============================================
 # SECTION 2: Source shared library
 # ============================================
-PG_ENV="$SCRIPT_DIR/lib/pg-env.sh"
+PG_ENV="$SCRIPT_DIR/memory/lib/pg-env.sh"
 if [ ! -f "$PG_ENV" ]; then
     echo -e "  ${RED}❌${NC} $PG_ENV not found"
     exit 1
@@ -2072,6 +2072,44 @@ done
 if [ -n "$DB_NAME_OVERRIDE" ]; then
     DB_NAME="$DB_NAME_OVERRIDE"
 fi
+
+# install_lib_files: Install shared PG loader files to ~/.openclaw/lib/
+# Uses SHA-256 hash comparison: install if missing, update if changed, skip if identical
+install_lib_files() {
+    local lib_src="$SCRIPT_DIR/memory/lib"
+    local lib_dst="$HOME/.openclaw/lib"
+    local files=("pg-env.sh" "pg_env.py" "pg-env.ts" "env-loader.sh" "env_loader.py")
+
+    mkdir -p "$lib_dst"
+    chmod 755 "$lib_dst"
+
+    for f in "${files[@]}"; do
+        local src="$lib_src/$f"
+        local dst="$lib_dst/$f"
+
+        if [ ! -f "$src" ]; then
+            echo -e "  ${WARNING} [lib] $f: source not found in repo, skipping"
+            continue
+        fi
+
+        if [ ! -f "$dst" ]; then
+            cp "$src" "$dst"
+            chmod 644 "$dst"
+            echo -e "  ${CHECK_MARK} [lib] $f: installed"
+        else
+            local src_hash dst_hash
+            src_hash=$(sha256sum "$src" | awk '{print $1}')
+            dst_hash=$(sha256sum "$dst" | awk '{print $1}')
+            if [ "$src_hash" != "$dst_hash" ]; then
+                cp "$src" "$dst"
+                chmod 644 "$dst"
+                echo -e "  ${CHECK_MARK} [lib] $f: updated (hash changed)"
+            else
+                echo -e "  ${INFO} [lib] $f: up to date"
+            fi
+        fi
+    done
+}
 
 # When the installer is sourced by unit tests, stop here so tests can call
 # the helper functions above without running the full installer.  This guard

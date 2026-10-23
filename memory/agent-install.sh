@@ -12,8 +12,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PG_CONFIG="${HOME}/.openclaw/postgres.json"
 if [ -f "$PG_CONFIG" ] && [ -r "$PG_CONFIG" ]; then
     # Source the shared loader if available, otherwise inline
-    if [ -f "$SCRIPT_DIR/lib/pg-env.sh" ]; then
-        source "$SCRIPT_DIR/lib/pg-env.sh"
+    if [ -f "$SCRIPT_DIR/memory/lib/pg-env.sh" ]; then
+        source "$SCRIPT_DIR/memory/lib/pg-env.sh"
         load_pg_env
     else
         # Inline fallback: read config file for any unset PG* vars

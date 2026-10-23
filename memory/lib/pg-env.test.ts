@@ -8,12 +8,12 @@
  * Run: npx tsx --test memory/lib/pg-env.test.ts
  */
 
-import { describe, it, before, after } from "node:test";
+import { describe, it, before, beforeEach, after, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { loadPgEnv } from "./pg-env.js";
+import { loadPgEnv, resolveAgentDatabase } from "./pg-env.js";
 
 const PG_VARS = ["PGHOST", "PGPORT", "PGDATABASE", "PGUSER", "PGPASSWORD"] as const;
 
@@ -374,5 +374,48 @@ describe("TC-27: bootstrap section does not leak into flat/no-section callers", 
     assert.strictEqual(cfg.database, "nova_memory");
     assert.strictEqual(cfg.user, "nova");
     assert.strictEqual(cfg.host, "flat-host");
+  });
+});
+
+describe("resolveAgentDatabase", { concurrency: false }, () => {
+  let savedEnv: Record<string, string | undefined>;
+
+  beforeEach(() => {
+    savedEnv = clearPgEnv();
+  });
+
+  afterEach(() => {
+    restorePgEnv(savedEnv);
+  });
+
+  it("returns graybeard_memory for user graybeard with no env/config", () => {
+    assert.strictEqual(resolveAgentDatabase(undefined, "graybeard"), "graybeard_memory");
+  });
+
+  it("returns nova_memory for user nova with no env/config", () => {
+    assert.strictEqual(resolveAgentDatabase(undefined, "nova"), "nova_memory");
+  });
+
+  it("prefers explicit config database over fallback", () => {
+    assert.strictEqual(resolveAgentDatabase("explicit_db", "graybeard"), "explicit_db");
+  });
+
+  it("prefers PGDATABASE env over fallback when no explicit config", () => {
+    process.env.PGDATABASE = "env_memory";
+    assert.strictEqual(resolveAgentDatabase(undefined, "graybeard"), "env_memory");
+  });
+
+  it("prefers explicit config over PGDATABASE env", () => {
+    process.env.PGDATABASE = "env_memory";
+    assert.strictEqual(resolveAgentDatabase("explicit_db", "graybeard"), "explicit_db");
+  });
+
+  it("falls back to current OS user when no args", () => {
+    const expected = `${os.userInfo().username}_memory`;
+    assert.strictEqual(resolveAgentDatabase(), expected);
+  });
+
+  it("normalizes hyphens to underscores in fallback user name", () => {
+    assert.strictEqual(resolveAgentDatabase(undefined, "nova-agent"), "nova_agent_memory");
   });
 });

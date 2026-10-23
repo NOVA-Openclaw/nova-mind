@@ -69,7 +69,7 @@ CATCHUP_SCRIPT="$REPO_ROOT/memory/scripts/memory-catchup.sh"
 printf '%s' 'nova-staging'
 EOF
     chmod +x "$tmp_bin/whoami"
-    run env -i HOME="$HOME" PATH="$tmp_bin:/usr/bin:/bin" bash -c "source '$REPO_ROOT/lib/pg-env.sh'; resolve_agent_db"
+    run env -i HOME="$HOME" PATH="$tmp_bin:/usr/bin:/bin" bash -c "source '$REPO_ROOT/memory/lib/pg-env.sh'; resolve_agent_db"
     [ "$status" -eq 0 ]
     [ "$output" = "nova_staging_memory" ]
     rm -rf "$tmp_bin"
@@ -82,20 +82,20 @@ EOF
 printf '%s' 'nova'
 EOF
     chmod +x "$tmp_bin/whoami"
-    run env -i HOME="$HOME" PATH="$tmp_bin:/usr/bin:/bin" bash -c "source '$REPO_ROOT/lib/pg-env.sh'; resolve_agent_db"
+    run env -i HOME="$HOME" PATH="$tmp_bin:/usr/bin:/bin" bash -c "source '$REPO_ROOT/memory/lib/pg-env.sh'; resolve_agent_db"
     [ "$status" -eq 0 ]
     [ "$output" = "nova_memory" ]
     rm -rf "$tmp_bin"
 }
 
 @test "TC-778-003: PGDATABASE wins over resolve_agent_db fallback" {
-    run env -i HOME="$HOME" PATH="/usr/bin:/bin" PGDATABASE="explicit_db" bash -c "source '$REPO_ROOT/lib/pg-env.sh'; resolve_agent_db"
+    run env -i HOME="$HOME" PATH="/usr/bin:/bin" PGDATABASE="explicit_db" bash -c "source '$REPO_ROOT/memory/lib/pg-env.sh'; resolve_agent_db"
     [ "$status" -eq 0 ]
     [ "$output" = "explicit_db" ]
 }
 
 @test "TC-778-004: explicit database argument wins over resolve_agent_db fallback" {
-    run env -i HOME="$HOME" PATH="/usr/bin:/bin" bash -c "source '$REPO_ROOT/lib/pg-env.sh'; resolve_agent_db 'arg_db'"
+    run env -i HOME="$HOME" PATH="/usr/bin:/bin" bash -c "source '$REPO_ROOT/memory/lib/pg-env.sh'; resolve_agent_db 'arg_db'"
     [ "$status" -eq 0 ]
     [ "$output" = "arg_db" ]
 }

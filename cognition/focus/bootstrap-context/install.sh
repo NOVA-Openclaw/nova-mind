@@ -13,7 +13,7 @@ FALLBACK_DIR="$OPENCLAW_DIR/bootstrap-fallback"
 # otherwise the DB is "$(whoami)_memory". Issue: nova-mind #775.
 PG_ENV_SH="$OPENCLAW_DIR/lib/pg-env.sh"
 if [ -f "$PG_ENV_SH" ]; then
-    # shellcheck source=../../lib/pg-env.sh
+    # shellcheck source=../../../../memory/lib/pg-env.sh
     source "$PG_ENV_SH"
 fi
 DB_NAME="${DB_NAME:-$(resolve_agent_db)}"

@@ -32,7 +32,7 @@ echo ""
 # ============================================
 # Source libraries early (before any checks)
 # ============================================
-PG_ENV="$SCRIPT_DIR/lib/pg-env.sh"
+PG_ENV="$SCRIPT_DIR/memory/lib/pg-env.sh"
 if [ ! -f "$PG_ENV" ]; then
     echo -e "  ${RED}❌${NC} $PG_ENV not found"
     exit 1

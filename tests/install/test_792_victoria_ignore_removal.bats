@@ -1515,3 +1515,39 @@ SQL
     _drop_test_db "$DB"
 }
 
+# --- CHUNK 5: adversarial live seams + regression gate ---
+
+@test "TC-792-052: ignore pattern matching nothing is harmless (GATING)" {
+    if [ ! -x "$VENV_PYTHON" ]; then skip "venv python not available at $VENV_PYTHON"; fi
+    if ! "$VENV_PYTHON" -c "import pglast" 2>/dev/null; then skip "pglast not installed"; fi
+    if ! _pg_available; then skip "live PostgreSQL/pgschema not available"; fi
+
+    DB=$(_make_test_db)
+    SCRATCH=$(mktemp -d /tmp/pgschema-792-052-XXXXXX)
+    PLAN="$SCRATCH/plan.json"
+
+    cat > "$SCRATCH/.pgschemaignore" <<'EOF'
+[tables]
+patterns = ["definitely_not_a_real_table_xyz"]
+EOF
+    cat > "$SCRATCH/schema.sql" <<'EOF'
+CREATE TABLE t792_052 (id serial PRIMARY KEY);
+EOF
+
+    run _pgschema_plan_to_file "$DB" "$SCRATCH" "$SCRATCH/schema.sql" "$PLAN"
+    [ "$status" -eq 0 ]
+
+    run "$VENV_PYTHON" - <<PY
+import json
+with open('$PLAN') as f:
+    p = json.load(f)
+steps = [s for g in (p.get('groups') or []) for s in g.get('steps', [])]
+print(len(steps))
+PY
+    [ "$status" -eq 0 ]
+    # The single create step for t792_052 should still be present.
+    [ "$output" -eq 1 ]
+
+    rm -rf "$SCRATCH"
+    _drop_test_db "$DB"
+}

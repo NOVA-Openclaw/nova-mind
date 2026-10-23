@@ -215,5 +215,47 @@ def test_peer_shadowed_ignore_still_works_with_db_user():
     assert "ignored_table" in excluded
 
 
+# --- TC-792-054/055/056: adversarial operation/type values (RECORD-ONLY) ---
+
+
+def test_uppercase_drop_operation_is_not_stripped():
+    """TC-792-054: operation 'DROP' (uppercase) is kept by exact-match code."""
+    plan = _plan([
+        {"sql": "DROP TABLE public.t;", "operation": "DROP", "type": "table", "path": "public.t"},
+    ])
+    filtered, count, excluded = strip_destructive(plan)
+    assert count == 0
+    assert len(filtered["groups"][0]["steps"]) == 1
+    assert filtered["groups"][0]["steps"][0]["operation"] == "DROP"
+
+
+def test_unrecognized_operation_with_destructive_sql_is_kept():
+    """TC-792-055: strip_destructive trusts 'operation', not the SQL text."""
+    plan = _plan([
+        {"sql": "DROP TABLE public.t;", "operation": "truncate", "type": "table", "path": "public.t"},
+        {"sql": "DROP TABLE public.u;", "operation": None, "type": "table", "path": "public.u"},
+        {"sql": "DROP TABLE public.v;", "type": "table", "path": "public.v"},
+    ])
+    filtered, count, excluded = strip_destructive(plan)
+    # All three survive because none declare operation == 'drop'.
+    assert count == 0
+    assert len(filtered["groups"][0]["steps"]) == 3
+
+
+def test_unrecognized_type_bypasses_nonowned_gate():
+    """TC-792-056: unknown type falls through _NONOWNED_TYPE_CATEGORY -> kept."""
+    from plan_check_superuser import _StubResolver
+
+    plan = _plan([
+        {"sql": "CREATE MATERIALIZED VIEW public.mv AS SELECT 1;", "operation": "create", "type": "materialized_view_refresh", "path": "public.mv"},
+    ])
+    resolver = _StubResolver([
+        {"name": "mv", "schema": "public", "kind": "materialized view", "owner": "postgres"},
+    ])
+    filtered, count, excluded = strip_destructive(plan, db_user="nova", resolver=resolver)
+    assert count == 0
+    assert len(filtered["groups"][0]["steps"]) == 1
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))

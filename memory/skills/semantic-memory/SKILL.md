@@ -1,6 +1,6 @@
 ---
 name: semantic-memory
-description: Implement semantic search over agent memory using vector embeddings. Use when building AI memory systems, enabling meaning-based recall, or setting up proactive context retrieval. Covers PostgreSQL pgvector, OpenAI embeddings, and memory search patterns.
+description: Implement semantic search over agent memory using vector embeddings. Use when building AI memory systems, enabling meaning-based recall, or setting up proactive context retrieval. Covers PostgreSQL pgvector, Ollama embeddings, and memory search patterns.
 ---
 
 # Semantic Memory System
@@ -13,20 +13,19 @@ Enable meaning-based search across agent memory using vector embeddings. Query b
 
 Search memory semantically:
 ```bash
-source ~/.openclaw/workspace/scripts/tts-venv/bin/activate
-python ~/.openclaw/workspace/scripts/proactive-recall.py "user's question here"
+echo '{"content": "user\'s question here"}' | python3 ~/.openclaw/scripts/proactive-recall.py
 ```
 
 ## Architecture
 
 ```
-┌─────────────────┐     ┌──────────────────┐     ┌─────────────────┐
-│ Source Content  │────▶│ Embed (OpenAI)   │────▶│ memory_embeddings│
-│ (markdown, DB)  │     │ text-embedding-3 │     │ (pgvector)      │
-└─────────────────┘     └──────────────────┘     └─────────────────┘
-                                                          │
-┌─────────────────┐     ┌──────────────────┐              │
-│ Search Results  │◀────│ Cosine Similarity│◀─────────────┘
+┌─────────────────┐     ┌─────────────────────────────┐     ┌─────────────────┐
+│ Source Content  │────▶│ Embed (Ollama)              │────▶│ memory_embeddings│
+│ (markdown, DB)  │     │ snowflake-arctic-embed2     │     │ (pgvector)      │
+└─────────────────┘     └─────────────────────────────┘     └─────────────────┘
+                                                                    │
+┌─────────────────┐     ┌──────────────────┐                        │
+│ Search Results  │◀────│ Cosine Similarity│◀───────────────────────┘
 └─────────────────┘     └──────────────────┘
 ```
 
@@ -40,7 +39,7 @@ CREATE TABLE memory_embeddings (
     source_type VARCHAR(50) NOT NULL,  -- 'daily_log', 'lesson', 'entity', etc.
     source_id TEXT,                     -- Reference to source record
     content TEXT NOT NULL,              -- The text that was embedded
-    embedding vector(1536),             -- OpenAI text-embedding-3-small
+    embedding vector(1024),             -- Ollama snowflake-arctic-embed2
     created_at TIMESTAMPTZ DEFAULT now(),
     updated_at TIMESTAMPTZ DEFAULT now()
 );
@@ -57,7 +56,8 @@ CREATE TABLE memory_embeddings (
 
 ```python
 import os
-import openai
+import json
+import urllib.request
 from psycopg2 import connect
 
 # Database name is dynamic: ${USER//-/_}_memory (e.g., nova_memory, argus_memory)
@@ -65,14 +65,22 @@ from psycopg2 import connect
 def get_db_name() -> str:
     return os.environ.get("PGDATABASE", f"{os.environ.get('USER', 'nova').replace('-', '_')}_memory")
 
+def get_embedding(text: str) -> list:
+    """Get a 1024-dim embedding from the local Ollama snowflake-arctic-embed2 model."""
+    url = "http://localhost:11434/api/embeddings"
+    payload = json.dumps({"model": "snowflake-arctic-embed2", "prompt": text}).encode()
+    req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        result = json.loads(resp.read())
+    embedding = result["embedding"]
+    if len(embedding) != 1024:
+        raise ValueError(f"Expected 1024 dimensions, got {len(embedding)}")
+    return embedding
+
 def embed_and_store(content: str, source_type: str, source_id: str):
     # Generate embedding
-    response = openai.embeddings.create(
-        model="text-embedding-3-small",
-        input=content
-    )
-    embedding = response.data[0].embedding
-    
+    embedding = get_embedding(content)
+
     # Store in PostgreSQL (reads PGHOST, PGUSER, PGDATABASE, PGPASSWORD from environment)
     conn = connect(dbname=get_db_name())
     cur = conn.cursor()
@@ -88,12 +96,8 @@ def embed_and_store(content: str, source_type: str, source_id: str):
 ```python
 def search_memory(query: str, limit: int = 5) -> list:
     # Embed the query
-    response = openai.embeddings.create(
-        model="text-embedding-3-small",
-        input=query
-    )
-    query_embedding = response.data[0].embedding
-    
+    query_embedding = get_embedding(query)
+
     # Find similar content (reads PG* env vars set by pg_env.py / pg-env.sh)
     conn = connect(dbname=get_db_name())
     cur = conn.cursor()
@@ -104,7 +108,7 @@ def search_memory(query: str, limit: int = 5) -> list:
         ORDER BY embedding <=> %s::vector
         LIMIT %s
     """, (query_embedding, query_embedding, limit))
-    
+
     return cur.fetchall()
 ```
 

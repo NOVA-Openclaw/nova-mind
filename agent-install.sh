@@ -3075,7 +3075,6 @@ echo "════════════════════════�
 echo ""
 echo "Database check (cognition)..."
 
-local db_exists
 db_exists=$(psql -U "$DB_USER" -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname = '$DB_NAME'" 2>/dev/null | tr -d '[:space:]')
 if [ "$db_exists" = "1" ]; then
     echo -e "  ${CHECK_MARK} Database '$DB_NAME' exists"

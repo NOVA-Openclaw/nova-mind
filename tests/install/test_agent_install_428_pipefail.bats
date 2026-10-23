@@ -131,3 +131,95 @@ _source_verify_schema() {
     [ "$status" -eq 0 ]
     [ "${#output}" -gt 65536 ]
 }
+
+# ─── Cognition database-existence check (regression guard for #428) ─────────
+
+# Install a stub psql that answers the cognition DB-existence query with the
+# supplied value ("1" for an existing DB, anything else for a missing one).
+_install_cognition_stub_psql() {
+    local return_value="${1:-}"
+    local stub_dir
+    stub_dir="$(mktemp -d)"
+    mkdir -p "$stub_dir/bin"
+
+    cat >"$stub_dir/bin/psql" <<EOF
+#!/usr/bin/env bash
+if [[ "\$*" == *"SELECT 1 FROM pg_database WHERE datname"* ]]; then
+    printf '%s\n' '$return_value'
+    exit 0
+fi
+printf '\n'
+exit 0
+EOF
+    chmod +x "$stub_dir/bin/psql"
+    export PATH="$stub_dir/bin:$PATH"
+    printf '%s\n' "$stub_dir"
+}
+
+# Extract the top-level cognition database-existence block from the installer
+# and evaluate it under the same set -euo pipefail options used by the script.
+_source_cognition_db_check() {
+    local script="$FAKE_REPO/agent-install.sh"
+
+    RED='\033[0;31m'
+    GREEN='\033[0;32m'
+    NC='\033[0m'
+    CHECK_MARK="${GREEN}✅${NC}"
+    CROSS_MARK="${RED}❌${NC}"
+    DB_USER="testuser"
+    DB_NAME="test_memory"
+
+    local block
+    block=$(awk '/^# --- Database check for cognition ---$/,/^# --- Configure PostgreSQL password file \(memory DB only\) ---$/' "$script" | head -n -1)
+    if [ -z "$block" ]; then
+        echo "cognition DB-check block not found in installer" >&2
+        return 1
+    fi
+
+    set -euo pipefail
+    eval "$block"
+}
+
+@test "TC-428-004: cognition DB check succeeds when database exists" {
+    _install_cognition_stub_psql "1" >/dev/null
+
+    run _source_cognition_db_check
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Database 'test_memory' exists"* ]]
+}
+
+@test "TC-428-005: cognition DB check fails when database is missing" {
+    _install_cognition_stub_psql "" >/dev/null
+
+    run _source_cognition_db_check
+
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Database 'test_memory' does not exist"* ]]
+}
+
+@test "TC-428-006: no top-level 'local' declarations in agent-install.sh" {
+    run awk -f "$BATS_TEST_DIRNAME/check_no_toplevel_local.awk" "$REPO_ROOT/agent-install.sh"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"OK:"* ]]
+}
+
+@test "TC-428-007: static check catches top-level 'local' regressions" {
+    local buggy_script
+    buggy_script="$(mktemp)"
+    cp "$REPO_ROOT/agent-install.sh" "$buggy_script"
+
+    # Re-introduce the exact regression at the cognition DB check.
+    awk '
+        /^db_exists=\$\(psql -U "\$DB_USER" -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname = '\''\$DB_NAME'\''"/{
+            print "local db_exists"
+        }
+        { print }
+    ' "$buggy_script" >"$buggy_script.new" && mv "$buggy_script.new" "$buggy_script"
+
+    run awk -f "$BATS_TEST_DIRNAME/check_no_toplevel_local.awk" "$buggy_script"
+    rm -f "$buggy_script" "$buggy_script.new"
+
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"top-level 'local' declaration"* ]]
+}

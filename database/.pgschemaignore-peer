@@ -14,9 +14,11 @@
 # FDW bootstrap stack).
 #
 # Keep this file in sync with database/.pgschemaignore (the base ignore set).
-# The base file's generic "*_local" pattern is preserved below; per-peer
-# agent-local table names are detected at plan time by
-# database/detect_peer_shadowed.py and injected into the scratch ignore file.
+# The base file's generic "*_local" pattern is preserved below; ordinary
+# agent-local tables (relkind 'r') are protected by the universal drop-
+# stripping in database/strip_destructive.py. The "*_local" suffix remains
+# a naming convention for agent-local tables; detect_peer_shadowed.py only
+# handles peer-shadowed views and foreign tables (relkind 'v'/'f').
 
 [tables]
 patterns = [

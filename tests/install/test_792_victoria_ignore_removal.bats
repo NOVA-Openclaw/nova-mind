@@ -34,7 +34,11 @@ _pg_available() {
 
 _make_test_db() {
     local dbname="nova_mind_792_${BATS_TEST_NUMBER}_$$_${RANDOM}"
-    createdb -U nova "$dbname" >/dev/null 2>&1
+    if [ -n "${NOVA_MIND_TEST_TEMPLATE:-}" ]; then
+        createdb -T "$NOVA_MIND_TEST_TEMPLATE" -U nova "$dbname" >/dev/null 2>&1
+    else
+        createdb -U nova "$dbname" >/dev/null 2>&1
+    fi
     echo "$dbname"
 }
 
@@ -555,7 +559,9 @@ _seed_victoria_trading_fixture() {
 
     if [ -n "$OWNER_ROLE" ]; then
         {
-            echo "GRANT \"$OWNER_ROLE\" TO nova;"
+            # Attempt grant silently; if nova lacks ADMIN OPTION the SET ROLE
+            # below still works as long as membership was verified beforehand.
+            echo "DO \$\$BEGIN EXECUTE 'GRANT \"$OWNER_ROLE\" TO nova'; EXCEPTION WHEN insufficient_privilege THEN NULL; END\$\$;"
             echo "SET ROLE \"$OWNER_ROLE\";"
             cat "$FIXTURE"
         } > "${FIXTURE}.owned"
@@ -824,36 +830,35 @@ _run_full_installer_pipeline() {
     return $apply_status
 }
 
-# Build fixture SQL.  Primary path: real schema-only dump from victoria_memory.
-# If the expected tables are absent, fall back to hand-built DDL.
+# Build fixture SQL.  Primary path: a shared schema-only dump of Victoria's
+# trading objects.  The dump is supplied out-of-band because nova has no
+# SELECT privilege on victoria_memory's trading tables, so pg_dump cannot be
+# run directly against that DB.  We still probe victoria_memory via pg_class
+# (which is visibility-agnostic) to confirm the tables exist there, but we
+# never read their DDL from the live DB.
 # Args: OUT_FILE
-# Returns 0 if a real dump was used, 1 if fallback was used.
+# Returns 0 if the shared dump was used, 1 if fallback was used.
 _build_victoria_fixture_sql() {
     local OUT="$1"
-    local DUMP_FILE
-    DUMP_FILE=$(mktemp)
+    local SHARED_DUMP="/opt/agents/shared-diagnostics/victoria-trading-schema.sql"
 
-    # Probe for the expected trading tables in victoria_memory.
+    # Probe victoria_memory with pg_class, not information_schema, because
+    # information_schema hides tables the current role has no privileges on.
     local found
-    found=$(PGDATABASE=victoria_memory psql -U nova -h /var/run/postgresql -tAc "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ($(printf "'%s'," "${VICTORIA_TRADING_TABLES[@]}" | sed 's/,$//'));")
+    found=$(PGDATABASE=victoria_memory psql -U nova -h /var/run/postgresql -tAc "SELECT COUNT(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind='r' AND c.relname IN ($(printf "'%s'," "${VICTORIA_TRADING_TABLES[@]}" | sed 's/,$//'));")
+    echo "TC-792-024: pg_class probe found $found victoria_memory trading table(s)" >&3
 
-    if [ "$found" -gt 0 ]; then
-        local existing
-        existing=$(PGDATABASE=victoria_memory psql -U nova -h /var/run/postgresql -tAc "SELECT string_agg(tablename, ' ') FROM pg_tables WHERE schemaname='public' AND tablename IN ($(printf "'%s'," "${VICTORIA_TRADING_TABLES[@]}" | sed 's/,$//'));")
-        # shellcheck disable=SC2086
-        pg_dump -s -h /var/run/postgresql -U nova -d victoria_memory $(printf -- "-t public.%s " $existing) > "$DUMP_FILE" 2>/dev/null
-        if [ -s "$DUMP_FILE" ] && grep -q 'CREATE TABLE' "$DUMP_FILE"; then
-            cat "$DUMP_FILE" > "$OUT"
-            rm -f "$DUMP_FILE"
-            return 0
-        fi
+    if [ -s "$SHARED_DUMP" ] && grep -q 'CREATE TABLE' "$SHARED_DUMP"; then
+        cat "$SHARED_DUMP" > "$OUT"
+        echo "TC-792-024: using shared schema dump $SHARED_DUMP" >&3
+        return 0
     fi
 
     {
-        echo "-- FALLBACK: hand-built fixture"
+        echo "-- FALLBACK: hand-built fixture (real schema dump not available)"
         _victoria_trading_ddl
     } > "$OUT"
-    rm -f "$DUMP_FILE"
+    echo "FALLBACK: hand-built fixture (real schema dump not available)" >&3
     return 1
 }
 
@@ -1047,24 +1052,23 @@ PY
     if ! "$VENV_PYTHON" -c "import pglast" 2>/dev/null; then skip "pglast not installed"; fi
     if ! _pg_available; then skip "live PostgreSQL/pgschema not available"; fi
 
+    # Use the pre-provisioned victoria_app_test role if nova can SET ROLE to
+    # it.  Never CREATE ROLE here; if the role is absent or unusable, skip.
+    local owner_role="victoria_app_test"
+    local role_exists can_set_role
+    role_exists=$(psql -U nova -d postgres -tAc "SELECT COUNT(*) FROM pg_roles WHERE rolname='$owner_role';")
+    if [ "$role_exists" -eq 0 ]; then
+        skip "role $owner_role does not exist (Graybeard provisions it)"
+    fi
+    can_set_role=$(psql -U nova -d postgres -tAc "SELECT CASE WHEN pg_has_role(CURRENT_USER, '$owner_role', 'MEMBER') THEN 1 ELSE 0 END;")
+    if [ "$can_set_role" -ne 1 ]; then
+        skip "nova cannot SET ROLE to $owner_role"
+    fi
+
     DB=$(_make_test_db)
     STRIP_LOG=$(mktemp)
     BEFORE=$(mktemp)
     AFTER=$(mktemp)
-    CREATED_ROLE=0
-
-    local role_exists
-    role_exists=$(psql -U nova -d postgres -tAc "SELECT COUNT(*) FROM pg_roles WHERE rolname='victoria_app';")
-    if [ "$role_exists" -eq 0 ]; then
-        run psql -U nova -d postgres -c "CREATE ROLE victoria_app;"
-        if [ "$status" -ne 0 ]; then
-            echo "ERROR: cannot create role victoria_app (current_user lacks CREATEROLE or privilege insufficient)" >&3
-            rm -f "$STRIP_LOG" "$BEFORE" "$AFTER"
-            _drop_test_db "$DB"
-            false
-        fi
-        CREATED_ROLE=1
-    fi
 
     run _apply_schema_sql_to_db "$DB"
     [ "$status" -eq 0 ]
@@ -1072,7 +1076,7 @@ PY
     _skip_unless_fdw "$DB"
     psql -U nova -d "$DB" -c "DROP TABLE IF EXISTS agent_bootstrap_context;" >/dev/null 2>&1
     _seed_peer_fixture "$DB" 1 1
-    _seed_victoria_trading_fixture "$DB" "victoria_app"
+    _seed_victoria_trading_fixture "$DB" "$owner_role"
     _seed_victoria_trading_rows "$DB"
 
     _capture_victoria_row_counts "$DB" "$BEFORE"
@@ -1085,13 +1089,9 @@ PY
 
     # Assert that the ownership gate (not just the universal drop-strip) did
     # real work on the newly-un-ignored Victoria objects.
-    run grep -E 'SKIPPED:.*owner=victoria_app' "$STRIP_LOG"
+    run grep -E "SKIPPED:.*owner=$owner_role" "$STRIP_LOG"
     [ "$status" -eq 0 ]
     [ -n "$output" ]
-
-    if [ "$CREATED_ROLE" -eq 1 ]; then
-        psql -U nova -d postgres -c "DROP ROLE IF EXISTS victoria_app;" >/dev/null 2>&1 || true
-    fi
 
     rm -f "$STRIP_LOG" "$BEFORE" "$AFTER"
     _drop_test_db "$DB"
@@ -1135,6 +1135,381 @@ PY
     local trigger_fired
     trigger_fired=$(psql -U nova -d "$DB" -tAc "SELECT count(*) FROM portfolios WHERE id = 1 AND created_at IS NOT NULL;")
     [ "$trigger_fired" -eq 1 ]
+
+    rm -f "$STRIP_LOG" "$FILTERED"
+    _drop_test_db "$DB"
+}
+
+
+# --- CHUNK 4: RECORD-ONLY live characterizations + GATING #686 guard ---
+
+# Run pgschema plan against a throwaway schema.sql in a scratch directory.
+# Args: DB_NAME SCRATCH_DIR SCHEMA_SQL_FILE PLAN_OUT
+_pgschema_plan_to_file() {
+    local DB="$1"
+    local SCRATCH="$2"
+    local SCHEMA="$3"
+    local OUT="$4"
+
+    # Copy only if the source is not already the scratch target; avoids a
+    # noisy but harmless 'cp: same file' warning when tests build schema.sql
+    # directly inside the scratch directory.
+    if [ "$(realpath -m "$SCHEMA")" != "$(realpath -m "$SCRATCH/schema.sql")" ]; then
+        cp "$SCHEMA" "$SCRATCH/schema.sql"
+    fi
+    (
+        cd "$SCRATCH" || exit 1
+        pgschema plan \
+            --host /var/run/postgresql \
+            --user nova \
+            --db "$DB" \
+            --schema public \
+            --file schema.sql \
+            --plan-host /var/run/postgresql \
+            --plan-db nova_memory \
+            --plan-user nova \
+            --output-json "$OUT" \
+            --no-color >/dev/null 2>&1
+    )
+}
+
+@test "TC-792-050: malformed TOML ignore file behavior (RECORD-ONLY)" {
+    if [ ! -x "$VENV_PYTHON" ]; then skip "venv python not available at $VENV_PYTHON"; fi
+    if ! "$VENV_PYTHON" -c "import pglast" 2>/dev/null; then skip "pglast not installed"; fi
+    if ! _pg_available; then skip "live PostgreSQL/pgschema not available"; fi
+
+    DB=$(_make_test_db)
+    SCRATCH=$(mktemp -d /tmp/pgschema-792-050-XXXXXX)
+    PLAN="$SCRATCH/plan.json"
+
+    # Deliberately malformed: unterminated string in [tables] array.
+    cat > "$SCRATCH/.pgschemaignore" <<'EOF'
+[tables]
+patterns = [
+  "definitely_not_a_real_table_xyz
+]
+EOF
+    cat > "$SCRATCH/schema.sql" <<'EOF'
+CREATE TABLE t792_050 (id serial PRIMARY KEY);
+EOF
+
+    run _pgschema_plan_to_file "$DB" "$SCRATCH" "$SCRATCH/schema.sql" "$PLAN"
+    local plan_status=$status
+
+    if [ "$plan_status" -eq 0 ]; then
+        echo "RECORD-ONLY TC-792-050: pgschema silently ignored malformed TOML (fail-open)" >&3
+    else
+        echo "RECORD-ONLY TC-792-050: pgschema failed fast on malformed TOML (exit $plan_status)" >&3
+        echo "$output" >&3
+    fi
+
+    rm -rf "$SCRATCH"
+    _drop_test_db "$DB"
+}
+
+@test "TC-792-053: local table collides with schema.sql table (RECORD-ONLY)" {
+    if [ ! -x "$VENV_PYTHON" ]; then skip "venv python not available at $VENV_PYTHON"; fi
+    if ! "$VENV_PYTHON" -c "import pglast" 2>/dev/null; then skip "pglast not installed"; fi
+    if ! _pg_available; then skip "live PostgreSQL/pgschema not available"; fi
+
+    DB=$(_make_test_db)
+    SCRATCH=$(mktemp -d /tmp/pgschema-792-053-XXXXXX)
+    PLAN="$SCRATCH/plan.json"
+    REORDERED="$SCRATCH/reordered.json"
+    FILTERED="$SCRATCH/filtered.json"
+
+    # Pick a real schema.sql table.  Create a local ordinary table with the
+    # same name but missing one schema.sql column and carrying an extra local
+    # column not present in schema.sql.
+    psql -U nova -d "$DB" -v ON_ERROR_STOP=1 <<'SQL' >/dev/null
+DROP TABLE IF EXISTS d100_roll_log;
+CREATE TABLE d100_roll_log (
+    id serial PRIMARY KEY,
+    roll integer NOT NULL,
+    extra_local_col text NOT NULL DEFAULT 'local'
+);
+INSERT INTO d100_roll_log (roll, extra_local_col) VALUES (42, 'keep-me');
+SQL
+
+    cp "$REPO_ROOT/database/schema.sql" "$SCRATCH/schema.sql"
+    cp "$REPO_ROOT/database/.pgschemaignore" "$SCRATCH/.pgschemaignore"
+
+    _pgschema_plan_to_file "$DB" "$SCRATCH" "$REPO_ROOT/database/schema.sql" "$PLAN"
+    [ $? -eq 0 ]
+
+    "$VENV_PYTHON" "$REORDERER" --plan "$PLAN" --output "$REORDERED" >/dev/null 2>&1
+    "$VENV_PYTHON" "$STRIPPER" --plan "$REORDERED" --output "$FILTERED" >/dev/null 2>&1
+
+    # Record findings.
+    run "$VENV_PYTHON" - <<PY
+import json
+with open('$FILTERED') as f:
+    p = json.load(f)
+steps = [s for g in (p.get('groups') or []) for s in g.get('steps', [])]
+for s in steps:
+    if 'd100_roll_log' in s.get('path', ''):
+        print(s.get('operation'), s.get('type'), s.get('path'))
+PY
+    echo "RECORD-ONLY TC-792-053: filtered d100_roll_log steps:" >&3
+    echo "$output" >&3
+
+    # Apply and record whether extra_local_col survived (drop-stripped).
+    run pgschema apply \
+        --host /var/run/postgresql \
+        --user nova \
+        --db "$DB" \
+        --schema public \
+        --plan "$FILTERED" \
+        --auto-approve \
+        --no-color
+    local apply_status=$status
+    echo "RECORD-ONLY TC-792-053: apply exit status=$apply_status" >&3
+
+    local extra_col_exists
+    extra_col_exists=$(psql -U nova -d "$DB" -tAc "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='d100_roll_log' AND column_name='extra_local_col';")
+    echo "RECORD-ONLY TC-792-053: extra_local_col present after apply=$extra_col_exists" >&3
+
+    rm -rf "$SCRATCH"
+    _drop_test_db "$DB"
+}
+
+@test "TC-792-060: column type narrowing planned as alter, not stripped (RECORD-ONLY)" {
+    if [ ! -x "$VENV_PYTHON" ]; then skip "venv python not available at $VENV_PYTHON"; fi
+    if ! "$VENV_PYTHON" -c "import pglast" 2>/dev/null; then skip "pglast not installed"; fi
+    if ! _pg_available; then skip "live PostgreSQL/pgschema not available"; fi
+
+    DB=$(_make_test_db)
+    SCRATCH=$(mktemp -d /tmp/pgschema-792-060-XXXXXX)
+    PLAN="$SCRATCH/plan.json"
+    REORDERED="$SCRATCH/reordered.json"
+    FILTERED="$SCRATCH/filtered.json"
+
+    psql -U nova -d "$DB" -v ON_ERROR_STOP=1 <<'SQL' >/dev/null
+CREATE TABLE t792_060 (id serial PRIMARY KEY, code text);
+INSERT INTO t792_060 (code) VALUES ('AB'), ('CD');
+SQL
+
+    cat > "$SCRATCH/schema.sql" <<'EOF'
+CREATE TABLE t792_060 (id serial PRIMARY KEY, code varchar(1));
+EOF
+    cat > "$SCRATCH/.pgschemaignore" <<'EOF'
+[tables]
+patterns = []
+EOF
+
+    _pgschema_plan_to_file "$DB" "$SCRATCH" "$SCRATCH/schema.sql" "$PLAN"
+    [ $? -eq 0 ]
+
+    "$VENV_PYTHON" "$REORDERER" --plan "$PLAN" --output "$REORDERED" >/dev/null 2>&1
+    "$VENV_PYTHON" "$STRIPPER" --plan "$REORDERED" --output "$FILTERED" >/dev/null 2>&1
+
+    run "$VENV_PYTHON" - <<PY
+import json
+with open('$PLAN') as f:
+    p = json.load(f)
+steps = [s for g in (p.get('groups') or []) for s in g.get('steps', [])]
+for s in steps:
+    if 't792_060.code' in s.get('path', ''):
+        print('RAW', s.get('operation'), s.get('type'))
+with open('$FILTERED') as f:
+    p = json.load(f)
+steps = [s for g in (p.get('groups') or []) for s in g.get('steps', [])]
+for s in steps:
+    if 't792_060.code' in s.get('path', ''):
+        print('FILTERED', s.get('operation'), s.get('type'))
+PY
+    echo "RECORD-ONLY TC-792-060: $output" >&3
+
+    rm -rf "$SCRATCH"
+    _drop_test_db "$DB"
+}
+
+@test "TC-792-061: SET NOT NULL on column with existing NULLs (RECORD-ONLY)" {
+    if [ ! -x "$VENV_PYTHON" ]; then skip "venv python not available at $VENV_PYTHON"; fi
+    if ! "$VENV_PYTHON" -c "import pglast" 2>/dev/null; then skip "pglast not installed"; fi
+    if ! _pg_available; then skip "live PostgreSQL/pgschema not available"; fi
+
+    DB=$(_make_test_db)
+    SCRATCH=$(mktemp -d /tmp/pgschema-792-061-XXXXXX)
+    PLAN="$SCRATCH/plan.json"
+    REORDERED="$SCRATCH/reordered.json"
+    FILTERED="$SCRATCH/filtered.json"
+
+    psql -U nova -d "$DB" -v ON_ERROR_STOP=1 <<'SQL' >/dev/null
+CREATE TABLE t792_061 (id serial PRIMARY KEY, label text);
+INSERT INTO t792_061 (label) VALUES ('x'), (NULL);
+SQL
+
+    cat > "$SCRATCH/schema.sql" <<'EOF'
+CREATE TABLE t792_061 (id serial PRIMARY KEY, label text NOT NULL);
+EOF
+    cat > "$SCRATCH/.pgschemaignore" <<'EOF'
+[tables]
+patterns = []
+EOF
+
+    _pgschema_plan_to_file "$DB" "$SCRATCH" "$SCRATCH/schema.sql" "$PLAN"
+    [ $? -eq 0 ]
+
+    "$VENV_PYTHON" "$REORDERER" --plan "$PLAN" --output "$REORDERED" >/dev/null 2>&1
+    "$VENV_PYTHON" "$STRIPPER" --plan "$REORDERED" --output "$FILTERED" >/dev/null 2>&1
+
+    run pgschema apply \
+        --host /var/run/postgresql \
+        --user nova \
+        --db "$DB" \
+        --schema public \
+        --plan "$FILTERED" \
+        --auto-approve \
+        --no-color
+    echo "RECORD-ONLY TC-792-061: apply exit status=$status" >&3
+    echo "$output" >&3
+
+    rm -rf "$SCRATCH"
+    _drop_test_db "$DB"
+}
+
+@test "TC-792-062: column type narrowing silently loses precision (RECORD-ONLY)" {
+    if [ ! -x "$VENV_PYTHON" ]; then skip "venv python not available at $VENV_PYTHON"; fi
+    if ! "$VENV_PYTHON" -c "import pglast" 2>/dev/null; then skip "pglast not installed"; fi
+    if ! _pg_available; then skip "live PostgreSQL/pgschema not available"; fi
+
+    DB=$(_make_test_db)
+    SCRATCH=$(mktemp -d /tmp/pgschema-792-062-XXXXXX)
+    PLAN="$SCRATCH/plan.json"
+    REORDERED="$SCRATCH/reordered.json"
+    FILTERED="$SCRATCH/filtered.json"
+
+    psql -U nova -d "$DB" -v ON_ERROR_STOP=1 <<'SQL' >/dev/null
+CREATE TABLE t792_062 (id serial PRIMARY KEY, amt numeric(10,4));
+INSERT INTO t792_062 (amt) VALUES (123.4567);
+SQL
+
+    cat > "$SCRATCH/schema.sql" <<'EOF'
+CREATE TABLE t792_062 (id serial PRIMARY KEY, amt numeric(10,2));
+EOF
+    cat > "$SCRATCH/.pgschemaignore" <<'EOF'
+[tables]
+patterns = []
+EOF
+
+    _pgschema_plan_to_file "$DB" "$SCRATCH" "$SCRATCH/schema.sql" "$PLAN"
+    [ $? -eq 0 ]
+
+    "$VENV_PYTHON" "$REORDERER" --plan "$PLAN" --output "$REORDERED" >/dev/null 2>&1
+    "$VENV_PYTHON" "$STRIPPER" --plan "$REORDERED" --output "$FILTERED" >/dev/null 2>&1
+
+    run pgschema apply \
+        --host /var/run/postgresql \
+        --user nova \
+        --db "$DB" \
+        --schema public \
+        --plan "$FILTERED" \
+        --auto-approve \
+        --no-color
+    echo "RECORD-ONLY TC-792-062: apply exit status=$status" >&3
+
+    local final_value
+    final_value=$(psql -U nova -d "$DB" -tAc "SELECT amt::text FROM t792_062 WHERE id=1;")
+    echo "RECORD-ONLY TC-792-062: final amt value=$final_value" >&3
+
+    rm -rf "$SCRATCH"
+    _drop_test_db "$DB"
+}
+
+@test "TC-792-070: unguarded #686 phantom CHECK drop+recreate (RECORD-ONLY)" {
+    if [ ! -x "$VENV_PYTHON" ]; then skip "venv python not available at $VENV_PYTHON"; fi
+    if ! "$VENV_PYTHON" -c "import pglast" 2>/dev/null; then skip "pglast not installed"; fi
+    if ! _pg_available; then skip "live PostgreSQL/pgschema not available"; fi
+
+    DB=$(_make_test_db)
+    SCRATCH=$(mktemp -d /tmp/pgschema-792-070-XXXXXX)
+    PLAN="$SCRATCH/plan.json"
+    REORDERED="$SCRATCH/reordered.json"
+    FILTERED="$SCRATCH/filtered.json"
+
+    psql -U nova -d "$DB" -v ON_ERROR_STOP=1 <<'SQL' >/dev/null
+CREATE TABLE t792_070 (id serial PRIMARY KEY, status text);
+ALTER TABLE t792_070 ADD CONSTRAINT t792_070_status_check CHECK (status::text = ANY (ARRAY['a','b','c']::text[]));
+SQL
+
+    cat > "$SCRATCH/schema.sql" <<'EOF'
+CREATE TABLE t792_070 (
+    id serial PRIMARY KEY,
+    status text,
+    CONSTRAINT t792_070_status_check CHECK (status::text IN ('a','b','c'))
+);
+EOF
+    cat > "$SCRATCH/.pgschemaignore" <<'EOF'
+[tables]
+patterns = []
+EOF
+
+    _pgschema_plan_to_file "$DB" "$SCRATCH" "$SCRATCH/schema.sql" "$PLAN"
+    [ $? -eq 0 ]
+
+    # Confirm phantom diff exists in raw plan.
+    run "$VENV_PYTHON" - <<PY
+import json
+with open('$PLAN') as f:
+    p = json.load(f)
+steps = [s for g in (p.get('groups') or []) for s in g.get('steps', [])]
+drop_steps = [s for s in steps if s.get('path') == 'public.t792_070.t792_070_status_check' and s.get('operation') == 'drop']
+create_steps = [s for s in steps if s.get('path') == 'public.t792_070.t792_070_status_check' and s.get('operation') == 'create']
+print(f"drop_steps={len(drop_steps)} create_steps={len(create_steps)}")
+PY
+    echo "RECORD-ONLY TC-792-070: raw plan $output" >&3
+
+    "$VENV_PYTHON" "$REORDERER" --plan "$PLAN" --output "$REORDERED" >/dev/null 2>&1
+    "$VENV_PYTHON" "$STRIPPER" --plan "$REORDERED" --output "$FILTERED" >/dev/null 2>&1
+
+    run pgschema apply \
+        --host /var/run/postgresql \
+        --user nova \
+        --db "$DB" \
+        --schema public \
+        --plan "$FILTERED" \
+        --auto-approve \
+        --no-color
+    echo "RECORD-ONLY TC-792-070: apply exit status=$status" >&3
+    echo "$output" >&3
+
+    rm -rf "$SCRATCH"
+    _drop_test_db "$DB"
+}
+
+@test "TC-792-071: #686 collision does not newly expose Victoria tables (GATING)" {
+    if [ ! -x "$VENV_PYTHON" ]; then skip "venv python not available at $VENV_PYTHON"; fi
+    if ! "$VENV_PYTHON" -c "import pglast" 2>/dev/null; then skip "pglast not installed"; fi
+    if ! _pg_available; then skip "live PostgreSQL/pgschema not available"; fi
+
+    DB=$(_make_test_db)
+    STRIP_LOG=$(mktemp)
+    FILTERED=$(mktemp)
+
+    run _apply_schema_sql_to_db "$DB"
+    [ "$status" -eq 0 ]
+
+    _skip_unless_fdw "$DB"
+    psql -U nova -d "$DB" -c "DROP TABLE IF EXISTS agent_bootstrap_context;" >/dev/null 2>&1
+    _seed_peer_fixture "$DB" 1 1
+    _seed_victoria_trading_fixture "$DB"
+    _seed_victoria_trading_rows "$DB"
+
+    # Add a CHECK constraint in Postgres-canonical = ANY(ARRAY[]) form on a
+    # Victoria table.  Because the table is not declared by schema.sql, the
+    # only pgschema step for it should be a DROP TABLE (universally stripped),
+    # not a constraint-level alter/drop/create that could hit the #686 mode.
+    psql -U nova -d "$DB" -v ON_ERROR_STOP=1 <<'SQL' >/dev/null
+ALTER TABLE trades ADD CONSTRAINT trades_side_check CHECK (side::text = ANY (ARRAY['buy','sell']::text[]));
+SQL
+
+    run _run_full_installer_pipeline "$DB" 1 "$STRIP_LOG" "$FILTERED"
+    [ "$status" -eq 0 ]
+
+    # The filtered plan must have zero constraint/index/trigger-level steps
+    # touching trades (or any other Victoria table).
+    _assert_no_victoria_refs "$FILTERED"
 
     rm -f "$STRIP_LOG" "$FILTERED"
     _drop_test_db "$DB"

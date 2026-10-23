@@ -14,23 +14,13 @@
 # FDW bootstrap stack).
 #
 # Keep this file in sync with database/.pgschemaignore (the base ignore set).
+# The base file's generic "*_local" pattern is preserved below; per-peer
+# agent-local table names are detected at plan time by
+# database/detect_peer_shadowed.py and injected into the scratch ignore file.
 
 [tables]
 patterns = [
   # Base patterns from database/.pgschemaignore
-  "portfolios",
-  "portfolio_snapshots",
-  "portfolio_asset_classes",
-  "positions",
-  "trades",
-  "cash_ledger",
-  "strategies",
-  "strategy_notes",
-  "instruments",
-  "asset_classes",
-  "open_orders",
-  "order_adjustments",
-  "price_cache_v2",
   "*_local",
   # Peer-only FDW bootstrap-context stack (#608 / #1231)
   # agent_bootstrap_context is injected dynamically when the target has it as a VIEW.

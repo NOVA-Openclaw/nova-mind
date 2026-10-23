@@ -11,26 +11,15 @@
 # graybeard) carry agent-local tables in their own <agent>_memory databases
 # that nova_memory does not have.
 #
-# Victoria's trading stack (automated-strategies):
-# portfolios, trades, positions, cash_ledger, strategies, instruments, etc.
+# Agent-local tables are not managed by the shared schema. Previously a
+# hard-coded list of Victoria trading tables lived here; it was removed in
+# nova-mind#792 because strip_destructive.py strips every DROP operation,
+# making the static list redundant.
 #
 # Generic pattern: any table suffixed _local is agent-local by convention
 # and never managed by the shared schema.
 
 [tables]
 patterns = [
-  "portfolios",
-  "portfolio_snapshots",
-  "portfolio_asset_classes",
-  "positions",
-  "trades",
-  "cash_ledger",
-  "strategies",
-  "strategy_notes",
-  "instruments",
-  "asset_classes",
-  "open_orders",
-  "order_adjustments",
-  "price_cache_v2",
   "*_local"
 ]

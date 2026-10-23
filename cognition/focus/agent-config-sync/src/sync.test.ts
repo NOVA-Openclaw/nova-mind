@@ -103,7 +103,6 @@ describe("TC-244-U-01: NOVA session — self as default, NOVA's subagents only",
   const { entries: result } = buildAgentsList(novaRows);
 
   it("nova entry has no default key", () => {
-    assert.strictEqual(result["nova"]?.default, undefined);
     assert.ok(
       !Object.prototype.hasOwnProperty.call(result["nova"], "default"),
       "default key must not be emitted under ownership=explicit",
@@ -111,15 +110,24 @@ describe("TC-244-U-01: NOVA session — self as default, NOVA's subagents only",
   });
 
   it("coder entry has no default key", () => {
-    assert.strictEqual(result["coder"]?.default, undefined);
+    assert.ok(
+      !Object.prototype.hasOwnProperty.call(result["coder"], "default"),
+      "default key must not be emitted under ownership=explicit",
+    );
   });
 
   it("gem entry has no default key", () => {
-    assert.strictEqual(result["gem"]?.default, undefined);
+    assert.ok(
+      !Object.prototype.hasOwnProperty.call(result["gem"], "default"),
+      "default key must not be emitted under ownership=explicit",
+    );
   });
 
   it("scout entry has no default key", () => {
-    assert.strictEqual(result["scout"]?.default, undefined);
+    assert.ok(
+      !Object.prototype.hasOwnProperty.call(result["scout"], "default"),
+      "default key must not be emitted under ownership=explicit",
+    );
   });
 
   it("all four agents are present", () => {
@@ -193,7 +201,6 @@ describe("TC-244-U-02: Newhart session — self as default, Newhart's subagents 
   const { entries: result } = buildAgentsList(newhartRows);
 
   it("newhart entry has no default key", () => {
-    assert.strictEqual(result["newhart"]?.default, undefined);
     assert.ok(
       !Object.prototype.hasOwnProperty.call(result["newhart"], "default"),
       "default key must not be emitted under ownership=explicit",
@@ -201,7 +208,10 @@ describe("TC-244-U-02: Newhart session — self as default, Newhart's subagents 
   });
 
   it("coder entry has no default key", () => {
-    assert.strictEqual(result["coder"]?.default, undefined);
+    assert.ok(
+      !Object.prototype.hasOwnProperty.call(result["coder"], "default"),
+      "default key must not be emitted under ownership=explicit",
+    );
   });
 
   it("gem is NOT present (not a Newhart subagent)", () => {
@@ -309,15 +319,18 @@ describe("TC-244-U-03: Mutual exclusion — NOVA and Newhart never see each othe
     );
   });
 
-  it("no list contains any entry with default: true", () => {
-    const novaDefaults = Object.values(novaResult).filter((e) => e.default === true);
-    const newhartDefaults = Object.values(newhartResult).filter((e) => e.default === true);
+  it("no list contains any entry with a default key", () => {
+    const novaDefaults = Object.values(novaResult).filter((e) =>
+      Object.prototype.hasOwnProperty.call(e, "default"),
+    );
+    const newhartDefaults = Object.values(newhartResult).filter((e) =>
+      Object.prototype.hasOwnProperty.call(e, "default"),
+    );
     assert.strictEqual(novaDefaults.length, 0);
     assert.strictEqual(newhartDefaults.length, 0);
   });
 
   it("nova entry has no default key in NOVA's list", () => {
-    assert.strictEqual(novaResult["nova"]?.default, undefined);
     assert.ok(
       !Object.prototype.hasOwnProperty.call(novaResult["nova"], "default"),
       "default key must not be emitted under ownership=explicit",
@@ -325,7 +338,6 @@ describe("TC-244-U-03: Mutual exclusion — NOVA and Newhart never see each othe
   });
 
   it("newhart entry has no default key in Newhart's list", () => {
-    assert.strictEqual(newhartResult["newhart"]?.default, undefined);
     assert.ok(
       !Object.prototype.hasOwnProperty.call(newhartResult["newhart"], "default"),
       "default key must not be emitted under ownership=explicit",
@@ -426,7 +438,6 @@ describe("TC-244-U-05: Row with is_default = null emits no `default` key", () =>
       !Object.prototype.hasOwnProperty.call(entry, "default"),
       "default key must not be present when is_default is null",
     );
-    assert.strictEqual(entry.default, undefined);
   });
 
   it("is_default = false → no default key on entry", () => {
@@ -436,7 +447,6 @@ describe("TC-244-U-05: Row with is_default = null emits no `default` key", () =>
       !Object.prototype.hasOwnProperty.call(entry, "default"),
       "default key must not be present when is_default is false",
     );
-    assert.strictEqual(entry.default, undefined);
   });
 
   it("is_default = true also emits no default key", () => {
@@ -452,7 +462,6 @@ describe("TC-244-U-05: Row with is_default = null emits no `default` key", () =>
       },
     ];
     const { entries: trueResult } = buildAgentsList(trueRow);
-    assert.strictEqual(trueResult["trueagent"]?.default, undefined);
     assert.ok(
       !Object.prototype.hasOwnProperty.call(trueResult["trueagent"], "default"),
       "default key must not be emitted even when is_default is true",

@@ -2432,7 +2432,13 @@ install_skills() {
 verify_schema() {
     echo "Schema verification (memory)..."
 
-    if ! psql -U "$DB_USER" -lqt | cut -d \| -f 1 | grep -qw "$DB_NAME"; then
+    # nova-mind#428: use a single-row query instead of psql -lqt | cut | grep.
+    # Under set -o pipefail, grep -q exits early once it finds a match; once
+    # the database list exceeds the pipe buffer, psql gets SIGPIPE (141) and
+    # the whole pipeline fails, falsely reporting the database missing.
+    local db_exists
+    db_exists=$(psql -U "$DB_USER" -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname = '$DB_NAME'" 2>/dev/null | tr -d '[:space:]')
+    if [ "${db_exists:-}" != "1" ]; then
         echo -e "  ${CROSS_MARK} Database '$DB_NAME' does not exist"
         VERIFICATION_ERRORS=$((VERIFICATION_ERRORS + 1))
         return 1
@@ -3069,7 +3075,8 @@ echo "════════════════════════�
 echo ""
 echo "Database check (cognition)..."
 
-if psql -U "$DB_USER" -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname = '$DB_NAME'" | grep -q 1 2>/dev/null; then
+db_exists=$(psql -U "$DB_USER" -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname = '$DB_NAME'" 2>/dev/null | tr -d '[:space:]')
+if [ "$db_exists" = "1" ]; then
     echo -e "  ${CHECK_MARK} Database '$DB_NAME' exists"
 else
     echo -e "  ${CROSS_MARK} Database '$DB_NAME' does not exist"

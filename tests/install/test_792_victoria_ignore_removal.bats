@@ -200,6 +200,16 @@ PY
     [ "$status" -eq 0 ]
     [[ "$output" == "0" ]]
 
+    run pgschema apply \
+        --host /var/run/postgresql \
+        --user nova \
+        --db "$DB" \
+        --schema public \
+        --plan "$FILTERED" \
+        --auto-approve \
+        --no-color
+    [ "$status" -eq 0 ]
+
     local expected_count actual_count
     expected_count=$(grep -cE '^CREATE TABLE ' "$REPO_ROOT/database/schema.sql")
     actual_count=$(psql -U nova -d "$DB" -tAc "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE';")
@@ -226,6 +236,15 @@ PY
     # First run
     _run_schema_management "$DB" "$PLAN" "$REORDERED" "$FILTERED"
     [ "$status" -eq 0 ]
+    run pgschema apply \
+        --host /var/run/postgresql \
+        --user nova \
+        --db "$DB" \
+        --schema public \
+        --plan "$FILTERED" \
+        --auto-approve \
+        --no-color
+    [ "$status" -eq 0 ]
 
     # Second run: plan should be empty and strip count 0.
     _run_schema_management "$DB" "$PLAN" "$REORDERED" "$FILTERED"
@@ -250,14 +269,23 @@ PY
     REORDERED=$(mktemp)
     FILTERED=$(mktemp)
 
+    # Bring the DB to the full schema.sql state, then drop only the column
+    # under test and insert rows.  This isolates the test to a single ADD
+    # COLUMN step rather than a broad diff against a hand-built partial table.
+    _run_schema_management "$DB" "$PLAN" "$REORDERED" "$FILTERED"
+    [ "$status" -eq 0 ]
+    run pgschema apply \
+        --host /var/run/postgresql \
+        --user nova \
+        --db "$DB" \
+        --schema public \
+        --plan "$FILTERED" \
+        --auto-approve \
+        --no-color
+    [ "$status" -eq 0 ]
+
     psql -U nova -d "$DB" -v ON_ERROR_STOP=1 <<'SQL' >/dev/null
-CREATE TABLE IF NOT EXISTS extraction_failures (
-    id serial PRIMARY KEY,
-    session_key text NOT NULL,
-    content text NOT NULL,
-    status text NOT NULL,
-    created_at timestamptz DEFAULT now()
-);
+ALTER TABLE extraction_failures DROP COLUMN sender_name;
 INSERT INTO extraction_failures (session_key, content, status) VALUES
     ('s1', 'hello', 'pending'),
     ('s2', 'world', 'pending');
@@ -279,7 +307,9 @@ else:
     print('MISSING')
 PY
     [ "$status" -eq 0 ]
-    [[ "$output" == "alter table.column" ]]
+    # pgschema emits ADD COLUMN as operation "create", type "table.column"
+    # (the TC doc guessed "alter"; adjusted to match observed behavior).
+    [[ "$output" == "create table.column" ]]
 
     run pgschema apply \
         --host /var/run/postgresql \
@@ -313,15 +343,22 @@ PY
     REORDERED=$(mktemp)
     FILTERED=$(mktemp)
 
+    # Bring the DB to the full schema.sql state, then drop only the column
+    # under test and insert rows.
+    _run_schema_management "$DB" "$PLAN" "$REORDERED" "$FILTERED"
+    [ "$status" -eq 0 ]
+    run pgschema apply \
+        --host /var/run/postgresql \
+        --user nova \
+        --db "$DB" \
+        --schema public \
+        --plan "$FILTERED" \
+        --auto-approve \
+        --no-color
+    [ "$status" -eq 0 ]
+
     psql -U nova -d "$DB" -v ON_ERROR_STOP=1 <<'SQL' >/dev/null
-CREATE TABLE IF NOT EXISTS extraction_failures (
-    id serial PRIMARY KEY,
-    session_key text NOT NULL,
-    sender_name text,
-    content text NOT NULL,
-    status text NOT NULL,
-    created_at timestamptz DEFAULT now()
-);
+ALTER TABLE extraction_failures DROP COLUMN retry_count;
 INSERT INTO extraction_failures (session_key, content, status) VALUES
     ('s1', 'hello', 'pending'),
     ('s2', 'world', 'pending');

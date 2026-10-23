@@ -61,3 +61,41 @@ CATCHUP_SCRIPT="$REPO_ROOT/memory/scripts/memory-catchup.sh"
     [[ "$output" == *"NOVA_DB unresolved"* ]]
     rm -rf "$tmp_home"
 }
+
+@test "TC-778-001: resolve_agent_db normalizes hyphens in the runtime user" {
+    tmp_bin=$(mktemp -d)
+    cat > "$tmp_bin/whoami" <<'EOF'
+#!/bin/bash
+printf '%s' 'nova-staging'
+EOF
+    chmod +x "$tmp_bin/whoami"
+    run env -i HOME="$HOME" PATH="$tmp_bin:/usr/bin:/bin" bash -c "source '$REPO_ROOT/lib/pg-env.sh'; resolve_agent_db"
+    [ "$status" -eq 0 ]
+    [ "$output" = "nova_staging_memory" ]
+    rm -rf "$tmp_bin"
+}
+
+@test "TC-778-002: resolve_agent_db leaves simple usernames unchanged" {
+    tmp_bin=$(mktemp -d)
+    cat > "$tmp_bin/whoami" <<'EOF'
+#!/bin/bash
+printf '%s' 'nova'
+EOF
+    chmod +x "$tmp_bin/whoami"
+    run env -i HOME="$HOME" PATH="$tmp_bin:/usr/bin:/bin" bash -c "source '$REPO_ROOT/lib/pg-env.sh'; resolve_agent_db"
+    [ "$status" -eq 0 ]
+    [ "$output" = "nova_memory" ]
+    rm -rf "$tmp_bin"
+}
+
+@test "TC-778-003: PGDATABASE wins over resolve_agent_db fallback" {
+    run env -i HOME="$HOME" PATH="/usr/bin:/bin" PGDATABASE="explicit_db" bash -c "source '$REPO_ROOT/lib/pg-env.sh'; resolve_agent_db"
+    [ "$status" -eq 0 ]
+    [ "$output" = "explicit_db" ]
+}
+
+@test "TC-778-004: explicit database argument wins over resolve_agent_db fallback" {
+    run env -i HOME="$HOME" PATH="/usr/bin:/bin" bash -c "source '$REPO_ROOT/lib/pg-env.sh'; resolve_agent_db 'arg_db'"
+    [ "$status" -eq 0 ]
+    [ "$output" = "arg_db" ]
+}

@@ -30,14 +30,14 @@ interface PgConnectionConfig {
  * Returns a config object without touching process.env.
  */
 function loadPgConfig(): PgConnectionConfig {
-  // Canonical fallback DB is <os_user>_memory (nova-mind #775). This file
+  // Canonical fallback DB is <os_user>_memory (nova-mind #775, #778). This file
   // inlines the rule because loadPgConfig is synchronous; lib/pg-env.ts
   // resolveAgentDatabase() is the shared source of truth for async TS code.
   const osUser = userInfo().username;
   const result: PgConnectionConfig = {
     host: process.env.PGHOST || "localhost",
     port: parseInt(process.env.PGPORT || "5432"),
-    database: process.env.PGDATABASE || `${osUser}_memory`,
+    database: process.env.PGDATABASE || `${osUser.replace(/-/g, "_")}_memory`,
     user: process.env.PGUSER || osUser,
     password: process.env.PGPASSWORD,
   };

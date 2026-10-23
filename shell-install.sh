@@ -45,7 +45,7 @@ _validate_pg_ownership() {
     local expected_user expected_db
     expected_user=$(whoami)
     # Canonical DB for this peer, ignoring any inherited PGDATABASE (#774).
-    expected_db="${expected_user//-/_}_memory"
+    expected_db=$(PGDATABASE= resolve_agent_db)
     if [ -n "${NOVA_MIND_ALLOW_FOREIGN_POSTGRES_JSON:-}" ]; then
         return 0
     fi
@@ -177,7 +177,7 @@ EOF
         DEFAULT_HOST="localhost"
         DEFAULT_PORT="5432"
         DEFAULT_USER="$(whoami)"
-        DEFAULT_DB="${DEFAULT_USER//-/_}_memory"
+        DEFAULT_DB="$(PGDATABASE= resolve_agent_db)"
 
         echo ""
         echo "  Enter PostgreSQL connection details (press Enter for defaults):"

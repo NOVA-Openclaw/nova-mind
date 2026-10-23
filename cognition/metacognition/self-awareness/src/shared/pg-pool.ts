@@ -30,7 +30,7 @@ export interface PgConnectionConfig {
 }
 
 function ownDb(): string {
-  return `${userInfo().username}_memory`;
+  return `${userInfo().username.replace(/-/g, "_")}_memory`;
 }
 
 const HARDCODED_DEFAULTS: PgConnectionConfig = {

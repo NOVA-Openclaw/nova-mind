@@ -2320,7 +2320,7 @@ install_hook() {
 install_lib_files() {
     local lib_src="$SCRIPT_DIR/memory/lib"
     local lib_dst="$HOME/.openclaw/lib"
-    local files=("pg-env.sh" "pg_env.py" "pg-env.ts" "env-loader.sh" "env_loader.py")
+    local files=("pg-env.sh" "pg_env.py" "pg-env.ts" "env-loader.sh" "env_loader.py" "embedding_config.py" "embedding-config.ts")
 
     mkdir -p "$lib_dst"
     chmod 755 "$lib_dst"

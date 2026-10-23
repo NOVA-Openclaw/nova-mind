@@ -28,8 +28,34 @@ import { getPool } from "./shared/pg-pool.ts";
 
 // ── Ollama config ─────────────────────────────────────────────────────────────
 
-const OLLAMA_HOST = process.env.OLLAMA_HOST || "http://localhost:11434";
-const EMBED_MODEL = "snowflake-arctic-embed2";
+import { join } from "path";
+import { homedir } from "os";
+
+const EMBEDDING_CONFIG_PATH =
+  process.env.EMBEDDING_CONFIG_PATH_OVERRIDE ||
+  join(homedir(), ".openclaw", "scripts", "embedding-config.json");
+
+interface EmbeddingConfig {
+  provider: string;
+  model: string;
+  base_url: string;
+  dimensions: number;
+}
+
+let embeddingConfigPromise: Promise<EmbeddingConfig> | null = null;
+
+async function loadEmbeddingConfig(): Promise<EmbeddingConfig> {
+  const loaderPath = join(homedir(), ".openclaw", "lib", "embedding-config.ts");
+  const { loadEmbeddingConfig: loader } = await import(loaderPath);
+  return loader(EMBEDDING_CONFIG_PATH) as EmbeddingConfig;
+}
+
+async function getEmbeddingConfig(): Promise<EmbeddingConfig> {
+  if (!embeddingConfigPromise) {
+    embeddingConfigPromise = loadEmbeddingConfig();
+  }
+  return embeddingConfigPromise;
+}
 
 // ── Plugin entry ──────────────────────────────────────────────────────────────
 
@@ -211,11 +237,12 @@ interface OllamaEmbedResponse {
 }
 
 async function embedViaOllama(text: string): Promise<number[]> {
-  const url = `${OLLAMA_HOST.replace(/\/$/, "")}/api/embeddings`;
+  const cfg = await getEmbeddingConfig();
+  const url = `${cfg.base_url.replace(/\/$/, "")}/api/embeddings`;
   const resp = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ model: EMBED_MODEL, prompt: text }),
+    body: JSON.stringify({ model: cfg.model, prompt: text }),
   });
   if (!resp.ok) {
     const body = await resp.text().catch(() => "");
@@ -224,6 +251,11 @@ async function embedViaOllama(text: string): Promise<number[]> {
   const data = (await resp.json()) as OllamaEmbedResponse;
   if (!Array.isArray(data.embedding)) {
     throw new Error("Ollama embed response missing embedding array");
+  }
+  if (data.embedding.length !== cfg.dimensions) {
+    throw new Error(
+      `Dimension mismatch: got ${data.embedding.length}, expected ${cfg.dimensions}`
+    );
   }
   return data.embedding;
 }

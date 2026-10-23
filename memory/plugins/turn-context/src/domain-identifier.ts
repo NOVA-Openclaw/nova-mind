@@ -33,9 +33,12 @@ interface DomainPool {
 
 // ── Configuration ─────────────────────────────────────────────────────────────
 
-const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || "http://localhost:11434";
-const EMBEDDING_MODEL = "snowflake-arctic-embed2";
-const EMBEDDING_DIMS = 1024;
+import { join } from "path";
+import { homedir } from "os";
+
+const EMBEDDING_CONFIG_PATH =
+  process.env.EMBEDDING_CONFIG_PATH_OVERRIDE ||
+  join(homedir(), ".openclaw", "scripts", "embedding-config.json");
 const EMBEDDING_TIMEOUT_MS = 8000;
 export const DOMAIN_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 const SIMILARITY_THRESHOLD = parseFloat(
@@ -205,8 +208,20 @@ export function resetDomainIdentifierCache(): void {
 
 // ── Embedding ─────────────────────────────────────────────────────────────────
 
-function getEmbedding(text: string): Promise<number[]> {
-  const body = JSON.stringify({ model: EMBEDDING_MODEL, prompt: text });
+async function loadEmbeddingConfig(): Promise<{
+  provider: string;
+  model: string;
+  base_url: string;
+  dimensions: number;
+}> {
+  const loaderPath = join(homedir(), ".openclaw", "lib", "embedding-config.ts");
+  const { loadEmbeddingConfig: loader } = await import(loaderPath);
+  return loader(EMBEDDING_CONFIG_PATH);
+}
+
+async function getEmbedding(text: string): Promise<number[]> {
+  const cfg = await loadEmbeddingConfig();
+  const body = JSON.stringify({ model: cfg.model, prompt: text });
 
   return new Promise((resolve, reject) => {
     let req: http.ClientRequest;
@@ -217,7 +232,7 @@ function getEmbedding(text: string): Promise<number[]> {
     }, EMBEDDING_TIMEOUT_MS);
 
     try {
-      const url = new URL(`${OLLAMA_BASE_URL}/api/embeddings`);
+      const url = new URL(`${cfg.base_url}/api/embeddings`);
       const options: http.RequestOptions = {
         hostname: url.hostname,
         port: parseInt(url.port || "80", 10),
@@ -239,10 +254,10 @@ function getEmbedding(text: string): Promise<number[]> {
           try {
             const parsed = JSON.parse(data);
             const embedding: number[] = parsed.embedding;
-            if (!Array.isArray(embedding) || embedding.length !== EMBEDDING_DIMS) {
+            if (!Array.isArray(embedding) || embedding.length !== cfg.dimensions) {
               reject(
                 new Error(
-                  `Dimension mismatch: got ${embedding?.length ?? "undefined"}, expected ${EMBEDDING_DIMS}`
+                  `Dimension mismatch: got ${embedding?.length ?? "undefined"}, expected ${cfg.dimensions}`
                 )
               );
               return;

@@ -303,6 +303,44 @@ PSQL
     _drop_test_db "$DB"
 }
 
+@test "TC-009-preheartbeat: agents table missing heartbeat_* and parent_agents gets columns added" {
+    if ! _pg_available; then skip "live PostgreSQL not available"; fi
+
+    DB=$(_make_test_db)
+
+    # Simulate a pre-heartbeat agents table: none of the columns referenced by
+    # the 12-column get_agent_export_rows() exist yet (nova-mind#773).
+    psql -U nova -d "$DB" -v ON_ERROR_STOP=1 <<'SQL' >/dev/null
+CREATE TABLE agents (
+    id serial PRIMARY KEY,
+    name varchar(100) NOT NULL,
+    model varchar(100),
+    fallback_models text[],
+    thinking varchar(20),
+    instance_type varchar(20),
+    allowed_subagents text[],
+    status varchar(20) DEFAULT 'active'
+);
+SQL
+
+    run _run_pre_migration "$DB"
+    [ "$status" -eq 0 ]
+
+    for col in parent_agents heartbeat_enabled heartbeat_every heartbeat_target heartbeat_to heartbeat_isolated_session; do
+        run psql -U nova -d "$DB" -tAc \
+            "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='agents' AND column_name='$col';"
+        [ "$status" -eq 0 ]
+        [ "${output//[[:space:]]/}" = "1" ]
+    done
+
+    # No old function existed, so schema.sql will create the new one later.
+    run psql -U nova -d "$DB" -tAc "SELECT COUNT(*) FROM pg_proc WHERE proname='get_agent_export_rows';"
+    [ "$status" -eq 0 ]
+    [ "${output//[[:space:]]/}" = "0" ]
+
+    _drop_test_db "$DB"
+}
+
 @test "TC-009-shellcheck: bats test file passes shellcheck" {
     if ! command -v shellcheck &>/dev/null; then skip "shellcheck not installed"; fi
     run shellcheck "$BATS_TEST_FILENAME"

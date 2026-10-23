@@ -123,7 +123,7 @@ if [ "$NEED_PROMPT" = true ]; then
     DEFAULT_HOST="localhost"
     DEFAULT_PORT="5432"
     DEFAULT_USER="$(whoami)"
-    DEFAULT_DB="${DEFAULT_USER//-/_}_memory"
+    DEFAULT_DB="$(PGDATABASE= resolve_agent_db)"
 
     echo ""
     echo "  Enter PostgreSQL connection details (press Enter for defaults):"

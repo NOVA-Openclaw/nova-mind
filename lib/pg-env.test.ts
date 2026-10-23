@@ -691,13 +691,30 @@ describe("resolveAgentDatabase", { concurrency: false }, () => {
     assert.strictEqual(resolveAgentDatabase(undefined, "nova"), "nova_memory");
   });
 
+  it("returns nova_staging_memory for hyphenated user nova-staging", () => {
+    assert.strictEqual(resolveAgentDatabase(undefined, "nova-staging"), "nova_staging_memory");
+  });
+
+  it("normalizes multiple hyphens in the user name", () => {
+    assert.strictEqual(resolveAgentDatabase(undefined, "a-b-c"), "a_b_c_memory");
+  });
+
   it("prefers explicit config database over fallback", () => {
     assert.strictEqual(resolveAgentDatabase("explicit_db", "graybeard"), "explicit_db");
+  });
+
+  it("prefers explicit config over hyphenated fallback", () => {
+    assert.strictEqual(resolveAgentDatabase("explicit_db", "nova-staging"), "explicit_db");
   });
 
   it("prefers PGDATABASE env over fallback when no explicit config", () => {
     process.env.PGDATABASE = "env_memory";
     assert.strictEqual(resolveAgentDatabase(undefined, "graybeard"), "env_memory");
+  });
+
+  it("prefers PGDATABASE env over hyphenated fallback", () => {
+    process.env.PGDATABASE = "env_memory";
+    assert.strictEqual(resolveAgentDatabase(undefined, "nova-staging"), "env_memory");
   });
 
   it("prefers explicit config over PGDATABASE env", () => {
@@ -706,7 +723,7 @@ describe("resolveAgentDatabase", { concurrency: false }, () => {
   });
 
   it("falls back to current OS user when no args", () => {
-    const expected = `${os.userInfo().username}_memory`;
+    const expected = `${os.userInfo().username.replace(/-/g, "_")}_memory`;
     assert.strictEqual(resolveAgentDatabase(), expected);
   });
 });

@@ -9,10 +9,15 @@
 --   Postgres rejects changing the return type of an existing function
 --   (SQLSTATE 42P13), causing the installer to exit 1 at schema apply.
 --
+--   Peer databases whose agents table predates the heartbeat_* columns and
+--   parent_agents (e.g. graybeard_memory) cannot recreate the function because
+--   the new body references those columns, so we add any missing columns first.
+--
 -- Fix:
 --   Before pgschema runs, and only when the live function still returns 11
---   columns, add the agents.heartbeat_isolated_session column if it is missing
---   and recreate the function with the 12-column signature from schema.sql.
+--   columns, add the agents columns that the new function body requires
+--   (parent_agents and all five heartbeat_* columns) and recreate the function
+--   with the 12-column signature from schema.sql.
 --   The ALTER TABLE + DROP FUNCTION + CREATE FUNCTION are wrapped in a single
 --   DO block so they execute as one transaction; if any part fails, Postgres
 --   rolls back and the existing function remains in place (gateways still get
@@ -24,16 +29,16 @@
 --
 -- Idempotence:
 --   On re-run, pg_get_function_result() already contains
---   heartbeat_isolated_session, so we return immediately.
+--   heartbeat_isolated_session, so we return immediately. ADD COLUMN IF NOT
+--   EXISTS guards the column additions.
 --
 -- Privileges/owner:
 --   Production proacl for this function is NULL (default PUBLIC EXECUTE).
---   Recreating it with default privileges preserves that. pgschema creates
---   objects as PG_SUPERUSER; the installer later reassigns ownership to DB_USER
---   when the two differ, so the recreated function follows the same ownership
---   path as every other schema object.
+--   Recreating it with default privileges preserves that. The agent's own
+--   database user owns the agents table and can run this DDL (no superuser
+--   required), matching the non-super role ruling in nova-mind#756.
 --
--- Run as: superuser (DDL). Mirrors the pattern used by 008.
+-- Run as: the agent's database user (table owner). Mirrors the pattern used by 008.
 
 DO $do$
 DECLARE
@@ -48,20 +53,29 @@ BEGIN
     END IF;
 
     v_func_oid := to_regprocedure('public.get_agent_export_rows()');
+    IF v_func_oid IS NOT NULL THEN
+        -- Already upgraded; nothing to do.
+        v_result := pg_get_function_result(v_func_oid);
+        IF v_result LIKE '%heartbeat_isolated_session%' THEN
+            RETURN;
+        END IF;
+    END IF;
+
+    -- Add any missing columns that the new function body references so the
+    -- recreate succeeds on pre-heartbeat agents tables (nova-mind#773).
+    -- On a fresh install the agents table does not exist, so we never reach here.
+    ALTER TABLE public.agents
+        ADD COLUMN IF NOT EXISTS parent_agents text[],
+        ADD COLUMN IF NOT EXISTS heartbeat_enabled boolean DEFAULT false,
+        ADD COLUMN IF NOT EXISTS heartbeat_every text,
+        ADD COLUMN IF NOT EXISTS heartbeat_target text,
+        ADD COLUMN IF NOT EXISTS heartbeat_to text,
+        ADD COLUMN IF NOT EXISTS heartbeat_isolated_session boolean DEFAULT false;
+
+    -- No stale function to replace; schema.sql will create it during apply.
     IF v_func_oid IS NULL THEN
         RETURN;
     END IF;
-
-    -- Already upgraded; nothing to do.
-    v_result := pg_get_function_result(v_func_oid);
-    IF v_result LIKE '%heartbeat_isolated_session%' THEN
-        RETURN;
-    END IF;
-
-    -- Existing function is the 11-column version. Add the column first so the
-    -- new function body can reference it.
-    ALTER TABLE public.agents
-        ADD COLUMN IF NOT EXISTS heartbeat_isolated_session boolean DEFAULT false;
 
     -- Drop the stale 11-column definition and recreate the 12-column one
     -- exactly as it appears in database/schema.sql (#714).

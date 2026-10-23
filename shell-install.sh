@@ -39,6 +39,31 @@ if [ ! -f "$PG_ENV" ]; then
 fi
 source "$PG_ENV"
 
+# Ensure postgres.json belongs to this peer: user must be $(whoami) and
+# database must be <user>_memory as resolved by lib/pg-env.sh (nova-mind#778).
+_validate_pg_ownership() {
+    local expected_user expected_db
+    expected_user=$(whoami)
+    # Canonical DB for this peer, ignoring any inherited PGDATABASE (#774).
+    expected_db=$(PGDATABASE= resolve_agent_db)
+    if [ -n "${NOVA_MIND_ALLOW_FOREIGN_POSTGRES_JSON:-}" ]; then
+        return 0
+    fi
+    if [ "${PGUSER:-}" != "$expected_user" ]; then
+        echo -e "  ${RED}❌${NC} $PG_CONFIG belongs to user '${PGUSER:-}', but this installer is running as '$expected_user'."
+        echo "      database must be '$expected_db' and user must be '$expected_user'."
+        echo "      Remove or edit $PG_CONFIG, or set NOVA_MIND_ALLOW_FOREIGN_POSTGRES_JSON=1 to override."
+        return 1
+    fi
+    if [ "${PGDATABASE:-}" != "$expected_db" ]; then
+        echo -e "  ${RED}❌${NC} $PG_CONFIG points to database '${PGDATABASE:-}', but the agent database for '$expected_user' is '$expected_db'."
+        echo "      A stale postgres.json from another peer will target the wrong database."
+        echo "      Update $PG_CONFIG to database '$expected_db' and user '$expected_user', or remove it and re-run."
+        return 1
+    fi
+    return 0
+}
+
 # Create config directory if needed
 if [ ! -d "$CONFIG_DIR" ]; then
     mkdir -p "$CONFIG_DIR"
@@ -75,6 +100,10 @@ NEED_PROMPT=false
 if _pg_config_complete; then
     # Config file looks structurally complete — load env and test reachability
     load_pg_env
+
+    if ! _validate_pg_ownership; then
+        exit 1
+    fi
 
     echo "  Resolved: PGHOST=$PGHOST PGDATABASE=${PGDATABASE:-(not set)} PGUSER=$PGUSER"
 
@@ -148,7 +177,7 @@ EOF
         DEFAULT_HOST="localhost"
         DEFAULT_PORT="5432"
         DEFAULT_USER="$(whoami)"
-        DEFAULT_DB="${DEFAULT_USER//-/_}_memory"
+        DEFAULT_DB="$(PGDATABASE= resolve_agent_db)"
 
         echo ""
         echo "  Enter PostgreSQL connection details (press Enter for defaults):"
@@ -211,6 +240,12 @@ EOF
             echo "      The agent_chat plugin requires password auth for TCP connections."
         fi
     fi
+fi
+
+# Final guard: the resolved database/user must belong to this peer.
+# This also blocks an inherited PGDATABASE that names another agent's DB (#774).
+if ! _validate_pg_ownership; then
+    exit 1
 fi
 
 # ============================================

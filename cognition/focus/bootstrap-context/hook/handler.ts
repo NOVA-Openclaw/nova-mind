@@ -26,7 +26,7 @@ import {
 // See: https://github.com/NOVA-Openclaw/nova-mind/issues/775
 const pgEnvPath = join(homedir(), '.openclaw', 'lib', 'pg-env.ts');
 const osUser = userInfo().username;
-const ownDb = `${osUser}_memory`;
+const ownDb = `${osUser.replace(/-/g, "_")}_memory`;
 let pgConfig: { host?: string; port?: number; database?: string; user?: string; password?: string } = {
   host: 'localhost',
   port: 5432,

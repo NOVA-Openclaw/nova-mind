@@ -157,7 +157,8 @@ EOF
 }
 
 # Extract the top-level cognition database-existence block from the installer
-# and evaluate it under the same set -euo pipefail options used by the script.
+# and evaluate it in a genuinely top-level shell under set -euo pipefail so
+# that a top-level 'local' declaration (illegal outside a function) fails.
 _source_cognition_db_check() {
     local script="$FAKE_REPO/agent-install.sh"
 
@@ -168,16 +169,24 @@ _source_cognition_db_check() {
     CROSS_MARK="${RED}❌${NC}"
     DB_USER="testuser"
     DB_NAME="test_memory"
+    export RED GREEN NC CHECK_MARK CROSS_MARK DB_USER DB_NAME
 
-    local block
+    local block tmpfile
     block=$(awk '/^# --- Database check for cognition ---$/,/^# --- Configure PostgreSQL password file \(memory DB only\) ---$/' "$script" | head -n -1)
     if [ -z "$block" ]; then
         echo "cognition DB-check block not found in installer" >&2
         return 1
     fi
 
-    set -euo pipefail
-    eval "$block"
+    tmpfile="$(mktemp)"
+    printf '%s\n' "$block" >"$tmpfile"
+
+    # Run in a fresh top-level shell so 'local' inside the sourced block is
+    # not masked by a surrounding function context.
+    bash -c "set -euo pipefail; source \"$tmpfile\""
+    local rc=$?
+    rm -f "$tmpfile"
+    return $rc
 }
 
 @test "TC-428-004: cognition DB check succeeds when database exists" {

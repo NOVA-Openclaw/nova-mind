@@ -35,6 +35,10 @@ import requests
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, os.path.expanduser("~/.openclaw/lib"))
 sys.path.insert(0, str(SCRIPT_DIR))
+# Development fallback: repo memory/lib/ when the loader isn't installed yet.
+sys.path.insert(0, str(SCRIPT_DIR.parent / "lib"))
+
+from embedding_config import load_embedding_config, EmbeddingConfigError
 
 try:
     from env_loader import load_openclaw_env
@@ -88,19 +92,6 @@ TABLE_DECAY_RATES = {
     'lessons': 0.001,
     'memory_embeddings': 0.01,
 }
-
-
-def load_embedding_config():
-    cfg_path = SCRIPT_DIR / "embedding-config.json"
-    if not cfg_path.exists():
-        return {
-            "provider": "ollama",
-            "model": "snowflake-arctic-embed2",
-            "base_url": "http://localhost:11434",
-            "dimensions": 1024,
-        }
-    with open(cfg_path) as f:
-        return json.load(f)
 
 
 # ---------------------------------------------------------------------------

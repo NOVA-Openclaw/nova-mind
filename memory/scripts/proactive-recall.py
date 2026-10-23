@@ -36,10 +36,6 @@ sys.path.insert(0, os.path.expanduser("~/.openclaw/lib"))
 from pg_env import load_pg_env
 load_pg_env()
 
-# NOTE: unused fallback constant — the live model comes from embedding-config.json
-# (loaded via load_embedding_config()). Kept in sync with the unified standard.
-EMBEDDING_MODEL = "snowflake-arctic-embed2"
-
 # Default configuration
 DEFAULT_MAX_RESULTS = 10  # Fetch more, then filter by token budget
 DEFAULT_TOKEN_BUDGET = 1000  # Max tokens to inject
@@ -56,14 +52,11 @@ CONTENT_LIMITS = {
 }
 
 
-def load_embedding_config():
-    """Load embedding configuration from the script's directory."""
-    config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'embedding-config.json')
-    if not os.path.exists(config_path):
-        print(f"Error: Config file not found: {config_path}", file=sys.stderr)
-        sys.exit(1)
-    with open(config_path) as f:
-        return json.load(f)
+# Load shared embedding configuration
+sys.path.insert(0, os.path.expanduser("~/.openclaw/lib"))
+# Development fallback: repo memory/lib/ when the loader isn't installed yet.
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "lib"))
+from embedding_config import load_embedding_config
 
 
 def get_embedding(config, text):

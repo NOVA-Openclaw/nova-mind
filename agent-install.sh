@@ -2074,11 +2074,10 @@ if [ -n "$DB_NAME_OVERRIDE" ]; then
 fi
 
 # install_lib_files: Install shared PG loader files to ~/.openclaw/lib/
-# Uses SHA-256 hash comparison: install if missing, update if changed, skip if identical
 install_lib_files() {
     local lib_src="$SCRIPT_DIR/memory/lib"
     local lib_dst="$HOME/.openclaw/lib"
-    local files=("pg-env.sh" "pg_env.py" "pg-env.ts" "env-loader.sh" "env_loader.py")
+    local files=("pg-env.sh" "pg_env.py" "pg-env.ts" "env-loader.sh" "env_loader.py" "embedding_config.py" "embedding-config.ts")
 
     mkdir -p "$lib_dst"
     chmod 755 "$lib_dst"
@@ -2352,43 +2351,6 @@ install_hook() {
         echo -e "  ${CHECK_MARK} $hook_name installed"
     fi
     return 0
-}
-
-# install_lib_files: Install shared PG loader files to ~/.openclaw/lib/
-install_lib_files() {
-    local lib_src="$SCRIPT_DIR/memory/lib"
-    local lib_dst="$HOME/.openclaw/lib"
-    local files=("pg-env.sh" "pg_env.py" "pg-env.ts" "env-loader.sh" "env_loader.py" "embedding_config.py" "embedding-config.ts")
-
-    mkdir -p "$lib_dst"
-    chmod 755 "$lib_dst"
-
-    for f in "${files[@]}"; do
-        local src="$lib_src/$f"
-        local dst="$lib_dst/$f"
-
-        if [ ! -f "$src" ]; then
-            echo -e "  ${WARNING} [lib] $f: source not found in repo, skipping"
-            continue
-        fi
-
-        if [ ! -f "$dst" ]; then
-            cp "$src" "$dst"
-            chmod 644 "$dst"
-            echo -e "  ${CHECK_MARK} [lib] $f: installed"
-        else
-            local src_hash dst_hash
-            src_hash=$(sha256sum "$src" | awk '{print $1}')
-            dst_hash=$(sha256sum "$dst" | awk '{print $1}')
-            if [ "$src_hash" != "$dst_hash" ]; then
-                cp "$src" "$dst"
-                chmod 644 "$dst"
-                echo -e "  ${CHECK_MARK} [lib] $f: updated (hash changed)"
-            else
-                echo -e "  ${INFO} [lib] $f: up to date"
-            fi
-        fi
-    done
 }
 
 # install_skills <source_skills_dir> <target_skills_dir> [label]

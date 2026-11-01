@@ -4,7 +4,11 @@
 #
 # Design:
 #   - flock-protected (single concurrent invocation)
-#   - Sources env-loader.sh + pg-env.sh so cron runs with API keys / PG vars
+#   - Sources pg-env.sh for PG vars, and env-loader.sh for openclaw.json env.vars.
+#     IMPORTANT: env-loader.sh does NOT supply provider API keys — those live only
+#     in the gateway unit's EnvironmentFile (secrets.env), not in env.vars. Run from
+#     cron / by hand without that env and extraction fails "<PROVIDER>_API_KEY not set"
+#     (nova-mind #701). A scheduled timer must inherit secrets.env to actually work.
 #   - Processes up to BATCH_LIMIT pending rows per run
 #   - Reconstructs message body from channel_transcripts.content (FK case) or
 #     the stored content fallback; rows with neither are marked unreplayable.
@@ -15,7 +19,7 @@
 
 set -euo pipefail
 
-# Load OpenClaw env (API keys) and PostgreSQL env.
+# Load openclaw.json env.vars (NOTE: NO provider API keys here — see header) + PostgreSQL env.
 ENV_LOADER="${HOME}/.openclaw/lib/env-loader.sh"
 PG_ENV="${HOME}/.openclaw/lib/pg-env.sh"
 [ -f "$ENV_LOADER" ] && source "$ENV_LOADER" && load_openclaw_env

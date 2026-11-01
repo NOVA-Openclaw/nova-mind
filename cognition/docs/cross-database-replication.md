@@ -1,5 +1,11 @@
 # Cross-Database Replication Setup
 
+> **➡️ For sharing tables like bootstrap context across agent databases, see
+> [`shared-memory-database.md`](shared-memory-database.md).** That pattern (a canonical
+> `shared_memory` database consumed identically by every `<agent>_memory` via `postgres_fdw`)
+> is the current approach for *sharing* tables across per-agent databases. This logical-
+> replication guide is a historical/reference document for the replication mechanics only.
+
 > **⚠️ Superseded for `agent_chat` by nova-mind#320/#579.** This entire guide describes a
 > pre-#320 architecture in which `agent_chat` was replicated bidirectionally between
 > each agent's own memory database (e.g. `nova_memory` ↔ `graybeard_memory`). As of

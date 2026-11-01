@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -269,6 +270,85 @@ def _platform_adapter(platform: str):
     return adapters.get(platform)
 
 
+# Task #717: comms_state.standingItems was write-only — NOVA (and other
+# writers) appended dispositions/close-outs to it, but no code path ever read
+# the field back to suppress re-asking already-dispositioned items (task #717,
+# nova-mind#644). This module reads standingItems at report-compose time and
+# surfaces it verbatim so the report consumer (Hermes) can treat a closed-out
+# entry as authoritative, per the standing rule already written into those
+# entries ("treat a CLOSED-OUT entry in standingItems as authoritative and
+# drop the item"). It also uses a conservative task/issue-reference extractor
+# to auto-suppress tracked_pending rows whose artifact_ref (e.g. "task#123")
+# is named inside a standing item as CLOSED/COMPLETED/DISPOSITIONED, so a
+# disposition NOVA already recorded does not require the reader (human or
+# agent) to cross-reference prose by hand. Unrecognized prose is never used to
+# suppress — it is always still surfaced verbatim; this function only ever
+# narrows what silently disappears from tracked_pending, never what appears in
+# standing_items_raw.
+_CLOSED_DISPOSITION_RE = re.compile(
+    r"\b(CLOSED|CLOSED-OUT|COMPLETED|DISPOSITIONED|RESOLVED|NO ACTION)\b",
+    re.IGNORECASE,
+)
+_TASK_REF_RE = re.compile(r"#(\d+)")
+
+
+def load_standing_items(
+    conn: psycopg2.extensions.connection,
+    platforms: list[str],
+) -> dict[str, list[str]]:
+    """Read comms_state.standingItems for each requested platform.
+
+    Returns {platform: [entry, ...]} for platforms that have a standingItems
+    array in comms_state.state. Platforms with no row, or no standingItems
+    key, are simply absent from the result (not an error — not every
+    platform carries standing items).
+    """
+    if not platforms:
+        return {}
+    standing: dict[str, list[str]] = {}
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT platform, state -> 'standingItems'
+            FROM comms_state
+            WHERE platform = ANY(%s) AND state ? 'standingItems'
+            """,
+            (platforms,),
+        )
+        for platform, items_json in cur.fetchall():
+            if isinstance(items_json, list):
+                standing[platform] = [str(entry) for entry in items_json]
+    return standing
+
+
+def _closed_out_task_refs(standing_items: dict[str, list[str]]) -> set[str]:
+    """Extract task/issue references (e.g. '123' from '#123') named inside a
+    standing item whose text also carries a recognized closure phrase.
+
+    Conservative by design: an entry must contain BOTH a closure phrase AND a
+    task reference to suppress that reference. This avoids false suppression
+    from entries that merely *mention* a task number while discussing
+    something else (e.g. "related: task #484").
+    """
+    refs: set[str] = set()
+    for entries in standing_items.values():
+        for entry in entries:
+            if not _CLOSED_DISPOSITION_RE.search(entry):
+                continue
+            refs.update(_TASK_REF_RE.findall(entry))
+    return refs
+
+
+def _artifact_ref_is_closed_out(artifact_ref: Optional[str], closed_refs: set[str]) -> bool:
+    """True if artifact_ref names a task/issue number present in closed_refs."""
+    if not artifact_ref or not closed_refs:
+        return False
+    match = _TASK_REF_RE.search(artifact_ref)
+    if not match:
+        return False
+    return match.group(1) in closed_refs
+
+
 def fetch_platform_items(
     platform: str,
     limit: Optional[int],
@@ -298,8 +378,16 @@ def run_ingest(
         - existing_items: items already in the DB
         - skipped_items: malformed items
         - platform_errors: per-platform fetch errors
-        - tracked_pending: existing tracked rows with artifact_ref still pending
+        - tracked_pending: existing tracked rows with artifact_ref still pending,
+          EXCLUDING any row whose artifact_ref is named CLOSED/RESOLVED/etc in
+          comms_state.standingItems (task #717 read-back)
         - injection_candidates: new injection_suspect rows
+        - standing_items: {platform: [entry, ...]} read verbatim from
+          comms_state.standingItems for the requested platforms (task #717) —
+          the report consumer treats a CLOSED-OUT entry here as authoritative
+        - suppressed_pending: tracked rows dropped from tracked_pending because
+          standingItems already dispositioned their artifact_ref (visibility
+          into what was suppressed and why, for audit/regression testing)
     """
     new_items: list[dict[str, Any]] = []
     existing_items: list[dict[str, Any]] = []
@@ -330,7 +418,7 @@ def run_ingest(
             LIMIT 100
             """
         )
-        tracked_pending = [
+        all_tracked = [
             {
                 "id": row[0],
                 "platform": row[1],
@@ -345,13 +433,28 @@ def run_ingest(
 
         injection_candidates = [i for i in new_items if i.get("disposition") == "injection_suspect"]
 
+    # Task #717 read-back: load standingItems for the platforms in scope and
+    # drop any tracked_pending row whose artifact_ref is already dispositioned
+    # there, so a resolved item is not re-surfaced to the report consumer.
+    standing_items = load_standing_items(conn, platforms)
+    closed_refs = _closed_out_task_refs(standing_items)
+    tracked_pending = []
+    suppressed_pending = []
+    for row in all_tracked:
+        if _artifact_ref_is_closed_out(row.get("artifact_ref"), closed_refs):
+            suppressed_pending.append(row)
+        else:
+            tracked_pending.append(row)
+
     return {
         "new_items": new_items,
         "existing_items": existing_items,
         "skipped_items": skipped_items,
         "platform_errors": platform_errors,
         "tracked_pending": tracked_pending,
+        "suppressed_pending": suppressed_pending,
         "injection_candidates": injection_candidates,
+        "standing_items": standing_items,
     }
 
 
@@ -418,6 +521,26 @@ def log_comms_check(
 def compose_report(report: dict[str, Any]) -> str:
     """Compose a typed Hermes->NOVA report from persisted rows."""
     lines: list[str] = ["## comms ingest report", ""]
+
+    # Task #717: surface standingItems verbatim so a CLOSED-OUT / CORRECTED
+    # entry is authoritative for whoever composes the human-facing report
+    # (previously write-only — nothing in this pipeline ever read it back).
+    standing_items = report.get("standing_items", {})
+    if standing_items:
+        total = sum(len(v) for v in standing_items.values())
+        lines.append(f"### standing dispositions ({total}) — authoritative, do not re-derive or re-ask")
+        for platform, entries in standing_items.items():
+            for entry in entries:
+                lines.append(f"- [{platform}] {entry}")
+        lines.append("")
+
+    suppressed = report.get("suppressed_pending", [])
+    if suppressed:
+        lines.append(f"### suppressed (already dispositioned in standingItems) ({len(suppressed)})")
+        for item in suppressed:
+            ref = f" ref={item['artifact_ref']}" if item.get("artifact_ref") else ""
+            lines.append(f"- [{item['platform']}] {item['summary']}{ref}")
+        lines.append("")
 
     tracked = report.get("tracked_pending", [])
     if tracked:

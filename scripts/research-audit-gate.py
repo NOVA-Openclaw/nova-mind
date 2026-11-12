@@ -33,6 +33,7 @@ import math
 import os
 import re
 import sys
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
@@ -341,11 +342,16 @@ class GateResult:
         """Return the coarse exit code for this run.
 
         0 = all pass, 1 = one or more findings blocked, 2 = gate could not run.
-        For chunk 1 the Jev layer is not yet implemented, so the systemic-failure
-        corner (all Jev calls failed) is not reachable; it will be wired in chunk 3.
+        Systemic Jev failure (at least one call attempted AND all attempted
+        calls failed) returns 2 per the pinned OQ-4/GATE-02A ruling.
         """
         if self.errors:
             return 2
+
+        # Systemic Jev failure: attempted at least one call and every call failed.
+        if self.jev_attempted > 0 and self.jev_failed >= self.jev_attempted:
+            return 2
+
         for fa in self.finding_audits:
             for ca in fa.citation_audits:
                 # Hard deterministic-axis failures block.
@@ -360,6 +366,9 @@ class GateResult:
                     return 1
                 # A citation dropped and left the finding unsupported blocks.
                 if ca.existence_state == "no_surviving_citations":
+                    return 1
+                # A finding with zero supporting citations blocks.
+                if ca.existence_state == "no_citations":
                     return 1
                 # Jev Support failure/escalation blocks (JEV/JEVERR groups).
                 if ca.jev_support_state in ("escalate", "failed"):
@@ -921,15 +930,26 @@ def audit_task(
     config: GateConfig,
     now: Optional[datetime] = None,
     fetcher: Callable[[str], tuple[int, Optional[str], str]] = fetch_url,
+    jev_post_func: Optional[Callable[..., tuple[int, str, dict[str, str]]]] = None,
+    jev_sleep_func: Optional[Callable[[float], None]] = None,
 ) -> GateResult:
     """Audit all findings for a task and return a GateResult.
 
     The clock is injectable via `now` so tests can simulate the 72h boundary
     deterministically. Dropped citations are removed from the active argument
     for each finding; a finding with no surviving citations is blocked.
+
+    jev_post_func and jev_sleep_func default to None and are resolved inside
+    the function because the real implementations (_post_json, time.sleep) are
+    defined later in this module; default-argument values are evaluated at
+    function-definition time, so using None avoids a forward-reference NameError.
     """
     if now is None:
         now = datetime.now(timezone.utc)
+    if jev_post_func is None:
+        jev_post_func = _post_json
+    if jev_sleep_func is None:
+        jev_sleep_func = time.sleep
     result = GateResult(task_id=findings[0].task_id if findings else 0)
     for finding in findings:
         finding_audit = FindingAudit(finding=finding)
@@ -981,6 +1001,20 @@ def audit_task(
                 )
             )
 
+        # Jev Support Noul for surviving citations.
+        for audit in surviving_audits:
+            jev_state, jev_detail, attempted, failed = _audit_citation_jev_support(
+                audit.citation,
+                finding,
+                config,
+                post_func=jev_post_func,
+                sleep_func=jev_sleep_func,
+            )
+            audit.jev_support_state = jev_state
+            audit.jev_support_detail = jev_detail
+            result.jev_attempted += attempted
+            result.jev_failed += failed
+
         # High-risk cell: weakest tier × consequential claim.
         if surviving_audits and _importance_level(finding.importance) >= _importance_level(
             "high"
@@ -996,6 +1030,246 @@ def audit_task(
 
         result.finding_audits.append(finding_audit)
     return result
+
+
+# ---------------------------------------------------------------------------
+# Jev / TypeSafe System One client
+# ---------------------------------------------------------------------------
+def _systemone_payload(claim_text: str, source_text: str) -> dict[str, Any]:
+    """Build the request body for a Jev Support Noul call.
+
+    The shape follows the TypeSafe /v1/systemone direct-API pattern from
+    SE#1282 step 2: a model name, role/policy instructions, criteria labels,
+    and a flat state object.
+    """
+    return {
+        "model": "jev-latest",
+        "instructions": (
+            "You are a skeptical citation auditor. Given a claim and a source "
+            "snapshot, estimate the probability that the source explicitly "
+            "supports the claim. Respond with a JSON object containing a "
+            "single field 'p_supports' between 0 and 1."
+        ),
+        "criteria": [
+            {"label": "supports", "description": "source explicitly supports claim"},
+            {"label": "does_not_support", "description": "source does not support claim"},
+        ],
+        "state": {
+            "claim": claim_text,
+            "source_text": source_text,
+            "context": "",
+        },
+    }
+
+
+def _post_json(
+    url: str,
+    payload: dict[str, Any],
+    api_key: Optional[str],
+    timeout: float = 30.0,
+) -> tuple[int, str, dict[str, str]]:
+    """POST JSON to url and return (status_code, body_text, headers)."""
+    data = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=data,
+        headers={
+            "Content-Type": "application/json",
+            **({"Authorization": f"Bearer {api_key}"} if api_key else {}),
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return (
+            resp.status,
+            resp.read().decode("utf-8", errors="replace"),
+            dict(resp.headers),
+        )
+
+
+def _parse_noul_response(body: str) -> float:
+    """Extract and validate p_supports from a Jev Noul response body.
+
+    Raises ValueError for missing, NaN, or out-of-range [0,1] values.
+    The response is fail-closed: any parsing problem is treated as a Jev error.
+    """
+    try:
+        obj = json.loads(body)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"invalid JSON: {exc}") from exc
+    if not isinstance(obj, dict):
+        raise ValueError("response is not a JSON object")
+    # Prefer explicit p_supports; fall back to a top-level 'probability' field.
+    for key in ("p_supports", "probability", "confidence"):
+        if key in obj:
+            val = obj[key]
+            break
+    else:
+        raise ValueError("missing p_supports/probability/confidence field")
+    if isinstance(val, str):
+        if val.lower() == "nan":
+            raise ValueError("p_supports is NaN")
+        try:
+            val = float(val)
+        except ValueError as exc:
+            raise ValueError(f"non-numeric p_supports: {val!r}") from exc
+    if not isinstance(val, (int, float)):
+        raise ValueError(f"non-numeric p_supports: {val!r}")
+    if math.isnan(val) or math.isinf(val):
+        raise ValueError("p_supports is NaN or infinite")
+    if not (0.0 <= val <= 1.0):
+        raise ValueError(f"p_supports {val} out of [0,1]")
+    return float(val)
+
+
+def _jev_call_with_retry(
+    claim_text: str,
+    source_text: str,
+    config: GateConfig,
+    post_func: Callable[..., tuple[int, str, dict[str, str]]] = _post_json,
+    sleep_func: Callable[[float], None] = time.sleep,
+    max_attempts: int = 3,
+) -> float:
+    """Call /v1/systemone for a single Noul score with retry policy.
+
+    Retries on timeout/5xx/429 only. Honors Retry-After on 429; otherwise uses
+    exponential backoff (1s, 2s). Non-429 4xx and malformed 200 bodies are NOT
+    retried. Raises JevCallError on exhaustion or non-retryable failure.
+    """
+    payload = _systemone_payload(claim_text, source_text)
+    last_error = ""
+    headers: dict[str, str] = {}
+    for attempt in range(1, max_attempts + 1):
+        try:
+            status, body, headers = post_func(
+                config.jev_url, payload, config.jev_api_key
+            )
+        except urllib.error.HTTPError as exc:
+            status = exc.code
+            body = exc.read().decode("utf-8", errors="replace") if exc.fp else ""
+            headers = dict(exc.headers) if exc.headers else {}
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            status = 0
+            body = ""
+            headers = {}
+            last_error = str(exc)
+
+        if status == 200:
+            return _parse_noul_response(body)
+
+        # Non-retryable 4xx (except 429) and any 3xx are fail-closed immediately.
+        if 300 <= status < 500 and status != 429:
+            raise JevCallError(f"HTTP {status}: non-retryable client error")
+
+        if attempt == max_attempts:
+            raise JevCallError(
+                f"HTTP {status} after {max_attempts} attempts: {last_error or body[:200]}"
+            )
+
+        # Determine retry delay.
+        delay = 1.0 * (2 ** (attempt - 1))  # 1s, 2s
+        if status == 429:
+            retry_after = headers.get("Retry-After")
+            if retry_after:
+                try:
+                    delay = max(0.0, float(retry_after))
+                except ValueError:
+                    pass
+        sleep_func(delay)
+
+    raise JevCallError("retry loop exited without result")
+
+
+class JevCallError(Exception):
+    """Raised when a Jev /v1/systemone call fails irrecoverably."""
+
+
+_JEV_UNCERTAINTY_LOW = 0.40
+_JEV_UNCERTAINTY_HIGH = 0.60
+
+
+def _jev_support_state(
+    p_supports: float,
+    threshold: float,
+) -> tuple[str, str]:
+    """Classify a Noul probability into a support state.
+
+    Returns (state, detail). p_supports <= threshold blocks. The [0.4,0.6]
+    uncertainty zone always escalates, even though it is above the threshold.
+    """
+    if _JEV_UNCERTAINTY_LOW <= p_supports <= _JEV_UNCERTAINTY_HIGH:
+        return "escalate", f"p_supports={p_supports} in uncertainty zone [0.4,0.6]"
+    if p_supports <= threshold:
+        return "escalate", f"p_supports={p_supports} <= threshold {threshold}"
+    return "passed", f"p_supports={p_supports} above threshold and outside uncertainty zone"
+
+
+def _audit_jev_support(
+    claim: AtomicClaim,
+    config: GateConfig,
+    post_func: Callable[..., tuple[int, str, dict[str, str]]] = _post_json,
+    sleep_func: Callable[[float], None] = time.sleep,
+) -> tuple[str, str]:
+    """Get Jev Support Noul classification for one atomic claim.
+
+    Returns:
+      * ("passed", detail)  — p_supports is above threshold and outside the
+        uncertainty zone.
+      * ("escalate", detail) — p_supports is at/below threshold or inside the
+        uncertainty zone; this is a finding-level block, not a Jev API failure.
+      * ("failed", detail)  — the Jev call itself failed (network, malformed
+        response, exhausted retries); counted toward systemic failure.
+    """
+    try:
+        p = _jev_call_with_retry(
+            claim.claim_text,
+            claim.source_text,
+            config,
+            post_func=post_func,
+            sleep_func=sleep_func,
+        )
+        return _jev_support_state(p, config.support_threshold)
+    except JevCallError as exc:
+        return "failed", f"Jev call failed: {exc}"
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        return "failed", f"Jev call failed: {exc}"
+
+
+def _audit_citation_jev_support(
+    citation: Citation,
+    finding: Finding,
+    config: GateConfig,
+    post_func: Callable[..., tuple[int, str, dict[str, str]]] = _post_json,
+    sleep_func: Callable[[float], None] = time.sleep,
+) -> tuple[str, str, int, int]:
+    """Run Jev Support Noul for all atomic claims of one citation.
+
+    Returns (state, detail, attempted, failed). 'state' is 'passed' only if
+    every atomic claim passed. 'failed' counts only Jev API failures, not
+    threshold/uncertainty escalations; it feeds the systemic-failure detector.
+    """
+    atomic, _compound = atomic_claims_for_citation(finding, citation)
+    if not atomic:
+        return "pending", "no atomic claims to judge", 0, 0
+
+    attempted = 0
+    failed = 0
+    escalations: list[str] = []
+    for claim in atomic:
+        attempted += 1
+        state, detail = _audit_jev_support(
+            claim, config, post_func=post_func, sleep_func=sleep_func
+        )
+        if state == "failed":
+            failed += 1
+        if state in ("failed", "escalate"):
+            escalations.append(detail)
+
+    if failed == attempted and attempted > 0:
+        return "failed", "; ".join(escalations), attempted, failed
+    if escalations:
+        return "escalate", "; ".join(escalations), attempted, failed
+    return "passed", "all atomic claims supported", attempted, failed
 
 
 # ---------------------------------------------------------------------------

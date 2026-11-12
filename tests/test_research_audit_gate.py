@@ -780,7 +780,7 @@ class TestHighRiskCell:
             citations=[citation],
         )
 
-    def _audit(self, finding: Any) -> Any:
+    def _audit(self, finding: Any, jev_response: Any = None) -> Any:
         """Run audit_task with default config on a single finding."""
         mod = _load_module()
         config = mod.GateConfig(
@@ -792,7 +792,14 @@ class TestHighRiskCell:
             db_dsn="",
             db_user="nova",
         )
-        return mod.audit_task([finding], config)
+        if jev_response is None:
+            jev_response = (200, '{"p_supports": 0.93}', {})
+        return mod.audit_task(
+            [finding],
+            config,
+            jev_post_func=lambda *a, **k: jev_response,
+            jev_sleep_func=lambda d: None,
+        )
 
     def test_risk01_critical_with_weakest_tier_flags(self):
         """TC-657-RISK-01: weakest tier + critical claim flags high-risk."""
@@ -895,6 +902,7 @@ class TestNetLifecycle:
         finding: Any,
         now: datetime,
         fetcher: Any = None,
+        jev_response: Any = (200, '{"p_supports": 0.93}', {}),
     ) -> Any:
         """Run audit_task with a fixed clock and optional mock fetcher."""
         mod = _load_module()
@@ -909,7 +917,14 @@ class TestNetLifecycle:
         )
         if fetcher is None:
             fetcher = lambda url: (200, finding.citations[0].source_title or "", "")
-        return mod.audit_task([finding], config, now=now, fetcher=fetcher)
+        return mod.audit_task(
+            [finding],
+            config,
+            now=now,
+            fetcher=fetcher,
+            jev_post_func=lambda *a, **k: jev_response,
+            jev_sleep_func=lambda d: None,
+        )
 
     def test_net01_first_unreachability_unread(self):
         """TC-657-NET-01: first unreachability becomes UNREAD and is retried."""
@@ -1139,3 +1154,117 @@ class TestAtomicSplit:
         atomic, _ = mod.atomic_claims_for_citation(finding, citation)
         # No claims are produced because there is no source text to judge against.
         assert atomic == []
+
+
+# ---------------------------------------------------------------------------
+# JEV-THRESH group tests (TC-657-JEV-01..JEV-07)
+# ---------------------------------------------------------------------------
+class TestJevThreshold:
+    """Jev Support Noul threshold boundaries."""
+
+    def _finding(self, content: str = "The sky is blue.") -> Any:
+        mod = _load_module()
+        return mod.Finding(
+            finding_id=10,
+            task_id=90001,
+            finding_type="fact",
+            content=content,
+            confidence=0.85,
+            importance="normal",
+            metadata={},
+            citations=[],
+        )
+
+    def _citation(self, snapshot: str = "The sky is blue.") -> Any:
+        mod = _load_module()
+        return mod.Citation(
+            citation_id=1,
+            finding_id=10,
+            source_type="paper",
+            source_url="https://example.com",
+            source_title="Example",
+            reliability=0.88,
+            accessed_at=datetime.now(timezone.utc),
+            metadata={
+                "source_snapshot_text": snapshot,
+                "last_fetch_success": True,
+                "last_status": 200,
+            },
+        )
+
+    def _audit(self, finding: Any, citation: Any, jev_body: str) -> Any:
+        mod = _load_module()
+        finding.citations = [citation]
+        config = mod.GateConfig(
+            schema="public",
+            drop_window_hours=72.0,
+            support_threshold=0.05,
+            jev_url="https://api.typesafe.ai/v1/systemone",
+            jev_api_key=None,
+            db_dsn="",
+            db_user="nova",
+        )
+        return mod.audit_task(
+            [finding],
+            config,
+            fetcher=lambda url: (200, citation.source_title or "", ""),
+            jev_post_func=lambda *a, **k: (200, jev_body, {}),
+            jev_sleep_func=lambda d: None,
+        )
+
+    def test_jev01_just_below_threshold(self):
+        """TC-657-JEV-01: p_supports=0.049 escalates."""
+        result = self._audit(
+            self._finding(), self._citation(), '{"p_supports": 0.049}'
+        )
+        assert result.finding_audits[0].citation_audits[0].jev_support_state == "escalate"
+        assert result.exit_code() == 1
+
+    def test_jev02_exactly_threshold(self):
+        """TC-657-JEV-02: p_supports=0.05 exactly escalates (<= 0.05)."""
+        result = self._audit(
+            self._finding(), self._citation(), '{"p_supports": 0.05}'
+        )
+        assert result.finding_audits[0].citation_audits[0].jev_support_state == "escalate"
+        assert result.exit_code() == 1
+
+    def test_jev03_just_above_threshold(self):
+        """TC-657-JEV-03: p_supports=0.051 passes threshold check."""
+        result = self._audit(
+            self._finding(), self._citation(), '{"p_supports": 0.051}'
+        )
+        assert result.finding_audits[0].citation_audits[0].jev_support_state == "passed"
+
+    def test_jev04_clearly_supported(self):
+        """TC-657-JEV-04: p_supports=0.93 passes cleanly."""
+        result = self._audit(
+            self._finding(), self._citation(), '{"p_supports": 0.93}'
+        )
+        assert result.finding_audits[0].citation_audits[0].jev_support_state == "passed"
+        assert result.exit_code() == 0
+
+    def test_jev05_uncertainty_low_boundary(self):
+        """TC-657-JEV-05: p_supports=0.40 in uncertainty zone escalates."""
+        result = self._audit(
+            self._finding(), self._citation(), '{"p_supports": 0.40}'
+        )
+        assert result.finding_audits[0].citation_audits[0].jev_support_state == "escalate"
+
+    def test_jev06_uncertainty_high_boundary(self):
+        """TC-657-JEV-06: p_supports=0.60 in uncertainty zone escalates."""
+        result = self._audit(
+            self._finding(), self._citation(), '{"p_supports": 0.60}'
+        )
+        assert result.finding_audits[0].citation_audits[0].jev_support_state == "escalate"
+
+    def test_jev07_just_above_uncertainty(self):
+        """TC-657-JEV-07: p_supports=0.61 outside uncertainty zone passes."""
+        result = self._audit(
+            self._finding(), self._citation(), '{"p_supports": 0.61}'
+        )
+        assert result.finding_audits[0].citation_audits[0].jev_support_state == "passed"
+
+
+# ---------------------------------------------------------------------------
+# JEV-ERR group tests (TC-657-JEVERR-01..JEVERR-07)
+# ---------------------------------------------------------------------------

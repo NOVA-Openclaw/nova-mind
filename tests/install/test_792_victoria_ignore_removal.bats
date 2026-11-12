@@ -32,13 +32,13 @@ _pg_available() {
         pg_isready -h /var/run/postgresql >/dev/null 2>&1
 }
 
+# Create a scratch DB from the shared test template.  The template carries
+# postgres_fdw and other extensions pre-installed so that GATING peer tests
+# can build a real FOREIGN TABLE fixture without needing superuser privileges.
 _make_test_db() {
     local dbname="nova_mind_792_${BATS_TEST_NUMBER}_$$_${RANDOM}"
-    if [ -n "${NOVA_MIND_TEST_TEMPLATE:-}" ]; then
-        createdb -T "$NOVA_MIND_TEST_TEMPLATE" -U nova "$dbname" >/dev/null 2>&1
-    else
-        createdb -U nova "$dbname" >/dev/null 2>&1
-    fi
+    local template="${NOVA_MIND_TEST_TEMPLATE:-nova_mind_test_template}"
+    createdb -T "$template" -U nova "$dbname" >/dev/null 2>&1
     echo "$dbname"
 }
 
@@ -47,9 +47,11 @@ _drop_test_db() {
     dropdb -U nova "$dbname" >/dev/null 2>&1 || true
 }
 
-# Run the real installer plan -> reorder -> strip-destructive -> apply pipeline
-# against database/schema.sql on the given DB.  Extra pgschema plan flags mirror
-# the existing test_608 helper.
+# Run the real installer plan -> reorder -> strip-destructive pipeline
+# against database/schema.sql on the given scratch DB.  Extra pgschema plan
+# flags mirror the existing test_608 helper.  The plan source-of-truth DB is
+# the scratch DB itself, never nova_memory, so a live production DB cannot be
+# accidentally mutated or observed by these tests.
 _run_schema_management() {
     local DB="$1"
     local PLAN="$2"
@@ -72,7 +74,7 @@ _run_schema_management() {
             --schema public \
             --file schema.sql \
             --plan-host /var/run/postgresql \
-            --plan-db nova_memory \
+            --plan-db "$DB" \
             --plan-user nova \
             --output-json "$PLAN" \
             --no-color >/dev/null 2>&1
@@ -399,6 +401,10 @@ INJECTOR="$REPO_ROOT/database/inject_peer_shadowed_ignores.py"
 
 # Copied from tests/install/test_608_peer_fdw_bootstrap_context.bats so the
 # #792 suite can build the same peer-shadowed bootstrap-context fixture.
+# This helper now requires a real FOREIGN TABLE.  If the current DB role lacks
+# USAGE on the postgres_fdw wrapper, the helper fails closed with a clear
+# message instead of silently using a VIEW-only shape that would let the GATING
+# peer tests pass while exercising the wrong relkind.
 _seed_peer_fixture() {
     local DB="$1"
     local HAS_FUNCTIONS="$2"
@@ -406,14 +412,21 @@ _seed_peer_fixture() {
     local FIXTURE
     FIXTURE=$(mktemp)
 
-    # The template DB may have postgres_fdw installed but not grant USAGE on
-    # the wrapper to nova.  Detect that before trying to create a server and
-    # fall back to a view-only peer shape.  A VIEW alone is enough to make
-    # detect_peer_shadowed.py switch into peer mode for #792's gating tests.
+    # The wrapper must exist before we can check privileges on it.  Creating
+    # the extension is a DB-owner operation in these scratch DBs; the actual
+    # GATING requirement is the USAGE grant on the wrapper.
+    psql -U nova -d "$DB" -v ON_ERROR_STOP=1 -c "CREATE EXTENSION IF NOT EXISTS postgres_fdw;" >/dev/null 2>&1 || {
+        echo "TC-792 peer fixture FAILED: could not create postgres_fdw extension." >&3
+        rm -f "$FIXTURE"
+        return 1
+    }
+
     local fdw_usable
     fdw_usable=$(psql -U nova -d "$DB" -tAc "SELECT CASE WHEN has_foreign_data_wrapper_privilege(current_user,'postgres_fdw','USAGE') THEN 1 ELSE 0 END;")
     if [ "$fdw_usable" != "1" ]; then
-        echo "TC-792 peer fixture: postgres_fdw USAGE not granted; using view-only peer shape" >&3
+        echo "TC-792 peer fixture FAILED: current role lacks USAGE on postgres_fdw. Grant with: GRANT USAGE ON FOREIGN DATA WRAPPER postgres_fdw TO nova;" >&3
+        rm -f "$FIXTURE"
+        return 1
     fi
 
     cat > "$FIXTURE" <<'SQL'
@@ -428,10 +441,6 @@ CREATE TABLE agent_bootstrap_context_local (
     updated_by text DEFAULT CURRENT_USER,
     agent_name text
 );
-SQL
-
-    if [ "$fdw_usable" = "1" ]; then
-        cat >> "$FIXTURE" <<'SQL'
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname='postgres_fdw') THEN
@@ -461,13 +470,6 @@ CREATE VIEW agent_bootstrap_context AS
       FROM agent_bootstrap_context_local
      WHERE context_type <> ALL(ARRAY['UNIVERSAL','GLOBAL']);
 SQL
-    else
-        cat >> "$FIXTURE" <<'SQL'
-CREATE VIEW agent_bootstrap_context AS
-    SELECT id, context_type, domain_names, file_key, content, description, updated_at, updated_by, agent_name
-      FROM agent_bootstrap_context_local;
-SQL
-    fi
 
     if [ "$HAS_FUNCTIONS" -eq 1 ]; then
         cat >> "$FIXTURE" <<'SQL'
@@ -665,11 +667,18 @@ SELECT (random() * 1000)::numeric, portfolio_id
 SQL
 }
 
-# The fixture itself tolerates a postgres_fdw installation that does not
-# grant USAGE to nova by falling back to a view-only peer shape.  Do not
-# skip gating tests just because the FDW server cannot be created.
-_skip_unless_fdw() {
-    return 0
+# Assert that the peer fixture created a real FOREIGN TABLE for
+# nova_bootstrap_context.  GATING peer TCs require relkind 'f'; a VIEW-only
+# shape would let detect_peer_shadowed.py switch into peer mode but would not
+# reproduce the #608 SQLSTATE 42809 collision the additive pipeline must avoid.
+_assert_peer_fixture_is_fdw() {
+    local DB="$1"
+    local relkind
+    relkind=$(psql -U nova -d "$DB" -tAc "SELECT c.relkind FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relname='nova_bootstrap_context';")
+    if [ "$relkind" != "f" ]; then
+        echo "TC-792 peer fixture FAILED: nova_bootstrap_context is relkind='$relkind', expected 'f' (real FOREIGN TABLE). The postgres_fdw USAGE grant is probably missing." >&3
+        return 1
+    fi
 }
 
 # Apply database/schema.sql to a scratch DB using the additive pipeline (no
@@ -788,11 +797,24 @@ _run_full_installer_pipeline() {
 
     cp "$REPO_ROOT/database/schema.sql" "$SCRATCH/schema.sql"
 
-    # Detect shadowed relations.
+    # Detect shadowed relations.  Always connect as the nova DB role over the
+    # local socket; do not depend on ambient PGUSER, because these tests may be
+    # invoked by an OS user whose PGUSER is not nova (e.g. CI or a subagent).
+    # A detector failure is fatal: in peer mode it must not silently look like
+    # "no shadowed relations" and then hit the #608 SQLSTATE 42809 collision.
     local SHADOWED_JSON SHADOWED_NAMES SHADOWED_RELKINDS SHADOWED_CSV
+    local DETECTOR_ERR detector_rc
+    DETECTOR_ERR="$SCRATCH/detector.err"
+    detector_rc=""
     SHADOWED_JSON=$("$VENV_PYTHON" "$DETECTOR" \
         --schema-file "$SCRATCH/schema.sql" \
-        --dbname "$DB" 2>/dev/null) || SHADOWED_JSON=""
+        --dsn "host=/var/run/postgresql dbname=$DB user=nova" 2>"$DETECTOR_ERR") || detector_rc=$?
+    if [ -n "${detector_rc:-}" ]; then
+        echo "ERROR: detect_peer_shadowed.py failed (exit $detector_rc):" >&3
+        cat "$DETECTOR_ERR" >&3
+        rm -rf "$SCRATCH"
+        return 1
+    fi
     SHADOWED_NAMES=()
     SHADOWED_RELKINDS=()
     while IFS= read -r line; do
@@ -895,8 +917,13 @@ _run_full_installer_pipeline() {
     # filtered plan is empty and pgschema apply would fail with a source
     # fingerprint mismatch because the DB still contains those ignored
     # objects.  agent-install.sh makes the same skip-when-empty decision.
-    local total_steps
+    #
+    # The helper reports STEPS and APPLY_RAN so callers can assert whether the
+    # test legitimately expected an empty plan (already-converged DB) or real
+    # changes (drift/upgrade cases).  A vacuous success is no longer silent.
+    local total_steps apply_ran
     total_steps=$(jq '[(.groups // [])[] | .steps[] | select(.type != "privilege")] | length' "$FILTERED" 2>/dev/null || echo 0)
+    apply_ran=0
     if [ "$total_steps" -gt 0 ]; then
         pgschema apply \
             --host /var/run/postgresql \
@@ -907,12 +934,25 @@ _run_full_installer_pipeline() {
             --auto-approve \
             --no-color >/dev/null 2>&1
         local apply_status=$?
+        apply_ran=1
+        echo "STEPS:$total_steps"
+        echo "APPLY_RAN:$apply_ran"
         rm -rf "$SCRATCH"
         return $apply_status
     fi
 
+    echo "STEPS:$total_steps"
+    echo "APPLY_RAN:$apply_ran"
     rm -rf "$SCRATCH"
     return 0
+}
+
+# Parse the STEPS/APPLY_RAN summary emitted by _run_full_installer_pipeline.
+# Sets shell variables _rfc_steps and _rfc_apply_ran for the caller to assert.
+_parse_full_installer_summary() {
+    local summary="$1"
+    _rfc_steps=$(printf '%s\n' "$summary" | awk -F: '/^STEPS:/ {print $2; exit}')
+    _rfc_apply_ran=$(printf '%s\n' "$summary" | awk -F: '/^APPLY_RAN:/ {print $2; exit}')
 }
 
 # Build fixture SQL.  Primary path: a shared schema-only dump of Victoria's
@@ -1023,9 +1063,9 @@ PY
     run _apply_schema_sql_to_db "$DB"
     [ "$status" -eq 0 ]
 
-    _skip_unless_fdw "$DB"
     psql -U nova -d "$DB" -c "DROP TABLE IF EXISTS agent_bootstrap_context;" >/dev/null 2>&1
     _seed_peer_fixture "$DB" 1 1
+    _assert_peer_fixture_is_fdw "$DB"
     _seed_victoria_trading_fixture "$DB"
     _seed_victoria_trading_rows "$DB"
 
@@ -1033,6 +1073,9 @@ PY
 
     run _run_full_installer_pipeline "$DB" 1 "$STRIP_LOG" "$FILTERED"
     [ "$status" -eq 0 ]
+    _parse_full_installer_summary "$output"
+    [ "$_rfc_steps" -eq 0 ]
+    [ "$_rfc_apply_ran" -eq 0 ]
 
     _capture_victoria_row_counts "$DB" "$AFTER"
     diff "$BEFORE" "$AFTER"
@@ -1063,6 +1106,9 @@ PY
 
     run _run_full_installer_pipeline "$DB" 0 "$STRIP_LOG"
     [ "$status" -eq 0 ]
+    _parse_full_installer_summary "$output"
+    [ "$_rfc_steps" -eq 0 ]
+    [ "$_rfc_apply_ran" -eq 0 ]
 
     _capture_victoria_row_counts "$DB" "$AFTER"
     diff "$BEFORE" "$AFTER"
@@ -1084,9 +1130,9 @@ PY
     run _apply_schema_sql_to_db "$DB"
     [ "$status" -eq 0 ]
 
-    _skip_unless_fdw "$DB"
     psql -U nova -d "$DB" -c "DROP TABLE IF EXISTS agent_bootstrap_context;" >/dev/null 2>&1
     _seed_peer_fixture "$DB" 1 1
+    _assert_peer_fixture_is_fdw "$DB"
     _seed_victoria_trading_fixture "$DB"
     _seed_victoria_trading_rows "$DB"
 
@@ -1094,6 +1140,9 @@ PY
 
     run _run_full_installer_pipeline "$DB" 1 "$STRIP_LOG"
     [ "$status" -eq 0 ]
+    _parse_full_installer_summary "$output"
+    [ "$_rfc_steps" -eq 0 ]
+    [ "$_rfc_apply_ran" -eq 0 ]
 
     _capture_victoria_object_inventory "$DB" "$AFTER"
     diff "$BEFORE" "$AFTER"
@@ -1115,9 +1164,9 @@ PY
     run _apply_schema_sql_to_db "$DB"
     [ "$status" -eq 0 ]
 
-    _skip_unless_fdw "$DB"
     psql -U nova -d "$DB" -c "DROP TABLE IF EXISTS agent_bootstrap_context;" >/dev/null 2>&1
     _seed_peer_fixture "$DB" 1 1
+    _assert_peer_fixture_is_fdw "$DB"
     _seed_victoria_trading_fixture "$DB"
     # Deliberately do NOT seed rows.
 
@@ -1125,6 +1174,9 @@ PY
 
     run _run_full_installer_pipeline "$DB" 1 "$STRIP_LOG"
     [ "$status" -eq 0 ]
+    _parse_full_installer_summary "$output"
+    [ "$_rfc_steps" -eq 0 ]
+    [ "$_rfc_apply_ran" -eq 0 ]
 
     _capture_victoria_row_counts "$DB" "$AFTER"
     diff "$BEFORE" "$AFTER"
@@ -1147,9 +1199,9 @@ PY
     run _apply_schema_sql_to_db "$DB"
     [ "$status" -eq 0 ]
 
-    _skip_unless_fdw "$DB"
     psql -U nova -d "$DB" -c "DROP TABLE IF EXISTS agent_bootstrap_context;" >/dev/null 2>&1
     _seed_peer_fixture "$DB" 1 1
+    _assert_peer_fixture_is_fdw "$DB"
 
     if _build_victoria_fixture_sql "$FIXTURE"; then
         echo "TC-792-024: using real schema-only dump from victoria_memory" >&3
@@ -1164,6 +1216,9 @@ PY
 
     run _run_full_installer_pipeline "$DB" 1 "$STRIP_LOG"
     [ "$status" -eq 0 ]
+    _parse_full_installer_summary "$output"
+    [ "$_rfc_steps" -eq 0 ]
+    [ "$_rfc_apply_ran" -eq 0 ]
 
     _capture_victoria_row_counts "$DB" "$AFTER"
     diff "$BEFORE" "$AFTER"
@@ -1198,9 +1253,9 @@ PY
     run _apply_schema_sql_to_db "$DB"
     [ "$status" -eq 0 ]
 
-    _skip_unless_fdw "$DB"
     psql -U nova -d "$DB" -c "DROP TABLE IF EXISTS agent_bootstrap_context;" >/dev/null 2>&1
     _seed_peer_fixture "$DB" 1 1
+    _assert_peer_fixture_is_fdw "$DB"
     _seed_victoria_trading_fixture "$DB" "$owner_role"
     _seed_victoria_trading_rows "$DB"
 
@@ -1208,6 +1263,9 @@ PY
 
     run _run_full_installer_pipeline "$DB" 1 "$STRIP_LOG"
     [ "$status" -eq 0 ]
+    _parse_full_installer_summary "$output"
+    [ "$_rfc_steps" -eq 0 ]
+    [ "$_rfc_apply_ran" -eq 0 ]
 
     _capture_victoria_row_counts "$DB" "$AFTER"
     diff "$BEFORE" "$AFTER"
@@ -1234,14 +1292,17 @@ PY
     run _apply_schema_sql_to_db "$DB"
     [ "$status" -eq 0 ]
 
-    _skip_unless_fdw "$DB"
     psql -U nova -d "$DB" -c "DROP TABLE IF EXISTS agent_bootstrap_context;" >/dev/null 2>&1
     _seed_peer_fixture "$DB" 1 1
+    _assert_peer_fixture_is_fdw "$DB"
     _seed_victoria_trading_fixture "$DB"
     _seed_victoria_trading_rows "$DB"
 
     run _run_full_installer_pipeline "$DB" 1 "$STRIP_LOG" "$FILTERED"
     [ "$status" -eq 0 ]
+    _parse_full_installer_summary "$output"
+    [ "$_rfc_steps" -eq 0 ]
+    [ "$_rfc_apply_ran" -eq 0 ]
 
     # The filtered plan must contain no steps referencing Victoria tables.
     _assert_no_victoria_refs "$FILTERED"
@@ -1269,6 +1330,7 @@ PY
 # --- CHUNK 4: RECORD-ONLY live characterizations + GATING #686 guard ---
 
 # Run pgschema plan against a throwaway schema.sql in a scratch directory.
+# The plan source-of-truth DB is the scratch DB itself, never nova_memory.
 # Args: DB_NAME SCRATCH_DIR SCHEMA_SQL_FILE PLAN_OUT
 _pgschema_plan_to_file() {
     local DB="$1"
@@ -1291,7 +1353,7 @@ _pgschema_plan_to_file() {
             --schema public \
             --file schema.sql \
             --plan-host /var/run/postgresql \
-            --plan-db nova_memory \
+            --plan-db "$DB" \
             --plan-user nova \
             --output-json "$OUT" \
             --no-color >/dev/null 2>&1
@@ -1615,9 +1677,9 @@ PY
     run _apply_schema_sql_to_db "$DB"
     [ "$status" -eq 0 ]
 
-    _skip_unless_fdw "$DB"
     psql -U nova -d "$DB" -c "DROP TABLE IF EXISTS agent_bootstrap_context;" >/dev/null 2>&1
     _seed_peer_fixture "$DB" 1 1
+    _assert_peer_fixture_is_fdw "$DB"
     _seed_victoria_trading_fixture "$DB"
     _seed_victoria_trading_rows "$DB"
 
@@ -1631,6 +1693,9 @@ SQL
 
     run _run_full_installer_pipeline "$DB" 1 "$STRIP_LOG" "$FILTERED"
     [ "$status" -eq 0 ]
+    _parse_full_installer_summary "$output"
+    [ "$_rfc_steps" -eq 0 ]
+    [ "$_rfc_apply_ran" -eq 0 ]
 
     # The filtered plan must have zero constraint/index/trigger-level steps
     # touching trades (or any other Victoria table).

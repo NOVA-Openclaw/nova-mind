@@ -31,10 +31,13 @@ import argparse
 import json
 import math
 import os
+import re
 import sys
+import urllib.error
+import urllib.request
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 # ---------------------------------------------------------------------------
 # Venv bootstrap — add nova venv site-packages so psycopg2 is importable
@@ -81,6 +84,35 @@ DEFAULT_JEV_URL = "https://api.typesafe.ai/v1/systemone"
 
 # Claim-scope enum values (pinned by Project Leadership 2026-11-12).
 CLAIM_SCOPE_VALUES = ("proved", "computed", "cited", "conjecture")
+
+# Title truncation cap from research_citations.source_title varchar(500).
+SOURCE_TITLE_MAX_LEN = 500
+
+# Deterministic markers that indicate a retraction/correction notice beyond the
+# truncation boundary. These are checked case-insensitively in the fetched title
+# suffix that extends past a 500-char filed title prefix.
+RETRACTION_MARKERS = (
+    "retracted",
+    "expression of concern",
+    "correction",
+    "erratum",
+    "withdrawn",
+)
+
+# Tier band cutpoints. A reliability below 0.50 combined with a formal source
+# type (paper/book/library_work) is flagged as a tier-reconciliation conflict
+# instead of being silently classified by reliability alone.
+TIER_CUTPOINT_LOW = 0.30
+TIER_CUTPOINT_HIGH = 0.80
+TIER_CONFLICT_INFORMAL_THRESHOLD = 0.70
+TIER_CONFLICT_FORMAL_THRESHOLD = 0.50
+
+STRONG_SOURCE_TYPES = {"paper", "book", "library_work"}
+WEAK_SOURCE_TYPES = {"agent", "url"}
+
+# Importance ordering for the high-risk-cell flag. The flag fires when the
+# weakest tier supports a finding at or above HIGH importance.
+IMPORTANCE_LEVEL = {"low": 0, "normal": 1, "high": 2, "critical": 3}
 
 
 # ---------------------------------------------------------------------------
@@ -429,35 +461,172 @@ def _claim_scope(finding: Finding) -> tuple[Optional[str], bool]:
     return scope, True
 
 
-def _audit_citation(citation: Citation, finding: Finding, config: GateConfig) -> CitationAudit:
+# ---------------------------------------------------------------------------
+# Existence axis
+# ---------------------------------------------------------------------------
+def fetch_url(url: str, timeout: float = 10.0) -> tuple[int, Optional[str], str]:
+    """Fetch a source URL and return (status_code, title, detail).
+
+    Status 0 indicates a network-level failure (connection refused, timeout,
+    DNS failure, etc.) that should be treated as UNREAD, not as a definitive
+    existence failure. HTTP 404 is treated as a definitive "not found"; 5xx is
+    treated as transient UNREAD eligible for the 72h retry lifecycle.
+
+    The title is extracted from the first <title> element with whitespace
+    normalized. Only HTTP status and title extraction errors are returned in
+    detail; successful fetches return an empty detail string.
+    """
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as resp:
+            html = resp.read().decode("utf-8", errors="replace")
+            title = _extract_title(html)
+            return resp.status, title, ""
+    except urllib.error.HTTPError as exc:
+        return exc.code, None, str(exc.reason)
+    except urllib.error.URLError as exc:
+        return 0, None, f"network error: {exc.reason}"
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        return 0, None, f"fetch error: {exc}"
+
+
+def _extract_title(html: str) -> Optional[str]:
+    """Extract and normalize text from the first <title> element."""
+    match = re.search(r"<title[^>]*>(.*?)</title>", html, re.IGNORECASE | re.DOTALL)
+    if not match:
+        return None
+    return " ".join(match.group(1).split())
+
+
+def _compare_titles(filed: str, fetched: str) -> tuple[str, str]:
+    """Compare a filed title against a fetched title.
+
+    Returns (state, detail). States:
+      * passed        — exact match, or filed title is a 500-char-cap prefix.
+      * warn          — prefix match but a retraction/correction marker appears
+                        past the truncation boundary.
+      * failed        — titles differ.
+
+    This handles the known varchar(500) cap on research_citations.source_title:
+    a filed title that is exactly the prefix of the fetched title must not be
+    flagged as a mismatch, but the leniency must not paper over retraction or
+    correction notices that appear beyond the truncation boundary.
+    """
+    if filed == fetched:
+        return "passed", "titles match exactly"
+    if len(filed) >= SOURCE_TITLE_MAX_LEN and fetched.startswith(filed):
+        suffix = fetched[len(filed):].lower()
+        if any(marker in suffix for marker in RETRACTION_MARKERS):
+            return (
+                "warn",
+                f"prefix match but retraction/correction marker past 500-char cap: {fetched}",
+            )
+        return "passed", "filed title is prefix of fetched title (500-char cap)"
+    return (
+        "failed",
+        f"title mismatch — filed '{filed}', fetched '{fetched}'",
+    )
+
+
+def _audit_existence(
+    citation: Citation,
+    fetcher: Callable[[str], tuple[int, Optional[str], str]] = fetch_url,
+) -> tuple[str, str, Optional[str]]:
+    """Audit the existence axis for a single citation.
+
+    Returns (state, detail, unread_reason). unread_reason is None unless the
+    source could not be verified due to a transient or ambiguous condition.
+    """
+    if citation.source_url is None or citation.source_url.strip() == "":
+        if citation.source_type == "book":
+            return "non_url_source", "book/source_type requires non-URL verification", None
+        return "no_url", "source_url absent", None
+
+    if citation.source_title is None or citation.source_title.strip() == "":
+        return "no_title", "no filed title to compare against", None
+
+    status, fetched_title, detail = fetcher(citation.source_url)
+
+    if status == 0:
+        return "unread", detail, "network unreachable"
+    if status == 404:
+        return "failed", "source returned 404", None
+    if status >= 500:
+        return "unread", f"source returned {status}", f"server error {status}"
+
+    if fetched_title is None:
+        return "unread", "no title element in fetched page", "missing fetched title"
+
+    state, detail = _compare_titles(
+        citation.source_title.strip(), fetched_title.strip()
+    )
+    return state, detail, None
+
+
+# ---------------------------------------------------------------------------
+# Source tier axis
+# ---------------------------------------------------------------------------
+def _audit_tier(citation: Citation) -> tuple[str, str]:
+    """Audit the source tier for a single citation.
+
+    Returns (state, detail). States:
+      * strong   — high-reliability source.
+      * medium   — mid-reliability source.
+      * weak     — low-reliability source.
+      * conflict — source_type and reliability contradict each other.
+      * unscored — reliability is NULL.
+
+    The gate reconciles the existing source_type and reliability columns rather
+    than introducing a parallel tier column, per SE#843 step-2 Correction 2.
+    """
+    if citation.reliability is None:
+        return "unscored", "reliability NULL"
+
+    rel = citation.reliability
+    stype = citation.source_type
+
+    if stype in STRONG_SOURCE_TYPES and rel < TIER_CONFLICT_FORMAL_THRESHOLD:
+        return "conflict", f"{stype} source_type with reliability {rel} indicates tier conflict"
+    if stype in WEAK_SOURCE_TYPES and rel >= TIER_CONFLICT_INFORMAL_THRESHOLD:
+        return "conflict", f"{stype} source_type with reliability {rel} indicates tier conflict"
+
+    if rel >= TIER_CUTPOINT_HIGH:
+        return "strong", f"reliability {rel}"
+    if rel <= TIER_CUTPOINT_LOW:
+        return "weak", f"reliability {rel}"
+    return "medium", f"reliability {rel}"
+
+
+def _is_weakest_tier(tier_state: str) -> bool:
+    """Return True for tier states that count as the weakest band."""
+    return tier_state == "weak"
+
+
+def _importance_level(importance: str) -> int:
+    """Return numeric importance level for high-risk-cell comparison."""
+    return IMPORTANCE_LEVEL.get(importance, 1)
+
+
+def _audit_citation(
+    citation: Citation,
+    finding: Finding,
+    config: GateConfig,
+    fetcher: Callable[[str], tuple[int, Optional[str], str]] = fetch_url,
+) -> CitationAudit:
     """Perform the deterministic three-axis audit for a single citation.
 
-    This is the chunk-1 scaffold: it populates existence/confidence/tier state
-    strings with pass/pending/unscored markers and attaches the scope advisory
-    flag, but does not yet perform URL fetches or Jev calls. Those layers are
-    added in chunks 2 and 3.
+    Existence and source-tier checks are implemented in chunks 1-2. Confidence
+    and Jev-mediated support/scope checks are still scaffolded and will be
+    completed in chunks 2b and 3.
     """
     audit = CitationAudit(citation=citation)
 
-    # EXISTENCE axis — chunk 2 will implement URL resolution and title match.
-    # For chunk 1 we distinguish only structural states: no URL, no title, or
-    # pending fetch. A non-URL source type (e.g. book) is treated as a different
-    # verification mechanism, not a failure.
-    if citation.source_url is None or citation.source_url.strip() == "":
-        if citation.source_type == "book":
-            audit.existence_state = "non_url_source"
-            audit.existence_detail = "book/source_type requires non-URL verification"
-        else:
-            audit.existence_state = "no_url"
-            audit.existence_detail = "source_url absent"
-    elif citation.source_title is None or citation.source_title.strip() == "":
-        audit.existence_state = "no_title"
-        audit.existence_detail = "no filed title to compare against"
-    else:
-        audit.existence_state = "pending"
-        audit.existence_detail = "URL/title check pending (chunk 2)"
+    # EXISTENCE axis — URL resolution + title comparison.
+    ex_state, ex_detail, ex_unread = _audit_existence(citation, fetcher=fetcher)
+    audit.existence_state = ex_state
+    audit.existence_detail = ex_detail
+    audit.unread_reason = ex_unread
 
-    # CONFIDENCE axis — chunk 2 will implement the 1.00 restriction. For chunk 1
+    # CONFIDENCE axis — chunk 2b will implement the 1.00 restriction. For now
     # we flag NULL as unscored and defer the rest.
     if finding.confidence is None:
         audit.confidence_state = "unscored"
@@ -465,23 +634,20 @@ def _audit_citation(citation: Citation, finding: Finding, config: GateConfig) ->
     else:
         scope, scope_valid = _claim_scope(finding)
         if finding.confidence == 1.00 and scope_valid and scope == "cited":
-            # Placeholder for the valid fact-about-document path; exact logic in chunk 2.
+            # Placeholder for the valid fact-about-document path; exact logic in chunk 2b.
             audit.confidence_state = "pending"
-            audit.confidence_detail = "1.00 with claim_scope=cited (chunk 2)"
+            audit.confidence_detail = "1.00 with claim_scope=cited (chunk 2b)"
         elif finding.confidence == 1.00:
             audit.confidence_state = "pending"
-            audit.confidence_detail = "1.00 restriction check pending (chunk 2)"
+            audit.confidence_detail = "1.00 restriction check pending (chunk 2b)"
         else:
             audit.confidence_state = "pending"
-            audit.confidence_detail = "confidence within [0,1] (chunk 2)"
+            audit.confidence_detail = "confidence within [0,1] (chunk 2b)"
 
-    # SOURCE TIER axis — chunk 2 will implement banding and conflict detection.
-    if citation.reliability is None:
-        audit.tier_state = "unscored"
-        audit.tier_detail = "reliability NULL"
-    else:
-        audit.tier_state = "pending"
-        audit.tier_detail = "tier classification pending (chunk 2)"
+    # SOURCE TIER axis — reconcile source_type and reliability.
+    tier_state, tier_detail = _audit_tier(citation)
+    audit.tier_state = tier_state
+    audit.tier_detail = tier_detail
 
     # Scope advisory — never gates.
     scope, scope_valid = _claim_scope(finding)
@@ -495,14 +661,18 @@ def _audit_citation(citation: Citation, finding: Finding, config: GateConfig) ->
     return audit
 
 
-def audit_task(findings: list[Finding], config: GateConfig) -> GateResult:
+def audit_task(
+    findings: list[Finding],
+    config: GateConfig,
+    fetcher: Callable[[str], tuple[int, Optional[str], str]] = fetch_url,
+) -> GateResult:
     """Audit all findings for a task and return a GateResult."""
     result = GateResult(task_id=findings[0].task_id if findings else 0)
     for finding in findings:
         finding_audit = FindingAudit(finding=finding)
         for citation in finding.citations:
             finding_audit.citation_audits.append(
-                _audit_citation(citation, finding, config)
+                _audit_citation(citation, finding, config, fetcher=fetcher)
             )
         if not finding.citations:
             # A finding with zero citations gets an explicit placeholder audit so
@@ -523,6 +693,20 @@ def audit_task(findings: list[Finding], config: GateConfig) -> GateResult:
                     existence_detail="finding has zero citations",
                 )
             )
+
+        # High-risk cell: weakest tier × consequential claim.
+        if finding.citations and _importance_level(finding.importance) >= _importance_level(
+            "high"
+        ):
+            for ca in finding_audit.citation_audits:
+                if _is_weakest_tier(ca.tier_state):
+                    finding_audit.high_risk = True
+                    finding_audit.high_risk_detail = (
+                        f"finding {finding.finding_id}: {finding.importance} claim "
+                        f"backed by weakest-tier citation {ca.citation.citation_id}"
+                    )
+                    break
+
         result.finding_audits.append(finding_audit)
     return result
 

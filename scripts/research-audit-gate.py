@@ -889,6 +889,10 @@ _AMBIGUOUS_ABBREVIATIONS = (
 # fragment is compound_unsplit.
 _INITIAL_RE = re.compile(r"\b[A-Z]\.(?=\s+[A-Z])")
 
+# Regex for multi-dot tokens such as Ph.D., U.S., U.K., a.m., p.m., M.Sc.
+# These are protected as a class and treated as ambiguous.
+_MULTI_DOT_RE = re.compile(r"\b(?:[A-Za-z]{1,3}\.){2,}")
+
 # Regex for decimal/version tokens ("3.5", "v2.1"). These are protected so
 # they do not become sentence boundaries.
 _DECIMAL_RE = re.compile(r"\b(?:v?\d+\.\d+)\b")
@@ -930,6 +934,9 @@ def _protect_abbreviations(text: str) -> tuple[str, list[_Placeholder]]:
 
     # Single capital initials are ambiguous in the same way.
     text = _INITIAL_RE.sub(lambda m: _placeholder(m.group(0), True), text)
+
+    # Multi-dot tokens (Ph.D., U.S., etc.) are ambiguous in the same way.
+    text = _MULTI_DOT_RE.sub(lambda m: _placeholder(m.group(0), True), text)
     return text, placeholders
 
 
@@ -954,6 +961,11 @@ def _has_ambiguous_sentence_boundary(text: str, placeholders: list[_Placeholder]
     return False
 
 
+def _contains_multi_dot_token(text: str) -> bool:
+    """Return True if the text contains a multi-dot abbreviation token."""
+    return bool(_MULTI_DOT_RE.search(text))
+
+
 def split_atomic_claims(content: str) -> tuple[list[str], list[str]]:
     """Split finding content into atomic claims.
 
@@ -963,9 +975,12 @@ def split_atomic_claims(content: str) -> tuple[list[str], list[str]]:
     No., approx., single capital initials) are protected for splitting, but if
     such a token is followed by whitespace + a capital letter the resulting
     fragment is marked compound_unsplit rather than risk merging two real
-    sentences. Any resulting sentence that still looks compound (two clauses
-    joined by coordinating 'and'/'which also', each with a finite verb) is also
-    returned as compound_unsplit.
+    sentences. Multi-dot tokens (Ph.D., U.S., a.m., M.Sc.) are protected as a
+    class: if the text contains one and also contains a sentence boundary, the
+    entire text is compound_unsplit; otherwise it stays one atomic claim. Any
+    resulting sentence that still looks compound (two clauses joined by
+    coordinating 'and'/'which also', each with a finite verb) is also returned
+    as compound_unsplit.
 
     Returns (atomic_claims, compound_unsplit_claims). Both lists contain
     stripped claim text.
@@ -978,6 +993,18 @@ def split_atomic_claims(content: str) -> tuple[list[str], list[str]]:
 
     # First split into sentences and on semicolons (deterministic separators).
     raw_parts = re.split(r"(?<=[.!?])\s+|\s*;\s*", protected_text)
+
+    # If the text contains a multi-dot token and also has a real sentence
+    # boundary (period + whitespace + capital letter), the boundary is
+    # ambiguous because any of the dots in the token could be mistaken for the
+    # sentence terminator. Escalate the whole text rather than risk fragments
+    # or merges.
+    if _contains_multi_dot_token(text) and re.search(r"\.\s+[A-Z]", text):
+        restored = _restore_abbreviations(text, placeholders)
+        # Do not strip periods: the text may end in a multi-dot token like
+        # "Ph.D." and stripping would fragment it.
+        return [], [restored.strip()]
+
     atomic: list[str] = []
     compound: list[str] = []
     for part in raw_parts:

@@ -15,6 +15,7 @@ no test database is configured.
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 import uuid
@@ -1319,6 +1320,103 @@ class TestAtomicSplit:
         assert "Smith proved the bound" in atomic
         assert "Jones gave a construction" in atomic
         assert compound == []
+
+    def test_inv7_multi_dot_phd_with_capital_is_compound(self):
+        """TC-657-INV7-13: Ph.D. followed by capital is ambiguous and escalated.
+
+        Derivation: 'Ph.D.' is a multi-dot token and is protected. Because it is
+        followed by whitespace + a capital letter ('The'), the sentence boundary
+        is ambiguous, so the fragment is compound_unsplit.
+        """
+        mod = _load_module()
+        atomic, compound = mod.split_atomic_claims(
+            "She earned a Ph.D. in mathematics. The thesis proved a new bound."
+        )
+        assert atomic == []
+        assert len(compound) == 1
+        assert "Ph.D." in compound[0]
+        assert "The thesis proved a new bound" in compound[0]
+
+    def test_inv7_multi_dot_phd_with_lowercase_is_atomic(self):
+        """TC-657-INV7-14: Ph.D. followed by lowercase stays one atomic claim.
+
+        Derivation: 'Ph.D.' is followed by 'in' (lowercase), so there is no
+        ambiguous sentence boundary and the claim stays atomic.
+        """
+        mod = _load_module()
+        atomic, compound = mod.split_atomic_claims(
+            "She earned a Ph.D. in mathematics."
+        )
+        assert atomic == ["She earned a Ph.D. in mathematics"]
+        assert compound == []
+
+    def test_inv7_multi_dot_us_merges_sentences(self):
+        """TC-657-INV7-15: U.S. followed by capital across real boundary is compound.
+
+        Derivation: 'U.S.' is a multi-dot token. When followed by whitespace +
+        a capital letter we treat the boundary as ambiguous and escalate.
+        """
+        mod = _load_module()
+        atomic, compound = mod.split_atomic_claims(
+            "The U.S. passed the law. The agency enforced it."
+        )
+        assert atomic == []
+        assert len(compound) == 1
+        assert "U.S." in compound[0]
+        assert "The agency enforced it" in compound[0]
+
+    def test_inv7_multi_dot_am_pm_stay_atomic(self):
+        """TC-657-INV7-16: a.m. and p.m. followed by lowercase stay atomic.
+
+        Derivation: multi-dot tokens followed by lowercase words are not
+        ambiguous boundaries.
+        """
+        mod = _load_module()
+        atomic, compound = mod.split_atomic_claims("The meeting starts at 9 a.m. tomorrow.")
+        assert atomic == ["The meeting starts at 9 a.m. tomorrow"]
+        assert compound == []
+
+    def test_inv7_invariant_no_fragments_or_merges(self):
+        """TC-657-INV7-12: invariant over adversarial abbreviation corpus.
+
+        Derivation: over a diverse set of abbreviation-bearing sentences, no
+        atomic claim may (a) end in a lone letter or an abbreviation token
+        without its dot, or (b) start with a lowercase word when the previous
+        fragment ended at a period. This catches both fragments and merged
+        sentences.
+        """
+        mod = _load_module()
+        sentences = [
+            "Smith et al. proved the bound is tight.",
+            "Some sets, e.g. primes, are infinite.",
+            "Only one solution exists, i.e. the trivial one.",
+            "Dr. Smith proved the theorem.",
+            "The result for P vs. NP remains open.",
+            "J. Smith proved the bound.",
+            "The gain is 3.5 dB.",
+            "We tested v2.1 of the model.",
+            "We tested model A. Results improved by 3.5 dB.",
+            "The list includes apples, pears, etc. The second claim is separate.",
+            "See Fig. 2 for the bound.",
+            "Smith proved the bound. Jones gave a construction.",
+            "She earned a Ph.D. in mathematics. The thesis proved a new bound.",
+            "She earned a Ph.D. in mathematics.",
+            "The U.S. passed the law. The agency enforced it.",
+            "The meeting starts at 9 a.m. tomorrow.",
+            "He finished an M.Sc. in computer science. Then he started a Ph.D.",
+        ]
+
+        for sentence in sentences:
+            atomic, compound = mod.split_atomic_claims(sentence)
+            all_parts = atomic + compound
+            assert all_parts, f"no output for {sentence!r}"
+            for i, part in enumerate(all_parts):
+                # No atomic part should end with a lone letter (fragmented abbrev).
+                assert not re.search(r"\b[A-Za-z]$", part), f"lone letter fragment in {part!r}"
+                # No atomic part should start lowercase if it follows a period
+                # boundary in the original text (would indicate a merge/fragment).
+                if i > 0 and part[0].islower():
+                    assert False, f"lowercase start after boundary in {part!r}"
 
 
 # ---------------------------------------------------------------------------

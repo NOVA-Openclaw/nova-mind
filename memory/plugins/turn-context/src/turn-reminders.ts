@@ -28,7 +28,7 @@ const contextCache = new Map<string, CacheEntry>();
 // ── DB query ─────────────────────────────────────────────────────────────────
 
 async function queryTurnContext(agentName: string): Promise<CacheEntry> {
-  const pool = getPool();
+  const pool = await getPool();
   const client = await pool.connect();
   try {
     const result = await client.query<{

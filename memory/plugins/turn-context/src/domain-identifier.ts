@@ -142,7 +142,7 @@ export async function loadDomains(pool?: DomainPool): Promise<DomainRow[]> {
 
   const client: DomainPoolClient = pool
     ? await pool.connect()
-    : (await getPool().connect() as DomainPoolClient);
+    : (await (await getPool()).connect() as DomainPoolClient);
   try {
     let useKeywords = keywordsColumnPresent;
 
@@ -328,7 +328,7 @@ async function matchVectorSimilarity(
 ): Promise<Map<number, number>> {
   const scores = new Map<number, number>();
 
-  const pool = getPool();
+  const pool = await getPool();
   const client = await pool.connect();
   try {
     const vectorStr = `[${embedding.join(",")}]`;

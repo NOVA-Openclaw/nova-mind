@@ -36,7 +36,7 @@ import { buildHonorificGuard } from "./honorific-guard.ts";
 import { runSemanticRecall, type RecallInput } from "./semantic-recall.ts";
 import { classifyMessage, type ClassifierResult, type MessageType } from "./classifier.ts";
 import { identifyDomain, formatDomainContext, type DomainResult } from "./domain-identifier.ts";
-import { getPool } from "./shared/pg-pool.ts";
+import { getPool, closePool, forceClosePool, getCurrentPool } from "./shared/pg-pool.ts";
 
 // ── Sender identity from host context (#712) ─────────────────────────────────
 
@@ -179,7 +179,7 @@ async function getHelperConfig(agentId: string, messageType: MessageType): Promi
   };
 
   try {
-    const pool = getPool();
+    const pool = await getPool();
     const client = await pool.connect();
     try {
       // DISTINCT ON ensures agent-specific config (agent_name IS NOT NULL) takes
@@ -234,11 +234,92 @@ function isGroupSession(sessionKey: string | undefined): boolean {
  * Plugin registration function called by the OpenClaw plugin loader.
  * The loader calls module.default(api) to register hooks.
  */
+const activeCalls = new Map<Promise<PromptBuildResult | undefined>, string>();
+
+const SHUTDOWN_DEADLINE_MS = 3000;
+const WORK_BUDGET_MS = 1500;
+
+function trackCall<T>(
+  promise: Promise<T>,
+  description = "before_prompt_build handler"
+): Promise<T> {
+  activeCalls.set(promise as any, description);
+  promise.finally(() => activeCalls.delete(promise as any));
+  return promise;
+}
+
+async function shutdown(): Promise<void> {
+  const deadline = Date.now() + SHUTDOWN_DEADLINE_MS;
+
+  // Drain in-flight calls with a bounded budget. A call waiting on a slow
+  // child process or DB query can take minutes, so we cap the wait and
+  // abandon stragglers. Core forces retirement after 5s; we stay well under it.
+  const snapshot = Array.from(activeCalls.entries());
+  if (snapshot.length > 0) {
+    let workTimer: ReturnType<typeof setTimeout> | undefined;
+    const workResult = await Promise.race([
+      Promise.allSettled(snapshot.map(([promise]) => promise)),
+      new Promise<"work-timeout">((resolve) => {
+        workTimer = setTimeout(resolve, WORK_BUDGET_MS, "work-timeout");
+      }),
+    ]);
+    if (workTimer) {
+      clearTimeout(workTimer);
+    }
+    if (workResult === "work-timeout") {
+      const abandoned = Array.from(activeCalls.values());
+      console.error(
+        `[turn-context] Shutdown timeout waiting for in-flight calls; abandoning ${abandoned.length} pending call(s): ${abandoned.join(", ")}`
+      );
+    }
+  }
+
+  // Close the pool with whatever budget remains. If pool.end() hangs on a
+  // checked-out client, force-close the underlying sockets so the call returns
+  // instead of waiting for core's forced retirement.
+  const poolToClose = getCurrentPool();
+  const remainingMs = deadline - Date.now();
+  if (remainingMs <= 0) {
+    console.error("[turn-context] Shutdown budget exhausted; force-closing pool");
+    forceClosePool(poolToClose);
+  } else {
+    let closeTimer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const closeResult = await Promise.race([
+        closePool(),
+        new Promise<"close-timeout">((resolve) => {
+          closeTimer = setTimeout(resolve, remainingMs, "close-timeout");
+        }),
+      ]);
+      if (closeTimer) {
+        clearTimeout(closeTimer);
+      }
+      if (closeResult === "close-timeout") {
+        console.error("[turn-context] Shutdown timeout waiting for pool.end(); force-closing pool");
+        forceClosePool(poolToClose);
+      }
+    } catch (err) {
+      console.error(
+        "[turn-context] Error closing pool:",
+        err instanceof Error ? err.message : String(err)
+      );
+      forceClosePool(poolToClose);
+      if (closeTimer) {
+        clearTimeout(closeTimer);
+      }
+    }
+  }
+}
+
 export default function register(api: PluginApi): void {
   const placement = resolvePlacement(api.pluginConfig as Record<string, unknown> | undefined);
   console.info(
     `[turn-context] Plugin registered — hooks: before_prompt_build, placement=${placement}`
   );
+
+  api.on("gateway_stop", async () => {
+    await shutdown();
+  });
 
   // ── Hook: before_prompt_build (awaited, returns context segments) ──────────
   //
@@ -262,11 +343,18 @@ export default function register(api: PluginApi): void {
 
   api.on(
     "before_prompt_build",
-    async (event: PluginEvent, ctx: PluginContext): Promise<PromptBuildResult | undefined> => {
+    (event: PluginEvent, ctx: PluginContext): Promise<PromptBuildResult | undefined> => {
+      const call = (async (): Promise<PromptBuildResult | undefined> => {
       const hookStart = Date.now();
       const sessionKey = ctx.sessionKey;
       const rawAgentId = ctx.agentId;
       const agentId: string = rawAgentId ?? "nova";
+      const signal = ctx.abortSignal;
+
+      if (signal?.aborted) {
+        console.info("[turn-context] before_prompt_build aborted before start");
+        return undefined;
+      }
 
       console.info(
         `[turn-context] before_prompt_build START agent=${agentId} session=${sessionKey ?? "none"}`
@@ -427,45 +515,75 @@ export default function register(api: PluginApi): void {
       );
       const subsystemStart = Date.now();
 
-      const [turnRemindersResult, domainIdentifierResult, recallResult] =
-        await Promise.allSettled<[
-          Promise<string | null>,
-          Promise<DomainResult | null>,
-          Promise<string | null>,
-        ]>([
-          // 1. Turn reminders — ALWAYS fires, never gated
-          getTurnReminders(agentId).catch((err) => {
-            console.error(
-              "[turn-context] Turn reminders error:",
-              err instanceof Error ? err.message : String(err)
-            );
-            return null;
-          }),
+      if (signal?.aborted) {
+        console.info("[turn-context] before_prompt_build aborted before subsystems");
+        return undefined;
+      }
 
-          // 2. Domain identifier — gated by helperConfig
-          helperConfig.domain_identifier && content
-            ? identifyDomain(content, classification.domainHints).catch((err) => {
-                console.error(
-                  "[turn-context] Domain identification error:",
-                  err instanceof Error ? err.message : String(err)
-                );
-                return null as DomainResult | null;
-              })
-            : Promise.resolve(null as DomainResult | null),
+      // Race subsystems against the host abort signal so shutdown is not blocked
+      // by a slow child process or DB query.
+      const abortPromise = new Promise<never>((_, reject) => {
+        if (signal?.aborted) {
+          reject(new Error("aborted"));
+          return;
+        }
+        signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+      });
 
-          // 3. Semantic recall — gated by helperConfig
-          // Uses classifier domain hints and resolved entityId for domain-scoped
-          // and visibility-gated recall (#150, #075)
-          helperConfig.semantic_recall && content
-            ? runSemanticRecall(recallInput).catch((err) => {
-                console.error(
-                  "[turn-context] Semantic recall error:",
-                  err instanceof Error ? err.message : String(err)
-                );
-                return null;
-              })
-            : Promise.resolve(null),
+      const subsystemRace = Promise.allSettled<[
+        Promise<string | null>,
+        Promise<DomainResult | null>,
+        Promise<string | null>,
+      ]>([
+        // 1. Turn reminders — ALWAYS fires, never gated
+        getTurnReminders(agentId).catch((err) => {
+          console.error(
+            "[turn-context] Turn reminders error:",
+            err instanceof Error ? err.message : String(err)
+          );
+          return null;
+        }),
+
+        // 2. Domain identifier — gated by helperConfig
+        helperConfig.domain_identifier && content
+          ? identifyDomain(content, classification.domainHints).catch((err) => {
+              console.error(
+                "[turn-context] Domain identification error:",
+                err instanceof Error ? err.message : String(err)
+              );
+              return null as DomainResult | null;
+            })
+          : Promise.resolve(null as DomainResult | null),
+
+        // 3. Semantic recall — gated by helperConfig
+        // Uses classifier domain hints and resolved entityId for domain-scoped
+        // and visibility-gated recall (#150, #075)
+        helperConfig.semantic_recall && content
+          ? runSemanticRecall(recallInput, signal).catch((err) => {
+              console.error(
+                "[turn-context] Semantic recall error:",
+                err instanceof Error ? err.message : String(err)
+              );
+              return null;
+            })
+          : Promise.resolve(null),
+      ]);
+
+      let [turnRemindersResult, domainIdentifierResult, recallResult]:
+        | [PromiseSettledResult<string | null>, PromiseSettledResult<DomainResult | null>, PromiseSettledResult<string | null>]
+        | [undefined, undefined, undefined] = [undefined, undefined, undefined];
+      try {
+        [turnRemindersResult, domainIdentifierResult, recallResult] = await Promise.race([
+          subsystemRace,
+          abortPromise,
         ]);
+      } catch (err) {
+        if ((err as Error).message === "aborted") {
+          console.info("[turn-context] before_prompt_build aborted during subsystems");
+          return undefined;
+        }
+        throw err;
+      }
 
       const subsystemMs = Date.now() - subsystemStart;
 
@@ -558,7 +676,9 @@ export default function register(api: PluginApi): void {
         ` isGroup=${isGroup}`
       );
 
-      return result;
+        return result;
+      })();
+      return trackCall(call);
     },
     { timeoutMs: 8000 }
   );
@@ -650,6 +770,8 @@ interface PluginContext {
   config?: Record<string, unknown>;
   /** Channel-owned sender/chat details. */
   channelContext?: ChannelContextShape;
+  /** Abort signal supplied by the host when the gateway is shutting down. */
+  abortSignal?: AbortSignal;
   [key: string]: unknown;
 }
 

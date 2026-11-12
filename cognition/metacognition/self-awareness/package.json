@@ -13,7 +13,8 @@
   },
   "scripts": {
     "build": "tsc",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --experimental-test-module-mocks --import tsx --test src/**/*.test.ts"
   },
   "dependencies": {
     "pg": "^8.11.0"
@@ -21,6 +22,7 @@
   "devDependencies": {
     "@types/node": "^20.0.0",
     "@types/pg": "^8.0.0",
+    "tsx": "^4.23.15",
     "typescript": "^5.9.3"
   }
 }

@@ -968,6 +968,20 @@ class TestNetLifecycle:
         result = self._audit(self._finding([cite]), datetime.now(timezone.utc))
         assert result.finding_audits[0].citation_audits[0].existence_state == "unread"
 
+    def test_net03_boundary_exactly_72h_drops(self):
+        """TC-657-NET-03: exactly 72h00m00s is dropped (boundary on drop side).
+
+        Derivation: use a fixed clock so elapsed == window exactly. This makes
+        the mutation check meaningful: changing '<' to '<=' causes the test to
+        fail because the citation would be classified as UNREAD instead of dropped.
+        """
+        now = datetime(2026, 11, 12, 12, 0, 0, tzinfo=timezone.utc)
+        base = now - timedelta(hours=72)
+        cite = self._citation(success=False, first_unreachable_at=base)
+        result = self._audit(self._finding([cite]), now)
+        assert result.dropped_citations == [1]
+        assert result.exit_code() == 1
+
     def test_net03_boundary_just_over_72h_drops(self):
         """TC-657-NET-03: just over 72h drops the citation."""
         base = datetime.now(timezone.utc) - timedelta(hours=72, seconds=2)

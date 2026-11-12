@@ -1548,6 +1548,10 @@ def render_review_table(result: GateResult) -> str:
             details: list[str] = []
             if ca.existence_detail and ca.existence_state not in ("passed", "ok"):
                 details.append(f"existence: {ca.existence_detail}")
+            if ca.confidence_detail and ca.confidence_state not in ("passed", "ok"):
+                details.append(f"confidence: {ca.confidence_detail}")
+            if ca.tier_detail and ca.tier_state not in ("passed", "ok", "strong", "medium", "weak"):
+                details.append(f"tier: {ca.tier_detail}")
             if ca.jev_support_detail and ca.jev_support_state not in ("passed", "ok", "pending"):
                 details.append(f"jev: {ca.jev_support_detail}")
             if ca.scope_detail and ca.scope_state == "advisory":

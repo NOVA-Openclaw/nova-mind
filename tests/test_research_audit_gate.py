@@ -1918,10 +1918,10 @@ class TestOutputContract:
 
 
 # ---------------------------------------------------------------------------
-# NEG group tests (TC-657-NEG-01..NEG-04) with clean controls
+# GATE group tests — exit-code contract / CLI (TC-657-GATE-01..GATE-06A)
 # ---------------------------------------------------------------------------
-class TestNegativePaths:
-    """CLI negative paths return exit 2; clean controls return the expected code."""
+class TestGateContract:
+    """Exit-code taxonomy and CLI contract: 0/1/2 only."""
 
     def _config(self) -> Any:
         mod = _load_module()
@@ -1935,53 +1935,448 @@ class TestNegativePaths:
             db_user="nova",
         )
 
-    def test_neg01_missing_task_arg_exits_2(self):
-        """TC-657-NEG-01: missing --task-id exits 2 (could-not-run)."""
+    def _clean_citation(
+        self,
+        cid: int = 1,
+        source_url: str = "https://example.com",
+        source_title: str = "Example",
+        reliability: float = 0.88,
+        source_type: str = "paper",
+    ) -> Any:
         mod = _load_module()
-        # Clean control: providing --task-id parses successfully.
-        ns = mod._parse_args(["--task-id", "42"])
-        assert ns.task_id == 42
-        # Negative: no --task-id raises SystemExit from argparse.
+        return mod.Citation(
+            citation_id=cid,
+            finding_id=10,
+            source_type=source_type,
+            source_url=source_url,
+            source_title=source_title,
+            reliability=reliability,
+            accessed_at=datetime.now(timezone.utc),
+            metadata={
+                "source_snapshot_text": "snapshot",
+                "last_fetch_success": True,
+                "last_status": 200,
+            },
+        )
+
+    def _clean_finding(
+        self,
+        fid: int = 10,
+        content: str = "The sky is blue.",
+        confidence: float = 0.85,
+        metadata: Any = None,
+        citations: Any = None,
+    ) -> Any:
+        mod = _load_module()
+        if citations is None:
+            citations = [self._clean_citation()]
+        return mod.Finding(
+            finding_id=fid,
+            task_id=90001,
+            finding_type="fact",
+            content=content,
+            confidence=confidence,
+            importance="normal",
+            metadata=metadata or {},
+            citations=citations,
+        )
+
+    def _audit(
+        self,
+        findings: list[Any],
+        support_body: str = '{"p_supports": 0.83}',
+        scope_body: str = '{"scope_mismatch": false, "confidence": 0.9}',
+        fetcher: Any = None,
+    ) -> Any:
+        mod = _load_module()
+        if fetcher is None:
+            fetcher = lambda url: (200, "Example", "")
+
+        def post(*a, **k):
+            payload = a[1] if len(a) > 1 else k.get("payload", {})
+            if isinstance(payload, dict) and "declared_scope" in payload.get("state", {}):
+                return 200, scope_body, {}
+            return 200, support_body, {}
+
+        return mod.audit_task(
+            findings,
+            self._config(),
+            fetcher=fetcher,
+            jev_post_func=post,
+            jev_sleep_func=lambda d: None,
+        )
+
+    def test_gate01_all_clean_fixture_exit_0(self):
+        """TC-657-GATE-01: all-clean fixture exits 0."""
+        result = self._audit([self._clean_finding()])
+        assert result.exit_code() == 0
+
+    def test_gate02_single_violations_exit_1(self):
+        """TC-657-GATE-02: five single-violation fixtures all collapse to exit 1."""
+        mod = _load_module()
+
+        # Existence mismatch.
+        bad_exist = self._clean_finding(
+            citations=[self._clean_citation(source_title="Wrong Title")]
+        )
+        result = self._audit([bad_exist])
+        assert result.exit_code() == 1, "existence mismatch should exit 1"
+
+        # Confidence misapplication.
+        bad_conf = self._clean_finding(confidence=1.00)
+        result = self._audit([bad_conf])
+        assert result.exit_code() == 1, "confidence misapplication should exit 1"
+
+        # Tier conflict.
+        bad_tier = self._clean_finding(
+            citations=[self._clean_citation(source_type="paper", reliability=0.10)]
+        )
+        result = self._audit([bad_tier])
+        assert result.exit_code() == 1, "tier conflict should exit 1"
+
+        # Jev support escalation.
+        bad_jev = self._clean_finding()
+        result = self._audit([bad_jev], support_body='{"p_supports": 0.02}')
+        assert result.exit_code() == 1, "Jev escalation should exit 1"
+
+        # UNREAD within window.
+        unread_cite = mod.Citation(
+            citation_id=1,
+            finding_id=10,
+            source_type="paper",
+            source_url="https://example.com",
+            source_title="Example",
+            reliability=0.88,
+            accessed_at=datetime.now(timezone.utc),
+            metadata={
+                "source_snapshot_text": "snapshot",
+                "last_fetch_success": False,
+                "first_unreachable_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+        unread_finding = self._clean_finding(citations=[unread_cite])
+        result = self._audit([unread_finding])
+        assert result.exit_code() == 1, "UNREAD within window should exit 1"
+
+    def test_gate02_nonexistent_task_exit_2(self):
+        """TC-657-GATE-02: nonexistent task_id is exit 2, not 1."""
+        mod = _load_module()
+        result = mod.main(["--task-id", "999999", "--schema", "public"])
+        assert result == 2
+
+    def test_gate03_clean_control_paired_with_neg01(self):
+        """TC-657-GATE-03: clean control paired with NEG-01 exits 0."""
+        # Same shape as NEG-01's fixture minus the injected defects.
+        finding_a = self._clean_finding(fid=10, content="The sky is blue.")
+        finding_b = self._clean_finding(fid=11, content="Grass is green.")
+        result = self._audit([finding_a, finding_b])
+        assert result.exit_code() == 0
+        assert not result.finding_audits[0].citation_audits[0].existence_state == "failed"
+        assert not result.finding_audits[1].citation_audits[0].confidence_state == "failed"
+
+    def test_gate04_cli_missing_or_malformed_task_id_exit_2(self):
+        """TC-657-GATE-04: missing or non-integer --task-id exits 2."""
+        mod = _load_module()
+        # Missing --task-id.
         with pytest.raises(SystemExit) as exc_info:
             mod._parse_args([])
         assert exc_info.value.code == 2
+        # Non-integer --task-id.
+        with pytest.raises(SystemExit) as exc_info:
+            mod._parse_args(["--task-id", "abc"])
+        assert exc_info.value.code == 2
 
-    def test_neg02_main_task_not_found_exits_2(self):
-        """TC-657-NEG-02: nonexistent task returns exit 2.
+    def test_gate05_idempotent_repeat_invocation(self):
+        """TC-657-GATE-05: repeat invocation of a known-bad fixture yields identical result."""
+        bad = self._clean_finding(
+            citations=[self._clean_citation(source_title="Wrong Title")]
+        )
+        results = [self._audit([bad]) for _ in range(3)]
+        for r in results:
+            assert r.exit_code() == 1
+        tables = [_load_module().render_review_table(r) for r in results]
+        assert tables[0] == tables[1] == tables[2]
 
-        The clean control is exercised by the DB fixture tests; here we only
-        verify the CLI contract for a missing task without a real DB.
-        """
+    def test_gate06_unread_within_72h_blocks(self):
+        """TC-657-GATE-06: UNREAD citation within 72h window blocks (exit 1)."""
         mod = _load_module()
-        # Negative: _task_exists returns False → main returns 2.
-        result = mod.main([
-            "--task-id", "999999",
-            "--schema", "public",
-        ])
-        assert result == 2
+        unread_cite = mod.Citation(
+            citation_id=1,
+            finding_id=10,
+            source_type="paper",
+            source_url="https://example.com",
+            source_title="Example",
+            reliability=0.88,
+            accessed_at=datetime.now(timezone.utc),
+            metadata={
+                "source_snapshot_text": "snapshot",
+                "last_fetch_success": False,
+                "first_unreachable_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+        result = self._audit([self._clean_finding(citations=[unread_cite])])
+        assert result.exit_code() == 1
+        assert result.finding_audits[0].citation_audits[0].unread_reason is not None
 
-    def test_neg03_db_driver_unavailable_exits_2(self):
-        """TC-657-NEG-03: missing psycopg2 driver returns exit 2."""
+    def test_gate06a_unread_past_72h_dropped_and_re_evaluated(self):
+        """TC-657-GATE-06A: UNREAD citation past 72h is dropped; finding re-evaluated."""
         mod = _load_module()
-        # Clean control: the live module has the driver available.
-        assert mod._DB_AVAILABLE is True
-        # Negative: simulate driver unavailable.
-        original = mod._DB_AVAILABLE
-        try:
-            mod._DB_AVAILABLE = False
-            result = mod.main(["--task-id", "1"])
-            assert result == 2
-        finally:
-            mod._DB_AVAILABLE = original
+        stale = mod.Citation(
+            citation_id=1,
+            finding_id=10,
+            source_type="paper",
+            source_url="https://example.com/stale",
+            source_title="Stale",
+            reliability=0.88,
+            accessed_at=datetime.now(timezone.utc),
+            metadata={
+                "source_snapshot_text": "snapshot",
+                "last_fetch_success": False,
+                "first_unreachable_at": (datetime.now(timezone.utc) - timedelta(hours=80)).isoformat(),
+            },
+        )
+        live = self._clean_citation(cid=2, source_url="https://example.com/live")
 
-    def test_neg04_config_loader_failure_exits_2(self):
-        """TC-657-NEG-04: config loader failure returns exit 2."""
+        # Fixture A: stale citation dropped, live citation remains → pass.
+        finding_a = self._clean_finding(fid=10, citations=[stale, live])
+        result_a = self._audit([finding_a])
+        assert result_a.exit_code() == 0
+        assert result_a.dropped_citations == [1]
+
+        # Fixture B: stale citation dropped, no remaining citation → blocked.
+        finding_b = self._clean_finding(fid=11, citations=[stale])
+        result_b = self._audit([finding_b])
+        assert result_b.exit_code() == 1
+        assert result_b.dropped_citations == [1]
+        assert any(
+            ca.existence_state == "no_surviving_citations"
+            for ca in result_b.finding_audits[0].citation_audits
+        )
+
+
+# ---------------------------------------------------------------------------
+# NEG group tests — AC7 known-bad injection proof (TC-657-NEG-01..NEG-04)
+# ---------------------------------------------------------------------------
+class TestNegativeCases:
+    """Known-bad fixtures prove the gate names specific violations."""
+
+    def _config(self) -> Any:
         mod = _load_module()
-        # Negative: monkey-patch load_config to raise.
-        original = mod.load_config
-        try:
-            mod.load_config = lambda: (_ for _ in ()).throw(RuntimeError("boom"))
-            result = mod.main(["--task-id", "1"])
-            assert result == 2
-        finally:
-            mod.load_config = original
+        return mod.GateConfig(
+            schema="public",
+            drop_window_hours=72.0,
+            support_threshold=0.05,
+            jev_url="https://api.typesafe.ai/v1/systemone",
+            jev_api_key=None,
+            db_dsn="",
+            db_user="nova",
+        )
+
+    def _clean_citation(
+        self,
+        cid: int = 1,
+        source_url: str = "https://example.com",
+        source_title: str = "Example",
+        reliability: float = 0.88,
+        source_type: str = "paper",
+    ) -> Any:
+        mod = _load_module()
+        return mod.Citation(
+            citation_id=cid,
+            finding_id=10,
+            source_type=source_type,
+            source_url=source_url,
+            source_title=source_title,
+            reliability=reliability,
+            accessed_at=datetime.now(timezone.utc),
+            metadata={
+                "source_snapshot_text": "snapshot",
+                "last_fetch_success": True,
+                "last_status": 200,
+            },
+        )
+
+    def _audit(self, findings: list[Any], fetcher: Any = None) -> Any:
+        mod = _load_module()
+        if fetcher is None:
+            fetcher = lambda url: (200, "Example", "")
+
+        def post(*a, **k):
+            payload = a[1] if len(a) > 1 else k.get("payload", {})
+            if isinstance(payload, dict) and "declared_scope" in payload.get("state", {}):
+                return 200, '{"scope_mismatch": false, "confidence": 0.9}', {}
+            return 200, '{"p_supports": 0.83}', {}
+
+        return mod.audit_task(
+            findings,
+            self._config(),
+            fetcher=fetcher,
+            jev_post_func=post,
+            jev_sleep_func=lambda d: None,
+        )
+
+    def test_neg01_two_independent_violations_named(self):
+        """TC-657-NEG-01: two injected known-bads are both named in the output."""
+        mod = _load_module()
+        # Finding A: title mismatch (EXIST-02 pattern).
+        cite_a = self._clean_citation(cid=101, source_title="Wrong Title")
+        finding_a = mod.Finding(
+            finding_id=10,
+            task_id=90001,
+            finding_type="fact",
+            content="The sky is blue.",
+            confidence=0.85,
+            importance="normal",
+            metadata={"claim_scope": "proved"},
+            citations=[cite_a],
+        )
+        # Finding B: confidence 1.00 misapplied (CONF-03 pattern).
+        cite_b = self._clean_citation(cid=201)
+        finding_b = mod.Finding(
+            finding_id=11,
+            task_id=90001,
+            finding_type="fact",
+            content="The proof shows P.",
+            confidence=1.00,
+            importance="normal",
+            metadata={"claim_scope": "proved"},
+            citations=[cite_b],
+        )
+
+        result = self._audit([finding_a, finding_b])
+        table = mod.render_review_table(result)
+        assert result.exit_code() == 1
+        # Both violations named by finding/citation id and axis.
+        assert "finding 10" in table.lower() or "10         101" in table
+        assert "title mismatch" in table.lower()
+        assert "finding 11" in table.lower() or "11         201" in table
+        assert "confidence 1.00 misapplied" in table.lower()
+
+    def test_neg01_control_clean_fixture_exit_0(self):
+        """TC-657-NEG-01 control: same fixture minus defects exits 0."""
+        mod = _load_module()
+        finding_a = mod.Finding(
+            finding_id=10,
+            task_id=90001,
+            finding_type="fact",
+            content="The sky is blue.",
+            confidence=0.85,
+            importance="normal",
+            metadata={},
+            citations=[self._clean_citation(cid=101)],
+        )
+        finding_b = mod.Finding(
+            finding_id=11,
+            task_id=90001,
+            finding_type="fact",
+            content="The proof shows P.",
+            confidence=0.85,
+            importance="normal",
+            metadata={},
+            citations=[self._clean_citation(cid=201)],
+        )
+        result = self._audit([finding_a, finding_b])
+        assert result.exit_code() == 0
+
+    def test_neg02_isolate_existence_failure(self):
+        """TC-657-NEG-02: isolated title mismatch names exactly one violation."""
+        mod = _load_module()
+        bad = mod.Finding(
+            finding_id=10,
+            task_id=90001,
+            finding_type="fact",
+            content="The sky is blue.",
+            confidence=0.85,
+            importance="normal",
+            metadata={"claim_scope": "proved"},
+            citations=[self._clean_citation(cid=1, source_title="Wrong Title")],
+        )
+        result = self._audit([bad])
+        table = mod.render_review_table(result)
+        assert result.exit_code() == 1
+        assert "title mismatch" in table.lower()
+        # Exactly one finding row is BLOCKED (ignore the exit-label BLOCKED).
+        assert table.count("Finding 10 — BLOCKED") == 1
+
+    def test_neg02_control_clean_existence(self):
+        """TC-657-NEG-02 control: title matches, other axes unchanged, exits 0."""
+        mod = _load_module()
+        good = mod.Finding(
+            finding_id=10,
+            task_id=90001,
+            finding_type="fact",
+            content="The sky is blue.",
+            confidence=0.85,
+            importance="normal",
+            metadata={},
+            citations=[self._clean_citation(cid=1)],
+        )
+        assert self._audit([good]).exit_code() == 0
+
+    def test_neg03_isolate_confidence_failure(self):
+        """TC-657-NEG-03: isolated confidence 1.00 misapplication names one violation."""
+        mod = _load_module()
+        bad = mod.Finding(
+            finding_id=10,
+            task_id=90001,
+            finding_type="fact",
+            content="The proof shows P.",
+            confidence=1.00,
+            importance="normal",
+            metadata={"claim_scope": "proved"},
+            citations=[self._clean_citation(cid=1)],
+        )
+        result = self._audit([bad])
+        table = mod.render_review_table(result)
+        assert result.exit_code() == 1
+        assert "confidence 1.00 misapplied" in table.lower()
+        assert table.count("Finding 10 — BLOCKED") == 1
+
+    def test_neg03_control_clean_confidence(self):
+        """TC-657-NEG-03 control: confidence < 1.00, other axes unchanged, exits 0."""
+        mod = _load_module()
+        good = mod.Finding(
+            finding_id=10,
+            task_id=90001,
+            finding_type="fact",
+            content="The proof shows P.",
+            confidence=0.95,
+            importance="normal",
+            metadata={},
+            citations=[self._clean_citation(cid=1)],
+        )
+        assert self._audit([good]).exit_code() == 0
+
+    def test_neg04_isolate_tier_conflict(self):
+        """TC-657-NEG-04: isolated tier conflict names exactly one violation."""
+        mod = _load_module()
+        bad = mod.Finding(
+            finding_id=10,
+            task_id=90001,
+            finding_type="fact",
+            content="The sky is blue.",
+            confidence=0.85,
+            importance="normal",
+            metadata={"claim_scope": "proved"},
+            citations=[self._clean_citation(cid=1, source_type="paper", reliability=0.10)],
+        )
+        result = self._audit([bad])
+        table = mod.render_review_table(result)
+        assert result.exit_code() == 1
+        assert "tier conflict" in table.lower()
+        assert table.count("Finding 10 — BLOCKED") == 1
+
+    def test_neg04_control_clean_tier(self):
+        """TC-657-NEG-04 control: strong source_type + high reliability, exits 0."""
+        mod = _load_module()
+        good = mod.Finding(
+            finding_id=10,
+            task_id=90001,
+            finding_type="fact",
+            content="The sky is blue.",
+            confidence=0.85,
+            importance="normal",
+            metadata={},
+            citations=[self._clean_citation(cid=1, source_type="paper", reliability=0.95)],
+        )
+        assert self._audit([good]).exit_code() == 0

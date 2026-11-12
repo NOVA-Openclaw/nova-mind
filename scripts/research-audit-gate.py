@@ -857,13 +857,68 @@ def _is_compound_clause(text: str) -> bool:
     return False
 
 
+# Closed list of abbreviations that end with a period but must not terminate
+# a sentence. Protected before sentence splitting, then restored.
+_PROTECTED_ABBREVIATIONS = (
+    "e.g.",
+    "i.e.",
+    "et al.",
+    "cf.",
+    "vs.",
+    "etc.",
+    "Dr.",
+    "Mr.",
+    "Mrs.",
+    "Ms.",
+    "Prof.",
+    "Fig.",
+    "Eq.",
+    "No.",
+    "approx.",
+)
+
+# Regex for a single capital initial (e.g. "J. Smith") and for decimal-like
+# tokens ("3.5", "v2.1"). These are protected so they do not become sentence
+# boundaries.
+_INITIAL_RE = re.compile(r"\b[A-Z]\.(?=\s+[A-Z])")
+_DECIMAL_RE = re.compile(r"\b(?:v?\d+\.\d+)\b")
+
+
+def _protect_abbreviations(text: str) -> tuple[str, list[str]]:
+    """Replace protected tokens with placeholders; return text and restore list."""
+    placeholders: list[str] = []
+
+    def _placeholder(match: re.Match) -> str:
+        token = match.group(0)
+        ph = f"\x00{len(placeholders)}\x00"
+        placeholders.append(token)
+        return ph
+
+    # Protect decimals first so digits around a dot are not mistaken for
+    # sentence boundaries.
+    text = _DECIMAL_RE.sub(_placeholder, text)
+    for abbrev in _PROTECTED_ABBREVIATIONS:
+        text = re.sub(re.escape(abbrev), _placeholder, text)
+    text = _INITIAL_RE.sub(_placeholder, text)
+    return text, placeholders
+
+
+def _restore_abbreviations(text: str, placeholders: list[str]) -> str:
+    """Restore tokens hidden by _protect_abbreviations."""
+    for i, token in enumerate(placeholders):
+        text = text.replace(f"\x00{i}\x00", token)
+    return text
+
+
 def split_atomic_claims(content: str) -> tuple[list[str], list[str]]:
     """Split finding content into atomic claims.
 
     Splits only at sentence boundaries ('.', '!', '?') and semicolons, never
-    inside a clause. Any resulting sentence that still looks compound (two
-    clauses joined by coordinating 'and'/'which also', each with a finite verb)
-    is returned as compound_unsplit rather than guessed.
+    inside a clause. Protected abbreviations, single capital initials, and
+    decimal/version tokens are preserved as part of their containing sentence.
+    Any resulting sentence that still looks compound (two clauses joined by
+    coordinating 'and'/'which also', each with a finite verb) is returned as
+    compound_unsplit rather than guessed.
 
     Returns (atomic_claims, compound_unsplit_claims). Both lists contain
     stripped claim text.
@@ -872,12 +927,14 @@ def split_atomic_claims(content: str) -> tuple[list[str], list[str]]:
     if not text:
         return [], []
 
+    protected_text, placeholders = _protect_abbreviations(text)
+
     # First split into sentences and on semicolons (deterministic separators).
-    raw_parts = re.split(r"(?<=[.!?])\s+|\s*;\s*", text)
+    raw_parts = re.split(r"(?<=[.!?])\s+|\s*;\s*", protected_text)
     atomic: list[str] = []
     compound: list[str] = []
     for part in raw_parts:
-        part = part.strip(".; ")
+        part = _restore_abbreviations(part.strip(".; "), placeholders)
         if not part:
             continue
         if _is_compound_clause(part):

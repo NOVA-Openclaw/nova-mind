@@ -1171,6 +1171,96 @@ class TestAtomicSplit:
         # No claims are produced because there is no source text to judge against.
         assert atomic == []
 
+    def test_inv7_abbreviation_et_al(self):
+        """TC-657-INV7-01: 'et al.' must not split a sentence.
+
+        Derivation: 'et al.' is a closed-list abbreviation ending in a period.
+        The splitter must protect it so 'Smith et al. proved X.' stays atomic.
+        """
+        mod = _load_module()
+        atomic, compound = mod.split_atomic_claims(
+            "Smith et al. proved the bound is tight."
+        )
+        assert atomic == ["Smith et al. proved the bound is tight"]
+        assert compound == []
+
+    def test_inv7_abbreviation_eg_ie(self):
+        """TC-657-INV7-02: 'e.g.' and 'i.e.' must not split sentences.
+
+        Derivation: both are closed-list Latin abbreviations. They should be
+        preserved inside their containing claim.
+        """
+        mod = _load_module()
+        atomic, compound = mod.split_atomic_claims(
+            "Some sets, e.g. primes, are infinite."
+        )
+        assert atomic == ["Some sets, e.g. primes, are infinite"]
+        atomic2, _ = mod.split_atomic_claims(
+            "Only one solution exists, i.e. the trivial one."
+        )
+        assert atomic2 == ["Only one solution exists, i.e. the trivial one"]
+
+    def test_inv7_abbreviation_dr_smith(self):
+        """TC-657-INV7-03: 'Dr.' must not split before a surname.
+
+        Derivation: 'Dr.' is a closed-list title abbreviation; 'Dr. Smith proved
+        X.' is a single sentence.
+        """
+        mod = _load_module()
+        atomic, compound = mod.split_atomic_claims("Dr. Smith proved the theorem.")
+        assert atomic == ["Dr. Smith proved the theorem"]
+        assert compound == []
+
+    def test_inv7_abbreviation_vs(self):
+        """TC-657-INV7-04: 'vs.' must not split a sentence.
+
+        Derivation: 'vs.' is a closed-list abbreviation used in comparisons.
+        """
+        mod = _load_module()
+        atomic, compound = mod.split_atomic_claims(
+            "The result for P vs. NP remains open."
+        )
+        assert atomic == ["The result for P vs. NP remains open"]
+        assert compound == []
+
+    def test_inv7_initial_split(self):
+        """TC-657-INV7-05: a single capital initial must not split a sentence.
+
+        Derivation: 'J.' is a single capital initial followed by a capitalized
+        surname; it must be protected, so 'J. Smith proved X.' stays atomic.
+        """
+        mod = _load_module()
+        atomic, compound = mod.split_atomic_claims("J. Smith proved the bound.")
+        assert atomic == ["J. Smith proved the bound"]
+        assert compound == []
+
+    def test_inv7_decimal_protected(self):
+        """TC-657-INV7-06: decimal numbers must not split a sentence.
+
+        Derivation: '3.5' and 'v2.1' contain a dot but are numeric/version
+        tokens, not sentence terminators.
+        """
+        mod = _load_module()
+        atomic, compound = mod.split_atomic_claims("The gain is 3.5 dB.")
+        assert atomic == ["The gain is 3.5 dB"]
+        atomic2, _ = mod.split_atomic_claims("We tested v2.1 of the model.")
+        assert atomic2 == ["We tested v2.1 of the model"]
+
+    def test_inv7_two_real_sentences_still_split(self):
+        """TC-657-INV7-07: two real sentences still split into two atomic claims.
+
+        Derivation: a period followed by whitespace that is NOT part of a
+        protected abbreviation or decimal must still terminate a sentence.
+        """
+        mod = _load_module()
+        atomic, compound = mod.split_atomic_claims(
+            "Smith proved the bound. Jones gave a construction."
+        )
+        assert len(atomic) == 2
+        assert "Smith proved the bound" in atomic
+        assert "Jones gave a construction" in atomic
+        assert compound == []
+
 
 # ---------------------------------------------------------------------------
 # JEV-THRESH group tests (TC-657-JEV-01..JEV-07)

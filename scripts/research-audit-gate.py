@@ -763,6 +763,7 @@ def _audit_citation(
     config: GateConfig,
     now: datetime,
     fetcher: Callable[[str], tuple[int, Optional[str], str]] = fetch_url,
+    jev_post_func: Optional[Callable[..., tuple[int, str, dict[str, str]]]] = None,
 ) -> CitationAudit:
     """Perform the deterministic three-axis audit for a single citation.
 
@@ -770,6 +771,8 @@ def _audit_citation(
     1-2b. Jev-mediated support/scope checks are still scaffolded and will be
     completed in chunks 3a-3b.
     """
+    if jev_post_func is None:
+        jev_post_func = _post_json
     audit = CitationAudit(citation=citation)
 
     # EXISTENCE axis — URL resolution + title comparison + 72h window.
@@ -790,14 +793,14 @@ def _audit_citation(
     audit.tier_state = tier_state
     audit.tier_detail = tier_detail
 
-    # Scope advisory — never gates.
-    scope, scope_valid = _claim_scope(finding)
-    if not scope_valid:
-        audit.scope_state = "advisory"
-        audit.scope_detail = "scope_undeclared"
-    else:
-        audit.scope_state = "pending"
-        audit.scope_detail = f"claim_scope={scope} (chunk 3)"
+    # Scope advisory — never gates. Jev Scope Choice is only called when the
+    # writer declared a valid claim_scope; invalid/missing scope is surfaced as
+    # scope_undeclared without a Jev call.
+    scope_state, scope_detail = _audit_scope(
+        finding, config, post_func=jev_post_func
+    )
+    audit.scope_state = scope_state
+    audit.scope_detail = scope_detail
 
     return audit
 
@@ -955,7 +958,9 @@ def audit_task(
         finding_audit = FindingAudit(finding=finding)
         surviving_audits: list[CitationAudit] = []
         for citation in finding.citations:
-            audit = _audit_citation(citation, finding, config, now=now, fetcher=fetcher)
+            audit = _audit_citation(
+                citation, finding, config, now=now, fetcher=fetcher, jev_post_func=jev_post_func
+            )
             if audit.existence_state == "dropped":
                 result.dropped_citations.append(citation.citation_id)
                 continue
@@ -1014,6 +1019,16 @@ def audit_task(
             audit.jev_support_detail = jev_detail
             result.jev_attempted += attempted
             result.jev_failed += failed
+
+        # Scope advisory aggregation (advisory-only, never gates).
+        scope_flags: list[str] = []
+        for ca in finding_audit.citation_audits:
+            if ca.scope_state == "advisory" and ca.scope_detail:
+                scope_flags.append(ca.scope_detail)
+        if scope_flags:
+            finding_audit.scope_advisory = "; ".join(
+                dict.fromkeys(scope_flags)
+            )
 
         # High-risk cell: weakest tier × consequential claim.
         if surviving_audits and _importance_level(finding.importance) >= _importance_level(
@@ -1270,6 +1285,109 @@ def _audit_citation_jev_support(
     if escalations:
         return "escalate", "; ".join(escalations), attempted, failed
     return "passed", "all atomic claims supported", attempted, failed
+
+
+# ---------------------------------------------------------------------------
+# Scope Choice client
+# ---------------------------------------------------------------------------
+_SCOPE_UNCERTAINTY_LOW = 0.40
+
+
+def _scope_choice_payload(claim_text: str, declared_scope: str) -> dict[str, Any]:
+    """Build the request body for a Jev Scope Choice call.
+
+    Scope Choice asks whether the writer-declared claim_scope is appropriate
+    for the claim content. The response is advisory only and never gates.
+    """
+    return {
+        "model": "jev-latest",
+        "instructions": (
+            "You are a careful reader. Given a claim and a declared scope "
+            "('proved', 'computed', 'cited', or 'conjecture'), decide whether "
+            "the scope is appropriate. A 'cited' scope is only appropriate "
+            "when the claim is a bibliographic or metadata fact about the "
+            "source document itself, not a claim the document makes. Respond "
+            "with a JSON object containing 'scope_mismatch' (boolean) and "
+            "'confidence' (0-1)."
+        ),
+        "criteria": [
+            {"label": "scope_ok", "description": "declared scope matches claim content"},
+            {"label": "scope_mismatch", "description": "declared scope does not match claim content"},
+        ],
+        "state": {
+            "claim": claim_text,
+            "declared_scope": declared_scope,
+            "context": "",
+        },
+    }
+
+
+def _parse_scope_choice_response(body: str) -> tuple[bool, float]:
+    """Parse a Scope Choice response into (mismatch, confidence).
+
+    Any parsing problem is treated as a low-confidence mismatch so the
+    skeptics get a flag, but it remains advisory-only.
+    """
+    try:
+        obj = json.loads(body)
+        if not isinstance(obj, dict):
+            return True, 0.0
+        mismatch = bool(obj.get("scope_mismatch", False))
+        confidence = float(obj.get("confidence", 0.0))
+        if math.isnan(confidence) or math.isinf(confidence):
+            confidence = 0.0
+        confidence = max(0.0, min(1.0, confidence))
+        return mismatch, confidence
+    except Exception:  # pylint: disable=broad-exception-caught
+        return True, 0.0
+
+
+def _jev_scope_choice(
+    claim_text: str,
+    declared_scope: str,
+    config: GateConfig,
+    post_func: Callable[..., tuple[int, str, dict[str, str]]] = _post_json,
+) -> tuple[str, str]:
+    """Call /v1/systemone for Scope Choice.
+
+    Returns (state, detail). State is 'ok' or 'advisory'. All failures are
+    returned as advisory so the gate never crashes on a bad Scope Choice call.
+    """
+    try:
+        payload = _scope_choice_payload(claim_text, declared_scope)
+        status, body, _headers = post_func(
+            config.jev_url, payload, config.jev_api_key
+        )
+        if status != 200:
+            return "advisory", f"Scope Choice HTTP {status}"
+        mismatch, confidence = _parse_scope_choice_response(body)
+        if mismatch:
+            return "advisory", f"scope mismatch detected (confidence={confidence})"
+        if confidence < _SCOPE_UNCERTAINTY_LOW:
+            return "advisory", f"low scope confidence ({confidence})"
+        return "ok", f"scope ok (confidence={confidence})"
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        return "advisory", f"Scope Choice failed: {exc}"
+
+
+def _audit_scope(
+    finding: Finding,
+    config: GateConfig,
+    post_func: Callable[..., tuple[int, str, dict[str, str]]] = _post_json,
+) -> tuple[str, str]:
+    """Advisory Scope Choice audit for a finding.
+
+    A missing or invalid declared scope is reported as scope_undeclared.
+    A valid declared scope is checked by Jev Scope Choice; mismatches and
+    low-confidence results are advisory-only and never change the exit code.
+    """
+    scope, scope_valid = _claim_scope(finding)
+    if not scope_valid:
+        return "advisory", "scope_undeclared"
+    state, detail = _jev_scope_choice(
+        finding.content, scope, config, post_func=post_func
+    )
+    return state, detail
 
 
 # ---------------------------------------------------------------------------

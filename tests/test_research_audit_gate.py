@@ -794,10 +794,17 @@ class TestHighRiskCell:
         )
         if jev_response is None:
             jev_response = (200, '{"p_supports": 0.93}', {})
+
+        def post(*a, **k):
+            payload = a[1] if len(a) > 1 else k.get("payload", {})
+            if isinstance(payload, dict) and "declared_scope" in payload.get("state", {}):
+                return 200, '{"scope_mismatch": false, "confidence": 0.9}', {}
+            return jev_response
+
         return mod.audit_task(
             [finding],
             config,
-            jev_post_func=lambda *a, **k: jev_response,
+            jev_post_func=post,
             jev_sleep_func=lambda d: None,
         )
 
@@ -917,12 +924,19 @@ class TestNetLifecycle:
         )
         if fetcher is None:
             fetcher = lambda url: (200, finding.citations[0].source_title or "", "")
+
+        def post(*a, **k):
+            payload = a[1] if len(a) > 1 else k.get("payload", {})
+            if isinstance(payload, dict) and "declared_scope" in payload.get("state", {}):
+                return 200, '{"scope_mismatch": false, "confidence": 0.9}', {}
+            return jev_response
+
         return mod.audit_task(
             [finding],
             config,
             now=now,
             fetcher=fetcher,
-            jev_post_func=lambda *a, **k: jev_response,
+            jev_post_func=post,
             jev_sleep_func=lambda d: None,
         )
 
@@ -1529,6 +1543,142 @@ class TestJevErrors:
         assert len(calls) == 2
         assert "proves X" in calls[0]
         assert "compute Y" in calls[1]
+
+
+# ---------------------------------------------------------------------------
+# SCOPE group tests (TC-657-SCOPE-01..SCOPE-05) + CONF-08
+# ---------------------------------------------------------------------------
+class TestJevScopeChoice:
+    """Jev Scope Choice is advisory-only and never gates."""
+
+    def _finding(self, content: str, scope: Any = "proved") -> Any:
+        mod = _load_module()
+        citation = mod.Citation(
+            citation_id=1,
+            finding_id=10,
+            source_type="paper",
+            source_url="https://example.com",
+            source_title="Example",
+            reliability=0.88,
+            accessed_at=datetime.now(timezone.utc),
+            metadata={
+                "source_snapshot_text": "snapshot text",
+                "last_fetch_success": True,
+                "last_status": 200,
+            },
+        )
+        return mod.Finding(
+            finding_id=10,
+            task_id=90001,
+            finding_type="fact",
+            content=content,
+            confidence=0.85,
+            importance="normal",
+            metadata={"claim_scope": scope} if scope is not None else {},
+            citations=[citation],
+        )
+
+    def _config(self) -> Any:
+        mod = _load_module()
+        return mod.GateConfig(
+            schema="public",
+            drop_window_hours=72.0,
+            support_threshold=0.05,
+            jev_url="https://api.typesafe.ai/v1/systemone",
+            jev_api_key=None,
+            db_dsn="",
+            db_user="nova",
+        )
+
+    def _audit(
+        self,
+        finding: Any,
+        support_body: str = '{"p_supports": 0.83}',
+        scope_body: str = '{"scope_mismatch": false, "confidence": 0.9}',
+    ) -> Any:
+        mod = _load_module()
+
+        def post(*a, **k):
+            payload = a[1] if len(a) > 1 else k.get("payload", {})
+            if isinstance(payload, dict) and "declared_scope" in payload.get("state", {}):
+                return 200, scope_body, {}
+            return 200, support_body, {}
+
+        return mod.audit_task(
+            [finding],
+            self._config(),
+            fetcher=lambda url: (200, finding.citations[0].source_title or "", ""),
+            jev_post_func=post,
+            jev_sleep_func=lambda d: None,
+        )
+
+    def test_scope01_scope_matches_content_ok(self):
+        """TC-657-SCOPE-01: matching scope → no advisory flag."""
+        result = self._audit(self._finding("The proof shows P.", "proved"))
+        ca = result.finding_audits[0].citation_audits[0]
+        assert ca.scope_state == "ok"
+        assert result.finding_audits[0].scope_advisory == ""
+        assert result.exit_code() == 0
+
+    def test_scope02_scope_contradicts_content_advisory(self):
+        """TC-657-SCOPE-02: scope contradicting content → advisory flag."""
+        result = self._audit(
+            self._finding("The proof shows P.", "cited"),
+            scope_body='{"scope_mismatch": true, "confidence": 0.85}',
+        )
+        ca = result.finding_audits[0].citation_audits[0]
+        fa = result.finding_audits[0]
+        assert ca.scope_state == "advisory"
+        assert "scope mismatch" in ca.scope_detail.lower()
+        assert "scope mismatch" in fa.scope_advisory.lower()
+        # Advisory-only: exit code remains 0 because support passed.
+        assert result.exit_code() == 0
+
+    def test_scope03_low_scope_confidence_advisory(self):
+        """TC-657-SCOPE-03: low scope confidence → advisory flag."""
+        result = self._audit(
+            self._finding("The proof shows P.", "proved"),
+            scope_body='{"scope_mismatch": false, "confidence": 0.25}',
+        )
+        ca = result.finding_audits[0].citation_audits[0]
+        assert ca.scope_state == "advisory"
+        assert "low scope confidence" in ca.scope_detail.lower()
+        assert result.exit_code() == 0
+
+    def test_scope04_invalid_declared_scope_undeclared(self):
+        """TC-657-SCOPE-04: invalid declared scope → scope_undeclared advisory."""
+        result = self._audit(self._finding("The proof shows P.", "Proved "))
+        ca = result.finding_audits[0].citation_audits[0]
+        assert ca.scope_state == "advisory"
+        assert ca.scope_detail == "scope_undeclared"
+        assert result.exit_code() == 0
+
+    def test_scope05_scope_advisory_does_not_override_block(self):
+        """TC-657-SCOPE-05: scope advisory does not suppress other blocks."""
+        result = self._audit(
+            self._finding("The proof shows P.", "cited"),
+            support_body='{"p_supports": 0.02}',
+            scope_body='{"scope_mismatch": true, "confidence": 0.85}',
+        )
+        ca = result.finding_audits[0].citation_audits[0]
+        assert ca.scope_state == "advisory"
+        assert ca.jev_support_state == "escalate"
+        assert result.exit_code() == 1
+
+    def test_conf08_scope_contradicts_100_cited_content(self):
+        """TC-657-CONF-08: 1.00 + cited + contradicting content → advisory, not crash."""
+        result = self._audit(
+            self._finding("The proof shows P.", "cited"),
+            support_body='{"p_supports": 1.0}',
+            scope_body='{"scope_mismatch": true, "confidence": 0.88}',
+        )
+        ca = result.finding_audits[0].citation_audits[0]
+        fa = result.finding_audits[0]
+        assert ca.confidence_state == "passed"
+        assert ca.scope_state == "advisory"
+        assert "scope mismatch" in fa.scope_advisory.lower()
+        # Scope is advisory-only, so a passing support/citation still exits 0.
+        assert result.exit_code() == 0
 
 
 # ---------------------------------------------------------------------------

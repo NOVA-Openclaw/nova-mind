@@ -5,7 +5,7 @@
 **Date:** 2026-11-12
 **Source artifact pinned:** fresh clone, `https://github.com/NOVA-Openclaw/nova-mind`,
 branch `feat/657-finding-audit-gate`, commit `286f24aca9377e74adf2d0bec076b2bb4701fd7a`
-(verified via `git rev-parse HEAD` before analysis — see §9).
+(verified via `git rev-parse HEAD` before analysis — see §7).
 
 **Inputs read in full:**
 - `gh issue view 657 --repo NOVA-Openclaw/nova-mind --comments` (issue body + all 6 comments,
@@ -35,8 +35,10 @@ branch `feat/657-finding-audit-gate`, commit `286f24aca9377e74adf2d0bec076b2bb47
 
 These are QA-stage decisions about **how to test**, distinct from the five already-settled
 engineering decisions in the dispatch brief (72h window, Jev Support threshold 0.05, Scope
-Choice advisory-only, direct `/v1/systemone` calls, three-axis gate). Open items needing
-Project Leadership rulings are in §10, not here.
+Choice advisory-only, direct `/v1/systemone` calls, three-axis gate). All items that originally
+needed Project Leadership rulings have since been ruled on (§6, Rev 2) and are pinned directly
+in the relevant test cases below; this section records the QA-stage reasoning, not open
+questions.
 
 **D1 — Treat the join correction and tier-field correction from SE#843 step 2 as binding
 inputs, not re-litigated.** The issue body's AC1 text ("reads `research_citations` +
@@ -145,12 +147,12 @@ non-trivial spend this task is explicitly scoped to avoid.
   (network failure, Jev API error, missing/NaN/out-of-range probability, missing required
   citation field) resolves to UNREAD/escalate/non-pass — never to a silent pass. "The gate
   could not determine X" must never be collapsed into "X is fine."
-  INV-2 **does not require every UNREAD-class state to produce the same exit code as a hard
-  tier/confidence/existence failure** — see §10 OQ-2 (exit-code taxonomy) for the open
-  question of whether UNREAD itself is gate-blocking (distinct non-zero code) or advisory
-  (logged, non-blocking). Both resolutions satisfy fail-closed as long as UNREAD is never
-  silently promoted to a pass; GATE-06/NET-01..06 test both candidate taxonomies pending that
-  ruling (see §10 OQ-3) rather than assuming one.
+  INV-2 is satisfied by the pinned ruling (§6, OQ-2/OQ-3): UNREAD within the 72h window is
+  gate-BLOCKING (exit 1, not advisory) and shares the same exit-code value (1) as a hard
+  tier/confidence/existence violation — the taxonomy is deliberately coarse (three codes total,
+  §6 OQ-2), with the distinction between violation classes carried in the review table's named
+  text, not in a separate exit code per class. GATE-06/GATE-06A/NET-01..07 test the pinned
+  behavior directly, not a range of candidate outcomes.
 - **INV-3 (scope never gates):** Jev Scope Choice output appears in the review table and is
   logged, but no combination of Scope Choice values or confidence changes the gate's exit code
   — only the deterministic axis checks and the Jev Support Noul score (plus its escalation to
@@ -203,10 +205,13 @@ non-trivial spend this task is explicitly scoped to avoid.
 - **Expected:** C never appears in task 90001's output. (Isolates a join-condition bug where a
   missing or malformed `WHERE research_findings.task_id = $1` could leak cross-task citations.)
 
-**TC-657-DB-05 — Non-existent `task_id`**
+**TC-657-DB-05 — Non-existent `task_id` — RULED: exit 2 (gate could not run)**
 - **Fixture:** `task_id=999999` (no `research_tasks` row).
-- **Expected:** Gate exits with a distinct "task not found" code (not the same code as "task
-  found but has a violation," and not a silent empty-pass) — see exit-code taxonomy, §10 OQ-2.
+- **Expected:** Per the pinned exit-code taxonomy (0=all pass, 1=one or more findings blocked,
+  2=gate could not run — config/DB/usage error), an invalid `task_id` is a usage/DB-lookup
+  error, not a finding-level gate decision: exit 2, with a clear "task not found" message —
+  NOT exit 1 (that code is reserved for a task that WAS found and has a blocked finding) and
+  NOT a silent empty-pass at exit 0.
 
 **TC-657-DB-06 — Row-count-unchanged invariant (INV-1), run against a fixture with an
   intentional known-bad citation**
@@ -302,8 +307,9 @@ non-trivial spend this task is explicitly scoped to avoid.
 - **Fixture:** `confidence=1.00`, finding content: "arXiv:2607.12346 was published 2026-07-xx
   and authored by Krishan and Vishwanathan" (a verifiable bibliographic fact about the
   document, not a claim the document's content makes).
-- **Expected:** CONFIDENCE axis passes. Requires the `claim_scope` signal (see §10 OQ-1) to be
-  present and classify this as a fact-about-the-document.
+- **Expected:** CONFIDENCE axis passes. Requires the `claim_scope` signal (§6 OQ-1, RULED:
+  `research_findings.metadata->>'claim_scope'`) to be present and classify this as a
+  fact-about-the-document.
 
 **TC-657-CONF-03 — Confidence=1.00 misapplied to a claim the document makes (the issue's named
   anti-pattern)**
@@ -334,22 +340,41 @@ non-trivial spend this task is explicitly scoped to avoid.
   silently treated as 0.00 (which the identity-element rule in D3 specifically guards against)
   and never silently treated as passing.
 
-**TC-657-CONF-07 — Confidence present, but claim_scope signal absent (the A4 ambiguity surfaced
-  as a concrete test)**
-- **Fixture:** `confidence=1.00`, no `metadata->>'claim_scope'` key set at all (NULL/missing,
-  not an empty string).
-- **Expected:** This exact scenario is why §10 OQ-1 is still open — whatever the eventual
-  ruling, this test asserts the behavior must be **fail-closed, never a silent pass**: either
-  (a) escalate/flag as "cannot verify 1.00 restriction, scope signal missing" or (b) treat
-  absence of the signal itself as a hard violation. Both satisfy INV-2; "pass because we
-  couldn't check" does not. This test is written now so it can be run unmodified once OQ-1
-  is resolved, with only the expected exit code pinned down.
+**TC-657-CONF-07 — Confidence present, `claim_scope` key missing entirely (RULED, I)ruid
+  2026-11-12): advisory flag `scope_undeclared`, never gates**
+- **Fixture:** `confidence=1.00`, `research_findings.metadata` has no `claim_scope` key at all
+  (verified live at the pinned commit: 0 of 6313 existing `research_findings` rows carry this
+  key today — every pre-existing row hits this exact case, not a hypothetical edge case).
+- **Expected:** Review table shows an advisory `scope_undeclared` flag for this finding. Exit
+  code is driven ONLY by the deterministic axes + Jev Support Noul score — `scope_undeclared`
+  on its own never changes the exit code (confirms INV-3 extends to the missing-key case, not
+  only to a present-but-mismatched value). The 1.00-restriction CONFIDENCE check still applies
+  independently on its own terms (per CONF-02/03) and is not weakened or skipped merely because
+  scope is undeclared — undeclared scope is a logging/advisory gap, not an excuse to waive the
+  confidence rule itself.
 
-**TC-657-CONF-08 — Adversarial: `claim_scope='fact_about_document'` set, but finding content is
-  plainly a claim the document makes (writer-declared scope contradicts content)**
-- **Fixture:** `confidence=1.00`, `metadata->>'claim_scope'='fact_about_document'`, content:
-  "The derivation proves an exact closed form for min ||P||_1(IP_t, eps)..." (a mathematical
-  claim, not a bibliographic fact).
+**TC-657-CONF-07A — `claim_scope` key present but holds an invalid value (RULED, new case,
+  BVA-style malformed-input coverage)**
+- **Fixture:** Two sub-cases, each independently: `metadata->>'claim_scope' = "Proved "`
+  (valid label with a case/whitespace variant, not one of the four exact enum strings
+  `proved|computed|cited|conjecture`) and `metadata->>'claim_scope' = 42` (wrong JSON type —
+  a number, not a string at all).
+- **Expected:** Both sub-cases resolve to the SAME advisory `scope_undeclared` state as
+  CONF-07 (an invalid value is treated as equivalent to an absent one, not as some third
+  silently-passing state, and not as a crash) — never gates, per the same ruling. This closes
+  the gap CONF-07 alone would leave: "key missing" and "key present but garbage" must not be
+  handled by two different code paths that happen to agree today but could silently diverge
+  later (the wrong-type-at-config-seam pattern named in the step-3 process requirement,
+  SE#499 TC-522-028).
+
+**TC-657-CONF-08 — Adversarial: `claim_scope='proved'` declared (valid enum value), but finding
+  content is plainly a claim the document makes, not a fact about it (writer-declared scope
+  contradicts content)**
+- **Fixture:** `confidence=1.00`, `metadata->>'claim_scope'='proved'` (one of the four ruled
+  enum values, correctly formed — this is NOT a CONF-07/07A malformed-key case), content: "The
+  derivation proves an exact closed form for min ||P||_1(IP_t, eps)..." (a mathematical claim
+  made by the document, not a bibliographic fact about the document itself, which is the
+  distinction the 1.00-restriction cares about).
 - **Expected:** Per the SE#1282 step-2 design, the Jev Scope Choice classifies scope
   independently of the writer's declaration; a mismatch between writer-declared and
   Jev-classified scope must escalate to skeptics (not silently trust the writer's label) —
@@ -357,7 +382,10 @@ non-trivial spend this task is explicitly scoped to avoid.
   (unsolved_problems id=3, where two fields of one row/session contradicted each other and the
   weaker-sourced half prevailed). Per I)ruid's 2026-11-12 ruling, Scope Choice itself never
   gates pass/fail directly — this test asserts the escalation-to-skeptics path fires, not that
-  the gate exit code changes solely from the scope mismatch.
+  the gate exit code changes solely from the scope mismatch. Distinguished from CONF-07/07A: a
+  present-and-valid-but-wrong value is a mismatch (SCOPE axis / escalation), while an
+  absent-or-malformed value is `scope_undeclared` (advisory flag only) — these are two
+  different states with two different handling paths, not the same failure mode.
 
 **TC-657-CONF-09 — Out-of-range confidence bypassing the check constraint (adversarial: data
   that should be impossible per schema, test gate's defensive handling anyway)**
@@ -512,14 +540,19 @@ non-trivial spend this task is explicitly scoped to avoid.
 - **Expected:** UNREAD persists across all 3 sessions; citation/finding is retried each time,
   not dropped, not silently escalated past the UNREAD state early.
 
-**TC-657-NET-03 — BVA: exactly at the 72h boundary (non-identity clock fixture)**
-- **Fixture:** First-unreachable timestamp set to exactly `now() - 72h` (not 0h, not a round
-  number coinciding with a session boundary by coincidence — pick a fixture time like
-  `71h 59m 58s` and `72h 00m 02s` ago as the two BVA points straddling the cutpoint, per D3).
-- **Expected:** The side of the boundary that counts as "still within window" vs. "past window"
-  is deterministic and documented (implementation must define whether 72h exactly is
-  inclusive or exclusive) — this test pins whichever the implementation chooses and fails if
-  the two straddling fixtures land on the wrong side of each other (i.e., flips the ordering).
+**TC-657-NET-03 — BVA: exactly at the 72h boundary (non-identity clock fixture) — RULED:
+  window is [0, 72h), elapsed >= 72h is dropped**
+- **Fixture:** Two straddling fixtures, per D3 (non-identity clock values, not round numbers
+  coinciding with a session boundary by coincidence): first-unreachable timestamp at
+  `now() - 71h 59m 58s` (elapsed just under 72h) and `now() - 72h 00m 02s` (elapsed just over
+  72h).
+- **Expected:** Per the pinned ruling, the window is half-open `[0, 72h)`: elapsed `< 72h`
+  (the `71h 59m 58s` fixture) is still-within-window — UNREAD, retried, blocks (exit 1), NOT
+  yet dropped. Elapsed `>= 72h` (the `72h 00m 02s` fixture) is past-window — the citation is
+  dropped and the finding is re-evaluated on its remaining citations per NET-04. An
+  elapsed-exactly-72h-to-the-second fixture (not just the two straddling points) is also
+  included in this test's fixture set and must land on the dropped side, confirming `>=` is
+  the actual comparison operator implemented, not `>`.
 
 **TC-657-NET-04 — Past 72h: source dropped, argument re-formed**
 - **Fixture:** First-unreachable timestamp `now() - 80h`, still unreachable.
@@ -567,13 +600,13 @@ non-trivial spend this task is explicitly scoped to avoid.
 - **Expected:** Escalates to skeptics (below threshold, per I)ruid's 2026-11-12 decision that
   Jev Support gates at 0.05).
 
-**TC-657-JEV-02 — BVA: p_supports = 0.05 exactly (the threshold value itself)**
+**TC-657-JEV-02 — BVA: p_supports = 0.05 exactly (the threshold value itself) — RULED**
 - **Fixture:** Mocked response, `p_supports=0.05`.
-- **Expected:** The tie-break direction at exactly 0.05 is deterministic and documented (the
-  calibration report's cutoff framing — "T=0.05 caught 36/39... with no supported claim
-  escalated" — describes 0.05 as a catch threshold, implying `<= 0.05` escalates; this test
-  pins that reading and fails if a future implementation silently flips to `< 0.05` without
-  the change being deliberate and reviewed).
+- **Expected:** Per the Project Leadership ruling pinning the tie-break direction: `p_supports
+  <= 0.05` escalates (blocks). At exactly 0.05, the finding escalates to skeptics and the
+  finding is blocked (contributes to exit code 1), same as JEV-01's 0.049 case. This is a hard
+  pinned boundary, not an implementer's choice — a future change to `< 0.05` (excluding the
+  exact boundary) would be a silent regression against this test, not a legitimate reading.
 
 **TC-657-JEV-03 — BVA: p_supports = 0.051 (just above threshold)**
 - **Fixture:** Mocked response, `p_supports=0.051`.
@@ -622,29 +655,62 @@ non-trivial spend this task is explicitly scoped to avoid.
 - **Expected:** Both fail-closed (escalate / flag as a malformed-response contract violation),
   never clamped silently to 0 or 1 and then evaluated as if that were the genuine score.
 
-**TC-657-JEVERR-04 — HTTP timeout calling `/v1/systemone`**
-- **Fixture:** Mocked network layer that times out.
-- **Expected:** Treated as a distinct failure mode from "Jev answered with an ambiguous score"
-  — escalates/fails closed, and is retried per whatever retry policy the implementation defines
-  for the Jev call layer specifically (separate from, and not to be confused with, the
-  collector's 72h source-unreachability retry — these are two different retry lifecycles on
-  two different resources, and conflating them would be a design bug worth a dedicated test).
+**TC-657-JEVERR-04 — HTTP timeout calling `/v1/systemone` — RULED: 3 attempts total,
+  exponential backoff (1s, 2s), then per-citation fail-closed**
+- **Fixture:** Mocked network layer that times out on all 3 attempts.
+- **Expected:** Exactly 3 attempts total (the original call plus 2 retries), with the mocked
+  clock/sleep calls showing backoff delays of 1s then 2s between attempts (not a 4th attempt,
+  not an immediate single-shot failure). After the 3rd timeout, treated as an OQ-4-class
+  per-citation failure (TC-657-JEVERR-04 continues below at JEVERR-04A) — distinct from, and
+  not to be confused with, the collector's separate 72h source-unreachability retry lifecycle
+  (NET group) — these are two different retry budgets on two different resources.
 
-**TC-657-JEVERR-05 — HTTP 5xx from `/v1/systemone`**
-- **Fixture:** Mocked 503 response.
-- **Expected:** Fail-closed, distinct handling from a successful-but-out-of-range response
-  (JEVERR-03) — a 5xx means Jev never actually rendered a judgment at all, which should be
-  reported differently in the review table than "Jev judged and the judgment was malformed."
+**TC-657-JEVERR-04A — Timeout retry succeeds on attempt 2 or 3 (the retry's actual payoff case)**
+- **Fixture:** Mocked network layer times out on attempt 1, succeeds with a clean
+  `p_supports=0.82` response on attempt 2.
+- **Expected:** The citation is evaluated normally using the attempt-2 response — a transient
+  failure that resolves within the retry budget must not be treated as a permanent failure or
+  leave any residual "degraded" marker on an otherwise-successful judgment. Confirms the retry
+  logic's purpose (recovering from genuine transients) is actually exercised, not only its
+  exhaustion path (JEVERR-04).
+
+**TC-657-JEVERR-05 — HTTP 5xx from `/v1/systemone` — RULED: same 3-attempt/backoff retry as
+  timeout, then per-citation fail-closed**
+- **Fixture:** Mocked 503 response on all 3 attempts.
+- **Expected:** Same retry contract as JEVERR-04: 3 attempts total, 1s/2s backoff, then
+  OQ-4-class per-citation failure. Fail-closed, distinct handling from a
+  successful-but-out-of-range response (JEVERR-03) — a 5xx means Jev never actually rendered a
+  judgment at all, which should be reported differently in the review table than "Jev judged
+  and the judgment was malformed."
+
+**TC-657-JEVERR-05A — HTTP 429 honors `Retry-After` header instead of the default backoff**
+- **Fixture:** Mocked 429 response on attempt 1 with `Retry-After: 5`, then a clean response on
+  attempt 2.
+- **Expected:** The retry waits 5s (the header value), not the default 1s backoff — confirms
+  `Retry-After` overrides the standard exponential schedule specifically for 429, per the
+  ruling. If no `Retry-After` header is present on a 429, falls back to the standard 1s/2s
+  schedule (a second sub-case within this test, not a separate TC number, since it is the same
+  code path's fallback branch).
+
+**TC-657-JEVERR-05B — Non-429 4xx response and malformed-but-200 body are NEVER retried
+  (negative retry-policy test)**
+- **Fixture:** Two sub-cases: (a) mocked 400 response; (b) mocked HTTP 200 with a malformed/
+  non-JSON body (same payload as JEVERR-06).
+- **Expected:** Exactly 1 attempt in both sub-cases — no retry at all, immediate per-citation
+  fail-closed treatment. This is the explicit negative case proving the retry budget is scoped
+  only to transient conditions (timeout, 5xx, 429) and does NOT blindly retry every failure
+  class, which would both waste the trivial-spend budget and mask a genuinely non-transient
+  contract violation (a malformed body is a bug, not a blip, and retrying it 3 times would not
+  fix it).
 
 **TC-657-JEVERR-06 — HTTP 200 with malformed/non-JSON body**
 - **Fixture:** Mocked response, HTTP 200, body is not valid JSON (or is JSON but missing the
   expected top-level shape entirely — e.g. an empty object `{}`).
-- **Expected:** Fail-closed; parse failure must not propagate as an unhandled exception that
-  crashes the whole gate run for one finding when other findings in the same task are
-  otherwise fine — the gate should degrade per-citation/per-claim, not all-or-nothing, unless
-  that all-or-nothing behavior is itself an explicit design decision (flag as §10 OQ if the
-  implementation chooses all-or-nothing, so it's a deliberate choice, not an accident of
-  unhandled-exception propagation).
+- **Expected:** Fail-closed; per the pinned OQ-4 ruling (§6: per-citation fail-closed), parse
+  failure must NOT propagate as an unhandled exception that crashes the whole gate run — this
+  specific citation is marked unverified and its finding blocked, while other findings in the
+  same task are evaluated normally (same per-citation contract as JEVERR-01..05/05A/05B),
+  unless the systemic all-Jev-calls-failed condition (GATE-02A) also applies to this run.
 
 **TC-657-JEVERR-07 — Compound (non-atomic) claim accidentally sent to a single Noul call
   (INV-7 violation check)**
@@ -685,8 +751,9 @@ non-trivial spend this task is explicitly scoped to avoid.
   call.
 
 **TC-657-SCOPE-04 — Scope Choice call itself errors/times out — does not block the gate**
-- **Fixture:** Mocked Scope Choice API error (same error shapes as JEVERR-04/05/06 but on the
-  Choice endpoint rather than the Noul endpoint).
+- **Fixture:** Mocked Scope Choice API error (same error shapes as JEVERR-04/05/06, including
+  the ruled 3-attempt retry with backoff on timeout/5xx/429, but on the Choice endpoint rather
+  than the Noul endpoint).
 - **Expected:** Per advisory-only status, a failed Scope Choice call must not fail-closed the
   entire gate the way a failed Support Noul call does (JEVERR group) — it is logged as
   "scope unavailable" and the gate proceeds on the deterministic axes + Support score alone.
@@ -742,18 +809,48 @@ non-trivial spend this task is explicitly scoped to avoid.
 
 ### Group GATE — Exit-Code Contract / CLI (6 cases)
 
-**TC-657-GATE-01 — Exit code 0 on an all-clean fixture (paired with GATE-03 as the control)**
+**TC-657-GATE-01 — Exit code 0 on an all-clean fixture (paired with GATE-03 as the control) —
+  RULED taxonomy: 0 = all findings pass**
 - **Fixture:** Same as OUT-03/GATE-03's clean fixture.
-- **Expected:** Exit code 0.
+- **Expected:** Exit code exactly `0`.
 
-**TC-657-GATE-02 — Exit code is non-zero and DISTINCT per violation class (existence vs.
-  confidence vs. tier vs. task-not-found vs. Jev-support-escalation)**
-- **Fixture:** Five separate single-violation fixtures, one per class.
-- **Expected:** Each produces a documented, distinct exit code (or an equivalent
-  machine-readable code/category field if the implementation uses one output channel for all
-  non-zero failures) — the exact taxonomy is §10 OQ-2's open question; this test is written to
-  be filled in with the ruled taxonomy's actual values once decided, but the requirement that
-  codes are distinct and documented (not just "zero vs. nonzero") is pinned now.
+**TC-657-GATE-02 — RULED taxonomy: only THREE exit codes exist (0/1/2); violation-class detail
+  lives in the review table's named-violation text, not in a proliferation of exit codes**
+- **Fixture:** Five separate single-violation fixtures: existence mismatch (EXIST-02), confidence
+  misapplication (CONF-03), tier-reconciliation conflict (TIER-03), Jev-support escalation
+  (JEV-01), and UNREAD-within-window (GATE-06).
+- **Expected:** All five produce exit code exactly `1` (one or more findings blocked) — the
+  pinned taxonomy is deliberately coarse (0/1/2), NOT one distinct integer per violation class.
+  This corrects this test's own original premise (which had assumed the taxonomy would assign
+  a distinct code per class) — the actual requirement is that each fixture's NAMED violation in
+  the review table is distinct and specific (already covered by OUT-02/NEG-01..04), while the
+  exit code itself collapses correctly to `1` in every one of these five cases. A sixth
+  sub-case — the non-existent-`task_id` fixture (DB-05) — is included here specifically to
+  confirm it produces `2`, not `1`, proving the gate correctly distinguishes "a finding was
+  evaluated and blocked" from "no finding was evaluated because the gate itself could not run."
+
+**TC-657-GATE-02A — Exit code 2: systemic failure when EVERY Jev call in a run fails (RULED,
+  OQ-4 resolution, new case)**
+- **Fixture:** A task with 3 findings/citations, ALL of which hit Jev-layer failures that
+  exhaust their ruled retry budget (3 attempts, 1s/2s backoff) — mix of JEVERR-04-style
+  exhausted timeouts and JEVERR-05-style exhausted 5xxs across all three findings, not a single
+  shared mock failure, to prove the systemic detection isn't an artifact of one specific mocked
+  error object.
+- **Expected:** Exit code `2` (gate could not run), not `1` — per the ruling's explicit
+  "if EVERY Jev call in a run fails, exit 2 (systemic: the gate couldn't run)" clause. This is
+  distinct from GATE-02's per-finding-blocked fixtures: a gate that attempted evaluation and
+  found real problems is a `1`; a gate whose underlying judgment mechanism never worked at all
+  for the entire run is a `2`, since in that case nothing was actually verified, as opposed to
+  verified-and-found-wanting.
+
+**TC-657-GATE-02B — BVA: all-but-one Jev calls fail — remains exit 1, NOT exit 2 (boundary
+  between GATE-02A's systemic case and the ordinary per-finding-blocked case)**
+- **Fixture:** Same 3-finding task as GATE-02A, but only 2 of 3 Jev calls exhaust retries; the
+  3rd succeeds cleanly.
+- **Expected:** Exit code `1` (the 2 failed-Jev findings are individually blocked per OQ-4's
+  per-citation fail-closed rule; the gate itself clearly ran, since one finding was fully and
+  successfully evaluated) — proves "systemic" in GATE-02A means ALL, not MOST, and that the
+  2-of-3 boundary does not accidentally trip the rarer, more severe exit-2 path.
 
 **TC-657-GATE-03 — Clean-fixture control run, paired with NEG-01 in the same test pass (AC7
   proof structure, carried forward from the original SE#843 design)**
@@ -762,28 +859,47 @@ non-trivial spend this task is explicitly scoped to avoid.
   which is the necessary complement to NEG-01's "proves it can fail." Neither test alone
   proves the gate is a real gate; both together do.
 
-**TC-657-GATE-04 — CLI invocation contract: missing/malformed `task_id` argument**
+**TC-657-GATE-04 — CLI invocation contract: missing/malformed `task_id` argument — RULED:
+  exit 2 (usage error, same code class as DB-05's not-found case)**
 - **Fixture:** Invoke with no `task_id`, then with `task_id='abc'` (non-integer).
-- **Expected:** Clear usage error, non-zero exit, distinct from "task not found" (DB-05) and
-  from any axis-violation code — an argument-parsing failure is a different failure class from
-  a data-quality failure and should not share a code with either.
+- **Expected:** Clear usage error message, exit code exactly `2` in both sub-cases — same code
+  as DB-05 (both are "gate could not run" conditions), distinguished from each other only by
+  message text (argument-parsing failure vs. DB lookup miss), not by a different integer — per
+  the ruled taxonomy's coarse three-value design.
 
 **TC-657-GATE-05 — Idempotent/deterministic repeat invocation (INV-4)**
 - **Fixture:** NEG-01's fixture, invoked 3 times in sequence with no DB or mock changes between
   runs.
-- **Expected:** Identical exit code and identical set of named violations across all 3 runs.
+- **Expected:** Identical exit code (`1`, per NEG-01's known-bad fixture) and identical set of
+  named violations across all 3 runs.
 
-**TC-657-GATE-06 — UNREAD-only result (no hard axis violations, one citation UNREAD) — exit
-  code pending §10 OQ-3**
-- **Fixture:** A finding with one clean citation and one UNREAD citation (within the 72h
-  window), no other violations.
-- **Expected:** Written to accept either ruling on OQ-3 (UNREAD gate-blocking vs. advisory):
-  if gate-blocking, a distinct non-zero code naming the UNREAD citation; if advisory, exit 0
-  with the UNREAD state still visible and prominent in the review table (not omitted). Either
-  way, NOT silently treated as equivalent to GATE-01's all-clean result in the review table's
-  human-readable output, even if the exit code ends up matching 0 under the advisory ruling —
-  the table output is the mechanism that stays fail-closed-visible regardless of which exit-code
-  ruling is made.
+**TC-657-GATE-06 — UNREAD-only result, within the 72h window — RULED: BLOCKING, exit 1**
+- **Fixture:** A finding with one clean citation and one UNREAD citation (unreachable source,
+  elapsed `< 72h` per NET-03's pinned window), no other violations.
+- **Expected:** Per I)ruid's ruling, UNREAD within the window is gate-BLOCKING, not advisory:
+  exit code 1 (one or more findings blocked), naming the specific UNREAD citation and the
+  finding it blocks, retried on the next session per NET-01/02. Distinct from GATE-06A (below),
+  which covers the same finding once its UNREAD citation ages past the 72h window.
+
+**TC-657-GATE-06A — UNREAD result PAST the 72h window: citation dropped, finding re-evaluated
+  on remaining citations (RULED, new case)**
+- **Fixture A (citation dropped, finding still supported):** Same finding as GATE-06, but the
+  UNREAD citation's elapsed time is now `>= 72h` (per NET-03/NET-04's pinned boundary), AND the
+  finding has a second, clean, currently-reachable citation that independently supports it.
+- **Expected A:** The stale citation is dropped from the finding's argument (does not appear as
+  an active citation in the review table, though its drop is logged/auditable); the finding is
+  re-evaluated on its one remaining citation; if that remaining citation is clean, the finding
+  passes (contributes to exit 0, assuming nothing else in the task fails) — this is the key
+  behavior GATE-06 and GATE-06A together must distinguish: the SAME originating UNREAD event
+  produces exit 1 before 72h and can produce exit 0 after 72h, if and only if another citation
+  still supports the finding.
+- **Fixture B (citation dropped, finding left with no supporting citation):** Same as Fixture A,
+  except the dropped citation was the finding's ONLY citation (no remaining citation after the
+  drop).
+- **Expected B:** Per the ruling's explicit "no remaining supporting citation → blocked" clause,
+  the finding is blocked — exit code 1, naming the finding and explaining it has zero
+  surviving citations post-drop (distinct violation text from GATE-06's "UNREAD, still
+  retrying" message — this is "dropped and now unsupported," not "still waiting").
 
 ### Group NEG — Negative / Failure Tests (AC7) (4 cases)
 
@@ -903,25 +1019,33 @@ non-trivial spend this task is explicitly scoped to avoid.
 
 ---
 
-## 4. Test Count Summary
+## 4. Test Count Summary (Rev 2 — rulings pinned, SE#1282 step 4)
 
-| Area | Group | Count |
-|---|---|---|
-| DB Query / Join Correctness & Read-Only Contract | DB | 7 |
-| EXISTENCE axis | EXIST | 9 |
-| CONFIDENCE axis | CONF | 9 |
-| SOURCE TIER axis | TIER | 9 |
-| High-Risk Cell Flag | RISK | 6 |
-| Unreachable ⇒ UNREAD / 72h Lifecycle | NET | 7 |
-| Jev Support Noul Threshold Boundaries | JEV-THRESH | 7 |
-| Jev API Errors / Malformed Responses | JEV-ERR | 7 |
-| Scope Choice Advisory-Only | SCOPE | 5 |
-| Output / Review Table | OUT | 5 |
-| Gate Contract (exit codes / CLI) | GATE | 6 |
-| Negative/Failure Tests (AC7) | NEG | 4 |
-| Workflow 32 Wiring | WIRE | 6 |
-| Config→Runtime Seam | CONFIG | 3 |
-| **Total** | | **90** |
+**Revision note:** Rev 1 (90 cases) is superseded in place (no v2 file created, per the
+TEST-CASE FILE DISPOSITION convention). Project Leadership's step-4 rulings (2026-11-12)
+resolved OQ-1 through OQ-5 plus the two implementer-discretion boundaries (JEV-02, NET-03).
+Seven net-new test cases were added where a ruling exposed a sub-case that didn't previously
+need its own ID (CONF-07A, JEVERR-04A, JEVERR-05A, JEVERR-05B, GATE-02A, GATE-02B, GATE-06A).
+No case was deleted; several were reworded in place to replace "either ruling"/"pending"
+language with the pinned behavior.
+
+| Area | Group | Count (Rev 1) | Count (Rev 2) |
+|---|---|---|---|
+| DB Query / Join Correctness & Read-Only Contract | DB | 7 | 7 |
+| EXISTENCE axis | EXIST | 9 | 9 |
+| CONFIDENCE axis | CONF | 9 | 10 (+1: CONF-07A) |
+| SOURCE TIER axis | TIER | 9 | 9 |
+| High-Risk Cell Flag | RISK | 6 | 6 |
+| Unreachable ⇒ UNREAD / 72h Lifecycle | NET | 7 | 7 |
+| Jev Support Noul Threshold Boundaries | JEV-THRESH | 7 | 7 |
+| Jev API Errors / Malformed Responses | JEV-ERR | 7 | 10 (+3: JEVERR-04A/05A/05B) |
+| Scope Choice Advisory-Only | SCOPE | 5 | 5 |
+| Output / Review Table | OUT | 5 | 5 |
+| Gate Contract (exit codes / CLI) | GATE | 6 | 9 (+3: GATE-02A/02B/06A) |
+| Negative/Failure Tests (AC7) | NEG | 4 | 4 |
+| Workflow 32 Wiring | WIRE | 6 | 6 |
+| Config→Runtime Seam | CONFIG | 3 | 3 |
+| **Total** | | **90** | **97 (+7)** |
 
 ---
 
@@ -932,14 +1056,18 @@ following test cases specifically exercise malformed, adversarial, or wrong-type
 than spec-conformant fixtures:
 
 - **Wrong-type/malformed values at seams:** JEVERR-01/02/03/06 (missing/NaN/out-of-range/
-  non-JSON Jev responses), CONF-09 (out-of-range confidence bypassing the DB constraint),
-  EXIST-08/09 (NULL fields at the existence seam).
+  non-JSON Jev responses), CONF-07A (invalid `claim_scope` value: wrong case/whitespace AND
+  wrong JSON type), CONF-09 (out-of-range confidence bypassing the DB constraint), EXIST-08/09
+  (NULL fields at the existence seam).
 - **Verdict-wording / content leakage into structured decisions:** RISK-06 (content hedge vs.
   structured `importance`), CONF-08 (writer-declared scope vs. content vs. Jev scope).
 - **Fragment/compound-input adversarial cases:** JEVERR-07 (compound claim reaching Noul
   unsplit).
 - **Title/string adversarial cases exploiting a necessary leniency:** EXIST-03/EXIST-04 (the
   500-char truncation leniency and the retraction-notice-past-truncation exploit of it).
+- **Retry-policy negative case (new, Rev 2):** JEVERR-05B (non-429 4xx and malformed-200-body
+  must NEVER be retried — proves the retry budget doesn't blindly apply to every failure
+  class).
 - **Config→runtime seam:** NET-07, WIRE-06, CONFIG-01/02/03.
 - **Non-identity fixture values:** applied throughout per D3 — no confidence/reliability/
   probability fixture uses 0.00 or an unexamined default except where the 0.00/1.00 boundary is
@@ -947,51 +1075,43 @@ than spec-conformant fixtures:
 
 ---
 
-## 6. Open Questions for Project Leadership
+## 6. Open Questions for Project Leadership (Rev 2 — all Rev-1 items RULED, 2026-11-12)
 
-These block or shape implementation; test design proceeded by writing tests that are correct
-under either plausible ruling where possible (CONF-07, GATE-06, SCOPE-04), flagging rather than
-guessing where it could not.
+All five original open questions, plus both flagged "implementer chooses" boundaries, were
+ruled on at SE#1282 step 4 (2026-11-12) and are now pinned throughout the test cases above,
+not left as "either ruling" language. Disposition of each:
 
-**OQ-1 — `claim_scope` signal mechanism (carried forward from SE#843, still not closed by the
-SE#1282 amendment).** The SE#1282 step-2 comment resolves *how scope is used* (writer declares
-it; Jev Choice classifies independently; mismatch/low-confidence escalates; advisory-only,
-never gates) but does not resolve *where the writer's declared scope is stored*. Is it
-`research_findings.metadata->>'claim_scope'` (the SE#843 assumption, A4) or some other field/
-mechanism? CONF-02/03/07/08 assume the metadata-JSON-key approach; if the actual mechanism
-differs, those four test cases' fixture construction (not their assertions) need updating.
+- **OQ-1 (`claim_scope` mechanism) — RULED.** Lives in
+  `research_findings.metadata->>'claim_scope'`, values `proved|computed|cited|conjecture`.
+  Verified live at the pinned commit: `metadata` is `jsonb NOT NULL`; no `claim_scope` column
+  exists anywhere; 0 of 6313 existing rows carry the key. Missing/invalid key → advisory
+  `scope_undeclared`, never gates. Pinned in CONF-07 (missing key) and CONF-07A (new: invalid
+  value, two sub-cases — case/whitespace variant and wrong JSON type).
+- **OQ-2 (exit-code taxonomy) — RULED.** 0 = all findings pass; 1 = one or more findings
+  blocked; 2 = gate could not run (config/DB/usage error). Advisory-only conditions never
+  change the exit code. Pinned throughout GATE-01..06A and at DB-05.
+- **OQ-3 (UNREAD gate-blocking vs. advisory) — RULED: BLOCKING.** Within the 72h window → exit
+  1. Past the window → citation dropped, finding re-evaluated on remaining citations; no
+  remaining supporting citation → blocked (exit 1). Pinned in GATE-06 (within-window) and new
+  GATE-06A (past-window, both the still-supported and now-unsupported sub-cases).
+- **OQ-4 (all-or-nothing vs. per-citation Jev failure) — RULED: per-citation (QA's recommended
+  option (a), confirmed).** A malformed/failed Jev response marks that citation unverified,
+  blocking its finding; other findings evaluate normally; exit code = worst outcome (1).
+  Exception: if EVERY Jev call in a run fails, that is systemic — exit 2. Pinned in new
+  GATE-02A (systemic, exit 2) and GATE-02B (BVA: all-but-one still exit 1, not 2).
+- **OQ-5 (Jev transient-error retry policy) — RULED.** 3 attempts total, exponential backoff
+  (1s, 2s), honoring `Retry-After` on 429. Applies to timeout, 5xx, 429. Non-429 4xx and
+  malformed-200-body get no retry. Pinned in JEVERR-04 (timeout, 3 attempts), new JEVERR-04A
+  (retry succeeds mid-budget), JEVERR-05 (5xx, same budget), new JEVERR-05A (429 + Retry-After),
+  new JEVERR-05B (negative case: no retry on non-429 4xx or malformed body).
+- **JEV-02 boundary — RULED: `p_supports <= 0.05` escalates (blocks).** Pinned directly in
+  JEV-02's text; no longer framed as an inferred reading of the calibration report.
+- **NET-03 boundary — RULED: window is `[0, 72h)`; elapsed `>= 72h` is dropped.** Pinned
+  directly in NET-03 with three fixtures (just-under, just-over, and exactly-72h), and carried
+  through to NET-04/GATE-06/GATE-06A's drop behavior.
 
-**OQ-2 — Exit-code taxonomy.** Flagged at SE#843 step-3 review as still undocumented;
-GATE-02/GATE-04/DB-05 all key off distinct codes existing and being documented, but cannot pin
-the actual integer/string values without the taxonomy. Recommend Project Leadership rule on this
-early, since it is pure bookkeeping (not a design trade-off) and several tests are currently
-written as "assert distinctness" placeholders pending it.
-
-**OQ-3 — Is UNREAD itself gate-blocking or advisory-only?** Flagged at SE#843 step-3 review as
-needing a deliberate ruling rather than a default. GATE-06 is written to pass under either
-ruling at the exit-code level, but the review-table visibility requirement (UNREAD must never
-be presented as equivalent to a clean pass, regardless of exit code) is non-negotiable either
-way per AC2's own "never silently coerced to pass" language.
-
-**OQ-4 (new, raised during this test design, not previously flagged) — All-or-nothing vs.
-per-citation degradation on a Jev/parsing failure (JEVERR-06).** If one citation's Jev call
-returns a malformed response, should the gate (a) fail closed only for that citation while
-still evaluating the rest of the task's findings/citations normally, or (b) fail the entire
-task's gate run outright? Both are defensible fail-closed designs with different operational
-tradeoffs (a) risks under-reporting if the failure pattern is systemic across citations; (b)
-risks blocking an entire session's synthesis over one bad citation unrelated to the actual
-finding being worked. Recommend (a) with the overall task-level exit code still reflecting the
-worst single outcome, but this is a design judgment call, not something QA should decide
-unilaterally.
-
-**OQ-5 (new, raised during this test design) — Retry policy for Jev-layer transient errors
-(JEVERR-04/05), independent of the collector's 72h source-retry window.** The issue and the
-SE#1282 amendment both specify retry/drop semantics for *source unreachability* (the 72h
-collector window) but say nothing about retry semantics for *Jev API* transient failures
-(timeout, 5xx). Is there a retry budget (e.g. 3 attempts with backoff) before a Jev-layer error
-is treated as a terminal escalation, or does any single Jev-call failure escalate immediately?
-JEVERR-04/05 are written to assert "fail-closed, escalates" as the outcome either way, but the
-*timing/retry-count* behavior leading to that outcome is unpinned pending this ruling.
+**No open questions remain from Rev 1.** See §8 (Pushback / Disagreements) for one ruling-time
+clarification QA is flagging rather than silently absorbing.
 
 ---
 
@@ -1012,6 +1132,46 @@ Fresh clone (never the working-tree checkout at `~/nova-mind`), pinned ref verif
 the dispatch brief before any analysis began. No gate implementation code exists in this repo
 at this commit — this document is a greenfield test design preceding implementation, per the
 SE#1282 step-3 dispatch.
+
+---
+
+## 8. Pushback / Disagreements (Rev 2)
+
+Nothing here blocks implementation — these are clarifications QA is flagging rather than
+silently resolving by assumption, per the instruction to push back if a ruling breaks a
+previously-designed test.
+
+**None of the five rulings broke a Rev-1 test case outright.** Every Rev-1 test that touched a
+ruled question was written in Rev 1 specifically to accept either plausible outcome (CONF-07,
+GATE-06, SCOPE-04) or to flag the gap honestly (GATE-02's original "distinct code per class"
+premise, JEVERR-04/05's unpinned retry timing) rather than assert a guessed behavior — so the
+rulings required rewording and net-new sub-cases, not retraction of a test that turned out
+wrong.
+
+**One genuine correction, flagged rather than silently absorbed:** Rev 1's `TC-657-GATE-02`
+was designed around the (wrong, in hindsight) assumption that the eventual taxonomy would
+assign **a distinct exit code per violation class** (existence vs. confidence vs. tier vs.
+task-not-found vs. Jev-escalation). The actual ruling is deliberately coarse — three codes
+total, with violation-class detail living only in the review table's named-violation text, not
+in the exit code. This is a better design (it keeps the taxonomy stable as new violation
+subtypes are added later, since `sys.exit(1)` never needs touching again) but it does mean
+Rev 1's GATE-02 was testing for behavior the implementation was never going to have. Reworded
+in place rather than left as a latent false expectation; flagging it explicitly here so the
+correction is visible in the revision history, not buried in a diff.
+
+**One scope note on OQ-4's "every Jev call fails → exit 2" clause:** the ruling's exact
+wording is "if EVERY Jev call in a run fails, exit 2." GATE-02A tests this literally (100% of
+Jev calls fail → exit 2) and GATE-02B tests the boundary just under 100% (2 of 3 fail → still
+exit 1). This leaves one case genuinely unspecified by the ruling's own wording, which QA is
+noting rather than guessing past: a task with **zero citations requiring any Jev call at all**
+(e.g. every finding fails on a purely deterministic axis — EXISTENCE/CONFIDENCE/TIER — before
+ever reaching the Jev layer). Is "every Jev call failed" vacuously true (0 of 0 calls failed,
+which some implementations might read as 100% failure) or vacuously false (no calls were
+attempted, so there is nothing to call "systemic")? This does not block implementation — a
+reasonable default (exit 1, since real deterministic violations were found and reported, and
+no Jev-layer problem exists at all) is almost certainly what was intended — but QA is not
+silently assuming it. No new test case added for this corner pending confirmation, to avoid
+pinning a behavior that wasn't actually ruled on.
 
 ---
 

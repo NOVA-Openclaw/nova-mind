@@ -1398,14 +1398,123 @@ def _fmt_state(state: str) -> str:
     return state.replace("_", " ").upper()
 
 
+def _fmt_cell(state: str, detail: str = "", unread_reason: Optional[str] = None) -> str:
+    """Format one axis cell so failures and UNREAD never look like a clean pass.
+
+    Pass-like states ('passed', 'ok', 'non_url_source') render as the state
+    token. Failed, escalate, conflict, and unread states are wrapped in
+    brackets and prefixed with their reason so they stand out in the review
+    table. Advisory-only states are suffixed with '(advisory)'.
+    """
+    token = _fmt_state(state)
+    if state in ("passed", "ok", "non_url_source"):
+        return token
+    if unread_reason is not None:
+        return f"[UNREAD: {unread_reason}]"
+    if state in ("failed", "escalate", "conflict", "no_citations", "no_surviving_citations"):
+        return f"[{token}]"
+    if state == "advisory":
+        return f"{token} (advisory)"
+    return token
+
+
+def _aggregate_finding_status(fa: FindingAudit) -> str:
+    """Return a short pass/blocked/advisory summary for one finding."""
+    blocked = False
+    advisory = bool(fa.scope_advisory) or any(
+        ca.scope_state == "advisory" for ca in fa.citation_audits
+    )
+    for ca in fa.citation_audits:
+        if ca.existence_state in ("failed", "no_citations", "no_surviving_citations"):
+            blocked = True
+        if ca.confidence_state == "failed":
+            blocked = True
+        if ca.tier_state == "conflict":
+            blocked = True
+        if ca.unread_reason is not None:
+            blocked = True
+        if ca.jev_support_state in ("escalate", "failed"):
+            blocked = True
+    if blocked:
+        return "BLOCKED"
+    if advisory:
+        return "PASS (advisory)"
+    return "PASS"
+
+
+def _result_to_json(result: GateResult) -> dict[str, Any]:
+    """Serialize a GateResult to a JSON-serializable dict.
+
+    The structure mirrors the internal dataclasses without leaking live
+    connection objects. Advisory-only fields are included but clearly
+    separated so callers can distinguish them from blockers.
+    """
+    findings: list[dict[str, Any]] = []
+    for fa in result.finding_audits:
+        citations: list[dict[str, Any]] = []
+        for ca in fa.citation_audits:
+            citations.append(
+                {
+                    "citation_id": ca.citation.citation_id,
+                    "existence": {
+                        "state": ca.existence_state,
+                        "detail": ca.existence_detail,
+                        "unread_reason": ca.unread_reason,
+                    },
+                    "confidence": {
+                        "state": ca.confidence_state,
+                        "detail": ca.confidence_detail,
+                    },
+                    "tier": {
+                        "state": ca.tier_state,
+                        "detail": ca.tier_detail,
+                    },
+                    "scope": {
+                        "state": ca.scope_state,
+                        "detail": ca.scope_detail,
+                    },
+                    "jev_support": {
+                        "state": ca.jev_support_state,
+                        "detail": ca.jev_support_detail,
+                    },
+                }
+            )
+        findings.append(
+            {
+                "finding_id": fa.finding.finding_id,
+                "content": fa.finding.content,
+                "importance": fa.finding.importance,
+                "status": _aggregate_finding_status(fa),
+                "citations": citations,
+                "high_risk": fa.high_risk,
+                "high_risk_detail": fa.high_risk_detail,
+                "scope_advisory": fa.scope_advisory,
+            }
+        )
+    return {
+        "task_id": result.task_id,
+        "exit_code": result.exit_code(),
+        "errors": result.errors,
+        "dropped_citations": result.dropped_citations,
+        "jev_attempted": result.jev_attempted,
+        "jev_failed": result.jev_failed,
+        "findings": findings,
+    }
+
+
 def render_review_table(result: GateResult) -> str:
     """Render a human-readable review table for the gate result.
 
-    The table is intentionally simple in chunk 1; it will gain per-axis detail
-    and the high-risk-cell section as the remaining axes are implemented.
+    The table shows per-axis states. UNREAD and failed states are bracketed
+    so they never look like a clean pass. Advisory scope flags are rendered
+    with an '(advisory)' label. High-risk cells and gate errors are surfaced
+    in their own sections.
     """
     lines: list[str] = []
-    lines.append(f"Research finding audit for task {result.task_id}")
+    exit_label = {0: "PASS", 1: "BLOCKED", 2: "ERROR"}.get(
+        result.exit_code(), "UNKNOWN"
+    )
+    lines.append(f"Research finding audit for task {result.task_id} — exit {result.exit_code()} ({exit_label})")
     lines.append("-" * 80)
     if result.errors:
         lines.append("Gate errors:")
@@ -1418,23 +1527,35 @@ def render_review_table(result: GateResult) -> str:
         return "\n".join(lines)
 
     header = (
-        f"{'Finding':<10} {'Citation':<10} {'Existence':<12} "
-        f"{'Confidence':<12} {'Tier':<12} {'Scope':<16}"
+        f"{'Finding':<10} {'Citation':<10} {'Existence':<28} "
+        f"{'Confidence':<16} {'Tier':<16} {'Scope':<24} {'Jev':<20}"
     )
     lines.append(header)
-    lines.append("-" * 80)
+    lines.append("-" * 120)
     for fa in result.finding_audits:
+        status = _aggregate_finding_status(fa)
+        lines.append(f"Finding {fa.finding.finding_id} — {status}")
         for ca in fa.citation_audits:
             lines.append(
                 f"{fa.finding.finding_id:<10} "
                 f"{ca.citation.citation_id:<10} "
-                f"{_fmt_state(ca.existence_state):<12} "
-                f"{_fmt_state(ca.confidence_state):<12} "
-                f"{_fmt_state(ca.tier_state):<12} "
-                f"{_fmt_state(ca.scope_state):<16}"
+                f"{_fmt_cell(ca.existence_state, ca.existence_detail, ca.unread_reason):<28} "
+                f"{_fmt_cell(ca.confidence_state):<16} "
+                f"{_fmt_cell(ca.tier_state):<16} "
+                f"{_fmt_cell(ca.scope_state, ca.scope_detail):<24} "
+                f"{_fmt_cell(ca.jev_support_state, ca.jev_support_detail):<20}"
             )
-            if ca.existence_detail:
-                lines.append(f"           detail: {ca.existence_detail}")
+            details: list[str] = []
+            if ca.existence_detail and ca.existence_state not in ("passed", "ok"):
+                details.append(f"existence: {ca.existence_detail}")
+            if ca.jev_support_detail and ca.jev_support_state not in ("passed", "ok", "pending"):
+                details.append(f"jev: {ca.jev_support_detail}")
+            if ca.scope_detail and ca.scope_state == "advisory":
+                details.append(f"scope: {ca.scope_detail}")
+            if details:
+                lines.append(f"           {'; '.join(details)}")
+        if fa.scope_advisory:
+            lines.append(f"  SCOPE ADVISORY: {fa.scope_advisory}")
         if fa.high_risk:
             lines.append(f"  HIGH-RISK CELL: {fa.high_risk_detail}")
 
@@ -1521,12 +1642,7 @@ def main(argv: list[str] | None = None) -> int:
         conn.close()
 
     if args.json:
-        # Minimal JSON output scaffold for chunk 1; richer serialization in later chunks.
-        payload = {
-            "task_id": result.task_id,
-            "exit_code": result.exit_code(),
-            "finding_count": len(result.finding_audits),
-        }
+        payload = _result_to_json(result)
         print(json.dumps(payload, indent=2))
     else:
         print(render_review_table(result))

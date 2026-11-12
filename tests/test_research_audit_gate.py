@@ -1780,3 +1780,208 @@ class TestSystemicJevFailure:
         result = mod.audit_task([finding], self._config())
         assert result.jev_attempted == 0
         assert result.exit_code() == 1  # no_surviving_citations placeholder
+
+
+# ---------------------------------------------------------------------------
+# OUT group tests (TC-657-OUT-01..OUT-05)
+# ---------------------------------------------------------------------------
+class TestOutputContract:
+    """Output rendering must distinguish blockers, UNREAD, and advisory flags."""
+
+    def _finding(self, content: str, confidence: float = 0.85) -> Any:
+        mod = _load_module()
+        citation = mod.Citation(
+            citation_id=1,
+            finding_id=10,
+            source_type="paper",
+            source_url="https://example.com",
+            source_title="Example",
+            reliability=0.88,
+            accessed_at=datetime.now(timezone.utc),
+            metadata={
+                "source_snapshot_text": "snapshot",
+                "last_fetch_success": True,
+                "last_status": 200,
+            },
+        )
+        return mod.Finding(
+            finding_id=10,
+            task_id=90001,
+            finding_type="fact",
+            content=content,
+            confidence=confidence,
+            importance="normal",
+            metadata={},
+            citations=[citation],
+        )
+
+    def _config(self) -> Any:
+        mod = _load_module()
+        return mod.GateConfig(
+            schema="public",
+            drop_window_hours=72.0,
+            support_threshold=0.05,
+            jev_url="https://api.typesafe.ai/v1/systemone",
+            jev_api_key=None,
+            db_dsn="",
+            db_user="nova",
+        )
+
+    def _audit(
+        self,
+        finding: Any,
+        support_body: str = '{"p_supports": 0.83}',
+        scope_body: str = '{"scope_mismatch": false, "confidence": 0.9}',
+        fetcher: Any = None,
+    ) -> Any:
+        mod = _load_module()
+        if fetcher is None:
+            fetcher = lambda url: (200, finding.citations[0].source_title or "", "")
+
+        def post(*a, **k):
+            payload = a[1] if len(a) > 1 else k.get("payload", {})
+            if isinstance(payload, dict) and "declared_scope" in payload.get("state", {}):
+                return 200, scope_body, {}
+            return 200, support_body, {}
+
+        return mod.audit_task(
+            [finding],
+            self._config(),
+            fetcher=fetcher,
+            jev_post_func=post,
+            jev_sleep_func=lambda d: None,
+        )
+
+    def test_out01_review_table_shows_exit_label(self):
+        """TC-657-OUT-01: review table starts with task id and exit label."""
+        result = self._audit(self._finding("The proof shows P."))
+        table = _load_module().render_review_table(result)
+        assert "task 90001" in table.lower()
+        assert "exit 0 (PASS)" in table
+
+    def test_out02_unread_renders_distinct_from_pass(self):
+        """TC-657-OUT-02: UNREAD citations render with a bracketed UNREAD marker."""
+        mod = _load_module()
+        finding = self._finding("The proof shows P.")
+        # Replace the citation with one that has no collector state → UNREAD.
+        finding.citations = [
+            mod.Citation(
+                citation_id=1,
+                finding_id=10,
+                source_type="paper",
+                source_url="https://example.com",
+                source_title="Example",
+                reliability=0.88,
+                accessed_at=datetime.now(timezone.utc),
+                metadata={"source_snapshot_text": "snapshot"},
+            )
+        ]
+        result = self._audit(finding)
+        table = _load_module().render_review_table(result)
+        assert "[UNREAD: missing collector state]" in table
+        # The finding is BLOCKED, and the UNREAD existence cell is not plain PASSED.
+        assert "Finding 10 — BLOCKED" in table
+        assert "[UNREAD: missing collector state]            PASSED" not in table
+
+    def test_out03_failed_renders_distinct_from_pass(self):
+        """TC-657-OUT-03: failed confidence axis renders with a bracketed FAILED marker."""
+        result = self._audit(self._finding("The proof shows P.", confidence=1.00))
+        table = _load_module().render_review_table(result)
+        assert "[FAILED]" in table
+        assert result.exit_code() == 1
+
+    def test_out04_advisory_flag_labelled(self):
+        """TC-657-OUT-04: advisory scope flag is labelled and does not say BLOCKED."""
+        result = self._audit(
+            self._finding("The proof shows P.", confidence=0.85),
+            scope_body='{"scope_mismatch": true, "confidence": 0.85}',
+        )
+        table = _load_module().render_review_table(result)
+        assert "ADVISORY" in table
+        assert "(advisory)" in table
+        assert "BLOCKED" not in table
+        assert result.exit_code() == 0
+
+    def test_out05_json_contains_exit_code_and_findings(self):
+        """TC-657-OUT-05: --json output contains exit code and full finding details."""
+        mod = _load_module()
+        finding = self._finding("The proof shows P.")
+        finding.metadata = {"claim_scope": "proved"}
+        result = self._audit(finding)
+        payload = mod._result_to_json(result)
+        assert payload["exit_code"] == 0
+        assert payload["task_id"] == 90001
+        assert len(payload["findings"]) == 1
+        assert payload["findings"][0]["status"] == "PASS"
+        assert "citations" in payload["findings"][0]
+        assert "jev_support" in payload["findings"][0]["citations"][0]
+
+
+# ---------------------------------------------------------------------------
+# NEG group tests (TC-657-NEG-01..NEG-04) with clean controls
+# ---------------------------------------------------------------------------
+class TestNegativePaths:
+    """CLI negative paths return exit 2; clean controls return the expected code."""
+
+    def _config(self) -> Any:
+        mod = _load_module()
+        return mod.GateConfig(
+            schema="public",
+            drop_window_hours=72.0,
+            support_threshold=0.05,
+            jev_url="https://api.typesafe.ai/v1/systemone",
+            jev_api_key=None,
+            db_dsn="",
+            db_user="nova",
+        )
+
+    def test_neg01_missing_task_arg_exits_2(self):
+        """TC-657-NEG-01: missing --task-id exits 2 (could-not-run)."""
+        mod = _load_module()
+        # Clean control: providing --task-id parses successfully.
+        ns = mod._parse_args(["--task-id", "42"])
+        assert ns.task_id == 42
+        # Negative: no --task-id raises SystemExit from argparse.
+        with pytest.raises(SystemExit) as exc_info:
+            mod._parse_args([])
+        assert exc_info.value.code == 2
+
+    def test_neg02_main_task_not_found_exits_2(self):
+        """TC-657-NEG-02: nonexistent task returns exit 2.
+
+        The clean control is exercised by the DB fixture tests; here we only
+        verify the CLI contract for a missing task without a real DB.
+        """
+        mod = _load_module()
+        # Negative: _task_exists returns False → main returns 2.
+        result = mod.main([
+            "--task-id", "999999",
+            "--schema", "public",
+        ])
+        assert result == 2
+
+    def test_neg03_db_driver_unavailable_exits_2(self):
+        """TC-657-NEG-03: missing psycopg2 driver returns exit 2."""
+        mod = _load_module()
+        # Clean control: the live module has the driver available.
+        assert mod._DB_AVAILABLE is True
+        # Negative: simulate driver unavailable.
+        original = mod._DB_AVAILABLE
+        try:
+            mod._DB_AVAILABLE = False
+            result = mod.main(["--task-id", "1"])
+            assert result == 2
+        finally:
+            mod._DB_AVAILABLE = original
+
+    def test_neg04_config_loader_failure_exits_2(self):
+        """TC-657-NEG-04: config loader failure returns exit 2."""
+        mod = _load_module()
+        # Negative: monkey-patch load_config to raise.
+        original = mod.load_config
+        try:
+            mod.load_config = lambda: (_ for _ in ()).throw(RuntimeError("boom"))
+            result = mod.main(["--task-id", "1"])
+            assert result == 2
+        finally:
+            mod.load_config = original

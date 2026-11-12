@@ -1037,26 +1037,105 @@ class TestAtomicSplit:
             citations=[],
         )
 
+    def _citation(
+        self,
+        snapshot: str | None = "snapshot text",
+        quote: str | None = "",
+    ) -> Any:
+        """Build a Citation with a collector snapshot for source_text tests."""
+        mod = _load_module()
+        return mod.Citation(
+            citation_id=1,
+            finding_id=10,
+            source_type="paper",
+            source_url="https://example.com",
+            source_title="Example",
+            reliability=0.88,
+            accessed_at=datetime.now(timezone.utc),
+            metadata={"source_snapshot_text": snapshot} if snapshot else {},
+            quote=quote,
+        )
+
     def test_inv7_simple_claim_passes_through(self):
         """A simple finding yields exactly one atomic claim."""
         mod = _load_module()
-        claims = mod.split_atomic_claims(self._finding("The sky is blue."))
-        assert len(claims) == 1
-        # Trailing punctuation is stripped to normalize atomic claim text.
-        assert claims[0].claim_text == "The sky is blue"
+        atomic, compound = mod.split_atomic_claims("The sky is blue.")
+        assert atomic == ["The sky is blue"]
+        assert compound == []
 
-    def test_inv7_compound_split_on_and(self):
-        """A compound claim joined by 'and' splits into two atomic claims."""
+    def test_inv7_compound_split_on_semicolon(self):
+        """Two independent clauses joined by ';' split into two atomic claims."""
         mod = _load_module()
-        content = "The proof shows P and the construction is polynomial time"
-        claims = mod.split_atomic_claims(self._finding(content))
-        assert len(claims) == 2
-        assert "proof shows P" in claims[0].claim_text
-        assert "construction is polynomial time" in claims[1].claim_text
+        atomic, compound = mod.split_atomic_claims(
+            "The paper proves X; the authors compute Y."
+        )
+        assert len(atomic) == 2
+        assert "proves X" in atomic[0]
+        assert "compute Y" in atomic[1]
+        assert compound == []
 
-    def test_inv7_compound_split_on_which_also(self):
-        """A compound claim joined by 'which also' splits into two atomic claims."""
+    def test_inv7_compound_unsplit_detected(self):
+        """A remaining compound clause is marked unsplit, not guessed."""
         mod = _load_module()
-        content = "The bound is tight which also implies the lower bound"
-        claims = mod.split_atomic_claims(self._finding(content))
-        assert len(claims) == 2
+        # Two finite-verb clauses joined by coordinating 'and'.
+        atomic, compound = mod.split_atomic_claims(
+            "The proof shows P and the construction is polynomial time"
+        )
+        assert atomic == []
+        assert len(compound) == 1
+
+    def test_inv7_compound_subject_not_split(self):
+        """'Smith and Jones proved the bound for n>2' is one claim.
+
+        Derivation: both nouns share the single finite verb 'proved'; the
+        conservative detector requires a verb on BOTH sides of 'and'.
+        """
+        mod = _load_module()
+        atomic, compound = mod.split_atomic_claims(
+            "Smith and Jones proved the bound for n>2."
+        )
+        assert atomic == ["Smith and Jones proved the bound for n>2"]
+        assert compound == []
+
+    def test_inv7_adjective_coordination_not_split(self):
+        """'The method is fast and accurate' is one claim.
+
+        Derivation: 'accurate' is an adjective, not a finite verb, so the
+        detector sees only one clause.
+        """
+        mod = _load_module()
+        atomic, compound = mod.split_atomic_claims("The method is fast and accurate.")
+        assert atomic == ["The method is fast and accurate"]
+        assert compound == []
+
+    def test_inv7_noun_phrase_coordination_not_split(self):
+        """'Research and development spending rose 4%' is one claim.
+
+        Derivation: neither 'Research' nor 'development spending' contains a
+        finite verb; only 'rose' is a finite verb in the whole sentence.
+        """
+        mod = _load_module()
+        atomic, compound = mod.split_atomic_claims(
+            "Research and development spending rose 4%."
+        )
+        assert atomic == ["Research and development spending rose 4%"]
+        assert compound == []
+
+    def test_inv7_source_text_from_citation_snapshot(self):
+        """source_text must be the citation snapshot, never the finding content."""
+        mod = _load_module()
+        finding = self._finding("The sky is blue.")
+        citation = self._citation(snapshot="collector snapshot text")
+        atomic, _ = mod.atomic_claims_for_citation(finding, citation)
+        assert len(atomic) == 1
+        assert atomic[0].source_text == "collector snapshot text"
+        assert atomic[0].source_text != finding.content
+
+    def test_inv7_no_snapshot_text_is_unread(self):
+        """Missing snapshot text means the citation is not self-compared."""
+        mod = _load_module()
+        finding = self._finding("The sky is blue.")
+        citation = self._citation(snapshot=None, quote=None)
+        atomic, _ = mod.atomic_claims_for_citation(finding, citation)
+        # No claims are produced because there is no source text to judge against.
+        assert atomic == []

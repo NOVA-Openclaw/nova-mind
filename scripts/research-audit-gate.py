@@ -231,9 +231,14 @@ class Citation:
     source_type: str
     source_url: Optional[str]
     source_title: Optional[str]
-    reliability: Optional[float]
-    accessed_at: datetime
-    metadata: dict[str, Any]
+    source_author: Optional[str] = None
+    source_date: Optional[str] = None
+    quote: Optional[str] = None
+    page_or_section: Optional[str] = None
+    reliability: Optional[float] = None
+    library_work_id: Optional[int] = None
+    accessed_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -307,12 +312,18 @@ class AtomicClaim:
     Jev Support Noul is called once per (atomic_claim, citation_source_text)
     pair. A compound finding is split before any Noul call so its score is
     never averaged across independent assertions (INV-7).
+
+    source_text is the citation's collector snapshot text, never the finding
+    content. is_compound_unsplit marks a sentence that still contains multiple
+    clauses after conservative splitting; it is escalated to skeptics with no
+    Noul score instead of being guessed.
     """
 
     finding_id: int
     claim_text: str
     source_text: str
     parent_finding: Finding
+    is_compound_unsplit: bool = False
 
 
 @dataclass
@@ -782,45 +793,127 @@ def _audit_citation(
     return audit
 
 
-def split_atomic_claims(finding: Finding) -> list[AtomicClaim]:
-    """Split a finding's content into atomic claims before Jev Noul calls.
-
-    Compound findings joined by 'and' or 'which also' are split so each
-    assertion gets its own support judgment. Simple claims pass through as a
-    single item. This preserves INV-7: a Noul score is never computed against,
-    or averaged across, a compound claim.
-
-    The source_text placeholder is the finding content itself; in chunk 3b the
-    collector's citation snapshot text will be paired with each atomic claim.
+# Closed list of finite-verb indicators used for conservative compound-sentence
+# detection. The detector only needs to recognize that BOTH sides of a clause
+# separator contain a verb-like token; it does not tag parts of speech.
+_FINITE_VERB_INDICATORS = frozenset(
     """
-    text = (finding.content or "").strip()
+    is are was were be been being have has had do does did will would could
+    should may might must can shall prove proves proved proveing compute
+    computes computed computing show shows showed showing establish
+    establishes established establishing imply implies implied implying
+    reduce reduces reduced reducing demonstrate demonstrates demonstrated
+    demonstrating give gives gave given giving state states stated stating
+    claim claims claimed claiming find finds found finding
+    """.split()
+)
+
+# Clause separators that can join two independent clauses.
+_CLAUSE_SEPARATORS = (r"\s+and\s+", r"\s+which also\s+")
+
+
+def _has_finite_verb(text: str) -> bool:
+    """Return True if the text contains a token from the finite-verb list.
+
+    This is intentionally a conservative closed-list check, not an NLP parse.
+    A false negative (missing a rare verb) causes a compound sentence to be
+    treated as atomic and escalated to skeptics as compound_unsplit — the safe
+    direction. A false positive would incorrectly mark a simple sentence as
+    compound, also safe because compound_unsplit is advisory-only.
+    """
+    tokens = re.findall(r"[A-Za-z]+", text.lower())
+    return any(token in _FINITE_VERB_INDICATORS for token in tokens)
+
+
+def _is_compound_clause(text: str) -> bool:
+    """Return True if text appears to join two clauses, each with a finite verb.
+
+    Only coordinating 'and' / 'which also' are checked; other conjunctions are
+    ignored to keep the rule deterministic and conservative.
+    """
+    for sep in _CLAUSE_SEPARATORS:
+        parts = re.split(sep, text, flags=re.IGNORECASE)
+        if len(parts) == 2 and all(_has_finite_verb(p) for p in parts):
+            return True
+    return False
+
+
+def split_atomic_claims(content: str) -> tuple[list[str], list[str]]:
+    """Split finding content into atomic claims.
+
+    Splits only at sentence boundaries ('.', '!', '?') and semicolons, never
+    inside a clause. Any resulting sentence that still looks compound (two
+    clauses joined by coordinating 'and'/'which also', each with a finite verb)
+    is returned as compound_unsplit rather than guessed.
+
+    Returns (atomic_claims, compound_unsplit_claims). Both lists contain
+    stripped claim text.
+    """
+    text = (content or "").strip()
     if not text:
-        return []
-    # Split on explicit compound markers while preserving the sub-claim text.
-    raw_parts = re.split(r"\s+(?:and|which also)\s+", text, flags=re.IGNORECASE)
-    claims: list[AtomicClaim] = []
+        return [], []
+
+    # First split into sentences and on semicolons (deterministic separators).
+    raw_parts = re.split(r"(?<=[.!?])\s+|\s*;\s*", text)
+    atomic: list[str] = []
+    compound: list[str] = []
     for part in raw_parts:
         part = part.strip(".; ")
-        if part:
-            claims.append(
-                AtomicClaim(
-                    finding_id=finding.finding_id,
-                    claim_text=part,
-                    source_text=finding.content,
-                    parent_finding=finding,
-                )
-            )
-    # If no split occurred, the whole content is the single atomic claim.
-    if not claims:
-        claims.append(
-            AtomicClaim(
-                finding_id=finding.finding_id,
-                claim_text=text,
-                source_text=finding.content,
-                parent_finding=finding,
-            )
+        if not part:
+            continue
+        if _is_compound_clause(part):
+            compound.append(part)
+        else:
+            atomic.append(part)
+    return atomic, compound
+
+
+def atomic_claims_for_citation(
+    finding: Finding,
+    citation: Citation,
+) -> tuple[list[AtomicClaim], list[AtomicClaim]]:
+    """Build atomic claims for a (finding, citation) pair.
+
+    source_text is taken from the citation's collector snapshot
+    (metadata['source_snapshot_text'] or citation.quote). If neither is present,
+    the citation cannot be judged and the caller should mark it UNREAD.
+
+    Returns (atomic_claims, compound_unsplit_claims). Compound unsplit claims
+    are escalated to skeptics with no Noul score; they are advisory-only and
+    never gate pass/fail.
+    """
+    source_text = (
+        citation.metadata.get("source_snapshot_text")
+        or citation.quote
+        or ""
+    ).strip()
+    # No collector snapshot text means the citation cannot be judged by Jev;
+    # the caller must mark it UNREAD rather than self-compare against the
+    # finding content.
+    if not source_text:
+        return [], []
+    atomic_texts, compound_texts = split_atomic_claims(finding.content)
+
+    atomic = [
+        AtomicClaim(
+            finding_id=finding.finding_id,
+            claim_text=t,
+            source_text=source_text,
+            parent_finding=finding,
         )
-    return claims
+        for t in atomic_texts
+    ]
+    compound = [
+        AtomicClaim(
+            finding_id=finding.finding_id,
+            claim_text=t,
+            source_text=source_text,
+            parent_finding=finding,
+            is_compound_unsplit=True,
+        )
+        for t in compound_texts
+    ]
+    return atomic, compound
 
 
 def audit_task(

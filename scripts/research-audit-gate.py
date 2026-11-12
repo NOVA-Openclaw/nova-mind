@@ -279,6 +279,42 @@ class FindingAudit:
     scope_advisory: str = ""
 
 
+@dataclass(frozen=True)
+class CollectorState:
+    """Snapshot of the collector's fetch result for a citation.
+
+    The collector (not this gate) writes these values. The gate reads them to
+    apply the 72-hour source-drop window without itself writing to research_*.
+
+    Attributes:
+        last_fetch_success: True if the collector's most recent fetch got a
+            usable snapshot (2xx for URL sources, or a successful non-URL
+            verification). Never inferred from accessed_at.
+        first_unreachable_at: Timestamp of the first consecutive unreachable
+            fetch, or None if the source is currently reachable.
+        last_status: HTTP status code from the last fetch, if applicable.
+    """
+
+    last_fetch_success: bool = False
+    first_unreachable_at: Optional[datetime] = None
+    last_status: Optional[int] = None
+
+
+@dataclass(frozen=True)
+class AtomicClaim:
+    """One atomic assertion extracted from a possibly compound finding.
+
+    Jev Support Noul is called once per (atomic_claim, citation_source_text)
+    pair. A compound finding is split before any Noul call so its score is
+    never averaged across independent assertions (INV-7).
+    """
+
+    finding_id: int
+    claim_text: str
+    source_text: str
+    parent_finding: Finding
+
+
 @dataclass
 class GateResult:
     """Result of auditing a whole task."""
@@ -286,6 +322,7 @@ class GateResult:
     task_id: int
     finding_audits: list[FindingAudit] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
+    dropped_citations: list[int] = field(default_factory=list)
     jev_attempted: int = 0
     jev_failed: int = 0
 
@@ -310,14 +347,12 @@ class GateResult:
                 # UNREAD within the 72h window blocks (NET-01..03, GATE-06).
                 if ca.unread_reason is not None:
                     return 1
+                # A citation dropped and left the finding unsupported blocks.
+                if ca.existence_state == "no_surviving_citations":
+                    return 1
                 # Jev Support failure/escalation blocks (JEV/JEVERR groups).
                 if ca.jev_support_state in ("escalate", "failed"):
                     return 1
-            # No surviving citations after a drop blocks (GATE-06A fixture B).
-            if fa.finding.citations and not any(
-                ca.unread_reason is None for ca in fa.citation_audits
-            ):
-                return 1
         return 0
 
 
@@ -528,14 +563,73 @@ def _compare_titles(filed: str, fetched: str) -> tuple[str, str]:
     )
 
 
+def _collector_state(citation: Citation) -> CollectorState:
+    """Read the collector's fetch state from citation metadata.
+
+    The collector writes this data; the gate is read-only. accessed_at is
+    intentionally NOT used as evidence of a successful fetch (NET-06).
+    """
+    meta = citation.metadata or {}
+    success = bool(meta.get("last_fetch_success", False))
+    status = meta.get("last_status")
+    status = int(status) if isinstance(status, int) else None
+    ts = meta.get("first_unreachable_at")
+    first_unreach: Optional[datetime] = None
+    if isinstance(ts, str):
+        try:
+            first_unreach = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        except ValueError:
+            first_unreach = None
+    elif isinstance(ts, datetime):
+        first_unreach = ts
+    return CollectorState(
+        last_fetch_success=success,
+        first_unreachable_at=first_unreach,
+        last_status=status,
+    )
+
+
+def _window_action(
+    state: CollectorState,
+    now: datetime,
+    config: GateConfig,
+) -> tuple[str, Optional[str]]:
+    """Decide what to do with a citation based on collector state.
+
+    Returns (action, detail):
+      * "verify"      — source is reachable; proceed with existence check.
+      * "unread"      — unreachable within the 72h window; block and retry.
+      * "drop"        — unreachable for >=72h; remove from active argument.
+      * "unknown"     — no collector state; treat as unread fail-closed.
+    """
+    if state.last_fetch_success:
+        return "verify", None
+    if state.first_unreachable_at is None:
+        return "unknown", "no collector state for unreachable source"
+    elapsed = now - state.first_unreachable_at
+    window = timedelta(hours=config.drop_window_hours)
+    if elapsed < window:
+        return (
+            "unread",
+            f"unreachable since {state.first_unreachable_at.isoformat()}; "
+            f"{elapsed.total_seconds() / 3600:.2f}h within {config.drop_window_hours}h window",
+        )
+    return "drop", f"unreachable for {elapsed.total_seconds() / 3600:.2f}h >= {config.drop_window_hours}h; dropping"
+
+
 def _audit_existence(
     citation: Citation,
+    config: GateConfig,
+    now: datetime,
     fetcher: Callable[[str], tuple[int, Optional[str], str]] = fetch_url,
 ) -> tuple[str, str, Optional[str]]:
     """Audit the existence axis for a single citation.
 
     Returns (state, detail, unread_reason). unread_reason is None unless the
     source could not be verified due to a transient or ambiguous condition.
+
+    The 72h collector lifecycle is applied first; only reachable sources are
+    subjected to the live URL/title check.
     """
     if citation.source_url is None or citation.source_url.strip() == "":
         if citation.source_type == "book":
@@ -545,6 +639,17 @@ def _audit_existence(
     if citation.source_title is None or citation.source_title.strip() == "":
         return "no_title", "no filed title to compare against", None
 
+    collector = _collector_state(citation)
+    action, action_detail = _window_action(collector, now, config)
+
+    if action == "unread":
+        return "unread", action_detail or "source unreachable within 72h window", "unreachable within window"
+    if action == "drop":
+        return "dropped", action_detail or "source dropped after 72h window", None
+    if action == "unknown":
+        return "unread", action_detail or "no collector state", "missing collector state"
+
+    # action == "verify": proceed with live fetch.
     status, fetched_title, detail = fetcher(citation.source_url)
 
     if status == 0:
@@ -636,6 +741,7 @@ def _audit_citation(
     citation: Citation,
     finding: Finding,
     config: GateConfig,
+    now: datetime,
     fetcher: Callable[[str], tuple[int, Optional[str], str]] = fetch_url,
 ) -> CitationAudit:
     """Perform the deterministic three-axis audit for a single citation.
@@ -646,8 +752,10 @@ def _audit_citation(
     """
     audit = CitationAudit(citation=citation)
 
-    # EXISTENCE axis — URL resolution + title comparison.
-    ex_state, ex_detail, ex_unread = _audit_existence(citation, fetcher=fetcher)
+    # EXISTENCE axis — URL resolution + title comparison + 72h window.
+    ex_state, ex_detail, ex_unread = _audit_existence(
+        citation, config=config, now=now, fetcher=fetcher
+    )
     audit.existence_state = ex_state
     audit.existence_detail = ex_detail
     audit.unread_reason = ex_unread
@@ -674,19 +782,73 @@ def _audit_citation(
     return audit
 
 
+def split_atomic_claims(finding: Finding) -> list[AtomicClaim]:
+    """Split a finding's content into atomic claims before Jev Noul calls.
+
+    Compound findings joined by 'and' or 'which also' are split so each
+    assertion gets its own support judgment. Simple claims pass through as a
+    single item. This preserves INV-7: a Noul score is never computed against,
+    or averaged across, a compound claim.
+
+    The source_text placeholder is the finding content itself; in chunk 3b the
+    collector's citation snapshot text will be paired with each atomic claim.
+    """
+    text = (finding.content or "").strip()
+    if not text:
+        return []
+    # Split on explicit compound markers while preserving the sub-claim text.
+    raw_parts = re.split(r"\s+(?:and|which also)\s+", text, flags=re.IGNORECASE)
+    claims: list[AtomicClaim] = []
+    for part in raw_parts:
+        part = part.strip(".; ")
+        if part:
+            claims.append(
+                AtomicClaim(
+                    finding_id=finding.finding_id,
+                    claim_text=part,
+                    source_text=finding.content,
+                    parent_finding=finding,
+                )
+            )
+    # If no split occurred, the whole content is the single atomic claim.
+    if not claims:
+        claims.append(
+            AtomicClaim(
+                finding_id=finding.finding_id,
+                claim_text=text,
+                source_text=finding.content,
+                parent_finding=finding,
+            )
+        )
+    return claims
+
+
 def audit_task(
     findings: list[Finding],
     config: GateConfig,
+    now: Optional[datetime] = None,
     fetcher: Callable[[str], tuple[int, Optional[str], str]] = fetch_url,
 ) -> GateResult:
-    """Audit all findings for a task and return a GateResult."""
+    """Audit all findings for a task and return a GateResult.
+
+    The clock is injectable via `now` so tests can simulate the 72h boundary
+    deterministically. Dropped citations are removed from the active argument
+    for each finding; a finding with no surviving citations is blocked.
+    """
+    if now is None:
+        now = datetime.now(timezone.utc)
     result = GateResult(task_id=findings[0].task_id if findings else 0)
     for finding in findings:
         finding_audit = FindingAudit(finding=finding)
+        surviving_audits: list[CitationAudit] = []
         for citation in finding.citations:
-            finding_audit.citation_audits.append(
-                _audit_citation(citation, finding, config, fetcher=fetcher)
-            )
+            audit = _audit_citation(citation, finding, config, now=now, fetcher=fetcher)
+            if audit.existence_state == "dropped":
+                result.dropped_citations.append(citation.citation_id)
+                continue
+            surviving_audits.append(audit)
+            finding_audit.citation_audits.append(audit)
+
         if not finding.citations:
             # A finding with zero citations gets an explicit placeholder audit so
             # the review table can distinguish "checked, no citations" from omitted.
@@ -699,7 +861,7 @@ def audit_task(
                         source_url=None,
                         source_title=None,
                         reliability=None,
-                        accessed_at=datetime.now(timezone.utc),
+                        accessed_at=now,
                         metadata={},
                     ),
                     existence_state="no_citations",
@@ -707,11 +869,30 @@ def audit_task(
                 )
             )
 
+        # No surviving supporting citations after drops → finding is blocked.
+        if finding.citations and not surviving_audits:
+            finding_audit.citation_audits.append(
+                CitationAudit(
+                    citation=Citation(
+                        citation_id=0,
+                        finding_id=finding.finding_id,
+                        source_type="none",
+                        source_url=None,
+                        source_title=None,
+                        reliability=None,
+                        accessed_at=now,
+                        metadata={},
+                    ),
+                    existence_state="no_surviving_citations",
+                    existence_detail="all citations dropped after 72h window",
+                )
+            )
+
         # High-risk cell: weakest tier × consequential claim.
-        if finding.citations and _importance_level(finding.importance) >= _importance_level(
+        if surviving_audits and _importance_level(finding.importance) >= _importance_level(
             "high"
         ):
-            for ca in finding_audit.citation_audits:
+            for ca in surviving_audits:
                 if _is_weakest_tier(ca.tier_state):
                     finding_audit.high_risk = True
                     finding_audit.high_risk_detail = (

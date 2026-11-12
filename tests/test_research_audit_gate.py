@@ -18,7 +18,7 @@ import os
 import subprocess
 import sys
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import ModuleType
 from typing import Any, Iterator
@@ -412,7 +412,20 @@ class TestExistenceAxis:
             source_title=source_title,
             reliability=0.88,
             accessed_at=datetime.now(timezone.utc),
-            metadata={},
+            metadata={"last_fetch_success": True, "last_status": 200},
+        )
+
+    def _config(self) -> Any:
+        """Return a GateConfig for direct existence tests."""
+        mod = _load_module()
+        return mod.GateConfig(
+            schema="public",
+            drop_window_hours=72.0,
+            support_threshold=0.05,
+            jev_url="https://api.typesafe.ai/v1/systemone",
+            jev_api_key=None,
+            db_dsn="",
+            db_user="nova",
         )
 
     def test_exist01_exact_title_match(self):
@@ -420,7 +433,10 @@ class TestExistenceAxis:
         mod = _load_module()
         cite = self._citation(source_title="Attention Is All You Need")
         state, detail, unread = mod._audit_existence(
-            cite, fetcher=lambda url: (200, "Attention Is All You Need", "")
+            cite,
+            config=self._config(),
+            now=datetime.now(timezone.utc),
+            fetcher=lambda url: (200, "Attention Is All You Need", ""),
         )
         assert state == "passed"
         assert unread is None
@@ -431,7 +447,10 @@ class TestExistenceAxis:
         mod = _load_module()
         cite = self._citation(source_title="Attention Is All You Need (v3)")
         state, detail, unread = mod._audit_existence(
-            cite, fetcher=lambda url: (200, "Attention Is All You Need (v7)", "")
+            cite,
+            config=self._config(),
+            now=datetime.now(timezone.utc),
+            fetcher=lambda url: (200, "Attention Is All You Need (v7)", ""),
         )
         assert state == "failed"
         assert "v3" in detail
@@ -444,7 +463,10 @@ class TestExistenceAxis:
         fetched = filed + " — continued"
         cite = self._citation(source_title=filed)
         state, detail, unread = mod._audit_existence(
-            cite, fetcher=lambda url: (200, fetched, "")
+            cite,
+            config=self._config(),
+            now=datetime.now(timezone.utc),
+            fetcher=lambda url: (200, fetched, ""),
         )
         assert state == "passed"
         assert "prefix" in detail.lower()
@@ -456,7 +478,10 @@ class TestExistenceAxis:
         fetched = filed + " (RETRACTED)"
         cite = self._citation(source_title=filed)
         state, detail, unread = mod._audit_existence(
-            cite, fetcher=lambda url: (200, fetched, "")
+            cite,
+            config=self._config(),
+            now=datetime.now(timezone.utc),
+            fetcher=lambda url: (200, fetched, ""),
         )
         assert state == "warn"
         assert "retraction" in detail.lower()
@@ -466,7 +491,10 @@ class TestExistenceAxis:
         mod = _load_module()
         cite = self._citation()
         state, detail, unread = mod._audit_existence(
-            cite, fetcher=lambda url: (0, None, "connection refused")
+            cite,
+            config=self._config(),
+            now=datetime.now(timezone.utc),
+            fetcher=lambda url: (0, None, "connection refused"),
         )
         assert state == "unread"
         assert unread == "network unreachable"
@@ -476,7 +504,10 @@ class TestExistenceAxis:
         mod = _load_module()
         cite = self._citation()
         state, detail, unread = mod._audit_existence(
-            cite, fetcher=lambda url: (404, None, "Not Found")
+            cite,
+            config=self._config(),
+            now=datetime.now(timezone.utc),
+            fetcher=lambda url: (404, None, "Not Found"),
         )
         assert state == "failed"
         assert unread is None
@@ -486,7 +517,10 @@ class TestExistenceAxis:
         mod = _load_module()
         cite = self._citation()
         state, detail, unread = mod._audit_existence(
-            cite, fetcher=lambda url: (503, None, "Service Unavailable")
+            cite,
+            config=self._config(),
+            now=datetime.now(timezone.utc),
+            fetcher=lambda url: (503, None, "Service Unavailable"),
         )
         assert state == "unread"
         assert unread == "server error 503"
@@ -495,7 +529,11 @@ class TestExistenceAxis:
         """TC-657-EXIST-08: book source with no URL uses non-URL verification."""
         mod = _load_module()
         cite = self._citation(source_type="book", source_url=None)
-        state, detail, unread = mod._audit_existence(cite)
+        state, detail, unread = mod._audit_existence(
+            cite,
+            config=self._config(),
+            now=datetime.now(timezone.utc),
+        )
         assert state == "non_url_source"
         assert unread is None
 
@@ -504,7 +542,10 @@ class TestExistenceAxis:
         mod = _load_module()
         cite = self._citation(source_title=None)
         state, detail, unread = mod._audit_existence(
-            cite, fetcher=lambda url: (200, "Some Title", "")
+            cite,
+            config=self._config(),
+            now=datetime.now(timezone.utc),
+            fetcher=lambda url: (200, "Some Title", ""),
         )
         assert state == "no_title"
         assert "no filed title" in detail.lower()
@@ -802,3 +843,220 @@ class TestHighRiskCell:
         finding.content = "well-established, low-stakes claim"
         result = self._audit(finding)
         assert result.finding_audits[0].high_risk is True
+
+
+# ---------------------------------------------------------------------------
+# NET group tests (TC-657-NET-01..NET-07) + GATE-06/GATE-06A drop behavior
+# ---------------------------------------------------------------------------
+class TestNetLifecycle:
+    """72-hour source-drop lifecycle for unreachable sources."""
+
+    def _citation(
+        self,
+        cid: int = 1,
+        success: bool = True,
+        first_unreachable_at: datetime | None = None,
+        status: int | None = 200,
+    ) -> Any:
+        """Build a Citation with collector state stored in metadata."""
+        mod = _load_module()
+        metadata: dict[str, Any] = {"last_fetch_success": success}
+        if status is not None:
+            metadata["last_status"] = status
+        if first_unreachable_at is not None:
+            metadata["first_unreachable_at"] = first_unreachable_at.isoformat()
+        return mod.Citation(
+            citation_id=cid,
+            finding_id=10,
+            source_type="paper",
+            source_url="https://example.com/paper",
+            source_title="Example Paper",
+            reliability=0.88,
+            accessed_at=datetime.now(timezone.utc),
+            metadata=metadata,
+        )
+
+    def _finding(self, citations: list[Any], importance: str = "normal") -> Any:
+        """Build a Finding with the given citations."""
+        mod = _load_module()
+        return mod.Finding(
+            finding_id=10,
+            task_id=90001,
+            finding_type="fact",
+            content="finding content",
+            confidence=0.85,
+            importance=importance,
+            metadata={},
+            citations=citations,
+        )
+
+    def _audit(
+        self,
+        finding: Any,
+        now: datetime,
+        fetcher: Any = None,
+    ) -> Any:
+        """Run audit_task with a fixed clock and optional mock fetcher."""
+        mod = _load_module()
+        config = mod.GateConfig(
+            schema="public",
+            drop_window_hours=72.0,
+            support_threshold=0.05,
+            jev_url="https://api.typesafe.ai/v1/systemone",
+            jev_api_key=None,
+            db_dsn="",
+            db_user="nova",
+        )
+        if fetcher is None:
+            fetcher = lambda url: (200, finding.citations[0].source_title or "", "")
+        return mod.audit_task([finding], config, now=now, fetcher=fetcher)
+
+    def test_net01_first_unreachability_unread(self):
+        """TC-657-NET-01: first unreachability becomes UNREAD and is retried."""
+        now = datetime.now(timezone.utc)
+        cite = self._citation(success=False, first_unreachable_at=now)
+        result = self._audit(self._finding([cite]), now)
+        ca = result.finding_audits[0].citation_audits[0]
+        assert ca.existence_state == "unread"
+        assert ca.unread_reason == "unreachable within window"
+        assert result.exit_code() == 1
+
+    def test_net02_retried_every_session_within_window(self):
+        """TC-657-NET-02: UNREAD persists across sessions within 72h."""
+        base = datetime.now(timezone.utc) - timedelta(hours=60)
+        cite = self._citation(success=False, first_unreachable_at=base)
+        result = self._audit(self._finding([cite]), base + timedelta(hours=20))
+        ca = result.finding_audits[0].citation_audits[0]
+        assert ca.existence_state == "unread"
+        assert result.exit_code() == 1
+
+    def test_net03_boundary_just_under_72h_blocks(self):
+        """TC-657-NET-03: just under 72h is still within window and blocks."""
+        base = datetime.now(timezone.utc) - timedelta(hours=71, minutes=59, seconds=58)
+        cite = self._citation(success=False, first_unreachable_at=base)
+        result = self._audit(self._finding([cite]), datetime.now(timezone.utc))
+        assert result.finding_audits[0].citation_audits[0].existence_state == "unread"
+
+    def test_net03_boundary_just_over_72h_drops(self):
+        """TC-657-NET-03: just over 72h drops the citation."""
+        base = datetime.now(timezone.utc) - timedelta(hours=72, seconds=2)
+        cite = self._citation(success=False, first_unreachable_at=base)
+        result = self._audit(self._finding([cite]), datetime.now(timezone.utc))
+        assert result.dropped_citations == [1]
+        # The dropped citation is removed from the active argument; the review
+        # table contains only the no-surviving-citations placeholder audit.
+        active_citation_ids = {
+            ca.citation.citation_id for ca in result.finding_audits[0].citation_audits
+        }
+        assert 1 not in active_citation_ids
+        assert result.exit_code() == 1
+
+    def test_net04_drop_reforms_argument_second_citation_remains(self):
+        """TC-657-NET-04/GATE-06A-A: dropped citation; finding re-evaluates on remainder."""
+        base = datetime.now(timezone.utc) - timedelta(hours=80)
+        stale = self._citation(cid=1, success=False, first_unreachable_at=base)
+        live = self._citation(cid=2, success=True)
+        result = self._audit(self._finding([stale, live]), datetime.now(timezone.utc))
+        assert result.dropped_citations == [1]
+        assert len(result.finding_audits[0].citation_audits) == 1
+        assert result.exit_code() == 0
+
+    def test_net04_drop_no_remaining_citation_blocks(self):
+        """TC-657-NET-04/GATE-06A-B: dropped citation leaves no support → blocked."""
+        base = datetime.now(timezone.utc) - timedelta(hours=80)
+        stale = self._citation(cid=1, success=False, first_unreachable_at=base)
+        result = self._audit(self._finding([stale]), datetime.now(timezone.utc))
+        assert result.dropped_citations == [1]
+        assert result.exit_code() == 1
+        assert result.finding_audits[0].citation_audits[0].existence_state == "no_surviving_citations"
+
+    def test_net05_recovery_clears_clock(self):
+        """TC-657-NET-05: a source that becomes reachable clears its stale clock."""
+        now = datetime.now(timezone.utc)
+        cite = self._citation(success=True)  # recent successful fetch
+        result = self._audit(
+            self._finding([cite]),
+            now,
+            fetcher=lambda url: (200, cite.source_title, ""),
+        )
+        assert result.finding_audits[0].citation_audits[0].existence_state == "passed"
+
+    def test_net06_accessed_at_not_evidence(self):
+        """TC-657-NET-06: accessed_at is not read as proof of successful fetch."""
+        mod = _load_module()
+        cite = mod.Citation(
+            citation_id=1,
+            finding_id=10,
+            source_type="paper",
+            source_url="https://example.com/paper",
+            source_title="Example Paper",
+            reliability=0.88,
+            accessed_at=datetime.now(timezone.utc),  # recent "touch" only
+            metadata={"last_fetch_success": False},  # actual collector record
+        )
+        result = self._audit(self._finding([cite]), datetime.now(timezone.utc))
+        assert result.finding_audits[0].citation_audits[0].existence_state == "unread"
+
+    def test_net07_window_from_config(self):
+        """TC-657-NET-07: 72h window value is read from config at runtime."""
+        mod = _load_module()
+        base = datetime.now(timezone.utc) - timedelta(hours=25)
+        cite = self._citation(success=False, first_unreachable_at=base)
+        # Short 24h window should drop a 25h-old unreachable source.
+        config = mod.GateConfig(
+            schema="public",
+            drop_window_hours=24.0,
+            support_threshold=0.05,
+            jev_url="https://api.typesafe.ai/v1/systemone",
+            jev_api_key=None,
+            db_dsn="",
+            db_user="nova",
+        )
+        finding = self._finding([cite])
+        result = mod.audit_task([finding], config, now=datetime.now(timezone.utc))
+        assert result.dropped_citations == [1]
+
+
+# ---------------------------------------------------------------------------
+# INV-7 atomic split tests
+# ---------------------------------------------------------------------------
+class TestAtomicSplit:
+    """Compound findings must be split into atomic claims before Jev Noul."""
+
+    def _finding(self, content: str) -> Any:
+        """Build a Finding with the given content."""
+        mod = _load_module()
+        return mod.Finding(
+            finding_id=10,
+            task_id=90001,
+            finding_type="fact",
+            content=content,
+            confidence=0.85,
+            importance="normal",
+            metadata={},
+            citations=[],
+        )
+
+    def test_inv7_simple_claim_passes_through(self):
+        """A simple finding yields exactly one atomic claim."""
+        mod = _load_module()
+        claims = mod.split_atomic_claims(self._finding("The sky is blue."))
+        assert len(claims) == 1
+        # Trailing punctuation is stripped to normalize atomic claim text.
+        assert claims[0].claim_text == "The sky is blue"
+
+    def test_inv7_compound_split_on_and(self):
+        """A compound claim joined by 'and' splits into two atomic claims."""
+        mod = _load_module()
+        content = "The proof shows P and the construction is polynomial time"
+        claims = mod.split_atomic_claims(self._finding(content))
+        assert len(claims) == 2
+        assert "proof shows P" in claims[0].claim_text
+        assert "construction is polynomial time" in claims[1].claim_text
+
+    def test_inv7_compound_split_on_which_also(self):
+        """A compound claim joined by 'which also' splits into two atomic claims."""
+        mod = _load_module()
+        content = "The bound is tight which also implies the lower bound"
+        claims = mod.split_atomic_claims(self._finding(content))
+        assert len(claims) == 2

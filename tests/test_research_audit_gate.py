@@ -1381,11 +1381,13 @@ class TestAtomicSplit:
 
         Derivation: over a diverse set of abbreviation-bearing sentences, no
         atomic claim may (a) end in a lone letter or an abbreviation token
-        without its dot, or (b) start with a lowercase word when the previous
-        fragment ended at a period. This catches both fragments and merged
-        sentences.
+        without its dot, (b) start with a lowercase word when the previous
+        fragment ended at a period, or (c) contain an internal sentence boundary
+        under the module's boundary definition. This catches fragments, merged
+        sentences, and boundary mis-detection around quotes/brackets.
         """
         mod = _load_module()
+        boundary_re = mod._SENTENCE_BOUNDARY_RE
         sentences = [
             "Smith et al. proved the bound is tight.",
             "Some sets, e.g. primes, are infinite.",
@@ -1404,6 +1406,15 @@ class TestAtomicSplit:
             "The U.S. passed the law. The agency enforced it.",
             "The meeting starts at 9 a.m. tomorrow.",
             "He finished an M.Sc. in computer science. Then he started a Ph.D.",
+            'She said "the result is clear." The committee agreed.',
+            "She said 'the result is clear.' The committee agreed.",
+            "She said \u201cthe result is clear.\u201d The committee agreed.",
+            "The result (see Fig. 2.) was surprising. We discuss it below.",
+            "The result [see Fig. 2.] was surprising. We discuss it below.",
+            "Did she say that? The committee agreed.",
+            "She said that! The committee agreed.",
+            'She said "the result is clear." then the committee agreed.',
+            '"Ph.D. work is hard." The committee agreed.',
         ]
 
         for sentence in sentences:
@@ -1417,6 +1428,14 @@ class TestAtomicSplit:
                 # boundary in the original text (would indicate a merge/fragment).
                 if i > 0 and part[0].islower():
                     assert False, f"lowercase start after boundary in {part!r}"
+                # No atomic part may contain an internal sentence boundary.
+                # Check the protected text so abbreviation dots (Dr., Fig.)
+                # are not mistaken for sentence terminators.
+                if part in atomic:
+                    protected_part, _ = mod._protect_abbreviations(part)
+                    assert not boundary_re.search(protected_part), (
+                        f"atomic claim contains internal boundary in {part!r}"
+                    )
 
 
 # ---------------------------------------------------------------------------

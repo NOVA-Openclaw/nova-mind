@@ -884,10 +884,20 @@ _AMBIGUOUS_ABBREVIATIONS = (
     "approx.",
 )
 
+# Sentence boundary: [.!?] followed by optional closing punctuation/brackets,
+# then whitespace, then optional opening punctuation/brackets, then a capital
+# letter. This single definition is used by the splitter, the multi-dot
+# escalation guard, and the ambiguous-token check.
+_SENTENCE_BOUNDARY_RE = re.compile(
+    r"[.!?][\"\'\u201d\u2019)\]]*\s+[\"\'\u201c\u2018(\[]?[A-Z]"
+)
+
 # Regex for a single capital initial (e.g. "J. Smith"). Ambiguous in the same
-# way as etc./No./approx.: if followed by whitespace + a capital letter, the
-# fragment is compound_unsplit.
-_INITIAL_RE = re.compile(r"\b[A-Z]\.(?=\s+[A-Z])")
+# way as etc./No./approx.: if followed by a sentence boundary, the fragment is
+# compound_unsplit.
+_INITIAL_RE = re.compile(
+    r"\b[A-Z]\.(?=[\"\'\u201d\u2019)\]]*\s+[\"\'\u201c\u2018(\[]?[A-Z])"
+)
 
 # Regex for multi-dot tokens such as Ph.D., U.S., U.K., a.m., p.m., M.Sc.
 # These are protected as a class and treated as ambiguous.
@@ -947,15 +957,51 @@ def _restore_abbreviations(text: str, placeholders: list[_Placeholder]) -> str:
     return text
 
 
+def _split_sentences(text: str) -> list[str]:
+    """Split text at sentence boundaries, preserving closing/opening punctuation.
+
+    Returns a list of stripped sentence fragments. Empty fragments are omitted.
+    """
+    parts: list[str] = []
+    start = 0
+    for m in _SENTENCE_BOUNDARY_RE.finditer(text):
+        # Locate the whitespace span inside the matched boundary so the
+        # closing punctuation stays with the first sentence and the opening
+        # punctuation/capital stays with the second.
+        match_text = m.group()
+        ws_match = re.search(r"\s+", match_text)
+        assert ws_match is not None
+        ws_start_in_match = ws_match.start()
+        ws_end_in_match = ws_match.end()
+        boundary_ws_start = m.start() + ws_start_in_match
+        boundary_ws_end = m.start() + ws_end_in_match
+        parts.append(text[start:boundary_ws_start].strip())
+        start = boundary_ws_end
+    parts.append(text[start:].strip())
+    return [p for p in parts if p]
+
+
+def _split_into_fragments(text: str) -> list[str]:
+    """Split text at semicolons and then at sentence boundaries."""
+    fragments: list[str] = []
+    for segment in re.split(r"\s*;\s*", text):
+        fragments.extend(_split_sentences(segment))
+    return fragments
+
+
 def _has_ambiguous_sentence_boundary(text: str, placeholders: list[_Placeholder]) -> bool:
-    """Return True if an ambiguous placeholder is followed by whitespace + capital letter."""
+    """Return True if an ambiguous placeholder is followed by a sentence boundary."""
     restored = _restore_abbreviations(text, placeholders)
     for _, token, ambiguous in placeholders:
         if not ambiguous:
             continue
-        # Check whether this specific restored token is followed by whitespace
-        # and a capital letter in the restored text.
-        pattern = re.escape(token) + r"(?=\s+[A-Z])"
+        # Check whether this specific restored token is followed by the sentence
+        # boundary pattern: optional closing chars, whitespace, optional opening
+        # chars, capital letter.
+        pattern = (
+            re.escape(token)
+            + r"(?=[\"\'\u201d\u2019)\]]*\s+[\"\'\u201c\u2018(\[]?[A-Z])"
+        )
         if re.search(pattern, restored):
             return True
     return False
@@ -991,15 +1037,15 @@ def split_atomic_claims(content: str) -> tuple[list[str], list[str]]:
 
     protected_text, placeholders = _protect_abbreviations(text)
 
-    # First split into sentences and on semicolons (deterministic separators).
-    raw_parts = re.split(r"(?<=[.!?])\s+|\s*;\s*", protected_text)
+    # Split at semicolons and sentence boundaries (deterministic separators).
+    # Sentence boundaries honor optional closing/opening quotes and brackets.
+    raw_parts = _split_into_fragments(protected_text)
 
     # If the text contains a multi-dot token and also has a real sentence
-    # boundary (period + whitespace + capital letter), the boundary is
-    # ambiguous because any of the dots in the token could be mistaken for the
-    # sentence terminator. Escalate the whole text rather than risk fragments
-    # or merges.
-    if _contains_multi_dot_token(text) and re.search(r"\.\s+[A-Z]", text):
+    # boundary, the boundary is ambiguous because any of the dots in the token
+    # could be mistaken for the sentence terminator. Escalate the whole text
+    # rather than risk fragments or merges.
+    if _contains_multi_dot_token(text) and _SENTENCE_BOUNDARY_RE.search(text):
         restored = _restore_abbreviations(text, placeholders)
         # Do not strip periods: the text may end in a multi-dot token like
         # "Ph.D." and stripping would fragment it.

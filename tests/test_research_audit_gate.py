@@ -49,42 +49,56 @@ def gate() -> ModuleType:
 # ---------------------------------------------------------------------------
 # PostgreSQL helpers
 # ---------------------------------------------------------------------------
+# Test DB resolution order:
+#   1. RESEARCH_AUDIT_GATE_TEST_DSN (a full libpq DSN string)
+#   2. PGHOST/PGPORT/PGDATABASE/PGUSER/PGPASSWORD env vars
+# If neither resolves to a database, DB tests are skipped so the suite can run
+# in environments without a configured test database.
+TEST_DSN = os.environ.get("RESEARCH_AUDIT_GATE_TEST_DSN", "")
+
+
+def _test_dsn() -> str:
+    """Return the DSN to use for tests, or '' if none is configured.
+
+    Only explicit environment values are used; the live ~/.openclaw/postgres.json
+    is intentionally NOT consulted so tests cannot accidentally run against
+    production nova_memory.
+    """
+    if TEST_DSN:
+        return TEST_DSN
+    # Require PGDATABASE to be explicitly set; without it we cannot know which
+    # database is the intended test target.
+    if not os.environ.get("PGDATABASE"):
+        return ""
+    parts: list[str] = []
+    if os.environ.get("PGHOST"):
+        parts.append(f"host={os.environ['PGHOST']}")
+    if os.environ.get("PGPORT"):
+        parts.append(f"port={os.environ['PGPORT']}")
+    parts.append(f"dbname={os.environ['PGDATABASE']}")
+    if os.environ.get("PGUSER"):
+        parts.append(f"user={os.environ['PGUSER']}")
+    return " ".join(parts)
+
+
+def _require_test_db() -> str:
+    """Return the test DSN or skip the current test."""
+    dsn = _test_dsn()
+    if not dsn:
+        pytest.skip(
+            "No test database configured. Set RESEARCH_AUDIT_GATE_TEST_DSN "
+            "or PGHOST/PGDATABASE/PGUSER to run DB tests."
+        )
+    return dsn
+
+
 @pytest.fixture(scope="module")
-def pg_env() -> dict[str, str]:
-    """Load PG env via the same loader the gate uses."""
-    # Import pg_env directly from the repo copy so we stay consistent with the
-    # gate's own config path.
-    spec = importlib.util.spec_from_file_location(
-        "pg_env_for_tests",
-        Path(__file__).parent.parent / "memory" / "lib" / "pg_env.py",
-    )
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)  # type: ignore[union-attr]
-    return mod.load_pg_env(section=None)
-
-
-def _psycopg2_conn(env: dict[str, str]):
-    """Return a psycopg2 connection using the loaded PG env."""
+def db_conn():
+    """Module-scoped DB connection for schema setup and teardown."""
+    dsn = _require_test_db()
     import psycopg2
 
-    parts: list[str] = []
-    if env.get("PGHOST"):
-        parts.append(f"host={env['PGHOST']}")
-    else:
-        parts.append("host=/var/run/postgresql")
-    if env.get("PGPORT"):
-        parts.append(f"port={env['PGPORT']}")
-    if env.get("PGDATABASE"):
-        parts.append(f"dbname={env['PGDATABASE']}")
-    if env.get("PGUSER"):
-        parts.append(f"user={env['PGUSER']}")
-    return psycopg2.connect(" ".join(parts))
-
-
-@pytest.fixture(scope="module")
-def db_conn(pg_env: dict[str, str]):
-    """Module-scoped DB connection for schema setup and teardown."""
-    conn = _psycopg2_conn(pg_env)
+    conn = psycopg2.connect(dsn)
     yield conn
     conn.close()
 
@@ -329,12 +343,9 @@ class TestDbExitAndRole:
     def test_db05_nonexistent_task_returns_exit_2(self, db_conn, schema, tmp_path):
         """TC-657-DB-05: a missing task_id is a usage/DB error, exit 2."""
         # The schema exists but contains no tasks.
+        _require_test_db()  # skipped early if no test DB is configured
         env = os.environ.copy()
         env["RESEARCH_AUDIT_GATE_SCHEMA"] = schema
-        env["PGHOST"] = "localhost"
-        env["PGDATABASE"] = "nova_memory"
-        env["PGUSER"] = "nova"
-        log = tmp_path / "gate.log"
         proc = subprocess.run(
             [sys.executable, str(_SCRIPT_PATH), "--task-id", "999999", "--json"],
             cwd=str(_SCRIPT_PATH.parent.parent),

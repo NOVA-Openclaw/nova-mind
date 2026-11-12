@@ -1238,15 +1238,18 @@ class TestAtomicSplit:
         assert compound == []
 
     def test_inv7_initial_split(self):
-        """TC-657-INV7-05: a single capital initial must not split a sentence.
+        """TC-657-INV7-05: a single capital initial is ambiguous and escalated.
 
         Derivation: 'J.' is a single capital initial followed by a capitalized
-        surname; it must be protected, so 'J. Smith proved X.' stays atomic.
+        surname. Under the ambiguous-token rule it is followed by whitespace +
+        a capital letter, so we refuse to guess whether it ends a sentence and
+        escalate the fragment to compound_unsplit. This avoids the more serious
+        bug of merging two real sentences into one Noul comparison.
         """
         mod = _load_module()
         atomic, compound = mod.split_atomic_claims("J. Smith proved the bound.")
-        assert atomic == ["J. Smith proved the bound"]
-        assert compound == []
+        assert atomic == []
+        assert compound == ["J. Smith proved the bound"]
 
     def test_inv7_decimal_protected(self):
         """TC-657-INV7-06: decimal numbers must not split a sentence.
@@ -1260,8 +1263,50 @@ class TestAtomicSplit:
         atomic2, _ = mod.split_atomic_claims("We tested v2.1 of the model.")
         assert atomic2 == ["We tested v2.1 of the model"]
 
+    def test_inv7_ambiguous_initial_merges_sentences(self):
+        """TC-657-INV7-08: initial followed by capital across real boundary is compound.
+
+        Derivation: 'A.' in 'model A. Results' is an ambiguous token followed
+        by whitespace + a capital letter. We refuse to guess whether it ends
+        the sentence, so the whole fragment escalates to compound_unsplit.
+        """
+        mod = _load_module()
+        atomic, compound = mod.split_atomic_claims(
+            "We tested model A. Results improved by 3.5 dB."
+        )
+        assert atomic == []
+        assert len(compound) == 1
+        restored = compound[0]
+        assert "3.5 dB" in restored
+        assert "model A" in restored
+
+    def test_inv7_ambiguous_etc_merges_sentences(self):
+        """TC-657-INV7-09: 'etc.' followed by capital across real boundary is compound.
+
+        Derivation: 'etc.' can end a sentence or not. When it is followed by
+        whitespace + a capital letter we treat the boundary as ambiguous and
+        escalate the fragment to compound_unsplit.
+        """
+        mod = _load_module()
+        atomic, compound = mod.split_atomic_claims(
+            "The list includes apples, pears, etc. The second claim is separate."
+        )
+        assert atomic == []
+        assert len(compound) == 1
+
+    def test_inv7_unconditional_fig(self):
+        """TC-657-INV7-10: 'Fig.' is unconditionally protected.
+
+        Derivation: 'Fig.' is in the unconditional abbreviation list, so it
+        cannot be interpreted as a sentence terminator and the claim stays atomic.
+        """
+        mod = _load_module()
+        atomic, compound = mod.split_atomic_claims("See Fig. 2 for the bound.")
+        assert atomic == ["See Fig. 2 for the bound"]
+        assert compound == []
+
     def test_inv7_two_real_sentences_still_split(self):
-        """TC-657-INV7-07: two real sentences still split into two atomic claims.
+        """TC-657-INV7-11: two real sentences still split into two atomic claims.
 
         Derivation: a period followed by whitespace that is NOT part of a
         protected abbreviation or decimal must still terminate a sentence.

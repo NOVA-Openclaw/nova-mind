@@ -852,6 +852,27 @@ non-trivial spend this task is explicitly scoped to avoid.
   successfully evaluated) — proves "systemic" in GATE-02A means ALL, not MOST, and that the
   2-of-3 boundary does not accidentally trip the rarer, more severe exit-2 path.
 
+**TC-657-GATE-02C — Zero Jev calls attempted: NOT systemic, exit follows the findings (RULED,
+  2026-11-12, closes the §8 corner)**
+- **Fixture A (zero Jev calls, a deterministic violation present):** A task where every finding
+  is blocked purely on a deterministic axis (e.g. an EXIST-02-style title mismatch and a
+  TIER-03-style reconciliation conflict) before the pipeline ever reaches the Jev Support Noul
+  layer — zero Jev calls attempted for the whole task, by construction.
+- **Expected A:** Exit code `1` — driven entirely by the deterministic axis violations, exactly
+  as GATE-02's ordinary per-finding-blocked cases. NOT exit 2: per the ruling, exit 2
+  ("systemic") requires **at least one Jev call attempted AND all attempted calls failing** —
+  zero attempts is explicitly excluded from "systemic" and must not be conflated with it.
+- **Fixture B (zero Jev calls, all findings otherwise clean):** A task where every finding
+  passes all three deterministic axes without ever needing a Jev call (e.g. because every
+  citation's EXISTENCE/CONFIDENCE/TIER checks are independently sufficient to resolve the
+  finding with no ambiguity requiring escalation — a degenerate but valid all-deterministic-pass
+  case).
+- **Expected B:** Exit code `0` — confirms the "exit follows the findings" rule cuts both ways:
+  zero Jev calls with a clean outcome is an ordinary pass, not a systemic non-event requiring
+  special handling. Together, Fixture A and B prove GATE-02A's "systemic" condition is strictly
+  about the Jev layer having been invoked and having failed universally — it says nothing about,
+  and must not leak into, tasks that never reach that layer at all.
+
 **TC-657-GATE-03 — Clean-fixture control run, paired with NEG-01 in the same test pass (AC7
   proof structure, carried forward from the original SE#843 design)**
 - **Fixture:** All-clean fixture, run in the same invocation/test session as NEG-01.
@@ -1019,33 +1040,34 @@ non-trivial spend this task is explicitly scoped to avoid.
 
 ---
 
-## 4. Test Count Summary (Rev 2 — rulings pinned, SE#1282 step 4)
+## 4. Test Count Summary (Rev 3 — SE#1282 step 4 mutual sign-off)
 
-**Revision note:** Rev 1 (90 cases) is superseded in place (no v2 file created, per the
-TEST-CASE FILE DISPOSITION convention). Project Leadership's step-4 rulings (2026-11-12)
-resolved OQ-1 through OQ-5 plus the two implementer-discretion boundaries (JEV-02, NET-03).
-Seven net-new test cases were added where a ruling exposed a sub-case that didn't previously
-need its own ID (CONF-07A, JEVERR-04A, JEVERR-05A, JEVERR-05B, GATE-02A, GATE-02B, GATE-06A).
-No case was deleted; several were reworded in place to replace "either ruling"/"pending"
-language with the pinned behavior.
+**Revision note:** Rev 1 (90 cases) and Rev 2 (97 cases) are superseded in place (no v2/v3
+file created, per the TEST-CASE FILE DISPOSITION convention). Project Leadership's step-4
+rulings (2026-11-12) resolved OQ-1 through OQ-5, the two implementer-discretion boundaries
+(JEV-02, NET-03), and — in a follow-up ruling the same day — the zero-Jev-call corner flagged
+in Rev 2's §8 pushback. Eight net-new test cases total across both rounds (CONF-07A,
+JEVERR-04A, JEVERR-05A, JEVERR-05B, GATE-02A, GATE-02B, GATE-02C, GATE-06A). No case was
+deleted; several were reworded in place to replace "either ruling"/"pending" language with
+pinned behavior. **Step 4 mutual sign-off reached 2026-11-12** — no open items remain.
 
-| Area | Group | Count (Rev 1) | Count (Rev 2) |
-|---|---|---|---|
-| DB Query / Join Correctness & Read-Only Contract | DB | 7 | 7 |
-| EXISTENCE axis | EXIST | 9 | 9 |
-| CONFIDENCE axis | CONF | 9 | 10 (+1: CONF-07A) |
-| SOURCE TIER axis | TIER | 9 | 9 |
-| High-Risk Cell Flag | RISK | 6 | 6 |
-| Unreachable ⇒ UNREAD / 72h Lifecycle | NET | 7 | 7 |
-| Jev Support Noul Threshold Boundaries | JEV-THRESH | 7 | 7 |
-| Jev API Errors / Malformed Responses | JEV-ERR | 7 | 10 (+3: JEVERR-04A/05A/05B) |
-| Scope Choice Advisory-Only | SCOPE | 5 | 5 |
-| Output / Review Table | OUT | 5 | 5 |
-| Gate Contract (exit codes / CLI) | GATE | 6 | 9 (+3: GATE-02A/02B/06A) |
-| Negative/Failure Tests (AC7) | NEG | 4 | 4 |
-| Workflow 32 Wiring | WIRE | 6 | 6 |
-| Config→Runtime Seam | CONFIG | 3 | 3 |
-| **Total** | | **90** | **97 (+7)** |
+| Area | Group | Count (Rev 1) | Count (Rev 2) | Count (Rev 3) |
+|---|---|---|---|---|
+| DB Query / Join Correctness & Read-Only Contract | DB | 7 | 7 | 7 |
+| EXISTENCE axis | EXIST | 9 | 9 | 9 |
+| CONFIDENCE axis | CONF | 9 | 10 | 10 |
+| SOURCE TIER axis | TIER | 9 | 9 | 9 |
+| High-Risk Cell Flag | RISK | 6 | 6 | 6 |
+| Unreachable ⇒ UNREAD / 72h Lifecycle | NET | 7 | 7 | 7 |
+| Jev Support Noul Threshold Boundaries | JEV-THRESH | 7 | 7 | 7 |
+| Jev API Errors / Malformed Responses | JEV-ERR | 7 | 10 | 10 |
+| Scope Choice Advisory-Only | SCOPE | 5 | 5 | 5 |
+| Output / Review Table | OUT | 5 | 5 | 5 |
+| Gate Contract (exit codes / CLI) | GATE | 6 | 9 | 10 (+1: GATE-02C) |
+| Negative/Failure Tests (AC7) | NEG | 4 | 4 | 4 |
+| Workflow 32 Wiring | WIRE | 6 | 6 | 6 |
+| Config→Runtime Seam | CONFIG | 3 | 3 | 3 |
+| **Total** | | **90** | **97** | **98 (+1)** |
 
 ---
 
@@ -1159,19 +1181,14 @@ Rev 1's GATE-02 was testing for behavior the implementation was never going to h
 in place rather than left as a latent false expectation; flagging it explicitly here so the
 correction is visible in the revision history, not buried in a diff.
 
-**One scope note on OQ-4's "every Jev call fails → exit 2" clause:** the ruling's exact
-wording is "if EVERY Jev call in a run fails, exit 2." GATE-02A tests this literally (100% of
-Jev calls fail → exit 2) and GATE-02B tests the boundary just under 100% (2 of 3 fail → still
-exit 1). This leaves one case genuinely unspecified by the ruling's own wording, which QA is
-noting rather than guessing past: a task with **zero citations requiring any Jev call at all**
-(e.g. every finding fails on a purely deterministic axis — EXISTENCE/CONFIDENCE/TIER — before
-ever reaching the Jev layer). Is "every Jev call failed" vacuously true (0 of 0 calls failed,
-which some implementations might read as 100% failure) or vacuously false (no calls were
-attempted, so there is nothing to call "systemic")? This does not block implementation — a
-reasonable default (exit 1, since real deterministic violations were found and reported, and
-no Jev-layer problem exists at all) is almost certainly what was intended — but QA is not
-silently assuming it. No new test case added for this corner pending confirmation, to avoid
-pinning a behavior that wasn't actually ruled on.
+**OQ-4's "every Jev call fails → exit 2" zero-call corner — RESOLVED (I)ruid, 2026-11-12).**
+Ruling: exit 2 ("systemic") requires **at least one Jev call attempted AND all attempted calls
+failing**. Zero calls attempted (every finding stopped on a deterministic axis before reaching
+the Jev layer) is explicitly NOT systemic — exit follows the findings as normal (1 if any
+blocked, 0 otherwise). Pinned in new `TC-657-GATE-02C` (two sub-cases: zero-calls-with-a-
+violation → exit 1, zero-calls-all-clean → exit 0), alongside GATE-02A (the genuine
+all-attempted-all-failed systemic case) and GATE-02B (the just-under-100%-failure boundary,
+still exit 1). No open corners remain in the exit-code taxonomy.
 
 ---
 

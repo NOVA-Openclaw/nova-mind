@@ -2216,7 +2216,7 @@ class TestNegativeCases:
         )
 
     def test_neg01_two_independent_violations_named(self):
-        """TC-657-NEG-01: two injected known-bads are both named in the output."""
+        """TC-657-NEG-01: two injected known-bads are both named; clean finding is not."""
         mod = _load_module()
         # Finding A: title mismatch (EXIST-02 pattern).
         cite_a = self._clean_citation(cid=101, source_title="Wrong Title")
@@ -2242,18 +2242,38 @@ class TestNegativeCases:
             metadata={"claim_scope": "proved"},
             citations=[cite_b],
         )
+        # Finding C: clean control within the same task.
+        cite_c = self._clean_citation(cid=301)
+        finding_c = mod.Finding(
+            finding_id=12,
+            task_id=90001,
+            finding_type="fact",
+            content="Grass is green.",
+            confidence=0.85,
+            importance="normal",
+            metadata={"claim_scope": "proved"},
+            citations=[cite_c],
+        )
 
-        result = self._audit([finding_a, finding_b])
+        result = self._audit([finding_a, finding_b, finding_c])
         table = mod.render_review_table(result)
         assert result.exit_code() == 1
-        # Both violations named by finding/citation id and axis.
-        assert "finding 10" in table.lower() or "10         101" in table
-        assert "title mismatch" in table.lower()
-        assert "finding 11" in table.lower() or "11         201" in table
-        assert "confidence 1.00 misapplied" in table.lower()
+
+        # Both bad findings named by finding id, citation id, and axis.
+        assert "Finding 10 — BLOCKED" in table
+        assert "10         101" in table
+        assert "existence: title mismatch" in table.lower()
+        assert "Finding 11 — BLOCKED" in table
+        assert "11         201" in table
+        assert "confidence: confidence 1.00 misapplied" in table.lower()
+
+        # Clean finding is not blocked and not named as a violation.
+        assert "Finding 12 — PASS" in table
+        assert "12         301" in table
+        assert "Finding 12 — BLOCKED" not in table
 
     def test_neg01_control_clean_fixture_exit_0(self):
-        """TC-657-NEG-01 control: same fixture minus defects exits 0."""
+        """TC-657-NEG-01 control: same fixture minus the two defects exits 0."""
         mod = _load_module()
         finding_a = mod.Finding(
             finding_id=10,
@@ -2262,7 +2282,7 @@ class TestNegativeCases:
             content="The sky is blue.",
             confidence=0.85,
             importance="normal",
-            metadata={},
+            metadata={"claim_scope": "proved"},
             citations=[self._clean_citation(cid=101)],
         )
         finding_b = mod.Finding(
@@ -2272,11 +2292,26 @@ class TestNegativeCases:
             content="The proof shows P.",
             confidence=0.85,
             importance="normal",
-            metadata={},
+            metadata={"claim_scope": "proved"},
             citations=[self._clean_citation(cid=201)],
         )
-        result = self._audit([finding_a, finding_b])
+        finding_c = mod.Finding(
+            finding_id=12,
+            task_id=90001,
+            finding_type="fact",
+            content="Grass is green.",
+            confidence=0.85,
+            importance="normal",
+            metadata={"claim_scope": "proved"},
+            citations=[self._clean_citation(cid=301)],
+        )
+        result = self._audit([finding_a, finding_b, finding_c])
         assert result.exit_code() == 0
+        assert all(
+            fa.citation_audits[0].existence_state != "failed"
+            and fa.citation_audits[0].confidence_state != "failed"
+            for fa in result.finding_audits
+        )
 
     def test_neg02_isolate_existence_failure(self):
         """TC-657-NEG-02: isolated title mismatch names exactly one violation."""
@@ -2294,9 +2329,12 @@ class TestNegativeCases:
         result = self._audit([bad])
         table = mod.render_review_table(result)
         assert result.exit_code() == 1
-        assert "title mismatch" in table.lower()
-        # Exactly one finding row is BLOCKED (ignore the exit-label BLOCKED).
+        assert "existence: title mismatch" in table.lower()
         assert table.count("Finding 10 — BLOCKED") == 1
+        # No other axis is named as a violation.
+        assert "confidence:" not in table.lower()
+        assert "tier:" not in table.lower()
+        assert "jev:" not in table.lower()
 
     def test_neg02_control_clean_existence(self):
         """TC-657-NEG-02 control: title matches, other axes unchanged, exits 0."""
@@ -2308,7 +2346,7 @@ class TestNegativeCases:
             content="The sky is blue.",
             confidence=0.85,
             importance="normal",
-            metadata={},
+            metadata={"claim_scope": "proved"},
             citations=[self._clean_citation(cid=1)],
         )
         assert self._audit([good]).exit_code() == 0
@@ -2329,8 +2367,12 @@ class TestNegativeCases:
         result = self._audit([bad])
         table = mod.render_review_table(result)
         assert result.exit_code() == 1
-        assert "confidence 1.00 misapplied" in table.lower()
+        assert "confidence: confidence 1.00 misapplied" in table.lower()
         assert table.count("Finding 10 — BLOCKED") == 1
+        # No other axis is named as a violation.
+        assert "existence:" not in table.lower()
+        assert "tier:" not in table.lower()
+        assert "jev:" not in table.lower()
 
     def test_neg03_control_clean_confidence(self):
         """TC-657-NEG-03 control: confidence < 1.00, other axes unchanged, exits 0."""
@@ -2342,7 +2384,7 @@ class TestNegativeCases:
             content="The proof shows P.",
             confidence=0.95,
             importance="normal",
-            metadata={},
+            metadata={"claim_scope": "proved"},
             citations=[self._clean_citation(cid=1)],
         )
         assert self._audit([good]).exit_code() == 0
@@ -2363,8 +2405,12 @@ class TestNegativeCases:
         result = self._audit([bad])
         table = mod.render_review_table(result)
         assert result.exit_code() == 1
-        assert "tier conflict" in table.lower()
+        assert "tier: paper source_type with reliability 0.1 indicates tier conflict" in table.lower()
         assert table.count("Finding 10 — BLOCKED") == 1
+        # No other axis is named as a violation.
+        assert "existence:" not in table.lower()
+        assert "confidence:" not in table.lower()
+        assert "jev:" not in table.lower()
 
     def test_neg04_control_clean_tier(self):
         """TC-657-NEG-04 control: strong source_type + high reliability, exits 0."""
@@ -2376,7 +2422,7 @@ class TestNegativeCases:
             content="The sky is blue.",
             confidence=0.85,
             importance="normal",
-            metadata={},
+            metadata={"claim_scope": "proved"},
             citations=[self._clean_citation(cid=1, source_type="paper", reliability=0.95)],
         )
         assert self._audit([good]).exit_code() == 0

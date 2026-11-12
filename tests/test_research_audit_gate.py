@@ -1268,3 +1268,325 @@ class TestJevThreshold:
 # ---------------------------------------------------------------------------
 # JEV-ERR group tests (TC-657-JEVERR-01..JEVERR-07)
 # ---------------------------------------------------------------------------
+class TestJevErrors:
+    """Jev API errors and malformed responses are fail-closed per-citation."""
+
+    def _finding(self, content: str = "The sky is blue.") -> Any:
+        mod = _load_module()
+        return mod.Finding(
+            finding_id=10,
+            task_id=90001,
+            finding_type="fact",
+            content=content,
+            confidence=0.85,
+            importance="normal",
+            metadata={},
+            citations=[],
+        )
+
+    def _citation(self, snapshot: str = "The sky is blue.") -> Any:
+        mod = _load_module()
+        return mod.Citation(
+            citation_id=1,
+            finding_id=10,
+            source_type="paper",
+            source_url="https://example.com",
+            source_title="Example",
+            reliability=0.88,
+            accessed_at=datetime.now(timezone.utc),
+            metadata={
+                "source_snapshot_text": snapshot,
+                "last_fetch_success": True,
+                "last_status": 200,
+            },
+        )
+
+    def _config(self) -> Any:
+        mod = _load_module()
+        return mod.GateConfig(
+            schema="public",
+            drop_window_hours=72.0,
+            support_threshold=0.05,
+            jev_url="https://api.typesafe.ai/v1/systemone",
+            jev_api_key=None,
+            db_dsn="",
+            db_user="nova",
+        )
+
+    def _audit(
+        self,
+        finding: Any,
+        citation: Any,
+        post_func: Any,
+        sleep_func: Any = None,
+    ) -> Any:
+        mod = _load_module()
+        finding.citations = [citation]
+        if sleep_func is None:
+            sleep_func = lambda d: None
+        return mod.audit_task(
+            [finding],
+            self._config(),
+            jev_post_func=post_func,
+            jev_sleep_func=sleep_func,
+        )
+
+    def test_jeverr01_missing_p_supports(self):
+        """TC-657-JEVERR-01: missing p_supports field is a Jev API failure."""
+        result = self._audit(
+            self._finding(), self._citation(), lambda *a, **k: (200, '{"answer": "yes"}', {})
+        )
+        assert result.finding_audits[0].citation_audits[0].jev_support_state == "failed"
+
+    def test_jeverr02_nan_p_supports(self):
+        """TC-657-JEVERR-02: NaN p_supports is a Jev API failure."""
+        result = self._audit(
+            self._finding(), self._citation(), lambda *a, **k: (200, '{"p_supports": NaN}', {})
+        )
+        assert result.finding_audits[0].citation_audits[0].jev_support_state == "failed"
+
+    def test_jeverr03_out_of_range_p_supports(self):
+        """TC-657-JEVERR-03: out-of-range p_supports is a Jev API failure."""
+        def make_post(body: str):
+            return lambda *a, **k: (200, body, {})
+        for body in ('{"p_supports": 1.4}', '{"p_supports": -0.2}'):
+            result = self._audit(
+                self._finding(), self._citation(), make_post(body)
+            )
+            assert result.finding_audits[0].citation_audits[0].jev_support_state == "failed"
+
+    def test_jeverr04_timeout_three_attempts(self):
+        """TC-657-JEVERR-04: 3 attempts on timeout, then fail-closed."""
+        calls: list[Any] = []
+        sleeps: list[float] = []
+
+        def post(*a, **k):
+            calls.append(len(calls) + 1)
+            raise TimeoutError("timeout")
+
+        result = self._audit(
+            self._finding(), self._citation(), post, sleep_func=sleeps.append
+        )
+        assert len(calls) == 3
+        assert sleeps == [1.0, 2.0]
+        assert result.jev_attempted == 1
+        assert result.jev_failed == 1
+
+    def test_jeverr04a_retry_succeeds_on_second_attempt(self):
+        """TC-657-JEVERR-04A: transient failure resolved within retry budget."""
+        responses = [
+            TimeoutError("timeout"),
+            (200, '{"p_supports": 0.82}', {}),
+        ]
+        calls: list[Any] = []
+
+        def post(*a, **k):
+            calls.append(len(calls) + 1)
+            r = responses.pop(0)
+            if isinstance(r, Exception):
+                raise r
+            return r
+
+        result = self._audit(
+            self._finding(), self._citation(), post
+        )
+        assert len(calls) == 2
+        assert result.finding_audits[0].citation_audits[0].jev_support_state == "passed"
+
+    def test_jeverr05_5xx_three_attempts(self):
+        """TC-657-JEVERR-05: 5xx retries 3 times then fails closed."""
+        calls: list[Any] = []
+
+        def post(*a, **k):
+            calls.append(len(calls) + 1)
+            return 503, "Service Unavailable", {}
+
+        result = self._audit(
+            self._finding(), self._citation(), post
+        )
+        assert len(calls) == 3
+        assert result.finding_audits[0].citation_audits[0].jev_support_state == "failed"
+
+    def test_jeverr05a_429_honors_retry_after(self):
+        """TC-657-JEVERR-05A: 429 Retry-After overrides default backoff."""
+        sleeps: list[float] = []
+        responses = [
+            (429, "Too Many Requests", {"Retry-After": "5"}),
+            (200, '{"p_supports": 0.82}', {}),
+        ]
+
+        def post(*a, **k):
+            return responses.pop(0)
+
+        mod = _load_module()
+        finding = self._finding()
+        finding.citations = [self._citation()]
+        result = mod.audit_task(
+            [finding],
+            self._config(),
+            jev_post_func=post,
+            jev_sleep_func=sleeps.append,
+        )
+        assert sleeps == [5.0]
+        assert result.finding_audits[0].citation_audits[0].jev_support_state == "passed"
+
+    def test_jeverr05b_non_429_4xx_no_retry(self):
+        """TC-657-JEVERR-05B: non-429 4xx and malformed 200 body get no retry."""
+        def make_post(status: int, body: str):
+            calls: list[Any] = []
+
+            def post(*a, **k):
+                calls.append(1)
+                return status, body, {}
+
+            return post, calls
+
+        for status, body in ((400, '{"p_supports": 0.82}'), (200, "not json")):
+            post, calls = make_post(status, body)
+            result = self._audit(
+                self._finding(), self._citation(), post
+            )
+            assert len(calls) == 1
+            assert result.finding_audits[0].citation_audits[0].jev_support_state == "failed"
+
+    def test_jeverr06_malformed_200_body(self):
+        """TC-657-JEVERR-06: HTTP 200 with non-JSON body is a Jev API failure."""
+        result = self._audit(
+            self._finding(), self._citation(), lambda *a, **k: (200, "not json", {})
+        )
+        ca = result.finding_audits[0].citation_audits[0]
+        assert ca.jev_support_state == "failed"
+        # Single citation whose only Jev call failed → systemic failure (exit 2).
+        assert result.exit_code() == 2
+
+    def test_jeverr07_compound_not_sent_to_noul(self):
+        """TC-657-JEVERR-07: compound claims are split before Noul."""
+        mod = _load_module()
+        finding = mod.Finding(
+            finding_id=10,
+            task_id=90001,
+            finding_type="fact",
+            content="The paper proves X; the authors compute Y.",
+            confidence=0.85,
+            importance="normal",
+            metadata={},
+            citations=[],
+        )
+        citation = self._citation("snapshot")
+        calls: list[Any] = []
+
+        def post(url: str, payload: dict[str, Any], key: str) -> tuple[int, str, dict[str, str]]:
+            calls.append(payload["state"]["claim"])
+            return 200, '{"p_supports": 0.93}', {}
+
+        finding.citations = [citation]
+        mod.audit_task(
+            [finding],
+            self._config(),
+            jev_post_func=post,
+            jev_sleep_func=lambda d: None,
+        )
+        assert len(calls) == 2
+        assert "proves X" in calls[0]
+        assert "compute Y" in calls[1]
+
+
+# ---------------------------------------------------------------------------
+# GATE-02A / GATE-02B / GATE-02C systemic Jev failure tests
+# ---------------------------------------------------------------------------
+class TestSystemicJevFailure:
+    """Systemic failure when all Jev calls fail vs. per-citation fail-closed."""
+
+    def _finding(self, content: str = "The sky is blue.") -> Any:
+        mod = _load_module()
+        return mod.Finding(
+            finding_id=10,
+            task_id=90001,
+            finding_type="fact",
+            content=content,
+            confidence=0.85,
+            importance="normal",
+            metadata={},
+            citations=[],
+        )
+
+    def _citation(self, cid: int = 1, snapshot: str = "snapshot") -> Any:
+        mod = _load_module()
+        return mod.Citation(
+            citation_id=cid,
+            finding_id=10,
+            source_type="paper",
+            source_url="https://example.com",
+            source_title="Example",
+            reliability=0.88,
+            accessed_at=datetime.now(timezone.utc),
+            metadata={"source_snapshot_text": snapshot},
+        )
+
+    def _config(self) -> Any:
+        mod = _load_module()
+        return mod.GateConfig(
+            schema="public",
+            drop_window_hours=72.0,
+            support_threshold=0.05,
+            jev_url="https://api.typesafe.ai/v1/systemone",
+            jev_api_key=None,
+            db_dsn="",
+            db_user="nova",
+        )
+
+    def test_gate02a_all_jev_calls_fail_exit_2(self):
+        """TC-657-GATE-02A: every Jev call in a run fails → exit 2."""
+        mod = _load_module()
+        finding = self._finding()
+        finding.citations = [self._citation(1), self._citation(2), self._citation(3)]
+
+        def post(*a, **k):
+            raise TimeoutError("timeout")
+
+        result = mod.audit_task(
+            [finding],
+            self._config(),
+            jev_post_func=post,
+            jev_sleep_func=lambda d: None,
+        )
+        assert result.jev_attempted == 3
+        assert result.jev_failed == 3
+        assert result.exit_code() == 2
+
+    def test_gate02b_all_but_one_fail_exit_1(self):
+        """TC-657-GATE-02B: all-but-one Jev call fails → exit 1, not 2."""
+        mod = _load_module()
+        finding = self._finding()
+        finding.citations = [self._citation(1), self._citation(2), self._citation(3)]
+        # First two calls time out; third returns a passing score.
+        responses = [
+            TimeoutError("timeout"),
+            TimeoutError("timeout"),
+            (200, '{"p_supports": 0.93}', {}),
+        ]
+
+        def post(*a, **k):
+            r = responses.pop(0)
+            if isinstance(r, Exception):
+                raise r
+            return r
+
+        result = mod.audit_task(
+            [finding],
+            self._config(),
+            jev_post_func=post,
+            jev_sleep_func=lambda d: None,
+        )
+        assert result.jev_attempted == 3
+        assert result.jev_failed == 2
+        assert result.exit_code() == 1
+
+    def test_gate02c_zero_jev_attempts_exit_follows_findings(self):
+        """TC-657-GATE-02C: zero Jev calls attempted → exit follows findings."""
+        mod = _load_module()
+        finding = self._finding()
+        # No citations means no Jev calls.
+        result = mod.audit_task([finding], self._config())
+        assert result.jev_attempted == 0
+        assert result.exit_code() == 1  # no_surviving_citations placeholder

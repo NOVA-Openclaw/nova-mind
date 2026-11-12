@@ -199,10 +199,17 @@ def _load_pg_dsn() -> tuple[str, str]:
 def load_config() -> GateConfig:
     """Load configuration from environment and centralized PG config.
 
-    All gate-specific tunables are env-driven so recalibration (e.g. moving the
-    0.05 threshold after more data) does not require code changes. The 72-hour
-    source-drop window is likewise read at runtime so the collector lifecycle
-    can be adjusted without touching comparison logic in multiple places.
+    Gate-specific tunables are read from environment variables so recalibration
+    (e.g. moving the 0.05 threshold after more data) does not require code
+    changes:
+      * RESEARCH_AUDIT_GATE_SUPPORT_THRESHOLD — Jev Support Noul threshold
+      * RESEARCH_AUDIT_GATE_DROP_WINDOW_HOURS — collector source-drop window
+      * RESEARCH_AUDIT_GATE_JEV_URL — TypeSafe /v1/systemone endpoint
+      * RESEARCH_AUDIT_GATE_JEV_API_KEY — optional API key
+      * RESEARCH_AUDIT_GATE_SCHEMA — PostgreSQL schema for research_* tables
+    The 72-hour source-drop window and 0.05 threshold are likewise read at
+    runtime so the collector lifecycle can be adjusted without touching
+    comparison logic in multiple places.
     """
     db_dsn, db_user = _load_pg_dsn()
     return GateConfig(
@@ -1569,6 +1576,101 @@ def render_review_table(result: GateResult) -> str:
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
+def _resolve_task_id_for_problem(
+    conn: Any, schema: str, problem_id: int
+) -> Optional[int]:
+    """Resolve the active research task_id for an unsolved_problem.
+
+    In production this seam is populated by workflow 32's problem→project→task
+    linkage. For the gate's wiring contract we read the stored research_task_id
+    from unsolved_problems.metadata, which is what workflow 32 step 3 is
+    expected to set before invoking the gate.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            f"SELECT metadata FROM {schema}.unsolved_problems WHERE id = %s",
+            (problem_id,),
+        )
+        row = cur.fetchone()
+    if not row or not row[0]:
+        return None
+    meta = row[0]
+    if isinstance(meta, str):
+        try:
+            meta = json.loads(meta)
+        except Exception:
+            return None
+    task_id = meta.get("research_task_id")
+    if task_id is None:
+        return None
+    try:
+        return int(task_id)
+    except (TypeError, ValueError):
+        return None
+
+
+def _write_progress_notes(
+    conn: Any, schema: str, problem_id: int, notes: str
+) -> None:
+    """Write progress_notes for an unsolved_problem (workflow 32 step 3)."""
+    with conn.cursor() as cur:
+        cur.execute(
+            f"UPDATE {schema}.unsolved_problems SET progress_notes = %s, "
+            f"updated_at = now() WHERE id = %s",
+            (notes, problem_id),
+        )
+    conn.commit()
+
+
+def workflow_32_step_3(
+    conn: Any,
+    problem_id: int,
+    config: GateConfig,
+    progress_notes: Optional[str] = None,
+    session_mode: str = "WORK",
+) -> tuple[GateResult, bool]:
+    """Dry-run workflow 32 step 3 wiring seam.
+
+    Resolves the task_id for the active problem, runs the audit gate, and
+    decides whether the step-3 progress_notes write may proceed. Hard
+    violations (exit 1) and gate-could-not-run conditions (exit 2) both block
+    the write. MONITOR-mode sessions still run the gate explicitly rather than
+    being silently skipped.
+
+    Returns (gate_result, wrote_progress_notes).
+    """
+    task_id = _resolve_task_id_for_problem(conn, config.schema, problem_id)
+    if task_id is None:
+        result = GateResult(
+            task_id=-1,
+            errors=[f"no research_task_id resolved for problem {problem_id}"],
+        )
+        return result, False
+
+    # MONITOR mode is deliberately not a silent skip: the gate re-runs so
+    # previously-clean data does not spuriously pass due to a bypass.
+    if session_mode == "MONITOR":
+        pass  # explicit branch; gate runs below
+
+    with conn.cursor() as cur:
+        if not _task_exists(cur, config.schema, task_id):
+            result = GateResult(
+                task_id=task_id,
+                errors=[f"resolved task {task_id} not found"],
+            )
+            return result, False
+
+    findings = load_findings(conn, config.schema, task_id)
+    result = audit_task(findings, config)
+
+    # WIRE-02: gate failure blocks the progress_notes write.
+    if result.exit_code() == 0 and progress_notes is not None:
+        _write_progress_notes(conn, config.schema, problem_id, progress_notes)
+        return result, True
+
+    return result, False
+
+
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(

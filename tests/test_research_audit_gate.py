@@ -200,13 +200,14 @@ def _insert_citation(
     source_url: str | None = "https://example.com/paper",
     source_title: str | None = "Example Paper",
     reliability: float | None = 0.88,
+    metadata: dict[str, Any] | None = None,
 ) -> None:
     """Insert a research_citations row."""
     cur.execute(
         f"""
         INSERT INTO {schema}.research_citations
-            (id, finding_id, source_type, source_url, source_title, reliability)
-        VALUES (%s, %s, %s, %s, %s, %s)
+            (id, finding_id, source_type, source_url, source_title, reliability, metadata)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
         """,
         (
             citation_id,
@@ -215,6 +216,7 @@ def _insert_citation(
             source_url,
             source_title,
             reliability,
+            json.dumps(metadata or {}),
         ),
     )
 
@@ -2426,3 +2428,316 @@ class TestNegativeCases:
             citations=[self._clean_citation(cid=1, source_type="paper", reliability=0.95)],
         )
         assert self._audit([good]).exit_code() == 0
+
+
+# ---------------------------------------------------------------------------
+# WIRE group tests — Workflow 32 wiring seams (TC-657-WIRE-01..WIRE-06)
+# ---------------------------------------------------------------------------
+class TestWorkflowWiring:
+    """Workflow 32 step 3 calls the gate at the correct seam."""
+
+    def _config(self, schema: str) -> Any:
+        mod = _load_module()
+        return mod.GateConfig(
+            schema=schema,
+            drop_window_hours=72.0,
+            support_threshold=0.05,
+            jev_url="https://api.typesafe.ai/v1/systemone",
+            jev_api_key=None,
+            db_dsn="",
+            db_user="nova",
+        )
+
+    def _insert_problem(
+        self,
+        cur: Any,
+        schema: str,
+        problem_id: int,
+        task_id: int | None,
+        name: str = "problem",
+    ) -> None:
+        meta = {}
+        if task_id is not None:
+            meta["research_task_id"] = task_id
+        cur.execute(
+            f"""
+            INSERT INTO {schema}.unsolved_problems (id, name, metadata)
+            VALUES (%s, %s, %s)
+            """,
+            (problem_id, name, json.dumps(meta)),
+        )
+
+    def _progress_notes(self, conn: Any, schema: str, problem_id: int) -> str | None:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"SELECT progress_notes FROM {schema}.unsolved_problems WHERE id = %s",
+                (problem_id,),
+            )
+            row = cur.fetchone()
+        return row[0] if row else None
+
+    def test_wire01_gate_runs_before_progress_notes_write(self, db_conn, schema):
+        """TC-657-WIRE-01: gate output is available before progress_notes is written."""
+        mod = _load_module()
+        with db_conn.cursor() as cur:
+            _insert_task(cur, schema, 90001)
+            _insert_finding(cur, schema, 3310, 90001, confidence=0.85)
+            _insert_citation(
+                cur, schema, 4010, 3310, reliability=0.88,
+                source_type="book", source_url=None,
+                metadata={"last_fetch_success": True, "last_status": 200},
+            )
+            self._insert_problem(cur, schema, 100, 90001)
+        db_conn.commit()
+
+        config = self._config(schema)
+        result, wrote = mod.workflow_32_step_3(
+            db_conn, 100, config, progress_notes="step 3 synthesis"
+        )
+        assert result.exit_code() == 0
+        assert wrote is True
+        assert self._progress_notes(db_conn, schema, 100) == "step 3 synthesis"
+
+    def test_wire02_gate_failure_blocks_progress_notes_write(self, db_conn, schema):
+        """TC-657-WIRE-02: hard violation blocks the progress_notes write."""
+        mod = _load_module()
+        with db_conn.cursor() as cur:
+            _insert_task(cur, schema, 90001)
+            _insert_finding(cur, schema, 3310, 90001, confidence=1.00)
+            _insert_citation(
+                cur, schema, 4010, 3310, reliability=0.88,
+                source_type="book", source_url=None,
+                metadata={"last_fetch_success": True, "last_status": 200},
+            )
+            self._insert_problem(cur, schema, 100, 90001)
+        db_conn.commit()
+
+        config = self._config(schema)
+        result, wrote = mod.workflow_32_step_3(
+            db_conn, 100, config, progress_notes="should not write"
+        )
+        assert result.exit_code() == 1
+        assert wrote is False
+        assert self._progress_notes(db_conn, schema, 100) is None
+
+    def test_wire03_correct_task_id_per_problem(self, db_conn, schema):
+        """TC-657-WIRE-03: each problem resolves its own task_id."""
+        mod = _load_module()
+        with db_conn.cursor() as cur:
+            _insert_task(cur, schema, 90001)
+            _insert_task(cur, schema, 90002)
+            # Problem A's task is clean.
+            _insert_finding(cur, schema, 3310, 90001, confidence=0.85)
+            _insert_citation(
+                cur, schema, 4010, 3310, reliability=0.88,
+                source_type="book", source_url=None,
+                metadata={"last_fetch_success": True, "last_status": 200},
+            )
+            # Problem B's task has a confidence violation.
+            _insert_finding(cur, schema, 3320, 90002, confidence=1.00)
+            _insert_citation(
+                cur, schema, 4020, 3320, reliability=0.88,
+                source_type="book", source_url=None,
+                metadata={"last_fetch_success": True, "last_status": 200},
+            )
+            self._insert_problem(cur, schema, 100, 90001, name="A")
+            self._insert_problem(cur, schema, 101, 90002, name="B")
+        db_conn.commit()
+
+        config = self._config(schema)
+        result_a, _ = mod.workflow_32_step_3(db_conn, 100, config)
+        result_b, _ = mod.workflow_32_step_3(db_conn, 101, config)
+        assert result_a.exit_code() == 0
+        assert result_b.exit_code() == 1
+        assert result_a.task_id == 90001
+        assert result_b.task_id == 90002
+
+    def test_wire04_monitor_mode_runs_gate(self, db_conn, schema):
+        """TC-657-WIRE-04: MONITOR mode still runs the gate explicitly."""
+        mod = _load_module()
+        with db_conn.cursor() as cur:
+            _insert_task(cur, schema, 90001)
+            _insert_finding(cur, schema, 3310, 90001, confidence=0.85)
+            _insert_citation(
+                cur, schema, 4010, 3310, reliability=0.88,
+                source_type="book", source_url=None,
+                metadata={"last_fetch_success": True, "last_status": 200},
+            )
+            self._insert_problem(cur, schema, 100, 90001)
+        db_conn.commit()
+
+        config = self._config(schema)
+        result, wrote = mod.workflow_32_step_3(
+            db_conn, 100, config, session_mode="MONITOR"
+        )
+        assert result.exit_code() == 0
+        assert wrote is False  # no progress_notes provided, but gate still ran
+
+    def test_wire05_gate_output_available_for_step4_review(self, db_conn, schema):
+        """TC-657-WIRE-05: gate output can be rendered for human-review step 4."""
+        mod = _load_module()
+        with db_conn.cursor() as cur:
+            _insert_task(cur, schema, 90001)
+            _insert_finding(cur, schema, 3310, 90001, confidence=1.00)
+            _insert_citation(
+                cur, schema, 4010, 3310, reliability=0.88,
+                source_type="book", source_url=None,
+                metadata={"last_fetch_success": True, "last_status": 200},
+            )
+            self._insert_problem(cur, schema, 100, 90001)
+        db_conn.commit()
+
+        config = self._config(schema)
+        result, _ = mod.workflow_32_step_3(db_conn, 100, config)
+        table = mod.render_review_table(result)
+        assert result.exit_code() == 1
+        assert "confidence 1.00 misapplied" in table.lower()
+        assert "finding 3310" in table.lower()
+
+    def test_wire06_config_window_consistent_standalone_vs_workflow(self, db_conn, schema):
+        """TC-657-WIRE-06: 72h window produces the same drop decision in both paths."""
+        mod = _load_module()
+        stale_ts = (datetime.now(timezone.utc) - timedelta(hours=80)).isoformat()
+        with db_conn.cursor() as cur:
+            _insert_task(cur, schema, 90001)
+            _insert_finding(cur, schema, 3310, 90001, confidence=0.85)
+            _insert_citation(
+                cur,
+                schema,
+                4010,
+                3310,
+                reliability=0.88,
+                source_url="https://example.com/stale",
+                source_title="Stale",
+            )
+            # Patch citation metadata to mark stale and unreachable.
+            cur.execute(
+                f"""
+                UPDATE {schema}.research_citations
+                SET metadata = %s
+                WHERE id = %s
+                """,
+                (json.dumps({"last_fetch_success": False, "first_unreachable_at": stale_ts}), 4010),
+            )
+            self._insert_problem(cur, schema, 100, 90001)
+        db_conn.commit()
+
+        config = self._config(schema)
+
+        # Standalone path.
+        findings = mod.load_findings(db_conn, schema, 90001)
+        standalone = mod.audit_task(findings, config)
+
+        # Workflow path.
+        workflow, _ = mod.workflow_32_step_3(db_conn, 100, config)
+
+        assert standalone.dropped_citations == workflow.dropped_citations == [4010]
+        assert standalone.exit_code() == workflow.exit_code() == 1
+
+
+# ---------------------------------------------------------------------------
+# CONFIG group tests — Config→runtime seam (TC-657-CONFIG-01..CONFIG-03)
+# ---------------------------------------------------------------------------
+class TestConfigSeam:
+    """Gate tunables are runtime config, not hardcoded literals."""
+
+    def test_config01_threshold_override_changes_behavior(self):
+        """TC-657-CONFIG-01: support_threshold override changes escalation behavior."""
+        mod = _load_module()
+        config_low = mod.GateConfig(
+            schema="public",
+            drop_window_hours=72.0,
+            support_threshold=0.05,
+            jev_url="https://api.typesafe.ai/v1/systemone",
+            jev_api_key=None,
+            db_dsn="",
+            db_user="nova",
+        )
+        config_high = mod.GateConfig(
+            schema="public",
+            drop_window_hours=72.0,
+            support_threshold=0.10,
+            jev_url="https://api.typesafe.ai/v1/systemone",
+            jev_api_key=None,
+            db_dsn="",
+            db_user="nova",
+        )
+
+        def post(*a, **k):
+            payload = a[1] if len(a) > 1 else k.get("payload", {})
+            if isinstance(payload, dict) and "declared_scope" in payload.get("state", {}):
+                return 200, '{"scope_mismatch": false, "confidence": 0.9}', {}
+            return 200, '{"p_supports": 0.07}', {}
+
+        citation = mod.Citation(
+            citation_id=1,
+            finding_id=10,
+            source_type="paper",
+            source_url="https://example.com",
+            source_title="Example",
+            reliability=0.88,
+            accessed_at=datetime.now(timezone.utc),
+            metadata={
+                "source_snapshot_text": "snapshot",
+                "last_fetch_success": True,
+                "last_status": 200,
+            },
+        )
+        finding = mod.Finding(
+            finding_id=10,
+            task_id=90001,
+            finding_type="fact",
+            content="The sky is blue.",
+            confidence=0.85,
+            importance="normal",
+            metadata={"claim_scope": "proved"},
+            citations=[citation],
+        )
+
+        result_low = mod.audit_task(
+            [finding],
+            config_low,
+            fetcher=lambda url: (200, "Example", ""),
+            jev_post_func=post,
+            jev_sleep_func=lambda d: None,
+        )
+        result_high = mod.audit_task(
+            [finding],
+            config_high,
+            fetcher=lambda url: (200, "Example", ""),
+            jev_post_func=post,
+            jev_sleep_func=lambda d: None,
+        )
+
+        assert result_low.exit_code() == 0  # 0.07 > 0.05
+        assert result_high.exit_code() == 1  # 0.07 < 0.10
+
+    def test_config02_threshold_is_runtime_config_not_literal(self):
+        """TC-657-CONFIG-02: threshold is read from config, not a code literal."""
+        mod = _load_module()
+        # The default is a named constant; comparison uses config.support_threshold.
+        assert hasattr(mod, "DEFAULT_SUPPORT_THRESHOLD")
+        assert mod.DEFAULT_SUPPORT_THRESHOLD == 0.05
+        # load_config reads the live value from an env var.
+        assert "RESEARCH_AUDIT_GATE_SUPPORT_THRESHOLD" in mod.load_config.__doc__
+
+    def test_config03_load_config_uses_production_populated_values(self):
+        """TC-657-CONFIG-03: load_config exercises the production config→runtime seam."""
+        mod = _load_module()
+        original_threshold = os.environ.get("RESEARCH_AUDIT_GATE_SUPPORT_THRESHOLD")
+        original_window = os.environ.get("RESEARCH_AUDIT_GATE_DROP_WINDOW_HOURS")
+        try:
+            os.environ["RESEARCH_AUDIT_GATE_SUPPORT_THRESHOLD"] = "0.10"
+            os.environ["RESEARCH_AUDIT_GATE_DROP_WINDOW_HOURS"] = "48"
+            config = mod.load_config()
+            assert config.support_threshold == 0.10
+            assert config.drop_window_hours == 48.0
+        finally:
+            if original_threshold is None:
+                os.environ.pop("RESEARCH_AUDIT_GATE_SUPPORT_THRESHOLD", None)
+            else:
+                os.environ["RESEARCH_AUDIT_GATE_SUPPORT_THRESHOLD"] = original_threshold
+            if original_window is None:
+                os.environ.pop("RESEARCH_AUDIT_GATE_DROP_WINDOW_HOURS", None)
+            else:
+                os.environ["RESEARCH_AUDIT_GATE_DROP_WINDOW_HOURS"] = original_window

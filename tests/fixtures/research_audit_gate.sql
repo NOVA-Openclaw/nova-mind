@@ -40,3 +40,15 @@ CREATE TABLE IF NOT EXISTS {{schema}}.research_citations (
     accessed_at timestamp with time zone NOT NULL DEFAULT now(),
     metadata jsonb NOT NULL DEFAULT '{}'::jsonb
 );
+
+-- Minimal unsolved_problems mirror for workflow-32 wiring tests.
+CREATE TABLE IF NOT EXISTS {{schema}}.unsolved_problems (
+    id integer PRIMARY KEY,
+    name character varying(255) NOT NULL,
+    category character varying(100),
+    description text,
+    status character varying(50) DEFAULT 'unexplored',
+    progress_notes text,
+    metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+    updated_at timestamp with time zone NOT NULL DEFAULT now()
+);

@@ -9,7 +9,7 @@
     "build": "tsc",
     "watch": "tsc --watch",
     "clean": "rm -rf dist",
-    "test": "npx tsx --test src/sync.test.ts src/sync.integration.test.ts"
+    "test": "node --experimental-test-module-mocks --import tsx --test src/*.test.ts"
   },
   "keywords": [
     "openclaw",
@@ -29,6 +29,7 @@
   "devDependencies": {
     "@types/node": "^22.0.0",
     "@types/pg": "^8.11.0",
+    "tsx": "^4.23.15",
     "typescript": "^5.6.0"
   }
 }

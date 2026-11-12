@@ -36,7 +36,7 @@ import { buildHonorificGuard } from "./honorific-guard.ts";
 import { runSemanticRecall, type RecallInput } from "./semantic-recall.ts";
 import { classifyMessage, type ClassifierResult, type MessageType } from "./classifier.ts";
 import { identifyDomain, formatDomainContext, type DomainResult } from "./domain-identifier.ts";
-import { getPool } from "./shared/pg-pool.ts";
+import { getPool, closePool } from "./shared/pg-pool.ts";
 
 // ── Sender identity from host context (#712) ─────────────────────────────────
 
@@ -240,6 +240,10 @@ export default function register(api: PluginApi): void {
     `[turn-context] Plugin registered — hooks: before_prompt_build, placement=${placement}`
   );
 
+  api.on("gateway_stop", async () => {
+    await closePool();
+  });
+
   // ── Hook: before_prompt_build (awaited, returns context segments) ──────────
   //
   // Classifier-first dispatch:
@@ -267,6 +271,12 @@ export default function register(api: PluginApi): void {
       const sessionKey = ctx.sessionKey;
       const rawAgentId = ctx.agentId;
       const agentId: string = rawAgentId ?? "nova";
+      const signal = ctx.abortSignal;
+
+      if (signal?.aborted) {
+        console.info("[turn-context] before_prompt_build aborted before start");
+        return undefined;
+      }
 
       console.info(
         `[turn-context] before_prompt_build START agent=${agentId} session=${sessionKey ?? "none"}`
@@ -427,45 +437,75 @@ export default function register(api: PluginApi): void {
       );
       const subsystemStart = Date.now();
 
-      const [turnRemindersResult, domainIdentifierResult, recallResult] =
-        await Promise.allSettled<[
-          Promise<string | null>,
-          Promise<DomainResult | null>,
-          Promise<string | null>,
-        ]>([
-          // 1. Turn reminders — ALWAYS fires, never gated
-          getTurnReminders(agentId).catch((err) => {
-            console.error(
-              "[turn-context] Turn reminders error:",
-              err instanceof Error ? err.message : String(err)
-            );
-            return null;
-          }),
+      if (signal?.aborted) {
+        console.info("[turn-context] before_prompt_build aborted before subsystems");
+        return undefined;
+      }
 
-          // 2. Domain identifier — gated by helperConfig
-          helperConfig.domain_identifier && content
-            ? identifyDomain(content, classification.domainHints).catch((err) => {
-                console.error(
-                  "[turn-context] Domain identification error:",
-                  err instanceof Error ? err.message : String(err)
-                );
-                return null as DomainResult | null;
-              })
-            : Promise.resolve(null as DomainResult | null),
+      // Race subsystems against the host abort signal so shutdown is not blocked
+      // by a slow child process or DB query.
+      const abortPromise = new Promise<never>((_, reject) => {
+        if (signal?.aborted) {
+          reject(new Error("aborted"));
+          return;
+        }
+        signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+      });
 
-          // 3. Semantic recall — gated by helperConfig
-          // Uses classifier domain hints and resolved entityId for domain-scoped
-          // and visibility-gated recall (#150, #075)
-          helperConfig.semantic_recall && content
-            ? runSemanticRecall(recallInput).catch((err) => {
-                console.error(
-                  "[turn-context] Semantic recall error:",
-                  err instanceof Error ? err.message : String(err)
-                );
-                return null;
-              })
-            : Promise.resolve(null),
+      const subsystemRace = Promise.allSettled<[
+        Promise<string | null>,
+        Promise<DomainResult | null>,
+        Promise<string | null>,
+      ]>([
+        // 1. Turn reminders — ALWAYS fires, never gated
+        getTurnReminders(agentId).catch((err) => {
+          console.error(
+            "[turn-context] Turn reminders error:",
+            err instanceof Error ? err.message : String(err)
+          );
+          return null;
+        }),
+
+        // 2. Domain identifier — gated by helperConfig
+        helperConfig.domain_identifier && content
+          ? identifyDomain(content, classification.domainHints).catch((err) => {
+              console.error(
+                "[turn-context] Domain identification error:",
+                err instanceof Error ? err.message : String(err)
+              );
+              return null as DomainResult | null;
+            })
+          : Promise.resolve(null as DomainResult | null),
+
+        // 3. Semantic recall — gated by helperConfig
+        // Uses classifier domain hints and resolved entityId for domain-scoped
+        // and visibility-gated recall (#150, #075)
+        helperConfig.semantic_recall && content
+          ? runSemanticRecall(recallInput, signal).catch((err) => {
+              console.error(
+                "[turn-context] Semantic recall error:",
+                err instanceof Error ? err.message : String(err)
+              );
+              return null;
+            })
+          : Promise.resolve(null),
+      ]);
+
+      let [turnRemindersResult, domainIdentifierResult, recallResult]:
+        | [PromiseSettledResult<string | null>, PromiseSettledResult<DomainResult | null>, PromiseSettledResult<string | null>]
+        | [undefined, undefined, undefined] = [undefined, undefined, undefined];
+      try {
+        [turnRemindersResult, domainIdentifierResult, recallResult] = await Promise.race([
+          subsystemRace,
+          abortPromise,
         ]);
+      } catch (err) {
+        if ((err as Error).message === "aborted") {
+          console.info("[turn-context] before_prompt_build aborted during subsystems");
+          return undefined;
+        }
+        throw err;
+      }
 
       const subsystemMs = Date.now() - subsystemStart;
 
@@ -650,6 +690,8 @@ interface PluginContext {
   config?: Record<string, unknown>;
   /** Channel-owned sender/chat details. */
   channelContext?: ChannelContextShape;
+  /** Abort signal supplied by the host when the gateway is shutting down. */
+  abortSignal?: AbortSignal;
   [key: string]: unknown;
 }
 

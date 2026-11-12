@@ -24,7 +24,7 @@
 // "plugins": { "entries": { "self-awareness": { "hooks": { "allowConversationAccess": true } } } }
 // Without this, the message_sent hook will not receive conversation content.
 
-import { getPool } from "./shared/pg-pool.ts";
+import { getPool, closePool } from "./shared/pg-pool.ts";
 
 // ── Ollama config ─────────────────────────────────────────────────────────────
 
@@ -73,21 +73,34 @@ interface TriggerRow {
   times_triggered: number;
 }
 
+const activeRuns = new Set<Promise<void>>();
+
 export default function register(api: PluginApi): void {
   console.info("[self-awareness] Plugin registered — hook: message_sent");
 
   api.on(
     "message_sent",
     async (event: PluginEvent, ctx: PluginContext) => {
-      // Fire-and-forget: don't await the inner processing
-      processMessageSent(event, ctx).catch((err) => {
+      if (ctx.abortSignal?.aborted) {
+        return;
+      }
+      // Fire-and-forget: don't block message delivery, but track the run so
+      // gateway_stop can wait for it before closing the pool.
+      const run = processMessageSent(event, ctx).catch((err) => {
         console.error(
           "[self-awareness] Unhandled error in message_sent handler:",
           err instanceof Error ? err.message : String(err)
         );
       });
+      activeRuns.add(run);
+      run.finally(() => activeRuns.delete(run));
     }
   );
+
+  api.on("gateway_stop", async () => {
+    await Promise.allSettled(Array.from(activeRuns));
+    await closePool();
+  });
 }
 
 async function processMessageSent(
@@ -96,6 +109,9 @@ async function processMessageSent(
 ): Promise<void> {
   const content = event.content || "";
   if (!content.trim()) return;
+
+  const signal = ctx.abortSignal;
+  if (signal?.aborted) return;
 
   const agentId = ctx.agentId ?? "nova";
 
@@ -106,6 +122,8 @@ async function processMessageSent(
     console.warn("[self-awareness] Could not get pg pool:", (e as Error).message);
     return;
   }
+
+  if (signal?.aborted) return;
 
   // ── Load enabled triggers ─────────────────────────────────────────────────
   let triggers: TriggerRow[] = [];
@@ -123,6 +141,8 @@ async function processMessageSent(
     return;
   }
 
+  if (signal?.aborted) return;
+
   if (triggers.length === 0) {
     console.debug("[self-awareness] No enabled triggers");
     return;
@@ -132,10 +152,12 @@ async function processMessageSent(
   const resolvedAgentId = await resolveSubagentToParent(agentId, pool);
   console.info(`[self-awareness] agentId=${agentId} resolvedSender=${resolvedAgentId}`);
 
+  if (signal?.aborted) return;
+
   // ── Embed message content once ────────────────────────────────────────────
   let messageEmbedding: number[] | undefined;
   try {
-    messageEmbedding = await embedViaOllama(content);
+    messageEmbedding = await embedViaOllama(content, signal);
   } catch (e) {
     console.warn(
       "[self-awareness] Ollama embedding failed for message, skipping:",
@@ -146,6 +168,8 @@ async function processMessageSent(
 
   // ── Evaluate each trigger ─────────────────────────────────────────────────
   for (const trigger of triggers) {
+    if (signal?.aborted) return;
+
     // Cooldown check
     if (trigger.last_triggered_at) {
       const elapsedMinutes =
@@ -162,7 +186,7 @@ async function processMessageSent(
     let embeddings = trigger.keyphrase_embeddings;
     if (!embeddings || embeddings.length === 0) {
       try {
-        embeddings = await selfHealKeyphrases(trigger.id, trigger.keyphrases, pool);
+        embeddings = await selfHealKeyphrases(trigger.id, trigger.keyphrases, pool, signal);
       } catch (e) {
         console.warn(
           `[self-awareness] Self-heal failed for '${trigger.name}':`,
@@ -190,6 +214,8 @@ async function processMessageSent(
     if (bestSim >= trigger.similarity_threshold) {
       // Fire action
       await fireAction(trigger, content, bestSim, resolvedAgentId, pool);
+
+      if (signal?.aborted) continue;
 
       // Update trigger stats
       try {
@@ -236,13 +262,14 @@ interface OllamaEmbedResponse {
   embedding: number[];
 }
 
-async function embedViaOllama(text: string): Promise<number[]> {
+async function embedViaOllama(text: string, signal?: AbortSignal): Promise<number[]> {
   const cfg = await getEmbeddingConfig();
   const url = `${cfg.base_url.replace(/\/$/, "")}/api/embeddings`;
   const resp = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ model: cfg.model, prompt: text }),
+    signal,
   });
   if (!resp.ok) {
     const body = await resp.text().catch(() => "");
@@ -263,20 +290,22 @@ async function embedViaOllama(text: string): Promise<number[]> {
 async function selfHealKeyphrases(
   triggerId: number,
   keyphrases: string[],
-  pool: import("pg").Pool
+  pool: import("pg").Pool,
+  signal?: AbortSignal
 ): Promise<number[][]> {
   console.info(`[self-awareness] Self-heal: embedding ${keyphrases.length} keyphrases for trigger ${triggerId}`);
   const embeddings: number[][] = [];
   for (const kp of keyphrases) {
+    if (signal?.aborted) break;
     try {
-      const emb = await embedViaOllama(kp);
+      const emb = await embedViaOllama(kp, signal);
       embeddings.push(emb);
     } catch (e) {
       console.warn(`[self-awareness] Failed to embed keyphrase '${kp}':`, (e as Error).message);
     }
   }
 
-  if (embeddings.length > 0) {
+  if (embeddings.length > 0 && !signal?.aborted) {
     try {
       await pool.query(
         `UPDATE self_awareness_triggers SET keyphrase_embeddings = $1::jsonb WHERE id = $2`,
@@ -378,5 +407,6 @@ interface PluginContext {
   agentId?: string;
   messageProvider?: string;
   runId?: string;
+  abortSignal?: AbortSignal;
   [key: string]: unknown;
 }

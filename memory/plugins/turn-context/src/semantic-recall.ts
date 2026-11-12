@@ -98,8 +98,14 @@ export interface RecallInput {
  * JSON from stdin when no positional args are given).
  */
 export async function runSemanticRecall(
-  input: RecallInput
+  input: RecallInput,
+  abortSignal?: AbortSignal
 ): Promise<string | null> {
+  if (abortSignal?.aborted) {
+    console.info("[turn-context] semantic-recall: aborted before spawn");
+    return null;
+  }
+
   const messageText = input.content.substring(0, 2000);
 
   // Determine recall tier for observability logging
@@ -131,7 +137,7 @@ export async function runSemanticRecall(
 
   let result: RecallResult | null = null;
   try {
-    result = await spawnWithTimeout(JSON.stringify(stdinPayload));
+    result = await spawnWithTimeout(JSON.stringify(stdinPayload), abortSignal);
   } catch (err) {
     console.error(
       "[turn-context] Semantic recall error:",
@@ -164,8 +170,16 @@ export async function runSemanticRecall(
 
 // ── Async spawn helper ────────────────────────────────────────────────────────
 
-function spawnWithTimeout(stdinPayload: string): Promise<RecallResult> {
+function spawnWithTimeout(
+  stdinPayload: string,
+  abortSignal?: AbortSignal
+): Promise<RecallResult> {
   return new Promise((resolve, reject) => {
+    if (abortSignal?.aborted) {
+      reject(new Error("aborted"));
+      return;
+    }
+
     const child = spawn(
       PYTHON_BIN,
       [
@@ -183,6 +197,24 @@ function spawnWithTimeout(stdinPayload: string): Promise<RecallResult> {
 
     let stdout = "";
     let stderr = "";
+    let settled = false;
+
+    function cleanup() {
+      settled = true;
+      clearTimeout(timer);
+      abortSignal?.removeEventListener("abort", onAbort);
+    }
+
+    function onAbort() {
+      if (settled) return;
+      cleanup();
+      try {
+        child.kill("SIGTERM");
+      } catch {
+        // Ignore errors from killing an already-dead process.
+      }
+      reject(new Error("aborted"));
+    }
 
     child.stdout.on("data", (chunk: Buffer) => {
       stdout += chunk.toString();
@@ -194,12 +226,23 @@ function spawnWithTimeout(stdinPayload: string): Promise<RecallResult> {
 
     // Hard timeout — kill the process if it hangs
     const timer = setTimeout(() => {
-      child.kill("SIGTERM");
+      if (settled) return;
+      cleanup();
+      try {
+        child.kill("SIGTERM");
+      } catch {
+        // Ignore errors from killing an already-dead process.
+      }
       reject(new Error(`proactive-recall.py timed out after ${SPAWN_TIMEOUT_MS}ms`));
     }, SPAWN_TIMEOUT_MS);
 
+    if (abortSignal) {
+      abortSignal.addEventListener("abort", onAbort, { once: true });
+    }
+
     child.on("close", (code) => {
-      clearTimeout(timer);
+      if (settled) return;
+      cleanup();
       if (code === 0 && stdout) {
         try {
           resolve(JSON.parse(stdout) as RecallResult);
@@ -218,7 +261,8 @@ function spawnWithTimeout(stdinPayload: string): Promise<RecallResult> {
     });
 
     child.on("error", (err) => {
-      clearTimeout(timer);
+      if (settled) return;
+      cleanup();
       reject(err);
     });
 

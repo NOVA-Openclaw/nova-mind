@@ -80,3 +80,19 @@ export function getPool(): pg.Pool {
   }
   return pool;
 }
+
+/**
+ * Close the singleton pg.Pool and drop the reference so a subsequent
+ * getPool() will create a fresh pool. Safe to call multiple times.
+ */
+export async function closePool(): Promise<void> {
+  const toClose = pool;
+  pool = null;
+  if (toClose) {
+    try {
+      await toClose.end();
+    } catch (err) {
+      console.warn("[turn-context] Pool close error:", (err as Error).message);
+    }
+  }
+}

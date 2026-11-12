@@ -69,6 +69,13 @@ function createConfigSyncService(api: OpenClawPluginApi) {
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   let stopped = false;
   let reconnectDelay = RECONNECT_DELAY_MS;
+  const activeWork = new Set<Promise<unknown>>();
+
+  function track<T>(promise: Promise<T>): Promise<T> {
+    activeWork.add(promise);
+    promise.finally(() => activeWork.delete(promise));
+    return promise;
+  }
 
   const outputPath =
     (api.pluginConfig?.outputPath as string | undefined) ?? DEFAULT_OUTPUT_PATH;
@@ -146,7 +153,9 @@ function createConfigSyncService(api: OpenClawPluginApi) {
       );
 
       // Handle notifications
-      client.on("notification", async (msg) => {
+      async function handleNotification(msg: { channel: string; payload?: string }) {
+        if (stopped) return;
+
         if (msg.channel === NOTIFY_CHANNEL) {
           log.info("agent_config_sync: Received agent config change notification");
 
@@ -205,38 +214,50 @@ function createConfigSyncService(api: OpenClawPluginApi) {
             log.error(`agent_config_sync: Heartbeat sync failed: ${err}`);
           }
         }
+      }
+
+      client.on("notification", (msg) => {
+        return track(handleNotification(msg as { channel: string; payload?: string }));
       });
 
       // Handle connection errors → reconnect
       client.on("error", (err) => {
         log.error(`agent_config_sync: Connection error: ${err.message}`);
-        cleanup();
+        cleanup().catch(() => {});
         scheduleReconnect(log);
       });
 
       // Keep-alive heartbeat
       keepAliveTimer = setInterval(() => {
-        client.query("SELECT 1").catch((err) => {
-          log.error(`agent_config_sync: Keep-alive failed: ${err.message}`);
-          cleanup();
-          scheduleReconnect(log);
-        });
+        if (stopped) return;
+        track(
+          client.query("SELECT 1").catch((err) => {
+            log.error(`agent_config_sync: Keep-alive failed: ${err.message}`);
+            cleanup().catch(() => {});
+            scheduleReconnect(log);
+          }),
+        );
       }, KEEPALIVE_INTERVAL_MS);
     } catch (err) {
       log.error(`agent_config_sync: Failed to start: ${err}`);
-      cleanup();
+      await cleanup();
       scheduleReconnect(log);
     }
   }
 
-  function cleanup(): void {
+  async function cleanup(): Promise<void> {
     if (keepAliveTimer) {
       clearInterval(keepAliveTimer);
       keepAliveTimer = null;
     }
     if (pgClient) {
-      pgClient.end().catch(() => {});
+      const client = pgClient;
       pgClient = null;
+      try {
+        await client.end();
+      } catch {
+        // Ignore close errors during shutdown.
+      }
     }
   }
 
@@ -248,8 +269,9 @@ function createConfigSyncService(api: OpenClawPluginApi) {
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null;
       if (!stopped) {
-        startListener(log).catch((err) => {
+        startListener(log).catch(async (err) => {
           log.error(`agent_config_sync: Reconnect failed: ${err}`);
+          await cleanup();
           // Exponential backoff
           reconnectDelay = Math.min(reconnectDelay * 2, MAX_RECONNECT_DELAY_MS);
           scheduleReconnect(log);
@@ -274,7 +296,15 @@ function createConfigSyncService(api: OpenClawPluginApi) {
         clearTimeout(reconnectTimer);
         reconnectTimer = null;
       }
-      cleanup();
+      if (keepAliveTimer) {
+        clearInterval(keepAliveTimer);
+        keepAliveTimer = null;
+      }
+      // End the client first so in-flight queries error and handlers can settle,
+      // then wait for every tracked handler/keepalive promise before declaring
+      // the service stopped.
+      await cleanup();
+      await Promise.allSettled(Array.from(activeWork));
       ctx.logger.info("agent_config_sync: Service stopped");
     },
   };

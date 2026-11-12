@@ -1336,14 +1336,18 @@ class TestJevErrors:
         result = self._audit(
             self._finding(), self._citation(), lambda *a, **k: (200, '{"answer": "yes"}', {})
         )
-        assert result.finding_audits[0].citation_audits[0].jev_support_state == "failed"
+        ca = result.finding_audits[0].citation_audits[0]
+        assert ca.jev_support_state == "failed"
+        assert result.exit_code() == 2  # only citation's Jev call failed
 
     def test_jeverr02_nan_p_supports(self):
         """TC-657-JEVERR-02: NaN p_supports is a Jev API failure."""
         result = self._audit(
             self._finding(), self._citation(), lambda *a, **k: (200, '{"p_supports": NaN}', {})
         )
-        assert result.finding_audits[0].citation_audits[0].jev_support_state == "failed"
+        ca = result.finding_audits[0].citation_audits[0]
+        assert ca.jev_support_state == "failed"
+        assert result.exit_code() == 2
 
     def test_jeverr03_out_of_range_p_supports(self):
         """TC-657-JEVERR-03: out-of-range p_supports is a Jev API failure."""
@@ -1353,7 +1357,9 @@ class TestJevErrors:
             result = self._audit(
                 self._finding(), self._citation(), make_post(body)
             )
-            assert result.finding_audits[0].citation_audits[0].jev_support_state == "failed"
+            ca = result.finding_audits[0].citation_audits[0]
+            assert ca.jev_support_state == "failed"
+            assert result.exit_code() == 2
 
     def test_jeverr04_timeout_three_attempts(self):
         """TC-657-JEVERR-04: 3 attempts on timeout, then fail-closed."""
@@ -1371,6 +1377,7 @@ class TestJevErrors:
         assert sleeps == [1.0, 2.0]
         assert result.jev_attempted == 1
         assert result.jev_failed == 1
+        assert result.exit_code() == 2
 
     def test_jeverr04a_retry_succeeds_on_second_attempt(self):
         """TC-657-JEVERR-04A: transient failure resolved within retry budget."""
@@ -1406,6 +1413,7 @@ class TestJevErrors:
         )
         assert len(calls) == 3
         assert result.finding_audits[0].citation_audits[0].jev_support_state == "failed"
+        assert result.exit_code() == 2
 
     def test_jeverr05a_429_honors_retry_after(self):
         """TC-657-JEVERR-05A: 429 Retry-After overrides default backoff."""
@@ -1448,16 +1456,48 @@ class TestJevErrors:
             )
             assert len(calls) == 1
             assert result.finding_audits[0].citation_audits[0].jev_support_state == "failed"
+            assert result.exit_code() == 2
 
-    def test_jeverr06_malformed_200_body(self):
-        """TC-657-JEVERR-06: HTTP 200 with non-JSON body is a Jev API failure."""
+    def test_jeverr06_malformed_200_body_systemic(self):
+        """TC-657-JEVERR-06A: single citation + malformed 200 → systemic exit 2."""
         result = self._audit(
             self._finding(), self._citation(), lambda *a, **k: (200, "not json", {})
         )
         ca = result.finding_audits[0].citation_audits[0]
         assert ca.jev_support_state == "failed"
-        # Single citation whose only Jev call failed → systemic failure (exit 2).
         assert result.exit_code() == 2
+
+    def test_jeverr06_malformed_200_body_per_citation(self):
+        """TC-657-JEVERR-06B: malformed 200 blocks its finding; other finding passes."""
+        mod = _load_module()
+        finding_a = self._finding("Finding A")
+        finding_b = self._finding("Finding B")
+        cite_a = self._citation("snapshot A")
+        cite_b = self._citation("snapshot B")
+        finding_a.citations = [cite_a]
+        finding_b.citations = [cite_b]
+
+        def post(*a, **k):
+            # Only the first call (finding A) gets the malformed body;
+            # everything else passes cleanly.
+            if not hasattr(post, "calls"):
+                post.calls = 0
+            post.calls += 1
+            if post.calls == 1:
+                return 200, "not json", {}
+            return 200, '{"p_supports": 0.83}', {}
+
+        result = mod.audit_task(
+            [finding_a, finding_b],
+            self._config(),
+            jev_post_func=post,
+            jev_sleep_func=lambda d: None,
+        )
+        ca_a = result.finding_audits[0].citation_audits[0]
+        ca_b = result.finding_audits[1].citation_audits[0]
+        assert ca_a.jev_support_state == "failed"
+        assert ca_b.jev_support_state == "passed"
+        assert result.exit_code() == 1
 
     def test_jeverr07_compound_not_sent_to_noul(self):
         """TC-657-JEVERR-07: compound claims are split before Noul."""

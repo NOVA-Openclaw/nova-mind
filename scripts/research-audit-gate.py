@@ -1185,6 +1185,9 @@ def _parse_noul_response(body: str) -> float:
             break
     else:
         raise ValueError("missing p_supports/probability/confidence field")
+    # bool is a subclass of int in Python; reject it explicitly (fail-closed).
+    if isinstance(val, bool):
+        raise ValueError("p_supports is a boolean, not a number")
     if isinstance(val, str):
         if val.lower() == "nan":
             raise ValueError("p_supports is NaN")

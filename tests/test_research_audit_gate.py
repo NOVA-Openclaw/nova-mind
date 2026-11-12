@@ -1481,6 +1481,18 @@ class TestJevErrors:
             assert ca.jev_support_state == "failed"
             assert result.exit_code() == 2
 
+    def test_jeverr03a_boolean_p_supports_fail_closed(self):
+        """TC-657-JEVERR-03A: boolean p_supports is rejected (bool is subclass of int)."""
+        def make_post(body: str):
+            return lambda *a, **k: (200, body, {})
+        for body in ('{"p_supports": true}', '{"p_supports": false}'):
+            result = self._audit(
+                self._finding(), self._citation(), make_post(body)
+            )
+            ca = result.finding_audits[0].citation_audits[0]
+            assert ca.jev_support_state == "failed"
+            assert result.exit_code() == 2
+
     def test_jeverr04_timeout_three_attempts(self):
         """TC-657-JEVERR-04: 3 attempts on timeout, then fail-closed."""
         calls: list[Any] = []

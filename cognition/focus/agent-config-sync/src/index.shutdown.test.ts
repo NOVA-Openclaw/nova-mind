@@ -16,6 +16,7 @@ import path from "node:path";
 import { EventEmitter } from "node:events";
 
 const SHUTDOWN_BUDGET_MS = 500; // must stay well under core's 5000ms drain
+const SHUTDOWN_BUDGET_WITH_WORK_MS = 2500; // allows the 1.5s in-flight work budget to fire
 
 function makeDbPluginConfig(outputPath: string) {
   return {
@@ -48,7 +49,7 @@ describe("agent_config_sync shutdown contract", () => {
     await fs.promises.rm(tmpDir, { recursive: true, force: true });
   });
 
-  it("awaits a pending NOTIFY handler and client.end() before returning from stop()", async (t) => {
+  it("awaits a pending NOTIFY handler and client.end() before returning from stop()", { timeout: 5000 }, async (t) => {
     const logLines: string[] = [];
     const logger = {
       info: (msg: string) => logLines.push(`INFO ${msg}`),
@@ -82,6 +83,9 @@ describe("agent_config_sync shutdown contract", () => {
         });
       }
       async query(text: string) {
+        if (endResolved) {
+          throw new Error("connection closed");
+        }
         if (text.includes("information_schema.columns")) {
           return { rows: [{ exists: true }] };
         }
@@ -166,8 +170,8 @@ describe("agent_config_sync shutdown contract", () => {
     const elapsed = Date.now() - stopStart;
 
     assert.ok(
-      elapsed < SHUTDOWN_BUDGET_MS,
-      `stop() took ${elapsed}ms, expected < ${SHUTDOWN_BUDGET_MS}ms`
+      elapsed < SHUTDOWN_BUDGET_WITH_WORK_MS,
+      `stop() took ${elapsed}ms, expected < ${SHUTDOWN_BUDGET_WITH_WORK_MS}ms`
     );
     assert.ok(endCalled, "pgClient.end() was not called by stop()");
     assert.ok(endResolved, "pgClient.end() was not awaited to completion by stop()");
@@ -179,7 +183,7 @@ describe("agent_config_sync shutdown contract", () => {
     assert.ok(stoppedIndex > stoppingIndex, "'Service stopped' must be logged after 'Service stopping'");
   });
 
-  it("returns quickly when there is no in-flight work", async (t) => {
+  it("returns quickly when there is no in-flight work", { timeout: 5000 }, async (t) => {
     const logLines: string[] = [];
     const logger = {
       info: (msg: string) => logLines.push(`INFO ${msg}`),
@@ -255,6 +259,105 @@ describe("agent_config_sync shutdown contract", () => {
     assert.ok(
       logLines.some((l) => l.includes("Service stopped")),
       "missing 'Service stopped' log"
+    );
+  });
+
+  it("returns within 4s when client.end() hangs and destroys the connection", { timeout: 6000 }, async (t) => {
+    const logLines: string[] = [];
+    const logger = {
+      info: (msg: string) => logLines.push(`INFO ${msg}`),
+      error: (msg: string) => logLines.push(`ERROR ${msg}`),
+      debug: (msg: string) => logLines.push(`DEBUG ${msg}`),
+    };
+
+    let clientInstance: MockClient | null = null;
+
+    class MockClient extends EventEmitter {
+      ended = false;
+      destroyed = false;
+      connection = {
+        stream: {
+          destroy: () => {
+            this.destroyed = true;
+            this.ended = true;
+          },
+        },
+      };
+
+      constructor(...args: any[]) {
+        super(...args);
+        clientInstance = this;
+      }
+
+      async connect() {}
+      async end() {
+        this.ended = true;
+        // Simulate a client.end() that never resolves.
+        return new Promise<void>(() => {});
+      }
+      async query(text: string) {
+        if (text.includes("information_schema.columns")) {
+          return { rows: [{ exists: true }] };
+        }
+        if (text.includes("get_agent_export_rows()")) {
+          return {
+            rows: [
+              {
+                name: "nova",
+                model: "ollama/llama3",
+                fallback_models: null,
+                thinking: null,
+                instance_type: "primary",
+                is_default: true,
+                allowed_subagents: null,
+                heartbeat_enabled: false,
+              },
+            ],
+          };
+        }
+        return { rows: [] };
+      }
+    }
+
+    const mockPg = {
+      default: { Client: MockClient },
+      Client: MockClient,
+    };
+
+    (t as any).mock.module("pg", {
+      exports: { default: mockPg.default, Client: MockClient },
+    });
+
+    let service: any;
+    const api = {
+      pluginConfig: makeDbPluginConfig(outputPath),
+      config: {},
+      logger,
+      registerService: (svc: any) => {
+        service = svc;
+      },
+    };
+
+    const { default: plugin } = await import("../index.ts");
+    plugin.register(api);
+
+    await service.start({ logger });
+
+    const stopStart = Date.now();
+    await service.stop({ logger });
+    const elapsed = Date.now() - stopStart;
+
+    assert.ok(
+      elapsed < 4000,
+      `stop() took ${elapsed}ms, expected < 4000ms`
+    );
+    assert.ok(
+      logLines.some((l) => l.includes("force-closing connection")),
+      "expected force-close log when client.end() hangs"
+    );
+    assert.ok(
+      clientInstance?.destroyed,
+      "connection stream was not destroyed when client.end() hung"
     );
   });
 });

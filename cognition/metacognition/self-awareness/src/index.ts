@@ -24,7 +24,7 @@
 // "plugins": { "entries": { "self-awareness": { "hooks": { "allowConversationAccess": true } } } }
 // Without this, the message_sent hook will not receive conversation content.
 
-import { getPool, closePool } from "./shared/pg-pool.ts";
+import { getPool, closePool, forceClosePool, getCurrentPool } from "./shared/pg-pool.ts";
 
 // ── Ollama config ─────────────────────────────────────────────────────────────
 
@@ -73,7 +73,82 @@ interface TriggerRow {
   times_triggered: number;
 }
 
-const activeRuns = new Set<Promise<void>>();
+const activeRuns = new Map<Promise<void>, string>();
+
+const SHUTDOWN_DEADLINE_MS = 3000;
+const WORK_BUDGET_MS = 1500;
+
+function trackRun(
+  promise: Promise<void>,
+  description = "message_sent handler"
+): Promise<void> {
+  activeRuns.set(promise, description);
+  promise.finally(() => activeRuns.delete(promise));
+  return promise;
+}
+
+async function shutdown(): Promise<void> {
+  const deadline = Date.now() + SHUTDOWN_DEADLINE_MS;
+
+  // Drain in-flight runs with a bounded budget. A run waiting on Ollama or
+  // Postgres can take minutes, so we cap the wait and abandon stragglers.
+  // Core forces retirement after 5s; we stay well under it.
+  const snapshot = Array.from(activeRuns.entries());
+  if (snapshot.length > 0) {
+    let workTimer: ReturnType<typeof setTimeout> | undefined;
+    const workResult = await Promise.race([
+      Promise.allSettled(snapshot.map(([promise]) => promise)),
+      new Promise<"work-timeout">((resolve) => {
+        workTimer = setTimeout(resolve, WORK_BUDGET_MS, "work-timeout");
+      }),
+    ]);
+    if (workTimer) {
+      clearTimeout(workTimer);
+    }
+    if (workResult === "work-timeout") {
+      const abandoned = Array.from(activeRuns.values());
+      console.error(
+        `[self-awareness] Shutdown timeout waiting for in-flight runs; abandoning ${abandoned.length} pending run(s): ${abandoned.join(", ")}`
+      );
+    }
+  }
+
+  // Close the pool with whatever budget remains. If pool.end() hangs on a
+  // checked-out client, force-close the underlying sockets so the call returns
+  // instead of waiting for core's forced retirement.
+  const poolToClose = getCurrentPool();
+  const remainingMs = deadline - Date.now();
+  if (remainingMs <= 0) {
+    console.error("[self-awareness] Shutdown budget exhausted; force-closing pool");
+    forceClosePool(poolToClose);
+  } else {
+    let closeTimer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const closeResult = await Promise.race([
+        closePool(),
+        new Promise<"close-timeout">((resolve) => {
+          closeTimer = setTimeout(resolve, remainingMs, "close-timeout");
+        }),
+      ]);
+      if (closeTimer) {
+        clearTimeout(closeTimer);
+      }
+      if (closeResult === "close-timeout") {
+        console.error("[self-awareness] Shutdown timeout waiting for pool.end(); force-closing pool");
+        forceClosePool(poolToClose);
+      }
+    } catch (err) {
+      console.error(
+        "[self-awareness] Error closing pool:",
+        err instanceof Error ? err.message : String(err)
+      );
+      forceClosePool(poolToClose);
+      if (closeTimer) {
+        clearTimeout(closeTimer);
+      }
+    }
+  }
+}
 
 export default function register(api: PluginApi): void {
   console.info("[self-awareness] Plugin registered — hook: message_sent");
@@ -86,20 +161,22 @@ export default function register(api: PluginApi): void {
       }
       // Fire-and-forget: don't block message delivery, but track the run so
       // gateway_stop can wait for it before closing the pool.
-      const run = processMessageSent(event, ctx).catch((err) => {
-        console.error(
-          "[self-awareness] Unhandled error in message_sent handler:",
-          err instanceof Error ? err.message : String(err)
-        );
-      });
-      activeRuns.add(run);
-      run.finally(() => activeRuns.delete(run));
+      const run = trackRun(
+        processMessageSent(event, ctx).catch((err) => {
+          console.error(
+            "[self-awareness] Unhandled error in message_sent handler:",
+            err instanceof Error ? err.message : String(err)
+          );
+        })
+      );
+      // Keep the unused reference to satisfy the no-floating-promises lint and
+      // to make it obvious the run is intentionally not awaited here.
+      void run;
     }
   );
 
   api.on("gateway_stop", async () => {
-    await Promise.allSettled(Array.from(activeRuns));
-    await closePool();
+    await shutdown();
   });
 }
 

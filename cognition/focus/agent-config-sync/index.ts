@@ -33,7 +33,7 @@ const MAX_RECONNECT_DELAY_MS = 60_000;
 function resolveDbConfig(
   pluginConfig: Record<string, unknown> | undefined,
   fullConfig: Record<string, unknown>,
-): { host: string; port: number; database: string; user: string; password: string } | null {
+): { host: string; port: number; database: string; user: string; password: string; query_timeout: number; statement_timeout: number } | null {
   // 1. Try dedicated plugin config
   if (pluginConfig?.database && pluginConfig?.host && pluginConfig?.user) {
     return {
@@ -42,6 +42,12 @@ function resolveDbConfig(
       database: String(pluginConfig.database),
       user: String(pluginConfig.user),
       password: String(pluginConfig.password ?? ""),
+      // Client-side (8s) and server-side (10s) query ceilings. Both are well
+      // above the 3s service shutdown deadline, so they never fire during
+      // normal operation, but they prevent a hung Postgres/network from
+      // blocking a client forever.
+      query_timeout: 8000,
+      statement_timeout: 10000,
     };
   }
 
@@ -55,6 +61,8 @@ function resolveDbConfig(
       database: String(agentChat.database),
       user: String(agentChat.user),
       password: String(agentChat.password ?? ""),
+      query_timeout: 8000,
+      statement_timeout: 10000,
     };
   }
 
@@ -69,10 +77,10 @@ function createConfigSyncService(api: OpenClawPluginApi) {
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   let stopped = false;
   let reconnectDelay = RECONNECT_DELAY_MS;
-  const activeWork = new Set<Promise<unknown>>();
+  const activeWork = new Map<Promise<unknown>, string>();
 
-  function track<T>(promise: Promise<T>): Promise<T> {
-    activeWork.add(promise);
+  function track<T>(promise: Promise<T>, description = "unnamed work"): Promise<T> {
+    activeWork.set(promise, description);
     promise.finally(() => activeWork.delete(promise));
     return promise;
   }
@@ -217,7 +225,10 @@ function createConfigSyncService(api: OpenClawPluginApi) {
       }
 
       client.on("notification", (msg) => {
-        return track(handleNotification(msg as { channel: string; payload?: string }));
+        return track(
+          handleNotification(msg as { channel: string; payload?: string }),
+          `${msg.channel} notification handler`,
+        );
       });
 
       // Handle connection errors → reconnect
@@ -236,6 +247,7 @@ function createConfigSyncService(api: OpenClawPluginApi) {
             cleanup().catch(() => {});
             scheduleReconnect(log);
           }),
+          "keepalive query",
         );
       }, KEEPALIVE_INTERVAL_MS);
     } catch (err) {
@@ -258,6 +270,26 @@ function createConfigSyncService(api: OpenClawPluginApi) {
       } catch {
         // Ignore close errors during shutdown.
       }
+    }
+  }
+
+  function forceCloseClient(
+    connectionClient: import("pg").Client | null,
+    log?: Logger,
+  ): void {
+    if (!connectionClient) return;
+    try {
+      const stream = (
+        connectionClient as unknown as {
+          connection?: { stream?: { destroy?: () => void } };
+        }
+      ).connection?.stream;
+      if (typeof stream?.destroy === "function") {
+        stream.destroy();
+        log?.info?.("agent_config_sync: Forced PostgreSQL connection closed");
+      }
+    } catch (error) {
+      log?.error?.(`agent_config_sync: Error force-closing connection: ${error}`);
     }
   }
 
@@ -300,11 +332,87 @@ function createConfigSyncService(api: OpenClawPluginApi) {
         clearInterval(keepAliveTimer);
         keepAliveTimer = null;
       }
-      // End the client first so in-flight queries error and handlers can settle,
-      // then wait for every tracked handler/keepalive promise before declaring
-      // the service stopped.
-      await cleanup();
-      await Promise.allSettled(Array.from(activeWork));
+
+      const SHUTDOWN_DEADLINE_MS = 3000;
+      const WORK_BUDGET_MS = 1500;
+      const deadline = Date.now() + SHUTDOWN_DEADLINE_MS;
+
+      // Drain in-flight handlers/keepalive queries with a bounded budget. A
+      // handler mid-sync can take minutes, so we cap the wait and abandon
+      // stragglers. Core forces retirement after 5s; we stay well under it.
+      const snapshot = Array.from(activeWork.entries());
+      if (snapshot.length > 0) {
+        let workTimer: ReturnType<typeof setTimeout> | undefined;
+        const workResult = await Promise.race([
+          Promise.allSettled(snapshot.map(([promise]) => promise)),
+          new Promise<"work-timeout">((resolve) => {
+            workTimer = setTimeout(resolve, WORK_BUDGET_MS, "work-timeout");
+          }),
+        ]);
+        if (workTimer) {
+          clearTimeout(workTimer);
+        }
+        if (workResult === "work-timeout") {
+          const abandoned = Array.from(activeWork.values());
+          ctx.logger.error(
+            `agent_config_sync: Shutdown timeout waiting for in-flight work; abandoning ${abandoned.length} pending task(s): ${abandoned.join(", ")}`,
+          );
+        }
+      }
+
+      // Close the client with whatever budget remains. If client.end() hangs
+      // on a dead connection, force-close the underlying stream so the call
+      // returns instead of waiting for core's forced retirement.
+      const clientToClose = pgClient;
+      if (clientToClose) {
+        pgClient = null;
+      }
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) {
+        ctx.logger.error("agent_config_sync: Shutdown budget exhausted; force-closing connection");
+        forceCloseClient(clientToClose, ctx.logger);
+      } else {
+        let closeTimer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          const closeResult = await Promise.race([
+            (async () => {
+              await clientToClose!.query(`UNLISTEN ${NOTIFY_CHANNEL}`);
+              await clientToClose!.query(`UNLISTEN ${HEARTBEAT_NOTIFY_CHANNEL}`);
+              await clientToClose!.end();
+            })(),
+            new Promise<"close-timeout">((resolve) => {
+              closeTimer = setTimeout(resolve, remainingMs, "close-timeout");
+            }),
+          ]);
+          if (closeTimer) {
+            clearTimeout(closeTimer);
+          }
+          if (closeResult === "close-timeout") {
+            ctx.logger.error("agent_config_sync: Shutdown timeout waiting for client.end(); force-closing connection");
+            forceCloseClient(clientToClose, ctx.logger);
+          }
+        } catch (error) {
+          ctx.logger.error(`agent_config_sync: Error during shutdown: ${error}`);
+          forceCloseClient(clientToClose, ctx.logger);
+          if (closeTimer) {
+            clearTimeout(closeTimer);
+          }
+        }
+      }
+
+      // After closing the connection, give handler continuations a brief
+      // bounded window to settle. Real pg.Client.end() rejects in-flight
+      // queries, so handlers should resolve quickly; this prevents the call
+      // from leaking unfinished promises.
+      if (activeWork.size > 0) {
+        await Promise.race([
+          Promise.allSettled(Array.from(activeWork.values())),
+          new Promise<void>((resolve) => {
+            setTimeout(resolve, 500);
+          }),
+        ]);
+      }
+
       ctx.logger.info("agent_config_sync: Service stopped");
     },
   };

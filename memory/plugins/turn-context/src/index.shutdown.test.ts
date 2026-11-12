@@ -30,7 +30,7 @@ describe("turn-context shutdown contract", () => {
     restoreEntityResolverPath();
   });
 
-  it("kills the semantic-recall child and returns promptly when aborted", async (t) => {
+  it("kills the semantic-recall child and returns promptly when aborted", { timeout: 5000 }, async (t) => {
     const ends: Array<{ calls: number }> = [];
     const spawnCalls: Array<{ args: any[]; child: MockChild }> = [];
 
@@ -152,7 +152,7 @@ describe("turn-context shutdown contract", () => {
     );
   });
 
-  it("returns undefined immediately when already aborted", async (t) => {
+  it("returns undefined immediately when already aborted", { timeout: 5000 }, async (t) => {
     const spawnCalls: Array<{ args: any[]; child: MockChild }> = [];
 
     class MockPool {
@@ -222,6 +222,74 @@ describe("turn-context shutdown contract", () => {
     );
     assert.equal(result, undefined);
     assert.equal(spawnCalls.length, 0, "no child should be spawned when already aborted");
+  });
+
+  it("returns within 4s when pool.end() hangs and force-closes connections", { timeout: 6000 }, async (t) => {
+    let endCalled = false;
+    let destroyed = false;
+
+    class MockPool {
+      connection = {
+        stream: {
+          destroy: () => {
+            destroyed = true;
+          },
+        },
+      };
+      _clients = [this];
+
+      async connect() {
+        return {
+          query: async () => ({ rows: [] }),
+          release: () => {},
+        };
+      }
+      async query() {
+        return { rows: [] };
+      }
+      on() {}
+      async end() {
+        endCalled = true;
+        // Simulate a hung pool.end() that never resolves.
+        return new Promise<void>(() => {});
+      }
+    }
+
+    const MockPoolCtor = function () {
+      return new MockPool();
+    } as unknown as typeof import("pg").Pool;
+
+    (t as any).mock.module("pg", {
+      exports: { default: { Pool: MockPoolCtor }, Pool: MockPoolCtor },
+    });
+
+    const handlers: Record<string, (...args: any[]) => any> = {};
+    const api = {
+      pluginConfig: {},
+      on: (hook: string, handler: (...args: any[]) => any) => {
+        handlers[hook] = handler;
+      },
+    };
+
+    const { getPool } = await import("./shared/pg-pool.ts");
+    await getPool();
+
+    const { default: register } = await import("./index.ts");
+    register(api);
+
+    const stopStart = Date.now();
+    await handlers.gateway_stop();
+    const elapsed = Date.now() - stopStart;
+
+    assert.ok(
+      elapsed < 4000,
+      `gateway_stop took ${elapsed}ms, expected < 4000ms`
+    );
+    assert.ok(endCalled, "pool.end() was not called by gateway_stop");
+    assert.ok(
+      destroyed,
+      "connection stream was not force-destroyed when pool.end() hung"
+    );
   });
 });
 

@@ -36,7 +36,7 @@ import { buildHonorificGuard } from "./honorific-guard.ts";
 import { runSemanticRecall, type RecallInput } from "./semantic-recall.ts";
 import { classifyMessage, type ClassifierResult, type MessageType } from "./classifier.ts";
 import { identifyDomain, formatDomainContext, type DomainResult } from "./domain-identifier.ts";
-import { getPool, closePool } from "./shared/pg-pool.ts";
+import { getPool, closePool, forceClosePool, getCurrentPool } from "./shared/pg-pool.ts";
 
 // ── Sender identity from host context (#712) ─────────────────────────────────
 
@@ -179,7 +179,7 @@ async function getHelperConfig(agentId: string, messageType: MessageType): Promi
   };
 
   try {
-    const pool = getPool();
+    const pool = await getPool();
     const client = await pool.connect();
     try {
       // DISTINCT ON ensures agent-specific config (agent_name IS NOT NULL) takes
@@ -234,6 +234,83 @@ function isGroupSession(sessionKey: string | undefined): boolean {
  * Plugin registration function called by the OpenClaw plugin loader.
  * The loader calls module.default(api) to register hooks.
  */
+const activeCalls = new Map<Promise<PromptBuildResult | undefined>, string>();
+
+const SHUTDOWN_DEADLINE_MS = 3000;
+const WORK_BUDGET_MS = 1500;
+
+function trackCall<T>(
+  promise: Promise<T>,
+  description = "before_prompt_build handler"
+): Promise<T> {
+  activeCalls.set(promise as any, description);
+  promise.finally(() => activeCalls.delete(promise as any));
+  return promise;
+}
+
+async function shutdown(): Promise<void> {
+  const deadline = Date.now() + SHUTDOWN_DEADLINE_MS;
+
+  // Drain in-flight calls with a bounded budget. A call waiting on a slow
+  // child process or DB query can take minutes, so we cap the wait and
+  // abandon stragglers. Core forces retirement after 5s; we stay well under it.
+  const snapshot = Array.from(activeCalls.entries());
+  if (snapshot.length > 0) {
+    let workTimer: ReturnType<typeof setTimeout> | undefined;
+    const workResult = await Promise.race([
+      Promise.allSettled(snapshot.map(([promise]) => promise)),
+      new Promise<"work-timeout">((resolve) => {
+        workTimer = setTimeout(resolve, WORK_BUDGET_MS, "work-timeout");
+      }),
+    ]);
+    if (workTimer) {
+      clearTimeout(workTimer);
+    }
+    if (workResult === "work-timeout") {
+      const abandoned = Array.from(activeCalls.values());
+      console.error(
+        `[turn-context] Shutdown timeout waiting for in-flight calls; abandoning ${abandoned.length} pending call(s): ${abandoned.join(", ")}`
+      );
+    }
+  }
+
+  // Close the pool with whatever budget remains. If pool.end() hangs on a
+  // checked-out client, force-close the underlying sockets so the call returns
+  // instead of waiting for core's forced retirement.
+  const poolToClose = getCurrentPool();
+  const remainingMs = deadline - Date.now();
+  if (remainingMs <= 0) {
+    console.error("[turn-context] Shutdown budget exhausted; force-closing pool");
+    forceClosePool(poolToClose);
+  } else {
+    let closeTimer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const closeResult = await Promise.race([
+        closePool(),
+        new Promise<"close-timeout">((resolve) => {
+          closeTimer = setTimeout(resolve, remainingMs, "close-timeout");
+        }),
+      ]);
+      if (closeTimer) {
+        clearTimeout(closeTimer);
+      }
+      if (closeResult === "close-timeout") {
+        console.error("[turn-context] Shutdown timeout waiting for pool.end(); force-closing pool");
+        forceClosePool(poolToClose);
+      }
+    } catch (err) {
+      console.error(
+        "[turn-context] Error closing pool:",
+        err instanceof Error ? err.message : String(err)
+      );
+      forceClosePool(poolToClose);
+      if (closeTimer) {
+        clearTimeout(closeTimer);
+      }
+    }
+  }
+}
+
 export default function register(api: PluginApi): void {
   const placement = resolvePlacement(api.pluginConfig as Record<string, unknown> | undefined);
   console.info(
@@ -241,7 +318,7 @@ export default function register(api: PluginApi): void {
   );
 
   api.on("gateway_stop", async () => {
-    await closePool();
+    await shutdown();
   });
 
   // ── Hook: before_prompt_build (awaited, returns context segments) ──────────
@@ -266,7 +343,8 @@ export default function register(api: PluginApi): void {
 
   api.on(
     "before_prompt_build",
-    async (event: PluginEvent, ctx: PluginContext): Promise<PromptBuildResult | undefined> => {
+    (event: PluginEvent, ctx: PluginContext): Promise<PromptBuildResult | undefined> => {
+      const call = (async (): Promise<PromptBuildResult | undefined> => {
       const hookStart = Date.now();
       const sessionKey = ctx.sessionKey;
       const rawAgentId = ctx.agentId;
@@ -598,7 +676,9 @@ export default function register(api: PluginApi): void {
         ` isGroup=${isGroup}`
       );
 
-      return result;
+        return result;
+      })();
+      return trackCall(call);
     },
     { timeoutMs: 8000 }
   );

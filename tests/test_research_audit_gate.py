@@ -1,9 +1,15 @@
 """
-Tests for scripts/research-audit-gate.py — chunk 1: Foundation & DB contract.
+Tests for scripts/research-audit-gate.py.
 
-Covers the DB test-case group (TC-657-DB-01..DB-07). All DB interaction uses a
-throwaway schema created from tests/fixtures/research_audit_gate.sql; no test
-writes into the live public.research_* tables.
+Run against a throwaway database (never production nova_memory):
+
+    createdb -U nova -h localhost se1282_gate_test_$$ && \
+    PGHOST=localhost PGDATABASE=se1282_gate_test_$$ PGUSER=nova \
+    python3 -m pytest tests/test_research_audit_gate.py -p no:xdist -v && \
+    dropdb -U nova -h localhost se1282_gate_test_$$
+
+Always run dropdb, even if tests fail. DB tests are skipped automatically when
+no test database is configured.
 """
 
 import importlib.util
@@ -597,3 +603,202 @@ class TestTierAxis:
         assert "tier" not in src.split("def _audit_tier")[1].lower() or True
         # The meaningful assertion: classification works from source_type + reliability.
         assert mod._audit_tier(self._citation("paper", 0.93))[0] == "strong"
+
+
+# ---------------------------------------------------------------------------
+# CONF group tests (TC-657-CONF-01..CONF-09)
+# ---------------------------------------------------------------------------
+class TestConfidenceAxis:
+    """Confidence axis, including the 1.00 restriction and claim_scope signal."""
+
+    def _finding(
+        self,
+        confidence: float | None = 0.85,
+        claim_scope: str | None = None,
+        importance: str = "normal",
+    ) -> Any:
+        """Build a Finding for direct confidence tests."""
+        mod = _load_module()
+        metadata = {}
+        if claim_scope is not None:
+            metadata["claim_scope"] = claim_scope
+        return mod.Finding(
+            finding_id=10,
+            task_id=90001,
+            finding_type="fact",
+            content="finding content",
+            confidence=confidence,
+            importance=importance,
+            metadata=metadata,
+        )
+
+    def test_conf01_plausible_range_with_scope_note(self):
+        """TC-657-CONF-01: confidence in plausible range passes."""
+        mod = _load_module()
+        state, _ = mod._audit_confidence(self._finding(0.85, "computed"))
+        assert state == "passed"
+
+    def test_conf02_100_fact_about_document_passes(self):
+        """TC-657-CONF-02: 1.00 with claim_scope='cited' passes."""
+        mod = _load_module()
+        state, detail = mod._audit_confidence(self._finding(1.00, "cited"))
+        assert state == "passed"
+        assert "fact about document" in detail.lower()
+
+    def test_conf03_100_misapplied_to_claim_fails(self):
+        """TC-657-CONF-03: 1.00 on a claim the document makes fails."""
+        mod = _load_module()
+        state, detail = mod._audit_confidence(self._finding(1.00, "proved"))
+        assert state == "failed"
+        assert "misapplied" in detail.lower()
+
+    def test_conf04_just_under_100_passes_restriction(self):
+        """TC-657-CONF-04: 0.99 is not caught by the 1.00 restriction."""
+        mod = _load_module()
+        state, _ = mod._audit_confidence(self._finding(0.99, "proved"))
+        assert state == "passed"
+
+    def test_conf05_exactly_100_in_scope(self):
+        """TC-657-CONF-05: 1.00 exactly triggers the restriction check."""
+        mod = _load_module()
+        state, _ = mod._audit_confidence(self._finding(1.00, "proved"))
+        assert state == "failed"
+
+    def test_conf06_null_confidence_unscored(self):
+        """TC-657-CONF-06: NULL confidence is unscored, not coerced."""
+        mod = _load_module()
+        state, _ = mod._audit_confidence(self._finding(None))
+        assert state == "unscored"
+
+    def test_conf07_missing_claim_scope_advisory_and_still_gates(self):
+        """TC-657-CONF-07: missing claim_scope → scope_undeclared, but 1.00 still fails."""
+        mod = _load_module()
+        finding = self._finding(1.00, None)
+        conf_state, _ = mod._audit_confidence(finding)
+        scope, valid = mod._claim_scope(finding)
+        assert conf_state == "failed"
+        assert scope is None and not valid
+
+    def test_conf07a_invalid_claim_scope_undeclared(self):
+        """TC-657-CONF-07A: invalid claim_scope values resolve to scope_undeclared."""
+        mod = _load_module()
+        for bad in ("Proved ", 42):
+            finding = self._finding(0.85, bad)
+            scope, valid = mod._claim_scope(finding)
+            assert scope is None and not valid, f"bad value {bad!r} should be invalid"
+
+    def test_conf08_valid_scope_contradicts_content_is_scoped_for_jev(self):
+        """TC-657-CONF-08: writer-declared scope contradicting content escalates to Jev.
+
+        The deterministic gate trusts the writer's claim_scope for the 1.00
+        restriction; the mismatch is surfaced as a pending scope state so the
+        Jev Scope Choice call in chunk 3 can detect and escalate it.
+        """
+        mod = _load_module()
+        finding = self._finding(1.00, "cited")
+        conf_state, _ = mod._audit_confidence(finding)
+        scope, valid = mod._claim_scope(finding)
+        assert conf_state == "passed"
+        assert scope == "cited" and valid
+
+    def test_conf09_out_of_range_defensive_handling(self):
+        """TC-657-CONF-09: out-of-range confidence is handled fail-closed."""
+        mod = _load_module()
+        state, detail = mod._audit_confidence(self._finding(1.5, "proved"))
+        assert state == "failed"
+        assert "out of [0,1]" in detail.lower()
+
+
+# ---------------------------------------------------------------------------
+# RISK group tests (TC-657-RISK-01..RISK-06)
+# ---------------------------------------------------------------------------
+class TestHighRiskCell:
+    """High-risk cell flag: weakest tier × consequential claim."""
+
+    def _finding(self, importance: str, reliability: float, source_type: str = "paper") -> Any:
+        """Build a Finding with a single citation for risk tests."""
+        mod = _load_module()
+        citation = mod.Citation(
+            citation_id=1,
+            finding_id=10,
+            source_type=source_type,
+            source_url="https://example.com",
+            source_title="Example",
+            reliability=reliability,
+            accessed_at=datetime.now(timezone.utc),
+            metadata={},
+        )
+        return mod.Finding(
+            finding_id=10,
+            task_id=90001,
+            finding_type="fact",
+            content="finding content",
+            confidence=0.88,
+            importance=importance,
+            metadata={},
+            citations=[citation],
+        )
+
+    def _audit(self, finding: Any) -> Any:
+        """Run audit_task with default config on a single finding."""
+        mod = _load_module()
+        config = mod.GateConfig(
+            schema="public",
+            drop_window_hours=72.0,
+            support_threshold=0.05,
+            jev_url="https://api.typesafe.ai/v1/systemone",
+            jev_api_key=None,
+            db_dsn="",
+            db_user="nova",
+        )
+        return mod.audit_task([finding], config)
+
+    def test_risk01_critical_with_weakest_tier_flags(self):
+        """TC-657-RISK-01: weakest tier + critical claim flags high-risk."""
+        result = self._audit(self._finding("critical", 0.15, "agent"))
+        assert result.finding_audits[0].high_risk is True
+
+    def test_risk02_low_importance_no_flag(self):
+        """TC-657-RISK-02: weakest tier + low importance does not flag."""
+        result = self._audit(self._finding("low", 0.15, "agent"))
+        assert result.finding_audits[0].high_risk is False
+
+    def test_risk03_strong_tier_no_flag(self):
+        """TC-657-RISK-03: strongest tier + critical claim does not flag."""
+        result = self._audit(self._finding("critical", 0.95, "paper"))
+        assert result.finding_audits[0].high_risk is False
+
+    def test_risk04_weakest_citation_drives_flag_not_average(self):
+        """TC-657-RISK-04: mixed tiers flag because the weakest is present."""
+        mod = _load_module()
+        strong = mod.Citation(
+            citation_id=1, finding_id=10, source_type="paper",
+            source_url="https://a.com", source_title="A", reliability=0.95,
+            accessed_at=datetime.now(timezone.utc), metadata={},
+        )
+        weak = mod.Citation(
+            citation_id=2, finding_id=10, source_type="agent",
+            source_url="https://b.com", source_title="B", reliability=0.15,
+            accessed_at=datetime.now(timezone.utc), metadata={},
+        )
+        finding = mod.Finding(
+            finding_id=10, task_id=90001, finding_type="fact",
+            content="claim", confidence=0.88, importance="critical",
+            metadata={}, citations=[strong, weak],
+        )
+        result = self._audit(finding)
+        assert result.finding_audits[0].high_risk is True
+
+    def test_risk05_importance_boundary(self):
+        """TC-657-RISK-05: 'high' and 'critical' flag; 'normal' and 'low' do not."""
+        assert self._audit(self._finding("normal", 0.15, "agent")).finding_audits[0].high_risk is False
+        assert self._audit(self._finding("high", 0.15, "agent")).finding_audits[0].high_risk is True
+        assert self._audit(self._finding("critical", 0.15, "agent")).finding_audits[0].high_risk is True
+
+    def test_risk06_structured_importance_not_content(self):
+        """TC-657-RISK-06: structured importance field drives the flag, not content."""
+        mod = _load_module()
+        finding = self._finding("critical", 0.15, "agent")
+        finding.content = "well-established, low-stakes claim"
+        result = self._audit(finding)
+        assert result.finding_audits[0].high_risk is True

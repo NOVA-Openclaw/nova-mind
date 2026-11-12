@@ -455,10 +455,11 @@ def _claim_scope(finding: Finding) -> tuple[Optional[str], bool]:
         return None, False
     if not isinstance(raw, str):
         return None, False
-    scope = raw.strip().lower()
-    if scope not in CLAIM_SCOPE_VALUES:
+    # The pinned enum is exact lowercase strings; any case/whitespace variant
+    # (e.g. "Proved ") is treated as invalid and surfaces scope_undeclared.
+    if raw not in CLAIM_SCOPE_VALUES:
         return None, False
-    return scope, True
+    return raw, True
 
 
 # ---------------------------------------------------------------------------
@@ -606,6 +607,31 @@ def _importance_level(importance: str) -> int:
     return IMPORTANCE_LEVEL.get(importance, 1)
 
 
+def _audit_confidence(finding: Finding) -> tuple[str, str]:
+    """Audit the confidence axis for a finding.
+
+    The 1.00 value is reserved for facts ABOUT a document (bibliographic or
+    metadata facts), never for claims the document itself makes. The writer
+    signals this via metadata->>'claim_scope' == 'cited'. A missing or invalid
+    claim_scope is advisory-only (scope_undeclared) but does NOT waive the
+    1.00-restriction check: without a valid 'cited' scope, 1.00 is treated as
+    misapplied.
+    """
+    if finding.confidence is None:
+        return "unscored", "confidence NULL"
+
+    if not (0.00 <= finding.confidence <= 1.00):
+        return "failed", f"confidence {finding.confidence} out of [0,1] range"
+
+    if finding.confidence == 1.00:
+        scope, scope_valid = _claim_scope(finding)
+        if scope_valid and scope == "cited":
+            return "passed", "1.00 reserved for fact about document"
+        return "failed", "confidence 1.00 misapplied to claim the document makes"
+
+    return "passed", f"confidence {finding.confidence}"
+
+
 def _audit_citation(
     citation: Citation,
     finding: Finding,
@@ -614,9 +640,9 @@ def _audit_citation(
 ) -> CitationAudit:
     """Perform the deterministic three-axis audit for a single citation.
 
-    Existence and source-tier checks are implemented in chunks 1-2. Confidence
-    and Jev-mediated support/scope checks are still scaffolded and will be
-    completed in chunks 2b and 3.
+    Existence, confidence, and source-tier checks are implemented in chunks
+    1-2b. Jev-mediated support/scope checks are still scaffolded and will be
+    completed in chunks 3a-3b.
     """
     audit = CitationAudit(citation=citation)
 
@@ -626,23 +652,10 @@ def _audit_citation(
     audit.existence_detail = ex_detail
     audit.unread_reason = ex_unread
 
-    # CONFIDENCE axis — chunk 2b will implement the 1.00 restriction. For now
-    # we flag NULL as unscored and defer the rest.
-    if finding.confidence is None:
-        audit.confidence_state = "unscored"
-        audit.confidence_detail = "confidence NULL"
-    else:
-        scope, scope_valid = _claim_scope(finding)
-        if finding.confidence == 1.00 and scope_valid and scope == "cited":
-            # Placeholder for the valid fact-about-document path; exact logic in chunk 2b.
-            audit.confidence_state = "pending"
-            audit.confidence_detail = "1.00 with claim_scope=cited (chunk 2b)"
-        elif finding.confidence == 1.00:
-            audit.confidence_state = "pending"
-            audit.confidence_detail = "1.00 restriction check pending (chunk 2b)"
-        else:
-            audit.confidence_state = "pending"
-            audit.confidence_detail = "confidence within [0,1] (chunk 2b)"
+    # CONFIDENCE axis — 1.00 restriction based on claim_scope.
+    conf_state, conf_detail = _audit_confidence(finding)
+    audit.confidence_state = conf_state
+    audit.confidence_detail = conf_detail
 
     # SOURCE TIER axis — reconcile source_type and reliability.
     tier_state, tier_detail = _audit_tier(citation)

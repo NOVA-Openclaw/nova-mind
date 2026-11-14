@@ -3164,9 +3164,11 @@ CREATE TABLE IF NOT EXISTS motivation_d100 (
     notes text,
     reserved boolean DEFAULT false NOT NULL,
     populated_at timestamptz,
+    weight numeric DEFAULT 1 NOT NULL,
     CONSTRAINT motivation_d100_pkey PRIMARY KEY (roll),
     CONSTRAINT motivation_d100_workflow_id_fkey FOREIGN KEY (workflow_id) REFERENCES workflows (id),
-    CONSTRAINT motivation_d100_roll_check CHECK (roll >= 1 AND roll <= 100)
+    CONSTRAINT motivation_d100_roll_check CHECK (roll >= 1 AND roll <= 100),
+    CONSTRAINT motivation_d100_weight_check CHECK (weight >= 0::numeric)
 );
 
 COMMENT ON TABLE motivation_d100 IS 'D100 motivation system. Roll via roll_d100(), mark complete via complete_d100(roll). 
@@ -5614,10 +5616,11 @@ RETURNS TABLE(roll integer, task_name varchar, task_description text, workflow_i
 LANGUAGE plpgsql
 VOLATILE
 SECURITY DEFINER
-SET search_path = public
+SET search_path = public, pg_temp
 AS $$
 DECLARE
     picked_roll    integer;
+    picked_is_pop  boolean;
     attempts       integer := 0;
     max_attempts   integer := 20;
     v_now          timestamp := CURRENT_TIMESTAMP::timestamp;
@@ -5628,109 +5631,80 @@ BEGIN
             RAISE EXCEPTION 'roll_d100: no populated+enabled tasks found after % attempts', max_attempts;
         END IF;
 
-        -- Pure random 1-100.
-        picked_roll := floor(random() * 100 + 1)::integer;
-
-        -- ---------------------------------------------------------------
-        -- Terminal path A: non-reserved empty + enabled => populate-me.
-        -- Anti-repeat window/cap never applies to empty-slot draws.
-        -- ---------------------------------------------------------------
-        IF EXISTS (
-            SELECT 1 FROM motivation_d100 m
-            WHERE m.roll = picked_roll
-              AND m.task_name IS NULL
+        WITH pop AS MATERIALIZED (
+            SELECT m.roll, m.last_rolled, m.weight
+            FROM motivation_d100 m
+            WHERE m.task_name IS NOT NULL
+              AND m.enabled = true
+              AND m.weight > 0
+        ),
+        counts AS MATERIALIZED (
+            SELECT
+                (SELECT count(*) FROM pop) AS total_pop,
+                (SELECT count(*) FROM pop WHERE pop.last_rolled >= v_now - interval '7 days') AS recent_pop
+        ),
+        admit AS MATERIALIZED (
+            SELECT ranked.roll
+            FROM (
+                SELECT p.roll,
+                       row_number() OVER (ORDER BY p.last_rolled ASC, p.roll ASC) AS rn
+                FROM pop p
+                WHERE p.last_rolled >= v_now - interval '7 days'
+            ) ranked
+            WHERE rn <= (
+                SELECT GREATEST(c.recent_pop - (floor(c.total_pop * 0.5))::integer, 0)
+                FROM counts c
+            )
+        ),
+        eligible AS MATERIALIZED (
+            -- Terminal path A: non-reserved empty + enabled => populate-me.
+            SELECT m.roll, m.weight, true AS is_populate_me
+            FROM motivation_d100 m
+            WHERE m.task_name IS NULL
               AND m.reserved = false
               AND m.enabled = true
-        ) THEN
-            UPDATE motivation_d100 m
-            SET times_rolled = COALESCE(m.times_rolled, 0) + 1,
-                last_rolled  = v_now
-            WHERE m.roll = picked_roll;
+              AND m.weight > 0
+            UNION ALL
+            -- Terminal path B: populated + enabled => apply anti-repeat rules.
+            SELECT p.roll, p.weight, false AS is_populate_me
+            FROM pop p
+            WHERE p.last_rolled IS NULL
+               OR p.last_rolled < v_now - interval '7 days'
+               OR p.roll IN (SELECT a.roll FROM admit a)
+        ),
+        target AS MATERIALIZED (
+            SELECT random()::numeric * COALESCE((SELECT SUM(weight) FROM eligible), 0) AS t
+        )
+        SELECT e.roll, e.is_populate_me
+        INTO picked_roll, picked_is_pop
+        FROM (
+            SELECT t.roll, t.is_populate_me,
+                   sum(t.weight) OVER (ORDER BY t.roll) AS cum_weight
+            FROM eligible t
+        ) e,
+        target tg
+        WHERE e.cum_weight > tg.t
+        ORDER BY e.cum_weight
+        LIMIT 1;
 
-            RETURN QUERY
-            SELECT m.roll, m.task_name, m.task_description, m.workflow_id,
-                   m.skill_name, m.tool_name, m.difficulty, m.energy_required,
-                   m.estimated_minutes, m.times_rolled, m.times_completed,
-                   m.last_rolled, m.last_completed, m.notes,
-                   true
-            FROM motivation_d100 m
-            WHERE m.roll = picked_roll;
-            RETURN;
-        END IF;
-
-        -- ---------------------------------------------------------------
-        -- Terminal path B: populated + enabled => apply anti-repeat rules.
-        -- ---------------------------------------------------------------
-        IF EXISTS (
-            SELECT 1 FROM motivation_d100 m
-            WHERE m.roll = picked_roll
-              AND m.task_name IS NOT NULL
-              AND m.enabled = true
-        ) THEN
-            -- Eligibility: not rolled in last 7 days, unless the cap forces
-            -- re-admission of the oldest recently-rolled slots.
-            IF EXISTS (
-                WITH pop AS (
-                    SELECT m.roll, m.last_rolled
-                    FROM motivation_d100 m
-                    WHERE m.task_name IS NOT NULL
-                      AND m.enabled = true
-                ),
-                counts AS (
-                    SELECT
-                        (SELECT count(*) FROM pop) AS total_pop,
-                        (SELECT count(*) FROM pop WHERE pop.last_rolled >= v_now - interval '7 days') AS recent_pop
-                ),
-                admit AS (
-                    SELECT ranked.roll
-                    FROM (
-                        SELECT
-                            p.roll,
-                            row_number() OVER (
-                                ORDER BY p.last_rolled ASC, p.roll ASC
-                            ) AS rn
-                        FROM pop p
-                        WHERE p.last_rolled >= v_now - interval '7 days'
-                    ) ranked
-                    WHERE rn <= (
-                        SELECT GREATEST(
-                            c.recent_pop - (floor(c.total_pop * 0.5))::integer,
-                            0
-                        )
-                        FROM counts c
-                    )
-                )
-                SELECT 1
-                FROM pop p
-                WHERE p.roll = picked_roll
-                  AND (
-                      p.last_rolled IS NULL
-                      OR p.last_rolled < v_now - interval '7 days'
-                      OR p.roll IN (SELECT admit.roll FROM admit)
-                  )
-            ) THEN
-                UPDATE motivation_d100 m
-                SET times_rolled = COALESCE(m.times_rolled, 0) + 1,
-                    last_rolled  = v_now
-                WHERE m.roll = picked_roll;
-
-                RETURN QUERY
-                SELECT m.roll, m.task_name, m.task_description, m.workflow_id,
-                       m.skill_name, m.tool_name, m.difficulty, m.energy_required,
-                       m.estimated_minutes, m.times_rolled, m.times_completed,
-                       m.last_rolled, m.last_completed, m.notes,
-                       false
-                FROM motivation_d100 m
-                WHERE m.roll = picked_roll;
-                RETURN;
-            END IF;
-
-            -- Excluded by anti-repeat window/cap; try again.
+        IF picked_roll IS NULL THEN
             CONTINUE;
         END IF;
 
-        -- All other draws (reserved empty, disabled) => re-roll.
-        CONTINUE;
+        UPDATE motivation_d100 m
+        SET times_rolled = COALESCE(m.times_rolled, 0) + 1,
+            last_rolled  = v_now
+        WHERE m.roll = picked_roll;
+
+        RETURN QUERY
+        SELECT m.roll, m.task_name, m.task_description, m.workflow_id,
+               m.skill_name, m.tool_name, m.difficulty, m.energy_required,
+               m.estimated_minutes, m.times_rolled, m.times_completed,
+               m.last_rolled, m.last_completed, m.notes,
+               picked_is_pop
+        FROM motivation_d100 m
+        WHERE m.roll = picked_roll;
+        RETURN;
     END LOOP;
 END;
 $$;

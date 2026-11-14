@@ -11,6 +11,7 @@ Area A-H tests (nova-mind#803) run against throwaway databases created and
 dropped by name. Area I tests are marked skip-unless-post-deploy.
 """
 
+import importlib.util
 import os
 import subprocess
 import sys
@@ -22,8 +23,18 @@ import pytest
 REPO_ROOT = Path(__file__).parent.parent.parent
 MIGRATION_PATH = REPO_ROOT / "memory" / "migrations" / "084_d100_motivation_refinements.sql"
 MIGRATION_PATH_089 = REPO_ROOT / "memory" / "migrations" / "089_d100_weights.sql"
+ANNOUNCE_SCRIPT = REPO_ROOT / "memory" / "scripts" / "announce-d100-rolls.py"
 # Use a valid, currently empty non-reserved roll for deterministic seeding.
 TEST_ROLL = 65
+
+EXPECTED_ROLL_D100_SIGNATURE = (
+    "TABLE(roll integer, task_name character varying, task_description text, "
+    "workflow_id integer, skill_name character varying, tool_name character varying, "
+    "difficulty character varying, energy_required character varying, "
+    "estimated_minutes integer, times_rolled integer, times_completed integer, "
+    "last_rolled timestamp without time zone, last_completed timestamp without time zone, "
+    "notes text, is_populate_me boolean)"
+)
 
 # Ensure the real psycopg2 driver is available before anything else can mock it.
 for _psycopg2_mod in ("psycopg2", "psycopg2.extras", "psycopg2.extensions"):
@@ -730,15 +741,7 @@ def test_migration_089_roll_d100_signature_unchanged(db_803):
             )
             result, arguments = cur.fetchone()
             assert arguments == "", f"expected no arguments, got {arguments}"
-            expected = (
-                "TABLE(roll integer, task_name character varying, task_description text, "
-                "workflow_id integer, skill_name character varying, tool_name character varying, "
-                "difficulty character varying, energy_required character varying, "
-                "estimated_minutes integer, times_rolled integer, times_completed integer, "
-                "last_rolled timestamp without time zone, last_completed timestamp without time zone, "
-                "notes text, is_populate_me boolean)"
-            )
-            assert result == expected, f"unexpected signature: {result}"
+            assert result == EXPECTED_ROLL_D100_SIGNATURE, f"unexpected signature: {result}"
     finally:
         conn.close()
 
@@ -1189,5 +1192,423 @@ def test_weight_zero_empty_slot_excluded(db_803):
         with pytest.raises(psycopg2.errors.RaiseException):
             with conn.cursor() as cur:
                 cur.execute("SELECT * FROM roll_d100() LIMIT 1")
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Helpers for Areas E-H.
+# ---------------------------------------------------------------------------
+
+_ERROR_TEXT = "roll_d100: no populated+enabled tasks found after 20 attempts"
+
+
+def _assert_all_ineligible_error(exc):
+    """Assert that exc carries the exact, byte-for-byte existing error text."""
+    assert isinstance(exc, psycopg2.errors.RaiseException)
+    primary = getattr(exc, "diag", None) and exc.diag.message_primary
+    assert primary == _ERROR_TEXT, f"unexpected error text: {primary!r}"
+
+
+def _announce_env(db_name: str) -> dict:
+    """Return an environment dict that points announce-d100-rolls.py at a throwaway DB."""
+    env = os.environ.copy()
+    env["PGHOST"] = "localhost"
+    env["PGPORT"] = os.environ.get("PGPORT", "5432")
+    env["PGDATABASE"] = db_name
+    env["PGUSER"] = "nova"
+    env.pop("PGPASSWORD", None)
+    return env
+
+
+def _run_announce_dry_run(db_name: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [sys.executable, str(ANNOUNCE_SCRIPT), "--dry-run"],
+        env=_announce_env(db_name),
+        capture_output=True,
+        text=True,
+        cwd=str(REPO_ROOT),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Area E: All-ineligible error path (E1-E4).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(os.environ.get("SKIP_DB_TESTS"), reason="SKIP_DB_TESTS set")
+def test_all_ineligible_all_weights_zero(db_803):
+    """E1: all weights are 0 raises the exact existing error text."""
+    conn = _connect_to_db(db_803)
+    try:
+        _load_minimal_d100_schema(conn)
+        _apply_migration_089(conn)
+        with conn.cursor() as cur:
+            cur.execute("INSERT INTO motivation_d100 (roll, task_name, enabled, weight) VALUES (1, 'Task 1', true, 0)")
+            cur.execute("INSERT INTO motivation_d100 (roll, reserved, enabled, weight) VALUES (2, false, true, 0)")
+        with pytest.raises(psycopg2.errors.RaiseException) as excinfo:
+            with conn.cursor() as cur:
+                cur.execute("SELECT * FROM roll_d100() LIMIT 1")
+        _assert_all_ineligible_error(excinfo.value)
+    finally:
+        conn.close()
+
+
+@pytest.mark.skipif(os.environ.get("SKIP_DB_TESTS"), reason="SKIP_DB_TESTS set")
+def test_all_ineligible_weight_zero_trumps_recency_admission(db_803):
+    """E2: weight-0 on every populated row trumps the 50% cap re-admission."""
+    conn = _connect_to_db(db_803)
+    try:
+        _load_minimal_d100_schema(conn)
+        _apply_migration_089(conn)
+        with conn.cursor() as cur:
+            # 10 populated recent slots, all weight 0.
+            for i, roll in enumerate(range(1, 11), start=1):
+                cur.execute(
+                    "INSERT INTO motivation_d100 (roll, task_name, enabled, last_rolled, weight) "
+                    "VALUES (%s, %s, true, CURRENT_TIMESTAMP - interval '%s hours', 0)",
+                    (roll, f"Recent {roll}", i),
+                )
+            # Only empty candidates are reserved/disabled/weight-0.
+            cur.execute("INSERT INTO motivation_d100 (roll, reserved, enabled, weight) VALUES (11, true, true, 0)")
+            cur.execute("INSERT INTO motivation_d100 (roll, reserved, enabled, weight) VALUES (12, false, false, 0)")
+        with pytest.raises(psycopg2.errors.RaiseException) as excinfo:
+            with conn.cursor() as cur:
+                cur.execute("SELECT * FROM roll_d100() LIMIT 1")
+        _assert_all_ineligible_error(excinfo.value)
+    finally:
+        conn.close()
+
+
+@pytest.mark.skipif(os.environ.get("SKIP_DB_TESTS"), reason="SKIP_DB_TESTS set")
+def test_all_ineligible_empty_table(db_803):
+    """E3: empty motivation_d100 raises the exact existing error text."""
+    conn = _connect_to_db(db_803)
+    try:
+        _load_minimal_d100_schema(conn)
+        _apply_migration_089(conn)
+        with pytest.raises(psycopg2.errors.RaiseException) as excinfo:
+            with conn.cursor() as cur:
+                cur.execute("SELECT * FROM roll_d100() LIMIT 1")
+        _assert_all_ineligible_error(excinfo.value)
+    finally:
+        conn.close()
+
+
+@pytest.mark.skipif(os.environ.get("SKIP_DB_TESTS"), reason="SKIP_DB_TESTS set")
+def test_all_ineligible_no_side_effects(db_803):
+    """E4: ineligible failure does not touch times_rolled or last_rolled."""
+    conn = _connect_to_db(db_803)
+    try:
+        _load_minimal_d100_schema(conn)
+        _apply_migration_089(conn)
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO motivation_d100 (roll, task_name, enabled, weight, times_rolled, last_rolled) "
+                "VALUES (1, 'Task 1', true, 0, 7, '2024-01-01 00:00:00')"
+            )
+            cur.execute(
+                "INSERT INTO motivation_d100 (roll, reserved, enabled, weight, times_rolled, last_rolled) "
+                "VALUES (2, false, true, 0, 3, '2024-01-02 00:00:00')"
+            )
+            cur.execute("SELECT roll, times_rolled, last_rolled FROM motivation_d100 ORDER BY roll")
+            before = {row[0]: (row[1], row[2]) for row in cur.fetchall()}
+        conn.commit()
+
+        with pytest.raises(psycopg2.errors.RaiseException) as excinfo:
+            with conn.cursor() as cur:
+                cur.execute("SELECT * FROM roll_d100() LIMIT 1")
+        _assert_all_ineligible_error(excinfo.value)
+
+        # The failed call aborts the transaction; roll back and verify nothing changed.
+        conn.rollback()
+        with conn.cursor() as cur:
+            cur.execute("SELECT roll, times_rolled, last_rolled FROM motivation_d100 ORDER BY roll")
+            after = {row[0]: (row[1], row[2]) for row in cur.fetchall()}
+        assert after == before, f"side effects detected: before={before} after={after}"
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Area F: Trigger & roll-history tests (T1-T5).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(os.environ.get("SKIP_DB_TESTS"), reason="SKIP_DB_TESTS set")
+def test_roll_log_exactly_one_row_per_roll(db_803):
+    """T1: a successful roll inserts exactly one d100_roll_log row."""
+    conn = _connect_to_db(db_803)
+    try:
+        _load_minimal_d100_schema(conn)
+        _apply_migration_089(conn)
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO motivation_d100 (roll, task_name, enabled, weight) VALUES (1, 'Task 1', true, 1)"
+            )
+            cur.execute("SELECT count(*) FROM d100_roll_log")
+            before = cur.fetchone()[0]
+            cur.execute("SELECT * FROM roll_d100() LIMIT 1")
+            row = cur.fetchone()
+            cur.execute("SELECT count(*) FROM d100_roll_log")
+            after = cur.fetchone()[0]
+            assert after == before + 1, f"expected one new log row, got {after - before}"
+            cur.execute("SELECT roll FROM d100_roll_log ORDER BY id DESC LIMIT 1")
+            assert cur.fetchone()[0] == row[0]
+    finally:
+        conn.close()
+
+
+@pytest.mark.skipif(os.environ.get("SKIP_DB_TESTS"), reason="SKIP_DB_TESTS set")
+def test_roll_log_no_duplicate_on_no_op_update(db_803):
+    """T2: updating last_rolled to itself does not insert a log row."""
+    conn = _connect_to_db(db_803)
+    try:
+        _load_minimal_d100_schema(conn)
+        _apply_migration_089(conn)
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO motivation_d100 (roll, task_name, enabled, weight, last_rolled) "
+                "VALUES (1, 'Task 1', true, 1, '2024-01-01 00:00:00')"
+            )
+            cur.execute("SELECT count(*) FROM d100_roll_log")
+            before = cur.fetchone()[0]
+            cur.execute("UPDATE motivation_d100 SET last_rolled = last_rolled WHERE roll = 1")
+            cur.execute("SELECT count(*) FROM d100_roll_log")
+            after = cur.fetchone()[0]
+            assert after == before, "no-op update created a log row"
+    finally:
+        conn.close()
+
+
+@pytest.mark.skipif(os.environ.get("SKIP_DB_TESTS"), reason="SKIP_DB_TESTS set")
+def test_roll_log_populate_me_row(db_803):
+    """T3: populate-me path also logs one row."""
+    conn = _connect_to_db(db_803)
+    try:
+        _load_minimal_d100_schema(conn)
+        _apply_migration_089(conn)
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO motivation_d100 (roll, reserved, enabled, weight) VALUES (5, false, true, 1)"
+            )
+            cur.execute("SELECT count(*) FROM d100_roll_log")
+            before = cur.fetchone()[0]
+            cur.execute("SELECT * FROM roll_d100() LIMIT 1")
+            row = cur.fetchone()
+            assert row[-1] is True
+            cur.execute("SELECT count(*) FROM d100_roll_log")
+            after = cur.fetchone()[0]
+            assert after == before + 1
+            cur.execute("SELECT roll FROM d100_roll_log ORDER BY id DESC LIMIT 1")
+            assert cur.fetchone()[0] == 5
+    finally:
+        conn.close()
+
+
+@pytest.mark.skipif(os.environ.get("SKIP_DB_TESTS"), reason="SKIP_DB_TESTS set")
+def test_roll_log_weight_only_update_no_row(db_803):
+    """T4: changing weight without touching last_rolled does not log."""
+    conn = _connect_to_db(db_803)
+    try:
+        _load_minimal_d100_schema(conn)
+        _apply_migration_089(conn)
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO motivation_d100 (roll, task_name, enabled, weight, last_rolled) "
+                "VALUES (1, 'Task 1', true, 1, '2024-01-01 00:00:00')"
+            )
+            cur.execute("SELECT count(*) FROM d100_roll_log")
+            before = cur.fetchone()[0]
+            cur.execute("UPDATE motivation_d100 SET weight = 5 WHERE roll = 1")
+            cur.execute("SELECT count(*) FROM d100_roll_log")
+            after = cur.fetchone()[0]
+            assert after == before, "weight-only update created a log row"
+    finally:
+        conn.close()
+
+
+@pytest.mark.skipif(os.environ.get("SKIP_DB_TESTS"), reason="SKIP_DB_TESTS set")
+def test_populated_at_trigger_still_fires(db_803):
+    """T5: _trg_set_populated_at still stamps populated_at post-migration."""
+    conn = _connect_to_db(db_803)
+    try:
+        _load_minimal_d100_schema(conn)
+        _apply_migration_089(conn)
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO motivation_d100 (roll, reserved, enabled, weight) VALUES (5, false, true, 1)"
+            )
+            cur.execute("SELECT * FROM roll_d100() LIMIT 1")
+            row = cur.fetchone()
+            assert row[-1] is True
+            cur.execute("SELECT populated_at FROM motivation_d100 WHERE roll = 5")
+            assert cur.fetchone()[0] is None
+            cur.execute(
+                "UPDATE motivation_d100 SET task_name = 'x', task_description = 'y', weight = 2.5 WHERE roll = 5"
+            )
+            cur.execute("SELECT populated_at, task_name FROM motivation_d100 WHERE roll = 5")
+            populated_at, task_name = cur.fetchone()
+            assert task_name == "x"
+            assert populated_at is not None, "populated_at trigger did not fire"
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Area G: Caller compatibility — announce script & return signature (G1-G4).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(os.environ.get("SKIP_DB_TESTS"), reason="SKIP_DB_TESTS set")
+def test_announce_script_dry_run_reads_existing_columns(db_803):
+    """G1: announce-d100-rolls.py runs unchanged against the post-migration DB."""
+    conn = _connect_to_db(db_803)
+    try:
+        _load_minimal_d100_schema(conn)
+        _apply_migration_089(conn)
+        result = _run_announce_dry_run(db_803)
+        assert result.returncode == 0, (
+            f"announce script failed:\nstdout={result.stdout}\nstderr={result.stderr}"
+        )
+        assert "0 rolls to announce" in result.stdout or "would send" in result.stdout
+    finally:
+        conn.close()
+
+
+@pytest.mark.skipif(os.environ.get("SKIP_DB_TESTS"), reason="SKIP_DB_TESTS set")
+def test_announce_script_end_to_end_roll_trigger_announce(db_803):
+    """G2: roll -> trigger -> announce dry-run sees the new log row."""
+    conn = _connect_to_db(db_803)
+    try:
+        _load_minimal_d100_schema(conn)
+        _apply_migration_089(conn)
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO motivation_d100 (roll, task_name, enabled, weight) VALUES (1, 'Task 1', true, 1)"
+            )
+            cur.execute("SELECT * FROM roll_d100() LIMIT 1")
+            row = cur.fetchone()
+            assert row is not None
+        conn.commit()  # make the logged roll visible to the separate announce process
+        result = _run_announce_dry_run(db_803)
+        assert result.returncode == 0, (
+            f"announce script failed:\nstdout={result.stdout}\nstderr={result.stderr}"
+        )
+        assert "[DRY-RUN] would send:" in result.stdout, (
+            f"expected dry-run announcement, got:\n{result.stdout}"
+        )
+        assert str(row[0]) in result.stdout
+    finally:
+        conn.close()
+
+
+@pytest.mark.skipif(os.environ.get("SKIP_DB_TESTS"), reason="SKIP_DB_TESTS set")
+def test_format_roll_unit_no_weight_key():
+    """G3: _format_roll() works with the pre-weight dict shape and needs no weight key."""
+    spec = importlib.util.spec_from_file_location("announce_d100_rolls", ANNOUNCE_SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    populated = {
+        "roll": 42,
+        "task_name": "Test task",
+        "estimated_minutes": 30,
+        "difficulty": "hard",
+        "last_rolled": None,
+        "last_completed": None,
+        "reserved": False,
+    }
+    text = module._format_roll(populated)
+    assert '42' in text
+    assert "Test task" in text
+    assert "30m" in text
+    assert "difficulty hard" in text
+
+    populate_me = {
+        "roll": 7,
+        "task_name": None,
+        "estimated_minutes": None,
+        "difficulty": None,
+        "last_rolled": None,
+        "last_completed": None,
+        "reserved": False,
+    }
+    text = module._format_roll(populate_me)
+    assert "[ORIGINATION SLOT" in text
+    assert "populate & execute" in text
+
+
+@pytest.mark.skipif(os.environ.get("SKIP_DB_TESTS"), reason="SKIP_DB_TESTS set")
+def test_roll_d100_return_signature_byte_for_byte(db_803):
+    """G4: post-migration roll_d100() returns the exact same 15-column signature."""
+    conn = _connect_to_db(db_803)
+    try:
+        _load_minimal_d100_schema(conn)
+        _apply_migration_089(conn)
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT pg_get_function_result('roll_d100'::regproc), "
+                "       pg_get_function_arguments('roll_d100'::regproc)"
+            )
+            result, arguments = cur.fetchone()
+            assert arguments == "", f"expected no arguments, got {arguments}"
+            assert result == EXPECTED_ROLL_D100_SIGNATURE, f"signature mismatch: {result}"
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Area H: Weight update takes effect immediately (W1-W2).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(os.environ.get("SKIP_DB_TESTS"), reason="SKIP_DB_TESTS set")
+def test_weight_bump_shifts_distribution_immediately(db_803):
+    """W1: raising a slot's weight in the same session shifts the next draws."""
+    conn = _connect_to_db(db_803)
+    try:
+        _load_minimal_d100_schema(conn)
+        _apply_migration_089(conn)
+        with conn.cursor() as cur:
+            for roll in (1, 2, 3):
+                cur.execute(
+                    "INSERT INTO motivation_d100 (roll, reserved, enabled, weight) VALUES (%s, false, true, 1)",
+                    (roll,),
+                )
+        baseline = _run_simulation(conn, n=500, seed=0.42)
+        _assert_distribution(baseline, {1: 1, 2: 1, 3: 1}, n=500)
+
+        with conn.cursor() as cur:
+            cur.execute("UPDATE motivation_d100 SET weight = 5 WHERE roll = 1")
+
+        after = _run_simulation(conn, n=500, seed=0.17)
+        _assert_distribution(after, {1: 5, 2: 1, 3: 1}, n=500)
+    finally:
+        conn.close()
+
+
+@pytest.mark.skipif(os.environ.get("SKIP_DB_TESTS"), reason="SKIP_DB_TESTS set")
+def test_weight_zero_mutes_immediately(db_803):
+    """W2: setting weight to 0 immediately mutes the slot in the same session."""
+    conn = _connect_to_db(db_803)
+    try:
+        _load_minimal_d100_schema(conn)
+        _apply_migration_089(conn)
+        with conn.cursor() as cur:
+            for roll in (1, 2, 3, 4, 5):
+                cur.execute(
+                    "INSERT INTO motivation_d100 (roll, task_name, enabled, weight) VALUES (%s, %s, true, 1)",
+                    (roll, f"Task {roll}"),
+                )
+        # Warm-up: confirm roll 1 is reachable before muting.
+        warmup = _run_simulation(conn, n=100, seed=0.42)
+        assert warmup.get(1, 0) > 0, "roll 1 was not reachable before muting"
+
+        with conn.cursor() as cur:
+            cur.execute("UPDATE motivation_d100 SET weight = 0 WHERE roll = 1")
+
+        after = _run_simulation(conn, n=500, seed=0.42)
+        assert after.get(1, 0) == 0, "roll 1 was drawn after being muted to weight 0"
     finally:
         conn.close()

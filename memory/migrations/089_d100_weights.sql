@@ -41,9 +41,11 @@ GRANT UPDATE (weight) ON TABLE motivation_d100 TO nova;
 -- Implementation notes:
 --   * CREATE OR REPLACE is used because the 15-column return signature is
 --     unchanged; existing grants (including EXECUTE to nova) survive.
---   * Eligibility is computed in a temp table, then a single cumulative-sum
---     weighted sample picks the slot. If no slots are eligible the loop
---     exhausts max_attempts and raises the unchanged error message.
+--   * Eligibility and the weighted sample are computed in CTEs. The draw
+--     target is materialized once per loop so random() is not re-evaluated
+--     per row of the cumulative sum.
+--   * No temporary tables are used: a caller cannot pre-create a temp table
+--     and shadow the function's internal state (SECURITY DEFINER hardening).
 --   * Fractional weights are supported because the column is numeric and the
 --     cumulative sum is computed in numeric.
 -- ---------------------------------------------------------------------------
@@ -67,7 +69,7 @@ RETURNS TABLE(
 )
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public
+SET search_path = public, pg_temp
 AS $$
 DECLARE
     picked_roll    integer;
@@ -75,8 +77,6 @@ DECLARE
     attempts       integer := 0;
     max_attempts   integer := 20;
     v_now          timestamp := CURRENT_TIMESTAMP::timestamp;
-    total_weight   numeric;
-    target         numeric;
 BEGIN
     LOOP
         attempts := attempts + 1;
@@ -84,27 +84,19 @@ BEGIN
             RAISE EXCEPTION 'roll_d100: no populated+enabled tasks found after % attempts', max_attempts;
         END IF;
 
-        -- Build the weighted eligible pool in a temp table.
-        CREATE TEMP TABLE IF NOT EXISTS _roll_d100_eligible (
-            roll integer,
-            weight numeric,
-            is_populate_me boolean
-        ) ON COMMIT DROP;
-        TRUNCATE _roll_d100_eligible;
-
-        WITH pop AS (
+        WITH pop AS MATERIALIZED (
             SELECT m.roll, m.last_rolled, m.weight
             FROM motivation_d100 m
             WHERE m.task_name IS NOT NULL
               AND m.enabled = true
               AND m.weight > 0
         ),
-        counts AS (
+        counts AS MATERIALIZED (
             SELECT
                 (SELECT count(*) FROM pop) AS total_pop,
                 (SELECT count(*) FROM pop WHERE pop.last_rolled >= v_now - interval '7 days') AS recent_pop
         ),
-        admit AS (
+        admit AS MATERIALIZED (
             SELECT ranked.roll
             FROM (
                 SELECT p.roll,
@@ -116,40 +108,35 @@ BEGIN
                 SELECT GREATEST(c.recent_pop - (floor(c.total_pop * 0.5))::integer, 0)
                 FROM counts c
             )
+        ),
+        eligible AS MATERIALIZED (
+            -- Terminal path A: non-reserved empty + enabled => populate-me.
+            SELECT m.roll, m.weight, true AS is_populate_me
+            FROM motivation_d100 m
+            WHERE m.task_name IS NULL
+              AND m.reserved = false
+              AND m.enabled = true
+              AND m.weight > 0
+            UNION ALL
+            -- Terminal path B: populated + enabled => apply anti-repeat rules.
+            SELECT p.roll, p.weight, false AS is_populate_me
+            FROM pop p
+            WHERE p.last_rolled IS NULL
+               OR p.last_rolled < v_now - interval '7 days'
+               OR p.roll IN (SELECT a.roll FROM admit a)
+        ),
+        target AS MATERIALIZED (
+            SELECT random()::numeric * COALESCE((SELECT SUM(weight) FROM eligible), 0) AS t
         )
-        INSERT INTO _roll_d100_eligible (roll, weight, is_populate_me)
-        -- Terminal path A: non-reserved empty + enabled => populate-me.
-        SELECT m.roll, m.weight, true
-        FROM motivation_d100 m
-        WHERE m.task_name IS NULL
-          AND m.reserved = false
-          AND m.enabled = true
-          AND m.weight > 0
-        UNION ALL
-        -- Terminal path B: populated + enabled => apply anti-repeat rules.
-        SELECT p.roll, p.weight, false
-        FROM pop p
-        WHERE p.last_rolled IS NULL
-           OR p.last_rolled < v_now - interval '7 days'
-           OR p.roll IN (SELECT a.roll FROM admit a);
-
-        SELECT COALESCE(SUM(weight), 0) INTO total_weight
-        FROM _roll_d100_eligible;
-
-        IF total_weight IS NULL OR total_weight <= 0 THEN
-            CONTINUE;
-        END IF;
-
-        target := random()::numeric * total_weight;
-
         SELECT e.roll, e.is_populate_me
         INTO picked_roll, picked_is_pop
         FROM (
             SELECT t.roll, t.is_populate_me,
                    sum(t.weight) OVER (ORDER BY t.roll) AS cum_weight
-            FROM _roll_d100_eligible t
-        ) e
-        WHERE e.cum_weight > target
+            FROM eligible t
+        ) e,
+        target tg
+        WHERE e.cum_weight > tg.t
         ORDER BY e.cum_weight
         LIMIT 1;
 

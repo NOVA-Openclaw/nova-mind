@@ -368,6 +368,54 @@ def db_803():
 
 
 @pytest.mark.skipif(os.environ.get("SKIP_DB_TESTS"), reason="SKIP_DB_TESTS set")
+def test_roll_d100_ignores_caller_temp_table_shadow(db_803):
+    """
+    SECURITY: a caller-created `_roll_d100_eligible` temp table cannot
+    influence the weighted draw. roll_d100() uses CTEs, not temp tables, and
+    runs with search_path = public, pg_temp.
+    """
+    conn = _connect_to_db(db_803)
+    try:
+        _load_minimal_d100_schema(conn)
+        _apply_migration_089(conn)
+
+        with conn.cursor() as cur:
+            # One real eligible populated slot.
+            cur.execute(
+                """
+                INSERT INTO motivation_d100 (
+                    roll, task_name, task_description, enabled, populated_at, weight
+                ) VALUES (1, 'Real task', 'Real description', true, now(), 1)
+                """
+            )
+
+            # Malicious shadow temp table with a high-weight junk roll.
+            cur.execute(
+                """
+                CREATE TEMP TABLE _roll_d100_eligible (
+                    roll integer,
+                    weight numeric,
+                    is_populate_me boolean
+                )
+                """
+            )
+            cur.execute(
+                "INSERT INTO _roll_d100_eligible VALUES (999, 1000000, false)"
+            )
+
+            cur.execute("SELECT * FROM roll_d100() LIMIT 1;")
+            row = cur.fetchone()
+
+            assert row is not None, "roll_d100() returned no row"
+            assert row[0] == 1, (
+                f"caller-created temp table shadowed the draw: got roll {row[0]}"
+            )
+            assert row[-1] is False, f"expected populated slot, got is_populate_me={row[-1]}"
+    finally:
+        conn.close()
+
+
+@pytest.mark.skipif(os.environ.get("SKIP_DB_TESTS"), reason="SKIP_DB_TESTS set")
 def test_migration_089_applies_cleanly_and_roll_d100_returns_row(db_803):
     """
     Chunk 1 smoke test: migration 089 applies to a minimal throwaway schema,

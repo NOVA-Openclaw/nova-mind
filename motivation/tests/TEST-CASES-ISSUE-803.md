@@ -1,5 +1,13 @@
 # Test Cases for Issue #803: D100 Motivation — Per-Slot `weight` Column & Weighted `roll_d100()`
 
+> **SE #1481 design record.** Per the Step 9 (Technical Writing) QA recommendation to
+> archive this file, it is retained here rather than moved — the repo has no
+> `archive/`/historical test-cases directory for QA design docs of this kind. Treat it as
+> a point-in-time design record of the Step 3/4 test design, not living documentation; the
+> current behavior (and the one post-publication correction — see "Retired cases" below,
+> where the M7/D3 `GRANT`-on-`weight` cases were retired when #808 dropped the redundant
+> grant) is documented in `motivation/README.md`/`motivation/ARCHITECTURE.md`.
+
 **SE Run #1481 — Step 3/4 QA test design, approved by orchestrator Step-4 review (2026-11-14)**
 
 Sources read: `nova-mind#803` (issue body + I)ruid's Step-1 rulings comment,

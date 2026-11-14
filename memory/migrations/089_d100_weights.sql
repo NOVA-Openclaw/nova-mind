@@ -4,8 +4,7 @@
 -- Changes:
 --   1. Add `weight numeric NOT NULL DEFAULT 1` to motivation_d100, with a
 --      CHECK (weight >= 0) constraint added only if missing.
---   2. Grant nova direct UPDATE on the new content column.
---   3. Rewrite roll_d100() to draw once from the weighted eligible pool:
+--   2. Rewrite roll_d100() to draw once from the weighted eligible pool:
 --        - empty slots are eligible when unreserved, enabled, and weight > 0;
 --        - populated slots are eligible when enabled, weight > 0, and they
 --          pass the existing 7-day anti-repeat window / 50% cap;

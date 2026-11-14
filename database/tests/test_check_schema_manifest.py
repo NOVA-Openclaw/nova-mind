@@ -391,26 +391,6 @@ class TestIssue803PostDeploy:
         )
         assert exit_code == 0
 
-    @pytest.mark.skipif(
-        not (_repo_schema_has_weight() and _repo_manifest_has_weight()),
-        reason="post-deploy only: real manifest/schema lack #803 entries until step 11",
-    )
-    def test_schema_sql_contains_weight_grant_to_nova(self):
-        """D3: the hand-maintained GRANT UPDATE (weight) line is present.
-
-        pgschema dump does not emit column-level GRANT statements, so this line
-        only survives if a human added it to schema.sql in the same PR as the
-        migration.
-        """
-        schema_sql = (REPO_ROOT / "database" / "schema.sql").read_text()
-        grant_re = re.compile(
-            r"GRANT\s+UPDATE\s*\([^)]*\bweight\b[^)]*\)\s+ON\s+TABLE\s+motivation_d100\s+TO\s+nova\s*;",
-            re.IGNORECASE,
-        )
-        assert grant_re.search(schema_sql), (
-            "missing GRANT UPDATE (...) ON TABLE motivation_d100 TO nova for weight"
-        )
-
 
 class TestIssue803SyntheticManifest:
     """D4 (nova-mind#803): synthetic fixtures proving the manifest checker

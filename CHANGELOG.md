@@ -12,8 +12,6 @@ SE Run #1481. Adds per-slot weights to the D100 motivation table and rewrites
   within the eligible pool; fractional values are supported; weight `0`
   soft-mutes a slot and excludes it from the populated-slot 50% cap
   denominators.
-- **Direct `GRANT UPDATE (weight) ON TABLE motivation_d100 TO nova`** so the
-  `nova` role can tune slot weights without a function wrapper.
 - **Full #803 test suite** in `motivation/tests/test_roll_d100_migration.py`
   covering migration idempotency, fractional weights, weight-0 soft-mute,
   anti-repeat regressions, exact error text, triggers, announce-script

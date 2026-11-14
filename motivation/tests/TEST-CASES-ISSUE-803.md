@@ -388,11 +388,18 @@ after the implementation PR lands the manifest entries, including in CI.
 
 ---
 
+## Retired cases (2026-11-14 I)ruid ruling)
+
+| Case | Status | Reason |
+|---|---|---|
+| M7 | Retired | The `nova` role owns the `nova_memory` database and `motivation_d100` table, so it already has write access to the `weight` column through ownership; no explicit column `GRANT` is needed, and `nova-mind` must not grant to a role by name. |
+| D3 | Retired | The hand-maintained `GRANT UPDATE (weight)` line is no longer required because ownership-based access makes it redundant. |
+
 ## Case count summary (final, approved)
 
 | Area | Cases |
 |---|---|
-| A. Migration & schema (change-SQL-only, no hand-edited schema.sql) | 9 (M1-M9) |
+| A. Migration & schema (change-SQL-only, no hand-edited schema.sql) | 8 (M1-M6, M8-M9) |
 | B. Statistical / weighted distribution (S7 required, per Q5) | 7 (S1-S7) |
 | C. Anti-repeat regressions (A7 finalized per Q2) | 8 (A1, A2, A2b, A3-A7) |
 | D. Populate-me path | 4 (P1-P4) |
@@ -400,8 +407,8 @@ after the implementation PR lands the manifest entries, including in CI.
 | F. Trigger & roll history | 5 (T1-T5) |
 | G. Caller compatibility (announce script + signature) | 5 (G1-G5) |
 | H. Weight update takes effect immediately | 2 (W1-W2) |
-| I. Post-deploy schema-dump & manifest verification (D1-D3 post-deploy; D4 static/CI, per Q7) | 4 (D1-D4) |
-| **Total** | **48** |
+| I. Post-deploy schema-dump & manifest verification (D1-D2 post-deploy; D4 static/CI, per Q7) | 3 (D1-D2, D4) |
+| **Total** | **46** |
 
 ---
 

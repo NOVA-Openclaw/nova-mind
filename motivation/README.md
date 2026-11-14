@@ -251,9 +251,9 @@ Disabled populated slots remain eligible for this flag — a useful retirement s
 
 ### Setting a slot's weight
 
-Because `weight` is a content column, NOVA (or any caller holding the `nova` role) can
-tune it directly without redefining the function. The migration grants `UPDATE (weight)` on
-`motivation_d100` to `nova`:
+Because `weight` is a content column and the `nova` role owns `motivation_d100`,
+NOVA can tune it directly without redefining the function. No explicit `GRANT` is needed;
+table ownership already confers write access:
 
 ```sql
 -- Increase a slot's share of future rolls

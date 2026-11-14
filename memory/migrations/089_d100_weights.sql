@@ -32,9 +32,6 @@ BEGIN
     END IF;
 END $$;
 
--- Nova maintains content columns directly; weight is a content column.
-GRANT UPDATE (weight) ON TABLE motivation_d100 TO nova;
-
 -- ---------------------------------------------------------------------------
 -- 2. roll_d100() — weighted draw over the currently eligible pool.
 --

@@ -705,39 +705,23 @@ def test_migration_089_accepts_zero_and_fractional_weights(db_803):
 
 
 @pytest.mark.skipif(os.environ.get("SKIP_DB_TESTS"), reason="SKIP_DB_TESTS set")
-def test_migration_089_grants_update_weight_to_nova(db_803):
-    """M7: nova can directly UPDATE the weight content column."""
+def test_migration_089_owner_can_update_weight(db_803):
+    """M7: the table owner can UPDATE the weight content column.
+
+    No explicit column GRANT is required: PostgreSQL table owners already
+    have full write access to their tables, and the throwaway DB creates
+    motivation_d100 as the current libpq/env user.
+    """
     conn = _connect_to_db(db_803)
     try:
         _load_minimal_d100_schema(conn)
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                DO $$
-                BEGIN
-                    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'nova') THEN
-                        CREATE ROLE nova NOLOGIN;
-                    END IF;
-                END $$;
-                """
-            )
-            cur.execute("GRANT ALL ON TABLE motivation_d100 TO nova")
         _apply_migration_089(conn)
 
-        nova_conn = psycopg2.connect(
-            host=os.environ.get("PGHOST", "localhost"),
-            port=os.environ.get("PGPORT", "5432"),
-            dbname=db_803,
-            user=os.environ.get("PGUSER"),
-        )
-        try:
-            with nova_conn.cursor() as cur:
-                cur.execute("INSERT INTO motivation_d100 (roll, enabled) VALUES (1, true)")
-                cur.execute("UPDATE motivation_d100 SET weight = 2 WHERE roll = 1")
-                cur.execute("SELECT weight FROM motivation_d100 WHERE roll = 1")
-                assert cur.fetchone()[0] == 2
-        finally:
-            nova_conn.close()
+        with conn.cursor() as cur:
+            cur.execute("INSERT INTO motivation_d100 (roll, enabled) VALUES (1, true)")
+            cur.execute("UPDATE motivation_d100 SET weight = 2 WHERE roll = 1")
+            cur.execute("SELECT weight FROM motivation_d100 WHERE roll = 1")
+            assert cur.fetchone()[0] == 2
     finally:
         conn.close()
 
@@ -769,7 +753,7 @@ def test_migration_089_extraction_executes_standalone(db_803):
     conn = _connect_to_db(db_803)
     try:
         _load_minimal_d100_schema(conn)
-        # Apply only the column/constraint/grant parts first so the function has a home.
+        # Apply only the column/constraint parts first so the function has a home.
         with conn.cursor() as cur:
             cur.execute("ALTER TABLE motivation_d100 ADD COLUMN IF NOT EXISTS weight numeric NOT NULL DEFAULT 1")
         conn.commit()

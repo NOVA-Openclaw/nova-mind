@@ -1,5 +1,30 @@
 # Changelog
 
+### Batch: d100-weights-803 (Issue #803)
+
+SE Run #1481. Adds per-slot weights to the D100 motivation table and rewrites
+`roll_d100()` to draw from the weighted eligible pool.
+
+#### Added
+- **`motivation_d100.weight` column** (`numeric NOT NULL DEFAULT 1`,
+  `CHECK (weight >= 0)`) and weighted `roll_d100()` rewrite in
+  `memory/migrations/089_d100_weights.sql`. Weight is a relative probability
+  within the eligible pool; fractional values are supported; weight `0`
+  soft-mutes a slot and excludes it from the populated-slot 50% cap
+  denominators.
+- **Full #803 test suite** in `motivation/tests/test_roll_d100_migration.py`
+  covering migration idempotency, fractional weights, weight-0 soft-mute,
+  anti-repeat regressions, exact error text, triggers, announce-script
+  compatibility, and immediate effect of weight updates; plus post-deploy
+  schema-dump verification tests in
+  `database/tests/test_check_schema_manifest.py`.
+
+#### Documentation
+- `motivation/README.md` — D100 Roll Mechanics section rewritten for weighted
+  draws, weight-0 semantics, and weight-setting SQL.
+- `motivation/ARCHITECTURE.md` §5 — updated to describe the `weight` column and
+  its effect on eligibility and cap math.
+
 ### Batch: pg-notify-listener-relocation-612 (Issue #612)
 
 #### Removed

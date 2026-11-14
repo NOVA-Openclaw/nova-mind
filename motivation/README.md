@@ -168,27 +168,39 @@ The HEARTBEAT record in `agent_bootstrap_context` (file_key='HEARTBEAT', agent_n
 
 ## D100 Roll Mechanics
 
-`roll_d100()` draws a uniform random value 1–100 and re-rolls (up to 20 attempts) until it
-lands on a terminal outcome. As of issue #444, there are two distinct terminal outcomes,
-distinguished by the additive `is_populate_me boolean` output column (15-column return
-contract; no sentinel strings):
+`roll_d100()` selects one slot from the currently **eligible** pool using a weighted draw,
+updates the picked slot's tracking columns (`times_rolled`, `last_rolled`), logs the roll in
+`d100_roll_log` via `_trg_log_d100_roll`, and returns the slot. The pool is recomputed on
+every invocation, so a weight change takes effect immediately on the next call.
+
+Every slot carries a `weight numeric NOT NULL DEFAULT 1` column (issue #803). Weights are
+relative probabilities within the eligible pool: a slot with `weight = 3.0` is drawn
+roughly three times as often as a slot with `weight = 1.0`. Fractional weights are fully
+supported because the column is `numeric`. A weight of `0` is a **soft mute** — the slot is
+never drawn, even if `enabled = true`, and is excluded from the populated-slot 50% cap
+denominators exactly as if it were disabled.
+
+There are two terminal outcomes, distinguished by the additive `is_populate_me boolean`
+output column (15-column return contract; no sentinel strings):
 
 - **Populate-me (generative empty slot):** the picked roll is `task_name IS NULL`,
-  `reserved = false`, and `enabled = true`. Returns `is_populate_me = true` with all
-  content columns NULL. The caller (Proactive Mode workflow id=27, step 11) is expected to
-  **invent a `task_name`/`task_description` for the slot via a direct UPDATE, do the work,
-  then call `complete_d100(roll)`** — see the workflow step text for the exact SQL. The
-  anti-repeat window/cap below never applies to empty-slot draws; they are always uniform
-  and independent (DQ-4).
-- **Populated task (normal path):** the picked roll has `task_name IS NOT NULL` and
-  `enabled = true`. Subject to the anti-repeat window/cap described below. Returns
-  `is_populate_me = false`.
-- **Re-roll (no terminal outcome):** `reserved = true` empty slots and any `enabled = false`
-  slot never terminate a roll — the function loops and tries again.
+  `reserved = false`, `enabled = true`, and `weight > 0`. Returns `is_populate_me = true`
+  with all content columns NULL. The caller (Proactive Mode workflow id=27, step 11) is
+  expected to **invent a `task_name`/`task_description` for the slot via a direct UPDATE,
+  do the work, then call `complete_d100(roll)`** — see the workflow step text for the
+  exact SQL. The anti-repeat window/cap never applies to empty-slot draws.
+- **Populated task (normal path):** the picked roll has `task_name IS NOT NULL`,
+  `enabled = true`, and `weight > 0`, and it passes the anti-repeat window/cap described
+  below. Returns `is_populate_me = false`.
+- **No terminal outcome:** if the weighted sample finds no eligible slot (the entire pool
+  is empty), the function loops and tries again, up to 20 attempts. If every populated and
+  empty slot is disabled, reserved, or weight-0, it raises the unchanged error
+  `roll_d100: no populated+enabled tasks found after 20 attempts`.
 
 Both terminal paths increment `times_rolled` and set `last_rolled` before returning
 (populate-me rolls count as real rolls — DQ-1 — so the `d100_roll_log` trigger and the
-forced-D100 staleness gate, issue #358, keep working unmodified).
+forced-D100 staleness gate, issue #358, keep working unmodified). The return signature,
+error text, tracking updates, and `is_populate_me` semantics are unchanged from #444.
 
 ### `reserved` column
 
@@ -200,22 +212,24 @@ remaining non-reserved empty slots are generative.
 
 ### Anti-repeat window and dynamic cap (populated slots only)
 
-To reduce short-interval repeats among populated tasks, a populated+enabled roll is only
-accepted if:
+To reduce short-interval repeats among populated tasks, a populated+enabled+weight>0 roll
+is only accepted if:
 - `last_rolled IS NULL`, or
 - `last_rolled` is more than 7 days old, or
 - the slot is re-admitted by the dynamic cap below.
 
 **Dynamic cap:** if too many populated slots have been rolled within the last 7 days, the
 window would over-exclude and starve the roll (excessive re-roll attempts). The cap
-recomputes each roll: it allows up to `floor(total_populated_count * 0.5)` "recently
-rolled" (last 7 days) slots to remain excluded; any excess is re-admitted, **oldest
-`last_rolled` first**, statelessly and independently per invocation (no persisted exclusion
-state — DQ-6). Cap rounding is floor (conservative — fewer exclusions on odd counts, DQ-5).
+recomputes each roll over **only the populated+enabled+weight>0 slots**: both
+`total_populated_count` and the "recently rolled" count exclude weight-0 rows. It allows up
+to `floor(total_populated_count * 0.5)` "recently rolled" (last 7 days) slots to remain
+excluded; any excess is re-admitted, **oldest `last_rolled` first**, statelessly and
+independently per invocation (no persisted exclusion state — DQ-6). Cap rounding is floor
+(conservative — fewer exclusions on odd counts, DQ-5).
 
-If a populated+enabled roll is excluded by the window/cap, the function re-rolls
-(`CONTINUE`) rather than returning a different slot directly — so any given attempt still
-draws uniformly from 1–100 before the eligibility check applies.
+If no eligible populated slot is selected, the function simply loops to the next attempt.
+Because the draw is taken over the eligible pool directly, high-weight excluded slots can
+never "outvote" the recency rules.
 
 ### `populated_at` and completion-rate flagging
 
@@ -234,6 +248,25 @@ the ratio needs no `populated_at` filter: `complete_d100()` requires
 construction. Legacy populated slots (pre-#444) were backfilled with
 `populated_at = created_at` (not NULL) during migration 084, so they remain flag-eligible.
 Disabled populated slots remain eligible for this flag — a useful retirement signal.
+
+### Setting a slot's weight
+
+Because `weight` is a content column and the `nova` role owns `motivation_d100`,
+NOVA can tune it directly without redefining the function. No explicit `GRANT` is needed;
+table ownership already confers write access:
+
+```sql
+-- Increase a slot's share of future rolls
+UPDATE motivation_d100 SET weight = 3.0 WHERE roll = 71;
+
+-- Soft-mute a slot without disabling it (keeps it out of the cap denominators too)
+UPDATE motivation_d100 SET weight = 0 WHERE roll = 13;
+
+-- Restore default prominence
+UPDATE motivation_d100 SET weight = 1 WHERE roll = 42;
+```
+
+Changes take effect on the very next `roll_d100()` call.
 
 ## D100 Roll Announcer
 

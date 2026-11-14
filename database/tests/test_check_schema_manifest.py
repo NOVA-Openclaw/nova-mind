@@ -8,6 +8,7 @@ database/schema.sql.
 from __future__ import annotations
 
 import importlib.util
+import re
 import sys
 from pathlib import Path
 
@@ -17,6 +18,35 @@ SCRIPT_PATH = Path(__file__).parent.parent / "check_schema_manifest.py"
 spec = importlib.util.spec_from_file_location("check_schema_manifest", SCRIPT_PATH)
 check_schema_manifest = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(check_schema_manifest)
+
+REPO_ROOT = Path(__file__).parent.parent.parent
+
+
+def _repo_schema_has_weight() -> bool:
+    """Return True once the live schema dumper has added weight to schema.sql.
+
+    nova-mind#803's weight column is added by migration 089 and will reach
+    database/schema.sql via the pg-notify-listener schema dumper after deploy.
+    Until then, the real-repo manifest checks are post-deploy only.
+    """
+    schema_path = REPO_ROOT / "database" / "schema.sql"
+    if not schema_path.exists():
+        return False
+    return "weight numeric NOT NULL DEFAULT 1" in schema_path.read_text()
+
+
+def _repo_manifest_has_weight() -> bool:
+    """Return True once the real manifest lists the #803 objects.
+
+    The manifest entries are added in step 11 after the schema dumper commits
+    the updated schema.sql. Pre-deploy the real manifest intentionally omits
+    roll_d100() and the weight column so the installer BATS suite passes.
+    """
+    manifest_path = REPO_ROOT / "database" / ".schema-manifest.toml"
+    if not manifest_path.exists():
+        return False
+    text = manifest_path.read_text()
+    return 'roll_d100()' in text and 'weight numeric NOT NULL DEFAULT 1' in text
 
 
 MANIFEST_ONE_FUNCTION = """\
@@ -62,6 +92,115 @@ SCHEMA_WITHOUT_FUNCTION = """\
 CREATE OR REPLACE FUNCTION some_other_function()
 RETURNS void
 AS $$ BEGIN NULL; END; $$ LANGUAGE plpgsql;
+"""
+
+# nova-mind#803 D4 synthetic fixtures: prove the manifest checker has teeth
+# for roll_d100() and the motivation_d100.weight column once they belong in
+# the manifest (step 11). The real manifest intentionally omits them pre-deploy.
+MANIFEST_WITH_ROLL_D100 = """\
+[functions]
+patterns = [
+  "append_run_note(integer, text)",
+  "roll_d100()",
+]
+
+[columns]
+patterns = [
+  "weight numeric NOT NULL DEFAULT 1",
+]
+
+[function_security]
+"append_run_note" = ["SECURITY DEFINER", "SET search_path = public"]
+"roll_d100" = ["SECURITY DEFINER", "SET search_path = public"]
+"""
+
+SCHEMA_WITH_ROLL_D100_AND_WEIGHT = """\
+CREATE TABLE motivation_d100 (
+    roll integer NOT NULL,
+    task_name character varying(255),
+    weight numeric NOT NULL DEFAULT 1,
+    CONSTRAINT motivation_d100_pkey PRIMARY KEY (roll)
+);
+
+CREATE OR REPLACE FUNCTION roll_d100()
+RETURNS TABLE(roll integer)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+    RETURN QUERY SELECT 1;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION append_run_note(
+    p_run_id integer,
+    p_note text
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$ BEGIN NULL; END; $$;
+"""
+
+SCHEMA_WITHOUT_ROLL_D100 = """\
+CREATE TABLE motivation_d100 (
+    roll integer NOT NULL,
+    task_name character varying(255),
+    weight numeric NOT NULL DEFAULT 1,
+    CONSTRAINT motivation_d100_pkey PRIMARY KEY (roll)
+);
+
+CREATE OR REPLACE FUNCTION append_run_note(
+    p_run_id integer,
+    p_note text
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$ BEGIN NULL; END; $$;
+"""
+
+SCHEMA_WITHOUT_WEIGHT = """\
+CREATE TABLE motivation_d100 (
+    roll integer NOT NULL,
+    task_name character varying(255),
+    CONSTRAINT motivation_d100_pkey PRIMARY KEY (roll)
+);
+
+CREATE OR REPLACE FUNCTION roll_d100()
+RETURNS TABLE(roll integer)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+    RETURN QUERY SELECT 1;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION append_run_note(
+    p_run_id integer,
+    p_note text
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$ BEGIN NULL; END; $$;
+"""
+
+SCHEMA_ROLL_D100_NO_SECDEF = """\
+CREATE OR REPLACE FUNCTION roll_d100()
+RETURNS TABLE(roll integer)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    RETURN QUERY SELECT 1;
+END;
+$$;
 """
 
 
@@ -193,17 +332,129 @@ class TestFunctionSecuritySection:
         assert exit_code == 0
         assert "OK" in capsys.readouterr().out
 
+    @pytest.mark.skipif(
+        not (_repo_schema_has_weight() and _repo_manifest_has_weight()),
+        reason="post-deploy only: real manifest/schema lack #803 entries until step 11",
+    )
     def test_real_repo_schema_passes_security_check(self):
-        """Integration smoke test: the restored append_run_note() in this PR
-        still declares SECURITY DEFINER and SET search_path = public."""
-        repo_root = Path(__file__).parent.parent.parent
+        """Integration smoke test: append_run_note() and the #803 roll_d100()
+        entries still declare SECURITY DEFINER and SET search_path = public."""
         exit_code = check_schema_manifest.main(
             [
-                "--manifest", str(repo_root / "database" / ".schema-manifest.toml"),
-                "--schema", str(repo_root / "database" / "schema.sql"),
+                "--manifest", str(REPO_ROOT / "database" / ".schema-manifest.toml"),
+                "--schema", str(REPO_ROOT / "database" / "schema.sql"),
             ]
         )
         assert exit_code == 0
+
+
+class TestIssue803PostDeploy:
+    """Area I D1-D3 (nova-mind#803): post-deploy verification against the
+    real committed database/schema.sql and .schema-manifest.toml. These tests
+    only run once the live apply + automated pgschema dump has landed the
+    weight column, the rewritten roll_d100(), and the hand-maintained column
+    grant in schema.sql (step 11). Pre-deploy they are skipped automatically.
+    """
+
+    @pytest.mark.skipif(
+        not (_repo_schema_has_weight() and _repo_manifest_has_weight()),
+        reason="post-deploy only: real manifest/schema lack #803 entries until step 11",
+    )
+    def test_schema_sql_contains_weight_column_and_weighted_roll_d100(self):
+        """D1: schema.sql contains the weight column and the new roll_d100() body."""
+        schema_path = REPO_ROOT / "database" / "schema.sql"
+        schema_sql = schema_path.read_text()
+
+        # Column + constraint.
+        assert "weight numeric NOT NULL DEFAULT 1" in schema_sql
+        assert "motivation_d100_weight_check" in schema_sql
+        assert "CHECK (weight >= 0)" in schema_sql
+
+        # Function body is the weighted-draw rewrite, not the old 1-100 re-roll.
+        body = check_schema_manifest.extract_function_body(schema_sql, "roll_d100")
+        assert body is not None, "roll_d100() not found in schema.sql"
+        assert "WITH pop AS MATERIALIZED" in body, "expected weighted-draw CTEs"
+        assert "weight > 0" in body, "expected weight eligibility filter"
+        assert "floor(random() * 100 + 1)" not in body, "old uniform 1-100 draw still present"
+
+    @pytest.mark.skipif(
+        not (_repo_schema_has_weight() and _repo_manifest_has_weight()),
+        reason="post-deploy only: real manifest/schema lack #803 entries until step 11",
+    )
+    def test_check_schema_manifest_passes_post_deploy(self):
+        """D2: check_schema_manifest.py exits 0 on the real post-deploy files."""
+        exit_code = check_schema_manifest.main(
+            [
+                "--manifest", str(REPO_ROOT / "database" / ".schema-manifest.toml"),
+                "--schema", str(REPO_ROOT / "database" / "schema.sql"),
+            ]
+        )
+        assert exit_code == 0
+
+
+class TestIssue803SyntheticManifest:
+    """D4 (nova-mind#803): synthetic fixtures proving the manifest checker
+    catches a #624-style silent clobber of roll_d100() or the weight column.
+    The real manifest omits these entries pre-deploy, so these fixtures stand
+    in for the real entries and demonstrate the checker has teeth once step 11
+    adds them.
+    """
+
+    def test_main_exit_0_when_roll_d100_and_weight_present(self, tmp_path, capsys):
+        manifest_path = tmp_path / "manifest.toml"
+        manifest_path.write_text(MANIFEST_WITH_ROLL_D100)
+        schema_path = tmp_path / "schema.sql"
+        schema_path.write_text(SCHEMA_WITH_ROLL_D100_AND_WEIGHT)
+
+        exit_code = check_schema_manifest.main(
+            ["--manifest", str(manifest_path), "--schema", str(schema_path)]
+        )
+        assert exit_code == 0
+        out = capsys.readouterr().out
+        assert "OK" in out
+        assert "roll_d100" in out
+
+    def test_main_exit_1_when_roll_d100_missing(self, tmp_path, capsys):
+        manifest_path = tmp_path / "manifest.toml"
+        manifest_path.write_text(MANIFEST_WITH_ROLL_D100)
+        schema_path = tmp_path / "schema.sql"
+        schema_path.write_text(SCHEMA_WITHOUT_ROLL_D100)
+
+        exit_code = check_schema_manifest.main(
+            ["--manifest", str(manifest_path), "--schema", str(schema_path)]
+        )
+        assert exit_code == 1
+        out = capsys.readouterr().out
+        assert "FAIL" in out
+        assert "roll_d100" in out
+
+    def test_main_exit_1_when_weight_column_missing(self, tmp_path, capsys):
+        manifest_path = tmp_path / "manifest.toml"
+        manifest_path.write_text(MANIFEST_WITH_ROLL_D100)
+        schema_path = tmp_path / "schema.sql"
+        schema_path.write_text(SCHEMA_WITHOUT_WEIGHT)
+
+        exit_code = check_schema_manifest.main(
+            ["--manifest", str(manifest_path), "--schema", str(schema_path)]
+        )
+        assert exit_code == 1
+        out = capsys.readouterr().out
+        assert "FAIL" in out
+        assert "weight numeric NOT NULL DEFAULT 1" in out
+
+    def test_main_exit_1_when_roll_d100_security_property_missing(self, tmp_path, capsys):
+        manifest_path = tmp_path / "manifest.toml"
+        manifest_path.write_text(MANIFEST_WITH_ROLL_D100)
+        schema_path = tmp_path / "schema.sql"
+        schema_path.write_text(SCHEMA_ROLL_D100_NO_SECDEF)
+
+        exit_code = check_schema_manifest.main(
+            ["--manifest", str(manifest_path), "--schema", str(schema_path)]
+        )
+        assert exit_code == 1
+        out = capsys.readouterr().out
+        assert "FAIL" in out
+        assert "SECURITY DEFINER" in out
 
 
 class TestMainExitCodes:
@@ -263,15 +514,18 @@ class TestMainExitCodes:
         )
         assert exit_code == 2
 
+    @pytest.mark.skipif(
+        not (_repo_schema_has_weight() and _repo_manifest_has_weight()),
+        reason="post-deploy only: real manifest/schema lack #803 entries until step 11",
+    )
     def test_real_repo_schema_passes(self):
         """Integration smoke test against the actual repo files (not tmp_path
-        fixtures) -- confirms the restored append_run_note() in this PR
-        satisfies the backstop against the real database/schema.sql."""
-        repo_root = Path(__file__).parent.parent.parent
+        fixtures) -- confirms every manifest entry, including the #803
+        roll_d100() and weight column, is present in database/schema.sql."""
         exit_code = check_schema_manifest.main(
             [
-                "--manifest", str(repo_root / "database" / ".schema-manifest.toml"),
-                "--schema", str(repo_root / "database" / "schema.sql"),
+                "--manifest", str(REPO_ROOT / "database" / ".schema-manifest.toml"),
+                "--schema", str(REPO_ROOT / "database" / "schema.sql"),
             ]
         )
         assert exit_code == 0

@@ -54,16 +54,21 @@ recorded roll, regardless of other steps' state (issue #358). Managed via `roll_
 issue #444, `roll_d100()` returns an additive `is_populate_me boolean` column: non-reserved
 empty slots are **generative** — NOVA invents the task content on the spot rather than
 executing a pre-written one — while a `reserved boolean` column lets specific empty slots
-opt out of that generative path. Populated-slot rolls are subject to a 7-day anti-repeat
-window with a dynamic 50%-floor cap (oldest `last_rolled` re-admitted first, stateless
-per-invocation). See `motivation/README.md#d100-roll-mechanics` for the full algorithm,
-including the `populated_at` subsection for the completion-rate audit design. Roll history
-(used for the forced-D100 check) is tracked in
-`d100_roll_log`, populated by a trigger on `motivation_d100` (migration 082). Roll
-announcements to `#proactive-mode` are handled by a dedicated cron script
-(`memory/scripts/announce-d100-rolls.py`, issue #432), not by the heartbeat LLM turn — see
-`motivation/README.md#d100-roll-announcer` for details, including the #444 populate-me
-rendering branch. This is independent of the gate check logic below, which is unaffected.
+opt out of that generative path. As of issue #803, each slot also has a
+`weight numeric NOT NULL DEFAULT 1` column that drives a weighted draw over the eligible
+pool: relative weights determine selection probability, fractional values are legal, and
+`weight = 0` soft-mutes a slot so it is never drawn and is excluded from the populated-slot
+50% cap denominators. Populated-slot rolls are subject to a 7-day anti-repeat window with a
+dynamic 50%-floor cap (oldest `last_rolled` re-admitted first, stateless per-invocation),
+now computed over only the populated+enabled+weight>0 rows. See
+`motivation/README.md#d100-roll-mechanics` for the full algorithm, including the
+`populated_at` subsection for the completion-rate audit design. Roll history (used for the
+forced-D100 check) is tracked in `d100_roll_log`, populated by a trigger on
+`motivation_d100` (migration 082). Roll announcements to `#proactive-mode` are handled by a
+dedicated cron script (`memory/scripts/announce-d100-rolls.py`, issue #432), not by the
+heartbeat LLM turn — see `motivation/README.md#d100-roll-announcer` for details, including
+the #444 populate-me rendering branch. This is independent of the gate check logic below,
+which is unaffected.
 
 ### 6. Unsolved Problems Research Workflow (id=32)
 

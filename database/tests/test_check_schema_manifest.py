@@ -8,6 +8,7 @@ database/schema.sql.
 from __future__ import annotations
 
 import importlib.util
+import re
 import sys
 from pathlib import Path
 
@@ -345,6 +346,70 @@ class TestFunctionSecuritySection:
             ]
         )
         assert exit_code == 0
+
+
+class TestIssue803PostDeploy:
+    """Area I D1-D3 (nova-mind#803): post-deploy verification against the
+    real committed database/schema.sql and .schema-manifest.toml. These tests
+    only run once the live apply + automated pgschema dump has landed the
+    weight column, the rewritten roll_d100(), and the hand-maintained column
+    grant in schema.sql (step 11). Pre-deploy they are skipped automatically.
+    """
+
+    @pytest.mark.skipif(
+        not (_repo_schema_has_weight() and _repo_manifest_has_weight()),
+        reason="post-deploy only: real manifest/schema lack #803 entries until step 11",
+    )
+    def test_schema_sql_contains_weight_column_and_weighted_roll_d100(self):
+        """D1: schema.sql contains the weight column and the new roll_d100() body."""
+        schema_path = REPO_ROOT / "database" / "schema.sql"
+        schema_sql = schema_path.read_text()
+
+        # Column + constraint.
+        assert "weight numeric NOT NULL DEFAULT 1" in schema_sql
+        assert "motivation_d100_weight_check" in schema_sql
+        assert "CHECK (weight >= 0)" in schema_sql
+
+        # Function body is the weighted-draw rewrite, not the old 1-100 re-roll.
+        body = check_schema_manifest.extract_function_body(schema_sql, "roll_d100")
+        assert body is not None, "roll_d100() not found in schema.sql"
+        assert "WITH pop AS MATERIALIZED" in body, "expected weighted-draw CTEs"
+        assert "weight > 0" in body, "expected weight eligibility filter"
+        assert "floor(random() * 100 + 1)" not in body, "old uniform 1-100 draw still present"
+
+    @pytest.mark.skipif(
+        not (_repo_schema_has_weight() and _repo_manifest_has_weight()),
+        reason="post-deploy only: real manifest/schema lack #803 entries until step 11",
+    )
+    def test_check_schema_manifest_passes_post_deploy(self):
+        """D2: check_schema_manifest.py exits 0 on the real post-deploy files."""
+        exit_code = check_schema_manifest.main(
+            [
+                "--manifest", str(REPO_ROOT / "database" / ".schema-manifest.toml"),
+                "--schema", str(REPO_ROOT / "database" / "schema.sql"),
+            ]
+        )
+        assert exit_code == 0
+
+    @pytest.mark.skipif(
+        not (_repo_schema_has_weight() and _repo_manifest_has_weight()),
+        reason="post-deploy only: real manifest/schema lack #803 entries until step 11",
+    )
+    def test_schema_sql_contains_weight_grant_to_nova(self):
+        """D3: the hand-maintained GRANT UPDATE (weight) line is present.
+
+        pgschema dump does not emit column-level GRANT statements, so this line
+        only survives if a human added it to schema.sql in the same PR as the
+        migration.
+        """
+        schema_sql = (REPO_ROOT / "database" / "schema.sql").read_text()
+        grant_re = re.compile(
+            r"GRANT\s+UPDATE\s*\([^)]*\bweight\b[^)]*\)\s+ON\s+TABLE\s+motivation_d100\s+TO\s+nova\s*;",
+            re.IGNORECASE,
+        )
+        assert grant_re.search(schema_sql), (
+            "missing GRANT UPDATE (...) ON TABLE motivation_d100 TO nova for weight"
+        )
 
 
 class TestIssue803SyntheticManifest:

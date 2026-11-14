@@ -63,6 +63,14 @@
 [functions]
 patterns = [
   "append_run_note(integer, text)",
+  "roll_d100()",
+]
+
+# Hand-authored columns that pgschema dump must never silently remove.
+# Patterns are matched as literal substrings inside database/schema.sql.
+[columns]
+patterns = [
+  "weight numeric NOT NULL DEFAULT 1",
 ]
 
 # Optional per-function security-property assertions (B-1, SE run #804 QA
@@ -76,3 +84,4 @@ patterns = [
 # instead of relying on someone remembering to check by hand next time.
 [function_security]
 "append_run_note" = ["SECURITY DEFINER", "SET search_path = public"]
+"roll_d100" = ["SECURITY DEFINER", "SET search_path = public"]

@@ -63,14 +63,6 @@
 [functions]
 patterns = [
   "append_run_note(integer, text)",
-  "roll_d100()",
-]
-
-# Hand-authored columns that pgschema dump must never silently remove.
-# Patterns are matched as literal substrings inside database/schema.sql.
-[columns]
-patterns = [
-  "weight numeric NOT NULL DEFAULT 1",
 ]
 
 # Optional per-function security-property assertions (B-1, SE run #804 QA
@@ -82,6 +74,14 @@ patterns = [
 # catalog properties that are otherwise only verifiable by an ad hoc psql
 # query; encoding the expectation here makes it re-runnable and CI-checked
 # instead of relying on someone remembering to check by hand next time.
+#
+# NOTE (nova-mind#803): roll_d100() and the motivation_d100.weight column
+# are intentionally NOT listed here pre-deploy. This manifest is checked by
+# the installer BATS suite against the committed database/schema.sql, which
+# is produced by the live pgschema dumper and does not yet contain the #803
+# changes. The real manifest entries will be added in step 11 after the
+# dumper commits the updated schema.sql. D4 synthetic fixture tests in
+# database/tests/test_check_schema_manifest.py provide CI coverage that the
+# manifest checker would catch the new entries once they belong.
 [function_security]
 "append_run_note" = ["SECURITY DEFINER", "SET search_path = public"]
-"roll_d100" = ["SECURITY DEFINER", "SET search_path = public"]

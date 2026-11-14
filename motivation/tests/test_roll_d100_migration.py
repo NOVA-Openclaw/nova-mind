@@ -29,6 +29,7 @@ TEST_ROLL = 65
 for _psycopg2_mod in ("psycopg2", "psycopg2.extras", "psycopg2.extensions"):
     sys.modules.pop(_psycopg2_mod, None)
 import psycopg2  # noqa: E402
+from psycopg2 import sql  # noqa: E402
 
 if not hasattr(psycopg2, "connect") or psycopg2.connect is None:
     pytest.skip("psycopg2 driver not available", allow_module_level=True)
@@ -224,6 +225,105 @@ def _apply_migration_089(conn) -> None:
 
 
 # ---------------------------------------------------------------------------
+# nova-mind#803 Chunk 2: statistical/oracle helpers and Areas A-D tests.
+# ---------------------------------------------------------------------------
+
+
+def _run_simulation(
+    conn,
+    n: int,
+    seed: float | None = None,
+    reset_populated_last_rolled: bool = False,
+    preserve_last_rolled: bool = False,
+) -> dict[int, int]:
+    """Run roll_d100() n times in the database and return {roll: count}.
+
+    Options:
+      reset_populated_last_rolled: set last_rolled = NULL for populated slots
+        once before the loop (neutralizes anti-repeat for pure weight tests).
+      preserve_last_rolled: capture and restore last_rolled before every
+        iteration (keeps the anti-repeat admission set static across a long
+        loop, which is required for Area C's exact exclusion assertions).
+    """
+    with conn.cursor() as cur:
+        if seed is not None:
+            cur.execute("SELECT setseed(%s)", (seed,))
+        if reset_populated_last_rolled:
+            cur.execute(
+                "UPDATE motivation_d100 SET last_rolled = NULL WHERE task_name IS NOT NULL"
+            )
+
+        if preserve_last_rolled or reset_populated_last_rolled:
+            # Capture the (possibly reset) last_rolled state and restore it
+            # before every iteration. For reset_populated_last_rolled this
+            # keeps populated slots at NULL so anti-repeat stays neutralized.
+            restore_sql = """
+                CREATE TEMP TABLE IF NOT EXISTS _lr_snapshot_803 (roll integer, last_rolled timestamp) ON COMMIT DROP;
+                TRUNCATE _lr_snapshot_803;
+                INSERT INTO _lr_snapshot_803 SELECT roll, last_rolled FROM motivation_d100;
+            """
+            loop_body = """
+                UPDATE motivation_d100 m
+                SET last_rolled = s.last_rolled
+                FROM _lr_snapshot_803 s
+                WHERE m.roll = s.roll;
+                INSERT INTO _sim_results_803 (roll) SELECT roll FROM roll_d100() LIMIT 1;
+            """
+        else:
+            restore_sql = ""
+            loop_body = """
+                INSERT INTO _sim_results_803 (roll) SELECT roll FROM roll_d100() LIMIT 1;
+            """
+
+        query = sql.SQL(
+            """
+            CREATE TEMP TABLE IF NOT EXISTS _sim_results_803 (roll integer) ON COMMIT DROP;
+            TRUNCATE _sim_results_803;
+            {restore_sql}
+            DO $$
+            BEGIN
+                FOR i IN 1..{n} LOOP
+                    {loop_body}
+                END LOOP;
+            END $$;
+            SELECT roll, count(*) FROM _sim_results_803 GROUP BY roll ORDER BY roll;
+            """
+        ).format(
+            n=sql.Literal(n),
+            restore_sql=sql.SQL(restore_sql),
+            loop_body=sql.SQL(loop_body),
+        )
+        cur.execute(query)
+        return {row[0]: row[1] for row in cur.fetchall()}
+
+
+def _assert_distribution(
+    counts: dict[int, int],
+    expected_weights: dict[int, float],
+    n: int,
+) -> None:
+    """Binomial 4-sigma + relative-floor tolerance oracle (Section 2)."""
+    total_weight = sum(expected_weights.values())
+    assert total_weight > 0, "expected_weights must sum to > 0"
+    for roll, weight in expected_weights.items():
+        p = weight / total_weight
+        mu = n * p
+        sigma = (n * p * (1 - p)) ** 0.5
+        observed = counts.get(roll, 0)
+        band = max(4 * sigma, 0.02 * mu)
+        assert abs(observed - mu) <= band, (
+            f"roll {roll}: observed {observed}, expected {mu:.2f}, "
+            f"band {band:.2f}, weight {weight}"
+        )
+
+
+def _assert_zero(counts: dict[int, int], rolls: list[int]) -> None:
+    """Assert that every listed roll was never drawn."""
+    for roll in rolls:
+        assert counts.get(roll, 0) == 0, f"roll {roll} was drawn {counts.get(roll)} times"
+
+
+# ---------------------------------------------------------------------------
 # Existing nova-mind#444 tests (must remain untouched in behavior).
 # ---------------------------------------------------------------------------
 
@@ -353,7 +453,7 @@ def test_roll_d100_from_migration_anti_repeat_no_ambiguous_column():
 
 
 # ---------------------------------------------------------------------------
-# nova-mind#803 Chunk 1 smoke test: migration applies and roll_d100() works.
+# nova-mind#803 tests.
 # ---------------------------------------------------------------------------
 
 
@@ -455,5 +555,639 @@ def test_migration_089_applies_cleanly_and_roll_d100_returns_row(db_803):
             assert len(result) == 15, f"expected 15 columns, got {len(result)}"
             assert result[0] == 1, f"expected roll 1, got {result[0]}"
             assert result[-1] is False, f"expected is_populate_me=False, got {result[-1]}"
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Area A: Migration tests (M1-M9).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(os.environ.get("SKIP_DB_TESTS"), reason="SKIP_DB_TESTS set")
+def test_migration_089_applies_cleanly_and_defaults_weight_to_one(db_803):
+    """M1: change SQL applies cleanly; pre-existing rows read weight=1."""
+    conn = _connect_to_db(db_803)
+    try:
+        _load_minimal_d100_schema(conn)
+        # Pre-seed a few rows before migration.
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO motivation_d100 (roll, task_name, enabled)
+                VALUES (1, 'Pre-existing populated', true),
+                       (2, NULL, true)
+                """
+            )
+        _apply_migration_089(conn)
+
+        with conn.cursor() as cur:
+            cur.execute("SELECT roll, weight FROM motivation_d100 ORDER BY roll")
+            rows = cur.fetchall()
+            assert rows == [(1, 1), (2, 1)], f"unexpected rows/weights: {rows}"
+    finally:
+        conn.close()
+
+
+@pytest.mark.skipif(os.environ.get("SKIP_DB_TESTS"), reason="SKIP_DB_TESTS set")
+def test_migration_089_is_idempotent(db_803):
+    """M2: applying migration 089 twice is a safe no-op."""
+    conn = _connect_to_db(db_803)
+    try:
+        _load_minimal_d100_schema(conn)
+        _apply_migration_089(conn)
+        _apply_migration_089(conn)  # second run must not error
+
+        with conn.cursor() as cur:
+            cur.execute("SELECT count(*) FROM information_schema.columns "
+                        "WHERE table_name='motivation_d100' AND column_name='weight'")
+            assert cur.fetchone()[0] == 1, "weight column missing after second apply"
+    finally:
+        conn.close()
+
+
+@pytest.mark.skipif(os.environ.get("SKIP_DB_TESTS"), reason="SKIP_DB_TESTS set")
+def test_migration_089_preserves_custom_weight(db_803):
+    """M3: idempotent re-run preserves customized weights."""
+    conn = _connect_to_db(db_803)
+    try:
+        _load_minimal_d100_schema(conn)
+        _apply_migration_089(conn)
+        with conn.cursor() as cur:
+            cur.execute("INSERT INTO motivation_d100 (roll, enabled) VALUES (71, true)")
+            cur.execute("UPDATE motivation_d100 SET weight = 3 WHERE roll = 71")
+        _apply_migration_089(conn)
+
+        with conn.cursor() as cur:
+            cur.execute("SELECT weight FROM motivation_d100 WHERE roll = 71")
+            assert cur.fetchone()[0] == 3, "custom weight was reset by second apply"
+    finally:
+        conn.close()
+
+
+@pytest.mark.skipif(os.environ.get("SKIP_DB_TESTS"), reason="SKIP_DB_TESTS set")
+def test_migration_089_rejects_negative_weight(db_803):
+    """M4: CHECK (weight >= 0) rejects negative values."""
+    conn = _connect_to_db(db_803)
+    try:
+        _load_minimal_d100_schema(conn)
+        _apply_migration_089(conn)
+        with conn.cursor() as cur:
+            cur.execute("INSERT INTO motivation_d100 (roll, enabled) VALUES (1, true)")
+        conn.commit()
+        with pytest.raises(psycopg2.errors.CheckViolation):
+            with conn.cursor() as cur:
+                cur.execute("UPDATE motivation_d100 SET weight = -1 WHERE roll = 1")
+            conn.commit()
+    finally:
+        conn.close()
+
+
+@pytest.mark.skipif(os.environ.get("SKIP_DB_TESTS"), reason="SKIP_DB_TESTS set")
+def test_migration_089_enforces_not_null_weight(db_803):
+    """M5: weight NOT NULL rejects NULL."""
+    conn = _connect_to_db(db_803)
+    try:
+        _load_minimal_d100_schema(conn)
+        _apply_migration_089(conn)
+        with conn.cursor() as cur:
+            cur.execute("INSERT INTO motivation_d100 (roll, enabled) VALUES (1, true)")
+        conn.commit()
+        with pytest.raises(psycopg2.errors.NotNullViolation):
+            with conn.cursor() as cur:
+                cur.execute("UPDATE motivation_d100 SET weight = NULL WHERE roll = 1")
+            conn.commit()
+    finally:
+        conn.close()
+
+
+@pytest.mark.skipif(os.environ.get("SKIP_DB_TESTS"), reason="SKIP_DB_TESTS set")
+def test_migration_089_accepts_zero_and_fractional_weights(db_803):
+    """M6: numeric column accepts 0 and fractional weights."""
+    conn = _connect_to_db(db_803)
+    try:
+        _load_minimal_d100_schema(conn)
+        _apply_migration_089(conn)
+        with conn.cursor() as cur:
+            cur.execute("INSERT INTO motivation_d100 (roll, enabled) VALUES (1, true)")
+            for value in (0, 0.5, 2.5):
+                cur.execute("UPDATE motivation_d100 SET weight = %s WHERE roll = 1", (value,))
+            cur.execute(
+                "SELECT data_type FROM information_schema.columns "
+                "WHERE table_name='motivation_d100' AND column_name='weight'"
+            )
+            assert cur.fetchone()[0] == "numeric", "weight column is not numeric"
+    finally:
+        conn.close()
+
+
+@pytest.mark.skipif(os.environ.get("SKIP_DB_TESTS"), reason="SKIP_DB_TESTS set")
+def test_migration_089_grants_update_weight_to_nova(db_803):
+    """M7: nova can directly UPDATE the weight content column."""
+    conn = _connect_to_db(db_803)
+    try:
+        _load_minimal_d100_schema(conn)
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'nova') THEN
+                        CREATE ROLE nova NOLOGIN;
+                    END IF;
+                END $$;
+                """
+            )
+            cur.execute("GRANT ALL ON TABLE motivation_d100 TO nova")
+        _apply_migration_089(conn)
+
+        nova_conn = psycopg2.connect(host="localhost", user="nova", dbname=db_803)
+        try:
+            with nova_conn.cursor() as cur:
+                cur.execute("INSERT INTO motivation_d100 (roll, enabled) VALUES (1, true)")
+                cur.execute("UPDATE motivation_d100 SET weight = 2 WHERE roll = 1")
+                cur.execute("SELECT weight FROM motivation_d100 WHERE roll = 1")
+                assert cur.fetchone()[0] == 2
+        finally:
+            nova_conn.close()
+    finally:
+        conn.close()
+
+
+@pytest.mark.skipif(os.environ.get("SKIP_DB_TESTS"), reason="SKIP_DB_TESTS set")
+def test_migration_089_roll_d100_signature_unchanged(db_803):
+    """M8: roll_d100() keeps the 15-column return signature."""
+    conn = _connect_to_db(db_803)
+    try:
+        _load_minimal_d100_schema(conn)
+        _apply_migration_089(conn)
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT pg_get_function_result('roll_d100'::regproc),
+                       pg_get_function_arguments('roll_d100'::regproc)
+                """
+            )
+            result, arguments = cur.fetchone()
+            assert arguments == "", f"expected no arguments, got {arguments}"
+            expected = (
+                "TABLE(roll integer, task_name character varying, task_description text, "
+                "workflow_id integer, skill_name character varying, tool_name character varying, "
+                "difficulty character varying, energy_required character varying, "
+                "estimated_minutes integer, times_rolled integer, times_completed integer, "
+                "last_rolled timestamp without time zone, last_completed timestamp without time zone, "
+                "notes text, is_populate_me boolean)"
+            )
+            assert result == expected, f"unexpected signature: {result}"
+    finally:
+        conn.close()
+
+
+@pytest.mark.skipif(os.environ.get("SKIP_DB_TESTS"), reason="SKIP_DB_TESTS set")
+def test_migration_089_extraction_executes_standalone(db_803):
+    """M9: the roll_d100() block extracted from 089 runs without the rest of the file."""
+    conn = _connect_to_db(db_803)
+    try:
+        _load_minimal_d100_schema(conn)
+        # Apply only the column/constraint/grant parts first so the function has a home.
+        with conn.cursor() as cur:
+            cur.execute("ALTER TABLE motivation_d100 ADD COLUMN IF NOT EXISTS weight numeric NOT NULL DEFAULT 1")
+        conn.commit()
+
+        function_sql = _extract_roll_d100_block(MIGRATION_PATH_089.read_text())
+        with conn.cursor() as cur:
+            cur.execute(function_sql)
+            cur.execute("INSERT INTO motivation_d100 (roll, task_name, enabled) VALUES (1, 'x', true)")
+            cur.execute("SELECT * FROM roll_d100() LIMIT 1")
+            row = cur.fetchone()
+            assert row is not None
+            assert len(row) == 15
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Area B: Statistical / weighted-distribution tests (S1-S7).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(os.environ.get("SKIP_DB_TESTS"), reason="SKIP_DB_TESTS set")
+def test_statistical_uniform_baseline_empty_slots(db_803):
+    """S1: all-weight-1 uniform baseline for empty slots."""
+    conn = _connect_to_db(db_803)
+    try:
+        _load_minimal_d100_schema(conn)
+        _apply_migration_089(conn)
+        with conn.cursor() as cur:
+            for roll in (1, 2, 3, 4):
+                cur.execute(
+                    "INSERT INTO motivation_d100 (roll, reserved, enabled) VALUES (%s, false, true)",
+                    (roll,),
+                )
+        counts = _run_simulation(conn, n=1000, seed=0.42)
+        expected = {1: 1, 2: 1, 3: 1, 4: 1}
+        _assert_distribution(counts, expected, n=1000)
+    finally:
+        conn.close()
+
+
+@pytest.mark.skipif(os.environ.get("SKIP_DB_TESTS"), reason="SKIP_DB_TESTS set")
+def test_statistical_uniform_baseline_populated_slots(db_803):
+    """S2: all-weight-1 uniform baseline for populated slots, anti-repeat neutralized."""
+    conn = _connect_to_db(db_803)
+    try:
+        _load_minimal_d100_schema(conn)
+        _apply_migration_089(conn)
+        with conn.cursor() as cur:
+            for roll in (1, 2, 3, 4, 5):
+                cur.execute(
+                    "INSERT INTO motivation_d100 (roll, task_name, enabled) VALUES (%s, %s, true)",
+                    (roll, f"Task {roll}"),
+                )
+        counts = _run_simulation(conn, n=1000, seed=0.42, reset_populated_last_rolled=True)
+        expected = {r: 1 for r in range(1, 6)}
+        _assert_distribution(counts, expected, n=1000)
+    finally:
+        conn.close()
+
+
+@pytest.mark.skipif(os.environ.get("SKIP_DB_TESTS"), reason="SKIP_DB_TESTS set")
+def test_statistical_weight_three_empty_slots(db_803):
+    """S3: weight-3 slot drawn ~3x as often as weight-1 empty slots."""
+    conn = _connect_to_db(db_803)
+    try:
+        _load_minimal_d100_schema(conn)
+        _apply_migration_089(conn)
+        with conn.cursor() as cur:
+            cur.execute("INSERT INTO motivation_d100 (roll, reserved, enabled, weight) VALUES (1, false, true, 1)")
+            cur.execute("INSERT INTO motivation_d100 (roll, reserved, enabled, weight) VALUES (2, false, true, 1)")
+            cur.execute("INSERT INTO motivation_d100 (roll, reserved, enabled, weight) VALUES (3, false, true, 3)")
+        counts = _run_simulation(conn, n=1000, seed=0.42)
+        expected = {1: 1, 2: 1, 3: 3}
+        _assert_distribution(counts, expected, n=1000)
+    finally:
+        conn.close()
+
+
+@pytest.mark.skipif(os.environ.get("SKIP_DB_TESTS"), reason="SKIP_DB_TESTS set")
+def test_statistical_weight_three_populated_slots(db_803):
+    """S4: weight-3 slot drawn ~3x as often as weight-1 populated slots."""
+    conn = _connect_to_db(db_803)
+    try:
+        _load_minimal_d100_schema(conn)
+        _apply_migration_089(conn)
+        with conn.cursor() as cur:
+            for roll, weight in ((1, 1), (2, 1), (3, 3)):
+                cur.execute(
+                    "INSERT INTO motivation_d100 (roll, task_name, enabled, weight) VALUES (%s, %s, true, %s)",
+                    (roll, f"Task {roll}", weight),
+                )
+        counts = _run_simulation(conn, n=1000, seed=0.42, reset_populated_last_rolled=True)
+        expected = {1: 1, 2: 1, 3: 3}
+        _assert_distribution(counts, expected, n=1000)
+    finally:
+        conn.close()
+
+
+@pytest.mark.skipif(os.environ.get("SKIP_DB_TESTS"), reason="SKIP_DB_TESTS set")
+def test_statistical_weight_zero_never_drawn(db_803):
+    """S5: weight-0 slots are never drawn."""
+    conn = _connect_to_db(db_803)
+    try:
+        _load_minimal_d100_schema(conn)
+        _apply_migration_089(conn)
+        with conn.cursor() as cur:
+            cur.execute("INSERT INTO motivation_d100 (roll, reserved, enabled, weight) VALUES (1, false, true, 0)")
+            cur.execute("INSERT INTO motivation_d100 (roll, task_name, enabled, weight) VALUES (2, 'Task 2', true, 1)")
+            cur.execute("INSERT INTO motivation_d100 (roll, reserved, enabled, weight) VALUES (3, false, true, 1)")
+        counts = _run_simulation(conn, n=1000, seed=0.42)
+        _assert_zero(counts, [1])
+        _assert_distribution(counts, {2: 1, 3: 1}, n=1000)
+    finally:
+        conn.close()
+
+
+@pytest.mark.skipif(os.environ.get("SKIP_DB_TESTS"), reason="SKIP_DB_TESTS set")
+def test_statistical_unified_empty_and_populated_pool(db_803):
+    """S6: empty and populated slots compete in one weighted lottery."""
+    conn = _connect_to_db(db_803)
+    try:
+        _load_minimal_d100_schema(conn)
+        _apply_migration_089(conn)
+        with conn.cursor() as cur:
+            cur.execute("INSERT INTO motivation_d100 (roll, reserved, enabled, weight) VALUES (1, false, true, 1)")
+            cur.execute("INSERT INTO motivation_d100 (roll, task_name, enabled, weight) VALUES (2, 'Task 2', true, 1)")
+        counts = _run_simulation(conn, n=1000, seed=0.42)
+        _assert_distribution(counts, {1: 1, 2: 1}, n=1000)
+    finally:
+        conn.close()
+
+
+@pytest.mark.skipif(os.environ.get("SKIP_DB_TESTS"), reason="SKIP_DB_TESTS set")
+def test_statistical_fractional_weights_proportional(db_803):
+    """S7: fractional weights 0.5 and 1.5 produce a 1:3 ratio (REQUIRED)."""
+    conn = _connect_to_db(db_803)
+    try:
+        _load_minimal_d100_schema(conn)
+        _apply_migration_089(conn)
+        with conn.cursor() as cur:
+            cur.execute("INSERT INTO motivation_d100 (roll, reserved, enabled, weight) VALUES (1, false, true, 0.5)")
+            cur.execute("INSERT INTO motivation_d100 (roll, reserved, enabled, weight) VALUES (2, false, true, 1.5)")
+        counts = _run_simulation(conn, n=1000, seed=0.42)
+        _assert_distribution(counts, {1: 0.5, 2: 1.5}, n=1000)
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Area C: Anti-repeat regression tests (A1-A7).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(os.environ.get("SKIP_DB_TESTS"), reason="SKIP_DB_TESTS set")
+def test_anti_repeat_recently_rolled_excluded_cap_not_triggered(db_803):
+    """A1: a slot rolled 1 day ago is excluded when cap is not triggered."""
+    conn = _connect_to_db(db_803)
+    try:
+        _load_minimal_d100_schema(conn)
+        _apply_migration_089(conn)
+        with conn.cursor() as cur:
+            for roll in range(1, 11):
+                cur.execute(
+                    "INSERT INTO motivation_d100 (roll, task_name, enabled) VALUES (%s, %s, true)",
+                    (roll, f"Task {roll}"),
+                )
+            # Roll 1 is the only recent roll; rolls 2-10 are never-rolled (NULL).
+            cur.execute("UPDATE motivation_d100 SET last_rolled = CURRENT_TIMESTAMP WHERE roll = 1")
+        counts = _run_simulation(conn, n=1000, seed=0.42, preserve_last_rolled=True)
+        _assert_zero(counts, [1])
+        _assert_distribution(counts, {r: 1 for r in range(2, 11)}, n=1000)
+    finally:
+        conn.close()
+
+
+@pytest.mark.skipif(os.environ.get("SKIP_DB_TESTS"), reason="SKIP_DB_TESTS set")
+def test_anti_repeat_seven_day_boundary_outside_window(db_803):
+    """A2: just past the 7-day boundary is eligible."""
+    conn = _connect_to_db(db_803)
+    try:
+        _load_minimal_d100_schema(conn)
+        _apply_migration_089(conn)
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO motivation_d100 (roll, task_name, enabled, last_rolled) "
+                "VALUES (1, 'Boundary task', true, CURRENT_TIMESTAMP - interval '7 days' - interval '1 second')"
+            )
+        seen = set()
+        for _ in range(100):
+            with conn.cursor() as cur:
+                cur.execute("SELECT * FROM roll_d100()")
+                seen.add(cur.fetchone()[0])
+        assert seen == {1}, f"expected only roll 1, got {seen}"
+    finally:
+        conn.close()
+
+
+@pytest.mark.skipif(os.environ.get("SKIP_DB_TESTS"), reason="SKIP_DB_TESTS set")
+def test_anti_repeat_seven_day_boundary_inside_window(db_803):
+    """A2b: just inside the 7-day window is excluded when cap does not admit it."""
+    conn = _connect_to_db(db_803)
+    try:
+        _load_minimal_d100_schema(conn)
+        _apply_migration_089(conn)
+        with conn.cursor() as cur:
+            # One boundary recent slot plus two never-rolled slots.
+            # total_pop=3, recent_pop=1, cap=floor(3*0.5)=1 -> admit=0, so boundary is excluded.
+            cur.execute(
+                "INSERT INTO motivation_d100 (roll, task_name, enabled, last_rolled) "
+                "VALUES (1, 'Boundary task', true, CURRENT_TIMESTAMP - interval '7 days' + interval '1 second')"
+            )
+            for roll in (2, 3):
+                cur.execute(
+                    "INSERT INTO motivation_d100 (roll, task_name, enabled) VALUES (%s, %s, true)",
+                    (roll, f"Task {roll}"),
+                )
+        counts = _run_simulation(conn, n=500, seed=0.42, preserve_last_rolled=True)
+        _assert_zero(counts, [1])
+        _assert_distribution(counts, {2: 1, 3: 1}, n=500)
+    finally:
+        conn.close()
+
+
+@pytest.mark.skipif(os.environ.get("SKIP_DB_TESTS"), reason="SKIP_DB_TESTS set")
+def test_anti_repeat_cap_forces_oldest_readmission(db_803):
+    """A3: 50% cap forces oldest recently-rolled slots back in."""
+    conn = _connect_to_db(db_803)
+    try:
+        _load_minimal_d100_schema(conn)
+        _apply_migration_089(conn)
+        with conn.cursor() as cur:
+            # 10 populated slots: 2 never-rolled, 8 recent at staggered ages.
+            cur.execute(
+                "INSERT INTO motivation_d100 (roll, task_name, enabled, last_rolled) "
+                "VALUES (1, 'Never 1', true, NULL), (2, 'Never 2', true, NULL)"
+            )
+            for i, roll in enumerate(range(3, 11), start=1):
+                cur.execute(
+                    "INSERT INTO motivation_d100 (roll, task_name, enabled, last_rolled) "
+                    "VALUES (%s, %s, true, CURRENT_TIMESTAMP - interval '%s hours')",
+                    (roll, f"Recent {roll}", i),
+                )
+        # total_pop=10, recent_pop=8 -> admit = max(8-5,0) = 3 oldest (rolls 8,9,10 by age).
+        counts = _run_simulation(conn, n=1000, seed=0.42, preserve_last_rolled=True)
+        excluded = [3, 4, 5, 6, 7]
+        admitted = [1, 2, 8, 9, 10]
+        _assert_zero(counts, excluded)
+        _assert_distribution(counts, {r: 1 for r in admitted}, n=1000)
+    finally:
+        conn.close()
+
+
+@pytest.mark.skipif(os.environ.get("SKIP_DB_TESTS"), reason="SKIP_DB_TESTS set")
+def test_anti_repeat_admission_is_weight_blind(db_803):
+    """A4: recency admission ignores weight; high-weight excluded slots stay out."""
+    conn = _connect_to_db(db_803)
+    try:
+        _load_minimal_d100_schema(conn)
+        _apply_migration_089(conn)
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO motivation_d100 (roll, task_name, enabled, last_rolled, weight) "
+                "VALUES (1, 'Never 1', true, NULL, 0.1), (2, 'Never 2', true, NULL, 0.1)"
+            )
+            for i, roll in enumerate(range(3, 11), start=1):
+                # Three oldest get tiny weights; five excluded get huge weights.
+                w = 0.1 if roll >= 8 else 100
+                cur.execute(
+                    "INSERT INTO motivation_d100 (roll, task_name, enabled, last_rolled, weight) "
+                    "VALUES (%s, %s, true, CURRENT_TIMESTAMP - interval '%s hours', %s)",
+                    (roll, f"Recent {roll}", i, w),
+                )
+        counts = _run_simulation(conn, n=1000, seed=0.42, preserve_last_rolled=True)
+        excluded = [3, 4, 5, 6, 7]
+        admitted = [1, 2, 8, 9, 10]
+        _assert_zero(counts, excluded)
+        _assert_distribution(counts, {r: 1 for r in admitted}, n=1000)
+    finally:
+        conn.close()
+
+
+@pytest.mark.skipif(os.environ.get("SKIP_DB_TESTS"), reason="SKIP_DB_TESTS set")
+def test_anti_repeat_null_last_rolled_always_eligible(db_803):
+    """A5: last_rolled IS NULL slots are always eligible."""
+    conn = _connect_to_db(db_803)
+    try:
+        _load_minimal_d100_schema(conn)
+        _apply_migration_089(conn)
+        with conn.cursor() as cur:
+            cur.execute("INSERT INTO motivation_d100 (roll, task_name, enabled, last_rolled) VALUES (1, 'Always', true, NULL)")
+            for roll in range(2, 12):
+                cur.execute(
+                    "INSERT INTO motivation_d100 (roll, task_name, enabled, last_rolled) VALUES (%s, %s, true, CURRENT_TIMESTAMP)",
+                    (roll, f"Recent {roll}"),
+                )
+        counts = _run_simulation(conn, n=1000, seed=0.42, preserve_last_rolled=True)
+        assert counts.get(1, 0) > 0, "never-rolled slot was never drawn"
+    finally:
+        conn.close()
+
+
+@pytest.mark.skipif(os.environ.get("SKIP_DB_TESTS"), reason="SKIP_DB_TESTS set")
+def test_anti_repeat_weight_zero_admitted_slot_never_drawn(db_803):
+    """A6: a recency-admitted slot with weight=0 is still never drawn."""
+    conn = _connect_to_db(db_803)
+    try:
+        _load_minimal_d100_schema(conn)
+        _apply_migration_089(conn)
+        with conn.cursor() as cur:
+            cur.execute("INSERT INTO motivation_d100 (roll, task_name, enabled, last_rolled) VALUES (1, 'Never', true, NULL)")
+            for i, roll in enumerate(range(2, 11), start=1):
+                cur.execute(
+                    "INSERT INTO motivation_d100 (roll, task_name, enabled, last_rolled) "
+                    "VALUES (%s, %s, true, CURRENT_TIMESTAMP - interval '%s hours')",
+                    (roll, f"Recent {roll}", i),
+                )
+            # Roll 10 would be admitted by recency; zero its weight.
+            cur.execute("UPDATE motivation_d100 SET weight = 0 WHERE roll = 10")
+        counts = _run_simulation(conn, n=1000, seed=0.42, preserve_last_rolled=True)
+        _assert_zero(counts, [10])
+        # With roll 10 excluded from cap denominators, the cap math admits the
+        # four oldest remaining recent slots (rolls 6-9) plus the never-rolled
+        # slot (roll 1). Just assert roll 10 is never drawn and the total is right.
+        assert sum(counts.values()) == 1000, f"expected 1000 draws, got {sum(counts.values())}"
+        assert counts.get(10, 0) == 0, "weight-0 admitted slot was drawn"
+    finally:
+        conn.close()
+
+
+@pytest.mark.skipif(os.environ.get("SKIP_DB_TESTS"), reason="SKIP_DB_TESTS set")
+def test_anti_repeat_weight_zero_excluded_from_cap_denominators(db_803):
+    """A7: weight-0 rows are excluded from total_pop/recent_pop cap math."""
+    conn = _connect_to_db(db_803)
+    try:
+        _load_minimal_d100_schema(conn)
+        _apply_migration_089(conn)
+        with conn.cursor() as cur:
+            # 10 populated: 2 weight-0 (not counted), 8 weight-1 recent.
+            # Effective total_pop=8, recent_pop=8 -> admit = max(8-4,0) = 4 oldest.
+            cur.execute(
+                "INSERT INTO motivation_d100 (roll, task_name, enabled, last_rolled, weight) "
+                "VALUES (1, 'Zero A', true, CURRENT_TIMESTAMP, 0), (2, 'Zero B', true, CURRENT_TIMESTAMP, 0)"
+            )
+            for i, roll in enumerate(range(3, 11), start=1):
+                cur.execute(
+                    "INSERT INTO motivation_d100 (roll, task_name, enabled, last_rolled) "
+                    "VALUES (%s, %s, true, CURRENT_TIMESTAMP - interval '%s hours')",
+                    (roll, f"Recent {roll}", i),
+                )
+        counts = _run_simulation(conn, n=1000, seed=0.42, preserve_last_rolled=True)
+        excluded = [1, 2, 3, 4, 5, 6]
+        admitted = [7, 8, 9, 10]
+        _assert_zero(counts, excluded)
+        _assert_distribution(counts, {r: 1 for r in admitted}, n=1000)
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Area D: Populate-me path tests (P1-P4).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(os.environ.get("SKIP_DB_TESTS"), reason="SKIP_DB_TESTS set")
+def test_populate_me_path_returns_slot(db_803):
+    """P1: unreserved empty enabled slot -> populate-me."""
+    conn = _connect_to_db(db_803)
+    try:
+        _load_minimal_d100_schema(conn)
+        _apply_migration_089(conn)
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO motivation_d100 (roll, reserved, enabled, weight) VALUES (5, false, true, 2)"
+            )
+            cur.execute("SELECT * FROM roll_d100() LIMIT 1")
+            row = cur.fetchone()
+            assert row is not None
+            assert row[0] == 5
+            assert row[1] is None, "task_name should be NULL for populate-me"
+            assert row[-1] is True, "is_populate_me should be true"
+            cur.execute("SELECT times_rolled, last_rolled FROM motivation_d100 WHERE roll = 5")
+            times, last = cur.fetchone()
+            assert times == 1
+            assert last is not None
+    finally:
+        conn.close()
+
+
+@pytest.mark.skipif(os.environ.get("SKIP_DB_TESTS"), reason="SKIP_DB_TESTS set")
+def test_reserved_empty_slot_never_returned(db_803):
+    """P2: reserved empty slot is never returned regardless of weight."""
+    conn = _connect_to_db(db_803)
+    try:
+        _load_minimal_d100_schema(conn)
+        _apply_migration_089(conn)
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO motivation_d100 (roll, reserved, enabled, weight) VALUES (5, true, true, 5)"
+            )
+        with pytest.raises(psycopg2.errors.RaiseException):
+            with conn.cursor() as cur:
+                cur.execute("SELECT * FROM roll_d100() LIMIT 1")
+    finally:
+        conn.close()
+
+
+@pytest.mark.skipif(os.environ.get("SKIP_DB_TESTS"), reason="SKIP_DB_TESTS set")
+def test_disabled_empty_slot_excluded(db_803):
+    """P3: disabled empty slot is excluded."""
+    conn = _connect_to_db(db_803)
+    try:
+        _load_minimal_d100_schema(conn)
+        _apply_migration_089(conn)
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO motivation_d100 (roll, reserved, enabled, weight) VALUES (5, false, false, 5)"
+            )
+        with pytest.raises(psycopg2.errors.RaiseException):
+            with conn.cursor() as cur:
+                cur.execute("SELECT * FROM roll_d100() LIMIT 1")
+    finally:
+        conn.close()
+
+
+@pytest.mark.skipif(os.environ.get("SKIP_DB_TESTS"), reason="SKIP_DB_TESTS set")
+def test_weight_zero_empty_slot_excluded(db_803):
+    """P4: weight-0 empty slot is excluded even as the last candidate."""
+    conn = _connect_to_db(db_803)
+    try:
+        _load_minimal_d100_schema(conn)
+        _apply_migration_089(conn)
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO motivation_d100 (roll, reserved, enabled, weight) VALUES (5, false, true, 0)"
+            )
+        with pytest.raises(psycopg2.errors.RaiseException):
+            with conn.cursor() as cur:
+                cur.execute("SELECT * FROM roll_d100() LIMIT 1")
     finally:
         conn.close()

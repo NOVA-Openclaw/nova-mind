@@ -32,7 +32,7 @@ def _repo_schema_has_weight() -> bool:
     schema_path = REPO_ROOT / "database" / "schema.sql"
     if not schema_path.exists():
         return False
-    return "weight numeric NOT NULL DEFAULT 1" in schema_path.read_text()
+    return "weight numeric DEFAULT 1 NOT NULL" in schema_path.read_text()
 
 
 def _repo_manifest_has_weight() -> bool:
@@ -46,7 +46,7 @@ def _repo_manifest_has_weight() -> bool:
     if not manifest_path.exists():
         return False
     text = manifest_path.read_text()
-    return 'roll_d100()' in text and 'weight numeric NOT NULL DEFAULT 1' in text
+    return 'roll_d100()' in text and 'weight numeric DEFAULT 1 NOT NULL' in text
 
 
 MANIFEST_ONE_FUNCTION = """\
@@ -366,9 +366,9 @@ class TestIssue803PostDeploy:
         schema_sql = schema_path.read_text()
 
         # Column + constraint.
-        assert "weight numeric NOT NULL DEFAULT 1" in schema_sql
+        assert "weight numeric DEFAULT 1 NOT NULL" in schema_sql
         assert "motivation_d100_weight_check" in schema_sql
-        assert "CHECK (weight >= 0)" in schema_sql
+        assert "CHECK (weight >= 0::numeric)" in schema_sql
 
         # Function body is the weighted-draw rewrite, not the old 1-100 re-roll.
         body = check_schema_manifest.extract_function_body(schema_sql, "roll_d100")

@@ -85,7 +85,7 @@ def _connect():
         host=os.environ.get("PGHOST", "/var/run/postgresql"),
         port=os.environ.get("PGPORT", "5432"),
         dbname=os.environ.get("PGDATABASE", "nova_memory"),
-        user=os.environ.get("PGUSER", "nova"),
+        user=os.environ.get("PGUSER"),
     )
 
 
@@ -95,15 +95,27 @@ def _connect():
 
 
 def _admin_conn():
-    """Connect to the postgres maintenance database as the nova user."""
+    """Connect to the postgres maintenance database using the current libpq/env user."""
+    _load_pg_env()
     os.environ.pop("PGPASSWORD", None)
-    return psycopg2.connect(host="localhost", user="nova", dbname="postgres")
+    return psycopg2.connect(
+        host=os.environ.get("PGHOST", "localhost"),
+        port=os.environ.get("PGPORT", "5432"),
+        dbname="postgres",
+        user=os.environ.get("PGUSER"),
+    )
 
 
 def _connect_to_db(db_name: str):
-    """Connect to a named throwaway database as the nova user."""
+    """Connect to a named throwaway database using the current libpq/env user."""
+    _load_pg_env()
     os.environ.pop("PGPASSWORD", None)
-    return psycopg2.connect(host="localhost", user="nova", dbname=db_name)
+    return psycopg2.connect(
+        host=os.environ.get("PGHOST", "localhost"),
+        port=os.environ.get("PGPORT", "5432"),
+        dbname=db_name,
+        user=os.environ.get("PGUSER"),
+    )
 
 
 def _create_throwaway_db() -> str:
@@ -712,7 +724,12 @@ def test_migration_089_grants_update_weight_to_nova(db_803):
             cur.execute("GRANT ALL ON TABLE motivation_d100 TO nova")
         _apply_migration_089(conn)
 
-        nova_conn = psycopg2.connect(host="localhost", user="nova", dbname=db_803)
+        nova_conn = psycopg2.connect(
+            host=os.environ.get("PGHOST", "localhost"),
+            port=os.environ.get("PGPORT", "5432"),
+            dbname=db_803,
+            user=os.environ.get("PGUSER"),
+        )
         try:
             with nova_conn.cursor() as cur:
                 cur.execute("INSERT INTO motivation_d100 (roll, enabled) VALUES (1, true)")
@@ -1213,10 +1230,9 @@ def _assert_all_ineligible_error(exc):
 def _announce_env(db_name: str) -> dict:
     """Return an environment dict that points announce-d100-rolls.py at a throwaway DB."""
     env = os.environ.copy()
-    env["PGHOST"] = "localhost"
+    env["PGHOST"] = os.environ.get("PGHOST", "localhost")
     env["PGPORT"] = os.environ.get("PGPORT", "5432")
     env["PGDATABASE"] = db_name
-    env["PGUSER"] = "nova"
     env.pop("PGPASSWORD", None)
     return env
 

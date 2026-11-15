@@ -2,7 +2,7 @@
 -- pgschema database dump
 --
 
--- Dumped from database version PostgreSQL 16.14
+-- Dumped from database version PostgreSQL 16.15
 -- Dumped by pgschema version 1.7.2
 
 --
@@ -28,10 +28,10 @@ CREATE TYPE mutability_class_enum AS ENUM (
 );
 
 --
--- Name: agent_bootstrap_context; Type: TABLE; Schema: -; Owner: -
+-- Name: agent_bootstrap_context_local; Type: TABLE; Schema: -; Owner: -
 --
 
-CREATE TABLE IF NOT EXISTS agent_bootstrap_context (
+CREATE TABLE IF NOT EXISTS agent_bootstrap_context_local (
     id SERIAL,
     context_type text NOT NULL,
     file_key text NOT NULL,
@@ -48,35 +48,41 @@ CREATE TABLE IF NOT EXISTS agent_bootstrap_context (
     CONSTRAINT chk_universal_global_no_names CHECK ((context_type <> ALL (ARRAY['UNIVERSAL'::text, 'GLOBAL'::text])) OR agent_name IS NULL AND domain_names IS NULL)
 );
 
-COMMENT ON TABLE agent_bootstrap_context IS 'Bootstrap context entries. Agents may write to their own AGENT-scoped records (matching their db user). Newhart (Agent Design/Management domain) manages schema, cross-agent entries, and GLOBAL/UNIVERSAL-scoped records.';
+COMMENT ON TABLE agent_bootstrap_context_local IS 'Bootstrap context entries. Agents may write to their own AGENT-scoped records (matching their db user). Newhart (Agent Design/Management domain) manages schema, cross-agent entries, and GLOBAL/UNIVERSAL-scoped records.';
 
-COMMENT ON COLUMN agent_bootstrap_context.context_type IS 'GLOBAL (all agents) or DOMAIN (agents in specific domain)';
+COMMENT ON COLUMN agent_bootstrap_context_local.context_type IS 'GLOBAL (all agents) or DOMAIN (agents in specific domain)';
 
-COMMENT ON COLUMN agent_bootstrap_context.file_key IS 'Identifier for context block, becomes filename in bootstrap';
+COMMENT ON COLUMN agent_bootstrap_context_local.file_key IS 'Identifier for context block, becomes filename in bootstrap';
 
 --
 -- Name: agent_bootstrap_context_domain_unique_idx; Type: INDEX; Schema: -; Owner: -
 --
 
-CREATE UNIQUE INDEX IF NOT EXISTS agent_bootstrap_context_domain_unique_idx ON agent_bootstrap_context (file_key) WHERE (context_type = 'DOMAIN'::text);
+CREATE UNIQUE INDEX IF NOT EXISTS agent_bootstrap_context_domain_unique_idx ON agent_bootstrap_context_local (file_key) WHERE (context_type = 'DOMAIN'::text);
+
+--
+-- Name: agent_bootstrap_context_local_domain_uniq; Type: INDEX; Schema: -; Owner: -
+--
+
+CREATE UNIQUE INDEX IF NOT EXISTS agent_bootstrap_context_local_domain_uniq ON agent_bootstrap_context_local (file_key) WHERE (context_type = 'DOMAIN'::text);
 
 --
 -- Name: agent_bootstrap_context_system_unique_idx; Type: INDEX; Schema: -; Owner: -
 --
 
-CREATE UNIQUE INDEX IF NOT EXISTS agent_bootstrap_context_system_unique_idx ON agent_bootstrap_context (context_type, COALESCE(agent_name, ''::text)) WHERE (context_type = 'SYSTEM'::text);
+CREATE UNIQUE INDEX IF NOT EXISTS agent_bootstrap_context_system_unique_idx ON agent_bootstrap_context_local (context_type, COALESCE(agent_name, ''::text)) WHERE (context_type = 'SYSTEM'::text);
 
 --
 -- Name: agent_bootstrap_context_unique_idx; Type: INDEX; Schema: -; Owner: -
 --
 
-CREATE UNIQUE INDEX IF NOT EXISTS agent_bootstrap_context_unique_idx ON agent_bootstrap_context (context_type, COALESCE(agent_name, ''::text), file_key) WHERE context_type IN ('UNIVERSAL'::text, 'GLOBAL'::text, 'AGENT'::text);
+CREATE UNIQUE INDEX IF NOT EXISTS agent_bootstrap_context_unique_idx ON agent_bootstrap_context_local (context_type, COALESCE(agent_name, ''::text), file_key) WHERE context_type IN ('UNIVERSAL'::text, 'GLOBAL'::text, 'AGENT'::text);
 
 --
 -- Name: idx_abc_agent_name; Type: INDEX; Schema: -; Owner: -
 --
 
-CREATE INDEX IF NOT EXISTS idx_abc_agent_name ON agent_bootstrap_context (agent_name) WHERE (agent_name IS NOT NULL);
+CREATE INDEX IF NOT EXISTS idx_abc_agent_name ON agent_bootstrap_context_local (agent_name) WHERE (agent_name IS NOT NULL);
 
 --
 -- Name: agent_jobs; Type: TABLE; Schema: -; Owner: -
@@ -203,13 +209,15 @@ CREATE TABLE IF NOT EXISTS agents (
     heartbeat_every text,
     heartbeat_target text,
     heartbeat_to text,
-    heartbeat_isolated_session boolean DEFAULT false,
     model_locked boolean DEFAULT false NOT NULL,
+    heartbeat_isolated_session boolean DEFAULT false,
     CONSTRAINT agents_pkey PRIMARY KEY (id),
     CONSTRAINT agents_name_key UNIQUE (name),
     CONSTRAINT agents_context_type_check CHECK (context_type IN ('ephemeral'::text, 'persistent'::text)),
     CONSTRAINT agents_thinking_check CHECK (thinking::text IN ('off'::text, 'minimal'::text, 'low'::text, 'medium'::text, 'high'::text, 'xhigh'::text, 'adaptive'::text))
 );
+
+COMMENT ON TABLE agents IS 'Agent registry';
 
 COMMENT ON COLUMN agents.access_details IS 'JSON: session_key, cli_command, endpoint URL, etc.';
 
@@ -397,8 +405,13 @@ CREATE TABLE IF NOT EXISTS ai_models (
     updated_at timestamptz DEFAULT now(),
     input_price_per_mtok numeric(10,4) DEFAULT NULL,
     output_price_per_mtok numeric(10,4) DEFAULT NULL,
+    default_params jsonb DEFAULT '{}' NOT NULL,
+    capabilities jsonb,
+    capabilities_verified_at timestamptz,
+    capabilities_gateway_version text,
     CONSTRAINT models_pkey PRIMARY KEY (id),
-    CONSTRAINT models_model_id_key UNIQUE (model_id)
+    CONSTRAINT models_model_id_key UNIQUE (model_id),
+    CONSTRAINT ai_models_default_params_is_object CHECK (jsonb_typeof(default_params) = 'object'::text)
 );
 
 COMMENT ON TABLE ai_models IS 'Available AI models. NOVA maintains this; Newhart reads for agent assignments. Credentials and endpoints stored in 1Password (see credential_ref column).';
@@ -406,6 +419,12 @@ COMMENT ON TABLE ai_models IS 'Available AI models. NOVA maintains this; Newhart
 COMMENT ON COLUMN ai_models.input_price_per_mtok IS 'Cost per million input tokens in USD. NULL = unknown, 0 = free (local models).';
 
 COMMENT ON COLUMN ai_models.output_price_per_mtok IS 'Cost per million output tokens in USD. NULL = unknown, 0 = free (local models).';
+
+COMMENT ON COLUMN ai_models.default_params IS 'Desired default parameters for this model, provider-neutral: {"thinking":"high", ...}. Human/agent-curated (Newhart). Agents may override per-row (agents.model_params, pending nova-mind#652). Checked advisorily by ai_model_param_issues, never gated.';
+
+COMMENT ON COLUMN ai_models.capabilities IS 'GENERATED by model-param-validation/scripts/generate-model-capabilities.mjs (weekly model review). openclaw / provider / valid(=intersection) / drift. NULL = not in the gateway registry. Do not hand-edit.';
+
+COMMENT ON COLUMN ai_models.capabilities_gateway_version IS 'OpenClaw version + commit the capabilities were rendered against. Peers on other builds must regenerate before trusting the openclaw column.';
 
 --
 -- Name: artwork; Type: TABLE; Schema: -; Owner: -
@@ -1321,10 +1340,13 @@ CREATE TABLE IF NOT EXISTS events (
     confidence real DEFAULT 1.0,
     last_confirmed_at timestamptz DEFAULT now(),
     updated_at timestamp DEFAULT CURRENT_TIMESTAMP,
+    environment varchar(255),
     CONSTRAINT events_pkey PRIMARY KEY (id)
 );
 
 COMMENT ON TABLE events IS 'Historical events, milestones, activities. Log significant occurrences.';
+
+COMMENT ON COLUMN events.environment IS 'Where the event took place: host, system, or environment context (e.g. ''nova-local'', ''blockhenge-sarsen-2'', ''external/world''). NULL = unspecified/legacy.';
 
 --
 -- Name: idx_events_date; Type: INDEX; Schema: -; Owner: -
@@ -1363,10 +1385,13 @@ CREATE TABLE IF NOT EXISTS events_archive (
     last_confirmed_at timestamptz DEFAULT now(),
     archived_at timestamptz DEFAULT now(),
     archive_reason varchar(50),
+    environment varchar(255),
     CONSTRAINT events_archive_pkey PRIMARY KEY (id)
 );
 
 COMMENT ON TABLE events_archive IS 'Archived historical events. Long-term storage for events moved out of active events table.';
+
+COMMENT ON COLUMN events_archive.environment IS 'Where the event took place: host, system, or environment context. NULL = unspecified/legacy.';
 
 --
 -- Name: extraction_failures; Type: TABLE; Schema: -; Owner: -
@@ -2819,6 +2844,21 @@ CREATE INDEX IF NOT EXISTS idx_social_interactions_created ON social_interaction
 CREATE INDEX IF NOT EXISTS idx_social_interactions_platform_status ON social_interactions (platform, status);
 
 --
+-- Name: soul_protect_audit; Type: TABLE; Schema: -; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS soul_protect_audit (
+    id BIGSERIAL,
+    occurred_at timestamptz DEFAULT now() NOT NULL,
+    db_user text DEFAULT SESSION_USER NOT NULL,
+    event text NOT NULL,
+    command_tag text,
+    object_identity text,
+    detail text,
+    CONSTRAINT soul_protect_audit_pkey PRIMARY KEY (id)
+);
+
+--
 -- Name: tags; Type: TABLE; Schema: -; Owner: -
 --
 
@@ -3038,6 +3078,8 @@ CREATE TABLE IF NOT EXISTS work_queue (
     completed_at timestamptz,
     notes text,
     completion_logged_at timestamptz,
+    completion_announced_at timestamptz,
+    terminal_state text,
     CONSTRAINT work_queue_pkey PRIMARY KEY (id),
     CONSTRAINT work_queue_kind_check CHECK (kind IN ('subagent_session'::text, 'pr'::text, 'process'::text, 'cron_job'::text, 'workflow_step'::text, 'other'::text)),
     CONSTRAINT work_queue_status_check CHECK (status IN ('pending'::text, 'done'::text, 'failed'::text, 'stale'::text, 'cancelled'::text))
@@ -3046,6 +3088,10 @@ CREATE TABLE IF NOT EXISTS work_queue (
 COMMENT ON TABLE work_queue IS 'Active-work watch queue: entries for in-flight subagent sessions, PRs, long-running processes. A 5m cron sweeps pending entries, checks live status, and wakes the owner session when items complete. Add an entry whenever dispatching fire-and-forget work; the sweeper closes the loop. Designed 2026-07-25 per I)ruid to replace ad-hoc dead-man timers.';
 
 COMMENT ON COLUMN work_queue.completion_logged_at IS 'Watermark set when the row''s completion line was appended to the daily log. Seeded by migration 087 for pre-existing closed rows; updated by completion-log-reconcile.py.';
+
+COMMENT ON COLUMN work_queue.completion_announced_at IS 'Watermark set by the work-queue sweeper in the SAME statement that moves the row to a terminal status, immediately before the owner wake is attempted. The announce path is gated on this being NULL, making completion notification idempotent across sweeper passes (nova-workspace#149). Distinct from completion_logged_at, which is owned by completion-log-reconcile.py for daily-log append tracking — do not conflate the two.';
+
+COMMENT ON COLUMN work_queue.terminal_state IS 'Resolved terminal state of the referenced work, read from the authoritative source (subagent_runs.ended_reason / outcome_json for subagent_session refs) rather than inferred from process liveness. One of: completed, failed, unknown. ''unknown'' is the correct fallback when the authoritative record cannot be resolved — a failure verdict must never be the default (nova-workspace#164).';
 
 --
 -- Name: idx_work_queue_pending; Type: INDEX; Schema: -; Owner: -
@@ -3183,6 +3229,8 @@ COMMENT ON COLUMN motivation_d100.workflow_id IS 'Optional link to workflows tab
 COMMENT ON COLUMN motivation_d100.skill_name IS 'Optional SKILL.md to follow (e.g., "daily-inspiration-art")';
 
 COMMENT ON COLUMN motivation_d100.tool_name IS 'Optional tool to use (e.g., "bird-x", "gog")';
+
+COMMENT ON COLUMN motivation_d100.weight IS 'Relative draw weight for roll_d100(); 0 = never drawn (soft mute), default 1. nova-mind#803.';
 
 --
 -- Name: workflow_steps; Type: TABLE; Schema: -; Owner: -
@@ -3526,6 +3574,91 @@ $$;
 --
 
 COMMENT ON FUNCTION audit_bootstrap_universal() IS 'Audit trigger function for universal context changes';
+
+--
+-- Name: audit_soul_protect_ddl(); Type: FUNCTION; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE FUNCTION audit_soul_protect_ddl()
+RETURNS event_trigger
+LANGUAGE plpgsql
+VOLATILE
+SECURITY DEFINER
+AS $$
+DECLARE r record;
+BEGIN
+  FOR r IN SELECT command_tag, object_type, object_identity
+           FROM pg_event_trigger_ddl_commands() LOOP
+    IF r.command_tag = 'ALTER TABLE'
+       AND r.object_identity ~* '(agent_bootstrap_context|agent_bootstrap_context_local)' THEN
+      INSERT INTO soul_protect_audit(db_user, event, command_tag, object_identity, detail)
+      VALUES (session_user, 'ALTER_TABLE', r.command_tag, r.object_identity,
+              format('ALTER TABLE on bootstrap table by "%s" (possible trigger DISABLE/ENABLE)', session_user));
+      IF session_user NOT IN ('postgres','druid') THEN
+        RAISE WARNING 'SOUL-PROTECT AUDIT: ALTER TABLE on % by "%" — review for trigger DISABLE', r.object_identity, session_user;
+        PERFORM pg_notify('soul_protect_alert',
+          json_build_object('event','ALTER_TABLE','user',session_user,'object',r.object_identity,'at',now())::text);
+      END IF;
+    END IF;
+  END LOOP;
+END;
+$$;
+
+--
+-- Name: audit_soul_protect_drop(); Type: FUNCTION; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE FUNCTION audit_soul_protect_drop()
+RETURNS event_trigger
+LANGUAGE plpgsql
+VOLATILE
+SECURITY DEFINER
+AS $$
+DECLARE r record;
+BEGIN
+  FOR r IN SELECT object_type, object_identity
+           FROM pg_event_trigger_dropped_objects() LOOP
+    IF r.object_type = 'trigger'
+       AND r.object_identity ~* 'protect_bootstrap_context' THEN
+      INSERT INTO soul_protect_audit(db_user, event, command_tag, object_identity, detail)
+      VALUES (session_user, 'DROP_TRIGGER', 'DROP TRIGGER', r.object_identity,
+              format('protect trigger dropped by "%s"', session_user));
+      RAISE WARNING 'SOUL-PROTECT AUDIT: protect trigger % DROPPED by "%"', r.object_identity, session_user;
+      PERFORM pg_notify('soul_protect_alert',
+        json_build_object('event','DROP_TRIGGER','user',session_user,'object',r.object_identity,'at',now())::text);
+    END IF;
+  END LOOP;
+END;
+$$;
+
+--
+-- Name: bootstrap_touch_updated_at(); Type: FUNCTION; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE FUNCTION bootstrap_touch_updated_at()
+RETURNS trigger
+LANGUAGE plpgsql
+VOLATILE
+AS $$
+BEGIN
+  -- Stamp updated_at/updated_by automatically, but respect explicitly supplied values
+  -- (sync/federation jobs that copy rows with their original metadata).
+  IF TG_OP = 'INSERT' THEN
+    NEW.updated_at := coalesce(NEW.updated_at, now());
+    NEW.updated_by := coalesce(NEW.updated_by, session_user::text);
+  ELSE
+    IF NEW.updated_at IS NOT DISTINCT FROM OLD.updated_at THEN NEW.updated_at := now(); END IF;
+    IF NEW.updated_by IS NOT DISTINCT FROM OLD.updated_by THEN NEW.updated_by := session_user::text; END IF;
+  END IF;
+  RETURN NEW;
+END
+$$;
+
+--
+-- Name: bootstrap_touch_updated_at(); Type: FUNCTION; Schema: -; Owner: -
+--
+
+COMMENT ON FUNCTION bootstrap_touch_updated_at() IS 'Auto-maintains agent_bootstrap_context updated_at (Newhart, 2026-10-14, I)ruid request).';
 
 --
 -- Name: calculate_word_count(); Type: FUNCTION; Schema: -; Owner: -
@@ -4261,6 +4394,26 @@ $$;
 --
 
 COMMENT ON FUNCTION get_strictest_mutability(integer, varchar) IS 'Returns the strictest mutability class present for a (entity_id, key) group. Ordering: immutable > slow_changing > stateful. Used by contradiction detection: if ANY row for this key is immutable, conflicting values are genuine contradictions regardless of other rows'' classes.';
+
+--
+-- Name: guard_local_domain_shared_collision(); Type: FUNCTION; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE FUNCTION guard_local_domain_shared_collision()
+RETURNS trigger
+LANGUAGE plpgsql
+VOLATILE
+AS $$
+BEGIN
+  IF NEW.context_type = 'DOMAIN' THEN
+    IF EXISTS (SELECT 1 FROM shared_bootstrap_context
+                WHERE context_type='DOMAIN' AND file_key = NEW.file_key) THEN
+      RAISE EXCEPTION 'DOMAIN file_key "%" exists in the SHARED set. Do not create a local copy; update the shared record in shared_memory instead.', NEW.file_key;
+    END IF;
+  END IF;
+  RETURN NEW;
+END;
+$$;
 
 --
 -- Name: insert_workflow_step(integer, integer, text, text, boolean, text, text); Type: FUNCTION; Schema: -; Owner: -
@@ -5267,61 +5420,52 @@ LANGUAGE plpgsql
 VOLATILE
 AS $$
 DECLARE
-  self_managed_keys TEXT[] := ARRAY[
-    'identity', 'IDENTITY',
-    'AGENTS',
-    'TOOLS',
-    'HEARTBEAT',
-    'MEMORY'
-  ];
+  peer_agents TEXT[] := ARRAY['nova','graybeard','newhart','victoria'];
+  is_super BOOLEAN := (SELECT rolsuper FROM pg_roles WHERE rolname = current_user);
 BEGIN
-  -- Superuser, newhart, and postgres always pass
-  IF current_user IN ('newhart', 'postgres') OR (SELECT rolsuper FROM pg_roles WHERE rolname = current_user) THEN
+  -- Peer SOUL records: druid / postgres / superusers ONLY (I)ruid 2026-10-15, reaffirmed 2026-10-21).
+  -- Checked first so not even the domain owner can rewrite a peer identity.
+  IF (TG_OP <> 'INSERT' AND OLD.context_type = 'AGENT' AND OLD.file_key = 'SOUL' AND OLD.agent_name = ANY(peer_agents))
+     OR (TG_OP <> 'DELETE' AND NEW.context_type = 'AGENT' AND NEW.file_key = 'SOUL' AND NEW.agent_name = ANY(peer_agents)) THEN
+    IF current_user IN ('druid','postgres') OR is_super THEN
+      RETURN COALESCE(NEW, OLD);
+    END IF;
+    RAISE EXCEPTION 'peer SOUL records are writable only by druid/postgres (attempted by "%")', current_user;
+  END IF;
+
+  -- Superuser, newhart, and postgres pass for all other rows
+  IF current_user IN ('newhart','postgres') OR is_super THEN
     RETURN COALESCE(NEW, OLD);
   END IF;
 
-  -- INSERT: agents can create their own AGENT records with self-managed file_keys
+  -- I)ruid ruling 2026-10-21 (#system-design msg 1562583801513906287):
+  -- an agent may edit EVERY record of its own except SOUL. SOUL is handled above.
+  -- So: an agent may INSERT/UPDATE/DELETE its own AGENT rows for any file_key
+  -- other than SOUL (SOUL already gated to druid/postgres/super).
   IF TG_OP = 'INSERT' THEN
-    IF NEW.context_type = 'AGENT'
-       AND NEW.agent_name = current_user
-       AND NEW.file_key = ANY(self_managed_keys)
-    THEN
+    IF NEW.context_type = 'AGENT' AND NEW.agent_name = current_user AND NEW.file_key <> 'SOUL' THEN
       RETURN NEW;
     END IF;
-
-    RAISE EXCEPTION
-      'agent_bootstrap_context INSERT denied for user "%". '
-      'Agents may only insert their own AGENT records with self-managed file_keys '
-      '(identity, IDENTITY, AGENTS, TOOLS, HEARTBEAT, MEMORY). '
-      'Contact Newhart for other changes.',
-      current_user;
+    RAISE EXCEPTION 'agent_bootstrap_context INSERT denied for user "%". Agents may only insert their own AGENT records (any file_key except SOUL). Contact Newhart for other changes.', current_user;
   END IF;
 
-  -- UPDATE: agents can update their own AGENT records with self-managed file_keys
   IF TG_OP = 'UPDATE' THEN
-    IF NEW.context_type = 'AGENT'
-       AND NEW.file_key = ANY(self_managed_keys)
-       AND NEW.agent_name = current_user
-       AND NEW.agent_name = OLD.agent_name
-       AND NEW.file_key   = OLD.file_key
-       AND NEW.context_type = OLD.context_type
-    THEN
+    IF NEW.context_type = 'AGENT' AND NEW.file_key <> 'SOUL' AND NEW.agent_name = current_user
+       AND NEW.agent_name = OLD.agent_name AND NEW.file_key = OLD.file_key AND NEW.context_type = OLD.context_type THEN
       RETURN NEW;
     END IF;
-
-    RAISE EXCEPTION
-      'agent_bootstrap_context UPDATE denied for user "%". '
-      'Agents may only update their own AGENT records with self-managed file_keys '
-      '(identity, IDENTITY, AGENTS, TOOLS, HEARTBEAT, MEMORY). '
-      'Contact Newhart for other changes.',
-      current_user;
+    RAISE EXCEPTION 'agent_bootstrap_context UPDATE denied for user "%". Agents may only update their own AGENT records (any file_key except SOUL). Contact Newhart for other changes.', current_user;
   END IF;
 
-  -- DELETE: only newhart/postgres/superusers (already returned above)
-  RAISE EXCEPTION
-    'agent_bootstrap_context DELETE denied for user "%". '
-    'Only Newhart can delete bootstrap context records.',
-    current_user;
+  -- DELETE: an agent may delete its own AGENT rows except SOUL.
+  IF TG_OP = 'DELETE' THEN
+    IF OLD.context_type = 'AGENT' AND OLD.agent_name = current_user AND OLD.file_key <> 'SOUL' THEN
+      RETURN OLD;
+    END IF;
+    RAISE EXCEPTION 'agent_bootstrap_context DELETE denied for user "%". Agents may only delete their own AGENT records (any file_key except SOUL). Contact Newhart for other changes.', current_user;
+  END IF;
+
+  RETURN COALESCE(NEW, OLD);
 END;
 $$;
 
@@ -6368,7 +6512,7 @@ CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks (status);
 -- Name: idx_tasks_watchdog_recovery_open; Type: INDEX; Schema: -; Owner: -
 --
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_watchdog_recovery_open ON tasks (title) WHERE ((title)::text ~~ '[watchdog-recovery]%'::text) AND ((status)::text = ANY ((ARRAY['pending'::character varying, 'in_progress'::character varying])::text[]));
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_watchdog_recovery_open ON tasks (title) WHERE ((title)::text ~~ '[watchdog-recovery]%'::text) AND ((status)::text IN (('pending'::character varying)::text, ('in_progress'::character varying)::text));
 
 --
 -- Name: lessons_learned_by_fkey; Type: CONSTRAINT; Schema: -; Owner: -
@@ -6469,11 +6613,20 @@ CREATE OR REPLACE TRIGGER gambling_logs_notify
     EXECUTE FUNCTION notify_gambling_change();
 
 --
+-- Name: guard_local_domain_shared_collision; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER guard_local_domain_shared_collision
+    BEFORE INSERT OR UPDATE ON agent_bootstrap_context_local
+    FOR EACH ROW
+    EXECUTE FUNCTION guard_local_domain_shared_collision();
+
+--
 -- Name: heartbeat_content_changed; Type: TRIGGER; Schema: -; Owner: -
 --
 
 CREATE OR REPLACE TRIGGER heartbeat_content_changed
-    AFTER INSERT OR UPDATE ON agent_bootstrap_context
+    AFTER INSERT OR UPDATE ON agent_bootstrap_context_local
     FOR EACH ROW
     WHEN (((NEW.file_key = 'HEARTBEAT'::text)))
     EXECUTE FUNCTION notify_heartbeat_content_changed();
@@ -6515,146 +6668,11 @@ CREATE OR REPLACE TRIGGER music_search_update
     EXECUTE FUNCTION update_music_search_vector();
 
 --
--- Name: protect_agent_aliases_delete; Type: TRIGGER; Schema: -; Owner: -
---
-
-CREATE OR REPLACE TRIGGER protect_agent_aliases_delete
-    BEFORE DELETE ON agent_aliases
-    FOR EACH ROW
-    EXECUTE FUNCTION protect_agent_deletes();
-
---
--- Name: protect_agent_aliases_insert; Type: TRIGGER; Schema: -; Owner: -
---
-
-CREATE OR REPLACE TRIGGER protect_agent_aliases_insert
-    BEFORE INSERT ON agent_aliases
-    FOR EACH ROW
-    EXECUTE FUNCTION protect_agent_writes();
-
---
--- Name: protect_agent_aliases_update; Type: TRIGGER; Schema: -; Owner: -
---
-
-CREATE OR REPLACE TRIGGER protect_agent_aliases_update
-    BEFORE UPDATE ON agent_aliases
-    FOR EACH ROW
-    EXECUTE FUNCTION protect_agent_writes();
-
---
--- Name: protect_agent_domains_delete; Type: TRIGGER; Schema: -; Owner: -
---
-
-CREATE OR REPLACE TRIGGER protect_agent_domains_delete
-    BEFORE DELETE ON agent_domains
-    FOR EACH ROW
-    EXECUTE FUNCTION protect_agent_deletes();
-
---
--- Name: protect_agent_domains_insert; Type: TRIGGER; Schema: -; Owner: -
---
-
-CREATE OR REPLACE TRIGGER protect_agent_domains_insert
-    BEFORE INSERT ON agent_domains
-    FOR EACH ROW
-    EXECUTE FUNCTION protect_agent_writes();
-
---
--- Name: protect_agent_domains_update; Type: TRIGGER; Schema: -; Owner: -
---
-
-CREATE OR REPLACE TRIGGER protect_agent_domains_update
-    BEFORE UPDATE ON agent_domains
-    FOR EACH ROW
-    EXECUTE FUNCTION protect_agent_writes();
-
---
--- Name: protect_agent_mods_delete; Type: TRIGGER; Schema: -; Owner: -
---
-
-CREATE OR REPLACE TRIGGER protect_agent_mods_delete
-    BEFORE DELETE ON agent_modifications
-    FOR EACH ROW
-    EXECUTE FUNCTION protect_agent_deletes();
-
---
--- Name: protect_agent_mods_insert; Type: TRIGGER; Schema: -; Owner: -
---
-
-CREATE OR REPLACE TRIGGER protect_agent_mods_insert
-    BEFORE INSERT ON agent_modifications
-    FOR EACH ROW
-    EXECUTE FUNCTION protect_agent_writes();
-
---
--- Name: protect_agent_mods_update; Type: TRIGGER; Schema: -; Owner: -
---
-
-CREATE OR REPLACE TRIGGER protect_agent_mods_update
-    BEFORE UPDATE ON agent_modifications
-    FOR EACH ROW
-    EXECUTE FUNCTION protect_agent_writes();
-
---
--- Name: protect_agent_spawns_delete; Type: TRIGGER; Schema: -; Owner: -
---
-
-CREATE OR REPLACE TRIGGER protect_agent_spawns_delete
-    BEFORE DELETE ON agent_spawns
-    FOR EACH ROW
-    EXECUTE FUNCTION protect_agent_deletes();
-
---
--- Name: protect_agent_spawns_insert; Type: TRIGGER; Schema: -; Owner: -
---
-
-CREATE OR REPLACE TRIGGER protect_agent_spawns_insert
-    BEFORE INSERT ON agent_spawns
-    FOR EACH ROW
-    EXECUTE FUNCTION protect_agent_writes();
-
---
--- Name: protect_agent_spawns_update; Type: TRIGGER; Schema: -; Owner: -
---
-
-CREATE OR REPLACE TRIGGER protect_agent_spawns_update
-    BEFORE UPDATE ON agent_spawns
-    FOR EACH ROW
-    EXECUTE FUNCTION protect_agent_writes();
-
---
--- Name: protect_agents_delete; Type: TRIGGER; Schema: -; Owner: -
---
-
-CREATE OR REPLACE TRIGGER protect_agents_delete
-    BEFORE DELETE ON agents
-    FOR EACH ROW
-    EXECUTE FUNCTION protect_agent_deletes();
-
---
--- Name: protect_agents_insert; Type: TRIGGER; Schema: -; Owner: -
---
-
-CREATE OR REPLACE TRIGGER protect_agents_insert
-    BEFORE INSERT ON agents
-    FOR EACH ROW
-    EXECUTE FUNCTION protect_agent_writes();
-
---
--- Name: protect_agents_update; Type: TRIGGER; Schema: -; Owner: -
---
-
-CREATE OR REPLACE TRIGGER protect_agents_update
-    BEFORE UPDATE ON agents
-    FOR EACH ROW
-    EXECUTE FUNCTION protect_agent_writes();
-
---
 -- Name: protect_bootstrap_context; Type: TRIGGER; Schema: -; Owner: -
 --
 
 CREATE OR REPLACE TRIGGER protect_bootstrap_context
-    BEFORE INSERT OR UPDATE OR DELETE ON agent_bootstrap_context
+    BEFORE INSERT OR UPDATE OR DELETE ON agent_bootstrap_context_local
     FOR EACH ROW
     EXECUTE FUNCTION protect_bootstrap_context_writes_v2();
 
@@ -6972,6 +6990,62 @@ CREATE OR REPLACE TRIGGER works_updated_at
     BEFORE UPDATE ON works
     FOR EACH ROW
     EXECUTE FUNCTION update_works_timestamp();
+
+--
+-- Name: zz_touch_updated_at; Type: TRIGGER; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE TRIGGER zz_touch_updated_at
+    BEFORE INSERT OR UPDATE ON agent_bootstrap_context_local
+    FOR EACH ROW
+    EXECUTE FUNCTION bootstrap_touch_updated_at();
+
+--
+-- Name: agent_bootstrap_context; Type: VIEW; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE VIEW agent_bootstrap_context AS
+ SELECT s.id,
+    s.context_type,
+    s.domain_names,
+    s.file_key,
+    s.content,
+    s.description,
+    s.updated_at,
+    s.updated_by,
+    s.agent_name
+   FROM shared_bootstrap_context s
+  WHERE s.context_type = ANY (ARRAY['UNIVERSAL'::text, 'GLOBAL'::text, 'DOMAIN'::text])
+UNION ALL
+ SELECT l.id,
+    l.context_type,
+    l.domain_names,
+    l.file_key,
+    l.content,
+    l.description,
+    l.updated_at,
+    l.updated_by,
+    l.agent_name
+   FROM agent_bootstrap_context_local l
+  WHERE (l.context_type <> ALL (ARRAY['UNIVERSAL'::text, 'GLOBAL'::text])) AND NOT (l.context_type = 'DOMAIN'::text AND (l.file_key IN ( SELECT shared_bootstrap_context.file_key
+           FROM shared_bootstrap_context
+          WHERE shared_bootstrap_context.context_type = 'DOMAIN'::text)));
+
+--
+-- Name: ai_model_param_issues; Type: VIEW; Schema: -; Owner: -
+--
+
+CREATE OR REPLACE VIEW ai_model_param_issues AS
+ SELECT m.model_id,
+    k.key AS param,
+    k.value #>> '{}'::text[] AS desired,
+    (m.capabilities -> 'valid'::text) -> k.key AS valid_values,
+    m.capabilities_gateway_version
+   FROM ai_models m
+     CROSS JOIN LATERAL jsonb_each(m.default_params) k(key, value)
+  WHERE k.key = 'thinking'::text AND m.capabilities IS NOT NULL AND jsonb_typeof((m.capabilities -> 'valid'::text) -> 'thinking'::text) = 'array'::text AND NOT ((m.capabilities -> 'valid'::text) -> 'thinking'::text) ? (k.value #>> '{}'::text[]);
+
+COMMENT ON VIEW ai_model_param_issues IS 'Advisory: default_params values outside the generated valid set. Reported by the weekly model review; not a write-gate.';
 
 --
 -- Name: delegation_knowledge; Type: VIEW; Schema: -; Owner: -
@@ -7390,13 +7464,11 @@ CREATE OR REPLACE VIEW workflow_steps_detail AS
 -- Name: agent_actions; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_actions FROM newhart;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_actions FROM nova;
 
 --
 -- Name: agent_actions; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
-
-REVOKE SELECT ON TABLE agent_actions FROM newhart;
 
 --
 -- Name: agent_aliases; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -7438,19 +7510,11 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE agent_aliases FROM iris;
 -- Name: agent_aliases; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_aliases FROM newhart;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_aliases FROM nova;
 
 --
 -- Name: agent_aliases; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
-
-REVOKE SELECT ON TABLE agent_aliases FROM newhart;
-
---
--- Name: agent_aliases; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE DELETE, INSERT, UPDATE ON TABLE agent_aliases FROM nova;
 
 --
 -- Name: agent_aliases; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -7465,70 +7529,62 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE agent_aliases FROM scout;
 REVOKE DELETE, INSERT, UPDATE ON TABLE agent_aliases FROM ticker;
 
 --
--- Name: agent_bootstrap_context; Type: PRIVILEGE; Schema: privileges; Owner: -
+-- Name: agent_bootstrap_context_local; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE ON TABLE agent_bootstrap_context FROM athena;
+REVOKE DELETE ON TABLE agent_bootstrap_context_local FROM athena;
 
 --
--- Name: agent_bootstrap_context; Type: PRIVILEGE; Schema: privileges; Owner: -
+-- Name: agent_bootstrap_context_local; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE ON TABLE agent_bootstrap_context FROM coder;
+REVOKE DELETE ON TABLE agent_bootstrap_context_local FROM coder;
 
 --
--- Name: agent_bootstrap_context; Type: PRIVILEGE; Schema: privileges; Owner: -
+-- Name: agent_bootstrap_context_local; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE ON TABLE agent_bootstrap_context FROM erato;
+REVOKE DELETE ON TABLE agent_bootstrap_context_local FROM erato;
 
 --
--- Name: agent_bootstrap_context; Type: PRIVILEGE; Schema: privileges; Owner: -
+-- Name: agent_bootstrap_context_local; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE ON TABLE agent_bootstrap_context FROM gem;
+REVOKE DELETE ON TABLE agent_bootstrap_context_local FROM gem;
 
 --
--- Name: agent_bootstrap_context; Type: PRIVILEGE; Schema: privileges; Owner: -
+-- Name: agent_bootstrap_context_local; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE ON TABLE agent_bootstrap_context FROM gidget;
+REVOKE DELETE ON TABLE agent_bootstrap_context_local FROM gidget;
 
 --
--- Name: agent_bootstrap_context; Type: PRIVILEGE; Schema: privileges; Owner: -
+-- Name: agent_bootstrap_context_local; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE ON TABLE agent_bootstrap_context FROM iris;
+REVOKE DELETE ON TABLE agent_bootstrap_context_local FROM iris;
 
 --
--- Name: agent_bootstrap_context; Type: PRIVILEGE; Schema: privileges; Owner: -
+-- Name: agent_bootstrap_context_local; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE agent_bootstrap_context FROM newhart;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_bootstrap_context_local FROM nova;
 
 --
--- Name: agent_bootstrap_context; Type: PRIVILEGE; Schema: privileges; Owner: -
+-- Name: agent_bootstrap_context_local; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_bootstrap_context FROM newhart;
-
 --
--- Name: agent_bootstrap_context; Type: PRIVILEGE; Schema: privileges; Owner: -
+-- Name: agent_bootstrap_context_local; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE ON TABLE agent_bootstrap_context FROM nova;
+REVOKE DELETE ON TABLE agent_bootstrap_context_local FROM scout;
 
 --
--- Name: agent_bootstrap_context; Type: PRIVILEGE; Schema: privileges; Owner: -
+-- Name: agent_bootstrap_context_local; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE ON TABLE agent_bootstrap_context FROM scout;
-
---
--- Name: agent_bootstrap_context; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE DELETE ON TABLE agent_bootstrap_context FROM ticker;
+REVOKE DELETE ON TABLE agent_bootstrap_context_local FROM ticker;
 
 --
 -- Name: agent_domains; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -7570,19 +7626,11 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE agent_domains FROM iris;
 -- Name: agent_domains; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE agent_domains FROM newhart;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_domains FROM nova;
 
 --
 -- Name: agent_domains; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
-
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_domains FROM newhart;
-
---
--- Name: agent_domains; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE DELETE, INSERT, UPDATE ON TABLE agent_domains FROM nova;
 
 --
 -- Name: agent_domains; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -7600,19 +7648,11 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE agent_domains FROM ticker;
 -- Name: agent_jobs; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_jobs FROM newhart;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_jobs FROM nova;
 
 --
 -- Name: agent_jobs; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
-
-REVOKE SELECT ON TABLE agent_jobs FROM newhart;
-
---
--- Name: agent_model_denylists; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE SELECT ON TABLE agent_model_denylists FROM argus;
 
 --
 -- Name: agent_model_denylists; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -7624,13 +7664,19 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_model_denylists FROM argus;
 -- Name: agent_model_denylists; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_model_denylists FROM athena;
+REVOKE SELECT ON TABLE agent_model_denylists FROM argus;
 
 --
 -- Name: agent_model_denylists; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
 REVOKE SELECT ON TABLE agent_model_denylists FROM athena;
+
+--
+-- Name: agent_model_denylists; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_model_denylists FROM athena;
 
 --
 -- Name: agent_model_denylists; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -7648,19 +7694,13 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_model_denylists FROM coder;
 -- Name: agent_model_denylists; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE agent_model_denylists FROM conductor;
-
---
--- Name: agent_model_denylists; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_model_denylists FROM conductor;
 
 --
 -- Name: agent_model_denylists; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE agent_model_denylists FROM erato;
+REVOKE SELECT ON TABLE agent_model_denylists FROM conductor;
 
 --
 -- Name: agent_model_denylists; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -7672,13 +7712,19 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_model_denylists FROM erato;
 -- Name: agent_model_denylists; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE agent_model_denylists FROM flint;
+REVOKE SELECT ON TABLE agent_model_denylists FROM erato;
 
 --
 -- Name: agent_model_denylists; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_model_denylists FROM flint;
+
+--
+-- Name: agent_model_denylists; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE agent_model_denylists FROM flint;
 
 --
 -- Name: agent_model_denylists; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -7714,25 +7760,25 @@ REVOKE SELECT ON TABLE agent_model_denylists FROM graybeard;
 -- Name: agent_model_denylists; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE agent_model_denylists FROM hermes;
-
---
--- Name: agent_model_denylists; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_model_denylists FROM hermes;
 
 --
 -- Name: agent_model_denylists; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE agent_model_denylists FROM iris;
+REVOKE SELECT ON TABLE agent_model_denylists FROM hermes;
 
 --
 -- Name: agent_model_denylists; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_model_denylists FROM iris;
+
+--
+-- Name: agent_model_denylists; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE agent_model_denylists FROM iris;
 
 --
 -- Name: agent_model_denylists; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -7750,25 +7796,11 @@ REVOKE SELECT ON TABLE agent_model_denylists FROM marcie;
 -- Name: agent_model_denylists; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE agent_model_denylists FROM newhart;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_model_denylists FROM nova;
 
 --
 -- Name: agent_model_denylists; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
-
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_model_denylists FROM newhart;
-
---
--- Name: agent_model_denylists; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE DELETE, INSERT, UPDATE ON TABLE agent_model_denylists FROM nova;
-
---
--- Name: agent_model_denylists; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE SELECT ON TABLE agent_model_denylists FROM "nova-staging";
 
 --
 -- Name: agent_model_denylists; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -7780,25 +7812,25 @@ REVOKE SELECT ON TABLE agent_model_denylists FROM openproject_user;
 -- Name: agent_model_denylists; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_model_denylists FROM quill;
-
---
--- Name: agent_model_denylists; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
 REVOKE SELECT ON TABLE agent_model_denylists FROM quill;
 
 --
 -- Name: agent_model_denylists; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_model_denylists FROM scout;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_model_denylists FROM quill;
 
 --
 -- Name: agent_model_denylists; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
 REVOKE SELECT ON TABLE agent_model_denylists FROM scout;
+
+--
+-- Name: agent_model_denylists; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_model_denylists FROM scout;
 
 --
 -- Name: agent_model_denylists; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -7864,19 +7896,11 @@ REVOKE DELETE ON TABLE agent_modifications FROM iris;
 -- Name: agent_modifications; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_modifications FROM newhart;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_modifications FROM nova;
 
 --
 -- Name: agent_modifications; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
-
-REVOKE SELECT ON TABLE agent_modifications FROM newhart;
-
---
--- Name: agent_modifications; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE DELETE ON TABLE agent_modifications FROM nova;
 
 --
 -- Name: agent_modifications; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -7894,13 +7918,11 @@ REVOKE DELETE ON TABLE agent_modifications FROM ticker;
 -- Name: agent_spawns; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_spawns FROM newhart;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_spawns FROM nova;
 
 --
 -- Name: agent_spawns; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
-
-REVOKE SELECT ON TABLE agent_spawns FROM newhart;
 
 --
 -- Name: agent_system_config; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -7942,19 +7964,11 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE agent_system_config FROM iris;
 -- Name: agent_system_config; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_system_config FROM newhart;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_system_config FROM nova;
 
 --
 -- Name: agent_system_config; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
-
-REVOKE SELECT ON TABLE agent_system_config FROM newhart;
-
---
--- Name: agent_system_config; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE DELETE, INSERT, UPDATE ON TABLE agent_system_config FROM nova;
 
 --
 -- Name: agent_system_config; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -7972,13 +7986,11 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE agent_system_config FROM ticker;
 -- Name: agent_turn_context; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_turn_context FROM newhart;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agent_turn_context FROM nova;
 
 --
 -- Name: agent_turn_context; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
-
-REVOKE SELECT ON TABLE agent_turn_context FROM newhart;
 
 --
 -- Name: agents; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -8020,19 +8032,11 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE agents FROM iris;
 -- Name: agents; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE agents FROM newhart;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agents FROM nova;
 
 --
 -- Name: agents; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
-
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE agents FROM newhart;
-
---
--- Name: agents; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE DELETE, INSERT, UPDATE ON TABLE agents FROM nova;
 
 --
 -- Name: agents; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -8086,19 +8090,11 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE ai_models FROM iris;
 -- Name: ai_models; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE ai_models FROM newhart;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE ai_models FROM nova;
 
 --
 -- Name: ai_models; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
-
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE ai_models FROM newhart;
-
---
--- Name: ai_models; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE DELETE, INSERT, UPDATE ON TABLE ai_models FROM nova;
 
 --
 -- Name: ai_models; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -8123,6 +8119,10 @@ REVOKE SELECT ON TABLE artwork FROM iris;
 --
 
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE artwork FROM iris;
+
+--
+-- Name: artwork; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
 
 --
 -- Name: blockers; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -8206,6 +8206,10 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE blockers FROM nova;
 -- Name: blockers; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+--
+-- Name: blockers; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 REVOKE DELETE, INSERT, UPDATE ON TABLE blockers FROM quill;
 
 --
@@ -8284,6 +8288,10 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE bootstrap_context_config FROM nova;
 -- Name: bootstrap_context_config; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+--
+-- Name: bootstrap_context_config; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 REVOKE DELETE, INSERT, UPDATE ON TABLE bootstrap_context_config FROM scout;
 
 --
@@ -8299,10 +8307,18 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE bootstrap_context_config FROM ticker;
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE certificates FROM nova;
 
 --
+-- Name: certificates; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+--
 -- Name: channel_activity; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE channel_activity FROM nova;
+
+--
+-- Name: channel_activity; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
 
 --
 -- Name: channel_sessions; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -8381,6 +8397,10 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE channel_sessions FROM newhart;
 --
 
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE channel_sessions FROM nova;
+
+--
+-- Name: channel_sessions; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
 
 --
 -- Name: channel_sessions; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -8488,6 +8508,10 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE channel_transcripts FROM nova;
 -- Name: channel_transcripts; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+--
+-- Name: channel_transcripts; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 REVOKE DELETE, INSERT, UPDATE ON TABLE channel_transcripts FROM quill;
 
 --
@@ -8585,6 +8609,10 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE comms_checks FROM newhart;
 --
 
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE comms_checks FROM nova;
+
+--
+-- Name: comms_checks; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
 
 --
 -- Name: comms_checks; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -8692,6 +8720,10 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE comms_digests FROM nova;
 -- Name: comms_digests; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+--
+-- Name: comms_digests; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 REVOKE DELETE, INSERT, UPDATE ON TABLE comms_digests FROM quill;
 
 --
@@ -8719,10 +8751,18 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE comms_digests FROM ticker;
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE comms_items FROM nova;
 
 --
+-- Name: comms_items; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+--
 -- Name: comms_responses; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE comms_responses FROM nova;
+
+--
+-- Name: comms_responses; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
 
 --
 -- Name: comms_state; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -8801,6 +8841,10 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE comms_state FROM newhart;
 --
 
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE comms_state FROM nova;
+
+--
+-- Name: comms_state; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
 
 --
 -- Name: comms_state; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -8908,6 +8952,10 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE d100_roll_log FROM nova;
 -- Name: d100_roll_log; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+--
+-- Name: d100_roll_log; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 REVOKE DELETE, INSERT, UPDATE ON TABLE d100_roll_log FROM quill;
 
 --
@@ -8933,6 +8981,10 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE d100_roll_log FROM ticker;
 --
 
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE entities FROM nova;
+
+--
+-- Name: entities; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
 
 --
 -- Name: entity_credibility; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9004,13 +9056,13 @@ REVOKE SELECT ON TABLE entity_credibility FROM graybeard;
 -- Name: entity_credibility; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE entity_credibility FROM hermes;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE entity_credibility FROM hermes;
 
 --
 -- Name: entity_credibility; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE entity_credibility FROM hermes;
+REVOKE SELECT ON TABLE entity_credibility FROM hermes;
 
 --
 -- Name: entity_credibility; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9028,25 +9080,11 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE entity_credibility FROM marcie;
 -- Name: entity_credibility; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE entity_credibility FROM newhart;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE entity_credibility FROM nova;
 
 --
 -- Name: entity_credibility; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
-
-REVOKE SELECT ON TABLE entity_credibility FROM newhart;
-
---
--- Name: entity_credibility; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE DELETE, INSERT, UPDATE ON TABLE entity_credibility FROM nova;
-
---
--- Name: entity_credibility; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
-REVOKE SELECT ON TABLE entity_credibility FROM "nova-staging";
 
 --
 -- Name: entity_credibility; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9085,10 +9123,18 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE entity_credibility FROM ticker;
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE entity_fact_conflicts FROM nova;
 
 --
+-- Name: entity_fact_conflicts; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+--
 -- Name: entity_fact_sources; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE entity_fact_sources FROM nova;
+
+--
+-- Name: entity_fact_sources; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
 
 --
 -- Name: entity_facts; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9097,10 +9143,18 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE entity_fact_sources FROM nova;
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE entity_facts FROM nova;
 
 --
+-- Name: entity_facts; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+--
 -- Name: entity_facts_archive; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE entity_facts_archive FROM nova;
+
+--
+-- Name: entity_facts_archive; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
 
 --
 -- Name: entity_relationships; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9109,10 +9163,18 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE entity_facts_archive FROM nova;
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE entity_relationships FROM nova;
 
 --
+-- Name: entity_relationships; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+--
 -- Name: event_entities; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE event_entities FROM nova;
+
+--
+-- Name: event_entities; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
 
 --
 -- Name: event_places; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9121,10 +9183,18 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE event_entities FROM nova;
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE event_places FROM nova;
 
 --
+-- Name: event_places; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+--
 -- Name: event_projects; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE event_projects FROM nova;
+
+--
+-- Name: event_projects; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
 
 --
 -- Name: events; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9133,10 +9203,18 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE event_projects FROM nova;
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE events FROM nova;
 
 --
+-- Name: events; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+--
 -- Name: events_archive; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE events_archive FROM nova;
+
+--
+-- Name: events_archive; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
 
 --
 -- Name: extraction_failures; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9220,6 +9298,10 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE extraction_failures FROM nova;
 -- Name: extraction_failures; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+--
+-- Name: extraction_failures; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 REVOKE DELETE, INSERT, UPDATE ON TABLE extraction_failures FROM quill;
 
 --
@@ -9247,10 +9329,18 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE extraction_failures FROM ticker;
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE extraction_metrics FROM nova;
 
 --
+-- Name: extraction_metrics; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+--
 -- Name: fact_change_log; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE fact_change_log FROM nova;
+
+--
+-- Name: fact_change_log; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
 
 --
 -- Name: gambling_entries; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9259,10 +9349,18 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE fact_change_log FROM nova;
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE gambling_entries FROM nova;
 
 --
+-- Name: gambling_entries; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+--
 -- Name: gambling_logs; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE gambling_logs FROM nova;
+
+--
+-- Name: gambling_logs; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
 
 --
 -- Name: git_issue_queue; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9275,6 +9373,10 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE git_issue_queue FROM coder;
 --
 
 REVOKE SELECT ON TABLE git_issue_queue FROM coder;
+
+--
+-- Name: git_issue_queue; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
 
 --
 -- Name: income_sources; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9353,6 +9455,10 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE income_sources FROM newhart;
 --
 
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE income_sources FROM nova;
+
+--
+-- Name: income_sources; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
 
 --
 -- Name: income_sources; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9460,6 +9566,10 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE income_transactions FROM nova;
 -- Name: income_transactions; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+--
+-- Name: income_transactions; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 REVOKE DELETE, INSERT, UPDATE ON TABLE income_transactions FROM quill;
 
 --
@@ -9485,6 +9595,10 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE income_transactions FROM ticker;
 --
 
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE job_messages FROM nova;
+
+--
+-- Name: job_messages; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
 
 --
 -- Name: journal_entries; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9568,6 +9682,10 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE journal_entries FROM nova;
 -- Name: journal_entries; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+--
+-- Name: journal_entries; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 REVOKE DELETE ON TABLE journal_entries FROM quill;
 
 --
@@ -9595,22 +9713,30 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE journal_entries FROM ticker;
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE lessons FROM nova;
 
 --
+-- Name: lessons; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+--
 -- Name: lessons_archive; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE lessons_archive FROM nova;
 
 --
--- Name: library_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
+-- Name: lessons_archive; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
-
-REVOKE SELECT ON TABLE library_authors FROM athena;
 
 --
 -- Name: library_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE library_authors FROM athena;
+
+--
+-- Name: library_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE library_authors FROM athena;
 
 --
 -- Name: library_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9658,6 +9784,10 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE library_authors FROM nova;
 -- Name: library_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+--
+-- Name: library_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 REVOKE DELETE, INSERT, UPDATE ON TABLE library_authors FROM scout;
 
 --
@@ -9670,13 +9800,13 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE library_authors FROM ticker;
 -- Name: library_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE library_tags FROM athena;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE library_tags FROM athena;
 
 --
 -- Name: library_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE library_tags FROM athena;
+REVOKE SELECT ON TABLE library_tags FROM athena;
 
 --
 -- Name: library_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9724,6 +9854,10 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE library_tags FROM nova;
 -- Name: library_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+--
+-- Name: library_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 REVOKE DELETE, INSERT, UPDATE ON TABLE library_tags FROM scout;
 
 --
@@ -9736,13 +9870,13 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE library_tags FROM ticker;
 -- Name: library_work_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE library_work_authors FROM athena;
+REVOKE SELECT ON TABLE library_work_authors FROM athena;
 
 --
 -- Name: library_work_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE library_work_authors FROM athena;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE library_work_authors FROM athena;
 
 --
 -- Name: library_work_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9785,6 +9919,10 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE library_work_authors FROM newhart;
 --
 
 REVOKE DELETE, INSERT, UPDATE ON TABLE library_work_authors FROM nova;
+
+--
+-- Name: library_work_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
 
 --
 -- Name: library_work_authors; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9856,6 +9994,10 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE library_work_relationships FROM nova;
 -- Name: library_work_relationships; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+--
+-- Name: library_work_relationships; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 REVOKE DELETE, INSERT, UPDATE ON TABLE library_work_relationships FROM scout;
 
 --
@@ -9922,6 +10064,10 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE library_work_tags FROM nova;
 -- Name: library_work_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+--
+-- Name: library_work_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 REVOKE DELETE, INSERT, UPDATE ON TABLE library_work_tags FROM scout;
 
 --
@@ -9934,13 +10080,13 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE library_work_tags FROM ticker;
 -- Name: library_works; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE library_works FROM athena;
+REVOKE SELECT ON TABLE library_works FROM athena;
 
 --
 -- Name: library_works; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE library_works FROM athena;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE library_works FROM athena;
 
 --
 -- Name: library_works; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -9988,6 +10134,10 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE library_works FROM nova;
 -- Name: library_works; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+--
+-- Name: library_works; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 REVOKE DELETE, INSERT, UPDATE ON TABLE library_works FROM scout;
 
 --
@@ -10003,10 +10153,18 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE library_works FROM ticker;
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE media_consumed FROM nova;
 
 --
+-- Name: media_consumed; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+--
 -- Name: media_queue; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE media_queue FROM nova;
+
+--
+-- Name: media_queue; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
 
 --
 -- Name: media_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10015,10 +10173,18 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE media_queue FROM nova;
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE media_tags FROM nova;
 
 --
+-- Name: media_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+--
 -- Name: memory_embeddings; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE memory_embeddings FROM nova;
+
+--
+-- Name: memory_embeddings; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
 
 --
 -- Name: memory_embeddings_archive; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10027,16 +10193,34 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE memory_embeddings FROM nova;
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE memory_embeddings_archive FROM nova;
 
 --
+-- Name: memory_embeddings_archive; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+--
 -- Name: memory_type_priorities; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE memory_type_priorities FROM nova;
 
 --
+-- Name: memory_type_priorities; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+--
 -- Name: motivation_d100; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE motivation_d100 FROM nova;
+
+--
+-- Name: motivation_d100; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+--
+-- Name: music_analysis; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_analysis FROM iris;
 
 --
 -- Name: music_analysis; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10047,8 +10231,6 @@ REVOKE SELECT ON TABLE music_analysis FROM iris;
 --
 -- Name: music_analysis; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
-
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_analysis FROM iris;
 
 --
 -- Name: music_library; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10063,10 +10245,8 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_library FROM iris;
 REVOKE SELECT ON TABLE music_library FROM iris;
 
 --
--- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
+-- Name: music_library; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
-
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_works FROM argus;
 
 --
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10078,7 +10258,7 @@ REVOKE SELECT ON TABLE music_works FROM argus;
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_works FROM athena;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_works FROM argus;
 
 --
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10090,7 +10270,7 @@ REVOKE SELECT ON TABLE music_works FROM athena;
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_works FROM coder;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_works FROM athena;
 
 --
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10102,13 +10282,19 @@ REVOKE SELECT ON TABLE music_works FROM coder;
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_works FROM conductor;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_works FROM coder;
 
 --
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
 REVOKE SELECT ON TABLE music_works FROM conductor;
+
+--
+-- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_works FROM conductor;
 
 --
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10126,13 +10312,13 @@ REVOKE SELECT ON TABLE music_works FROM erato;
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE music_works FROM flint;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_works FROM flint;
 
 --
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_works FROM flint;
+REVOKE SELECT ON TABLE music_works FROM flint;
 
 --
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10168,13 +10354,13 @@ REVOKE SELECT ON TABLE music_works FROM graybeard;
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE music_works FROM hermes;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_works FROM hermes;
 
 --
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_works FROM hermes;
+REVOKE SELECT ON TABLE music_works FROM hermes;
 
 --
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10192,31 +10378,23 @@ REVOKE SELECT ON TABLE music_works FROM iris;
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_works FROM marcie;
-
---
--- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
 REVOKE SELECT ON TABLE music_works FROM marcie;
 
 --
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE music_works FROM newhart;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_works FROM marcie;
 
 --
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_works FROM newhart;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_works FROM nova;
 
 --
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
-
-REVOKE SELECT ON TABLE music_works FROM "nova-staging";
 
 --
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10228,19 +10406,13 @@ REVOKE SELECT ON TABLE music_works FROM openproject_user;
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_works FROM quill;
-
---
--- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
---
-
 REVOKE SELECT ON TABLE music_works FROM quill;
 
 --
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_works FROM scout;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_works FROM quill;
 
 --
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10252,13 +10424,19 @@ REVOKE SELECT ON TABLE music_works FROM scout;
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE music_works FROM scribe;
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_works FROM scout;
 
 --
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE music_works FROM scribe;
+
+--
+-- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE music_works FROM scribe;
 
 --
 -- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10279,16 +10457,28 @@ REVOKE SELECT ON TABLE music_works FROM ticker;
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE place_properties FROM nova;
 
 --
+-- Name: place_properties; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+--
 -- Name: places; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE places FROM nova;
 
 --
+-- Name: places; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+--
 -- Name: preferences; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE preferences FROM nova;
+
+--
+-- Name: preferences; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
 
 --
 -- Name: proactive_outreach; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10372,6 +10562,10 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE proactive_outreach FROM nova;
 -- Name: proactive_outreach; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+--
+-- Name: proactive_outreach; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 REVOKE DELETE, INSERT, UPDATE ON TABLE proactive_outreach FROM quill;
 
 --
@@ -10399,16 +10593,28 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE proactive_outreach FROM ticker;
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE project_entities FROM nova;
 
 --
+-- Name: project_entities; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+--
 -- Name: project_tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE project_tasks FROM nova;
 
 --
+-- Name: project_tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+--
 -- Name: projects; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE projects FROM nova;
+
+--
+-- Name: projects; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
 
 --
 -- Name: prompt_helper_config; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10492,6 +10698,10 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE prompt_helper_config FROM nova;
 -- Name: prompt_helper_config; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+--
+-- Name: prompt_helper_config; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 REVOKE DELETE, INSERT, UPDATE ON TABLE prompt_helper_config FROM quill;
 
 --
@@ -10519,10 +10729,18 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE prompt_helper_config FROM ticker;
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE publications FROM nova;
 
 --
+-- Name: publications; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+--
 -- Name: ralph_sessions; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE ralph_sessions FROM nova;
+
+--
+-- Name: ralph_sessions; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
 
 --
 -- Name: research_citations; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10576,13 +10794,17 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE research_citations FROM nova;
 -- Name: research_citations; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE research_citations FROM scout;
-
 --
 -- Name: research_citations; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE research_citations FROM scout;
+
+--
+-- Name: research_citations; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE research_citations FROM scout;
 
 --
 -- Name: research_citations; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10642,13 +10864,17 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE research_conclusions FROM nova;
 -- Name: research_conclusions; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE research_conclusions FROM scout;
-
 --
 -- Name: research_conclusions; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE research_conclusions FROM scout;
+
+--
+-- Name: research_conclusions; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE research_conclusions FROM scout;
 
 --
 -- Name: research_conclusions; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10703,6 +10929,10 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE research_findings FROM newhart;
 --
 
 REVOKE DELETE, INSERT, UPDATE ON TABLE research_findings FROM nova;
+
+--
+-- Name: research_findings; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
 
 --
 -- Name: research_findings; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10774,6 +11004,10 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE research_projects FROM nova;
 -- Name: research_projects; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+--
+-- Name: research_projects; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE research_projects FROM scout;
 
 --
@@ -10835,6 +11069,10 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE research_provenance FROM newhart;
 --
 
 REVOKE DELETE, INSERT, UPDATE ON TABLE research_provenance FROM nova;
+
+--
+-- Name: research_provenance; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
 
 --
 -- Name: research_provenance; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10906,13 +11144,17 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE research_taggings FROM nova;
 -- Name: research_taggings; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE research_taggings FROM scout;
-
 --
 -- Name: research_taggings; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
 REVOKE SELECT ON TABLE research_taggings FROM scout;
+
+--
+-- Name: research_taggings; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE research_taggings FROM scout;
 
 --
 -- Name: research_taggings; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -10967,6 +11209,10 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE research_tags FROM newhart;
 --
 
 REVOKE DELETE, INSERT, UPDATE ON TABLE research_tags FROM nova;
+
+--
+-- Name: research_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
 
 --
 -- Name: research_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -11033,6 +11279,10 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE research_tasks FROM newhart;
 --
 
 REVOKE DELETE, INSERT, UPDATE ON TABLE research_tasks FROM nova;
+
+--
+-- Name: research_tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
 
 --
 -- Name: research_tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -11134,6 +11384,10 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE self_awareness_triggers FROM nova
 -- Name: self_awareness_triggers; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+--
+-- Name: self_awareness_triggers; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 REVOKE DELETE, INSERT, UPDATE ON TABLE self_awareness_triggers FROM quill;
 
 --
@@ -11164,8 +11418,6 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE shopping_history FROM nova;
 -- Name: shopping_history; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE shopping_history FROM "nova-staging";
-
 --
 -- Name: shopping_preferences; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
@@ -11175,8 +11427,6 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE shopping_preferences FROM nova;
 --
 -- Name: shopping_preferences; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
-
-REVOKE SELECT ON TABLE shopping_preferences FROM "nova-staging";
 
 --
 -- Name: shopping_wishlist; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -11188,13 +11438,15 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE shopping_wishlist FROM nova;
 -- Name: shopping_wishlist; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-REVOKE SELECT ON TABLE shopping_wishlist FROM "nova-staging";
-
 --
 -- Name: skills; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE skills FROM nova;
+
+--
+-- Name: skills; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
 
 --
 -- Name: social_interactions; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -11278,6 +11530,10 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE social_interactions FROM nova;
 -- Name: social_interactions; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+--
+-- Name: social_interactions; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 REVOKE DELETE, INSERT, UPDATE ON TABLE social_interactions FROM quill;
 
 --
@@ -11299,10 +11555,102 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE social_interactions FROM scribe;
 REVOKE DELETE, INSERT, UPDATE ON TABLE social_interactions FROM ticker;
 
 --
+-- Name: soul_protect_audit; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE soul_protect_audit FROM graybeard;
+
+--
+-- Name: soul_protect_audit; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+--
+-- Name: soul_protect_audit; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE SELECT ON TABLE soul_protect_audit FROM openproject_user;
+
+--
 -- Name: tags; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE tags FROM nova;
+
+--
+-- Name: tags; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+--
+-- Name: tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, UPDATE ON TABLE tasks FROM argus;
+
+--
+-- Name: tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, UPDATE ON TABLE tasks FROM athena;
+
+--
+-- Name: tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, UPDATE ON TABLE tasks FROM coder;
+
+--
+-- Name: tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, UPDATE ON TABLE tasks FROM conductor;
+
+--
+-- Name: tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, UPDATE ON TABLE tasks FROM erato;
+
+--
+-- Name: tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, UPDATE ON TABLE tasks FROM flint;
+
+--
+-- Name: tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, UPDATE ON TABLE tasks FROM gem;
+
+--
+-- Name: tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, UPDATE ON TABLE tasks FROM gidget;
+
+--
+-- Name: tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, UPDATE ON TABLE tasks FROM hermes;
+
+--
+-- Name: tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, UPDATE ON TABLE tasks FROM iris;
+
+--
+-- Name: tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, UPDATE ON TABLE tasks FROM marcie;
+
+--
+-- Name: tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, UPDATE ON TABLE tasks FROM newhart;
 
 --
 -- Name: tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -11311,16 +11659,48 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE tags FROM nova;
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE tasks FROM nova;
 
 --
+-- Name: tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, UPDATE ON TABLE tasks FROM quill;
+
+--
+-- Name: tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, UPDATE ON TABLE tasks FROM scout;
+
+--
+-- Name: tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, UPDATE ON TABLE tasks FROM scribe;
+
+--
+-- Name: tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+REVOKE DELETE, INSERT, UPDATE ON TABLE tasks FROM ticker;
+
+--
 -- Name: tools; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE tools FROM nova;
 
 --
+-- Name: tools; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+--
 -- Name: unsolved_problems; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE unsolved_problems FROM nova;
+
+--
+-- Name: unsolved_problems; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
 
 --
 -- Name: user_domains; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -11399,6 +11779,10 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE user_domains FROM newhart;
 --
 
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE user_domains FROM nova;
+
+--
+-- Name: user_domains; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
 
 --
 -- Name: user_domains; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -11506,6 +11890,10 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE user_insights FROM nova;
 -- Name: user_insights; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+--
+-- Name: user_insights; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 REVOKE DELETE, INSERT, UPDATE ON TABLE user_insights FROM quill;
 
 --
@@ -11533,10 +11921,18 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE user_insights FROM ticker;
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE vehicles FROM nova;
 
 --
+-- Name: vehicles; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+--
 -- Name: vocabulary; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE vocabulary FROM nova;
+
+--
+-- Name: vocabulary; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
 
 --
 -- Name: work_queue; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -11620,6 +12016,10 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE work_queue FROM nova;
 -- Name: work_queue; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+--
+-- Name: work_queue; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 REVOKE DELETE, INSERT, UPDATE ON TABLE work_queue FROM quill;
 
 --
@@ -11645,6 +12045,10 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE work_queue FROM ticker;
 --
 
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE work_tags FROM nova;
+
+--
+-- Name: work_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
 
 --
 -- Name: workflow_runs; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -11728,6 +12132,10 @@ REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE workflow_runs FROM nova;
 -- Name: workflow_runs; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+--
+-- Name: workflow_runs; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 REVOKE DELETE, INSERT, UPDATE ON TABLE workflow_runs FROM quill;
 
 --
@@ -11755,16 +12163,28 @@ REVOKE DELETE, INSERT, UPDATE ON TABLE workflow_runs FROM ticker;
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE workflow_steps FROM nova;
 
 --
+-- Name: workflow_steps; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+--
 -- Name: workflows; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE workflows FROM nova;
 
 --
+-- Name: workflows; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+--
 -- Name: works; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
 REVOKE DELETE, INSERT, SELECT, UPDATE ON TABLE works FROM nova;
+
+--
+-- Name: works; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
 
 --
 -- Name: current_agent_id(); Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -11932,7 +12352,7 @@ GRANT USAGE ON SEQUENCE agent_actions_id_seq TO marcie;
 -- Name: agent_actions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-GRANT USAGE ON SEQUENCE agent_actions_id_seq TO nova;
+GRANT SELECT, USAGE ON SEQUENCE agent_actions_id_seq TO newhart;
 
 --
 -- Name: agent_actions_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -12034,7 +12454,7 @@ GRANT USAGE ON SEQUENCE agent_bootstrap_context_id_seq TO marcie;
 -- Name: agent_bootstrap_context_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-GRANT USAGE ON SEQUENCE agent_bootstrap_context_id_seq TO nova;
+GRANT USAGE ON SEQUENCE agent_bootstrap_context_id_seq TO newhart;
 
 --
 -- Name: agent_bootstrap_context_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -12136,7 +12556,7 @@ GRANT USAGE ON SEQUENCE agent_domains_id_seq TO marcie;
 -- Name: agent_domains_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-GRANT USAGE ON SEQUENCE agent_domains_id_seq TO nova;
+GRANT SELECT, USAGE ON SEQUENCE agent_domains_id_seq TO newhart;
 
 --
 -- Name: agent_domains_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -12244,7 +12664,7 @@ GRANT USAGE ON SEQUENCE agent_jobs_id_seq TO marcie;
 -- Name: agent_jobs_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-GRANT USAGE ON SEQUENCE agent_jobs_id_seq TO nova;
+GRANT SELECT, USAGE ON SEQUENCE agent_jobs_id_seq TO newhart;
 
 --
 -- Name: agent_jobs_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -12280,7 +12700,7 @@ GRANT USAGE ON SEQUENCE agent_model_denylists_id_seq TO cadence;
 -- Name: agent_model_denylists_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-GRANT SELECT, USAGE ON SEQUENCE agent_model_denylists_id_seq TO nova;
+GRANT SELECT, USAGE ON SEQUENCE agent_model_denylists_id_seq TO newhart;
 
 --
 -- Name: agent_modifications_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -12358,7 +12778,7 @@ GRANT USAGE ON SEQUENCE agent_modifications_id_seq TO marcie;
 -- Name: agent_modifications_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-GRANT USAGE ON SEQUENCE agent_modifications_id_seq TO nova;
+GRANT SELECT, USAGE ON SEQUENCE agent_modifications_id_seq TO newhart;
 
 --
 -- Name: agent_modifications_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -12466,7 +12886,7 @@ GRANT USAGE ON SEQUENCE agent_spawns_id_seq TO marcie;
 -- Name: agent_spawns_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-GRANT USAGE ON SEQUENCE agent_spawns_id_seq TO nova;
+GRANT SELECT, USAGE ON SEQUENCE agent_spawns_id_seq TO newhart;
 
 --
 -- Name: agent_spawns_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -12574,7 +12994,7 @@ GRANT USAGE ON SEQUENCE agent_turn_context_id_seq TO marcie;
 -- Name: agent_turn_context_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-GRANT USAGE ON SEQUENCE agent_turn_context_id_seq TO nova;
+GRANT SELECT, USAGE ON SEQUENCE agent_turn_context_id_seq TO newhart;
 
 --
 -- Name: agent_turn_context_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -12676,7 +13096,7 @@ GRANT USAGE ON SEQUENCE agents_id_seq TO marcie;
 -- Name: agents_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-GRANT USAGE ON SEQUENCE agents_id_seq TO nova;
+GRANT USAGE ON SEQUENCE agents_id_seq TO newhart;
 
 --
 -- Name: agents_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -12778,7 +13198,7 @@ GRANT USAGE ON SEQUENCE ai_models_id_seq TO marcie;
 -- Name: ai_models_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-GRANT USAGE ON SEQUENCE ai_models_id_seq TO nova;
+GRANT SELECT, USAGE ON SEQUENCE ai_models_id_seq TO newhart;
 
 --
 -- Name: ai_models_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -13606,7 +14026,7 @@ GRANT SELECT, USAGE ON SEQUENCE entity_credibility_id_seq TO marcie;
 -- Name: entity_credibility_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-GRANT SELECT, USAGE ON SEQUENCE entity_credibility_id_seq TO nova;
+GRANT SELECT, USAGE ON SEQUENCE entity_credibility_id_seq TO newhart;
 
 --
 -- Name: entity_credibility_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -13827,8 +14247,6 @@ GRANT SELECT, USAGE ON SEQUENCE entity_fact_sources_id_seq TO newhart;
 --
 -- Name: entity_fact_sources_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
-
-GRANT SELECT ON SEQUENCE entity_fact_sources_id_seq TO "nova-staging";
 
 --
 -- Name: entity_fact_sources_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -16282,7 +16700,7 @@ GRANT USAGE ON SEQUENCE music_works_id_seq TO cadence;
 -- Name: music_works_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-GRANT SELECT, USAGE ON SEQUENCE music_works_id_seq TO nova;
+GRANT SELECT, USAGE ON SEQUENCE music_works_id_seq TO newhart;
 
 --
 -- Name: place_properties_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -18271,6 +18689,108 @@ GRANT USAGE ON SEQUENCE skills_id_seq TO ticker;
 GRANT USAGE ON SEQUENCE social_interactions_id_seq TO cadence;
 
 --
+-- Name: soul_protect_audit_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE soul_protect_audit_id_seq TO argus;
+
+--
+-- Name: soul_protect_audit_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE soul_protect_audit_id_seq TO athena;
+
+--
+-- Name: soul_protect_audit_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE soul_protect_audit_id_seq TO coder;
+
+--
+-- Name: soul_protect_audit_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE soul_protect_audit_id_seq TO conductor;
+
+--
+-- Name: soul_protect_audit_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE soul_protect_audit_id_seq TO erato;
+
+--
+-- Name: soul_protect_audit_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE soul_protect_audit_id_seq TO flint;
+
+--
+-- Name: soul_protect_audit_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE soul_protect_audit_id_seq TO gem;
+
+--
+-- Name: soul_protect_audit_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE soul_protect_audit_id_seq TO gidget;
+
+--
+-- Name: soul_protect_audit_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE soul_protect_audit_id_seq TO hermes;
+
+--
+-- Name: soul_protect_audit_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE soul_protect_audit_id_seq TO iris;
+
+--
+-- Name: soul_protect_audit_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE soul_protect_audit_id_seq TO marcie;
+
+--
+-- Name: soul_protect_audit_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE soul_protect_audit_id_seq TO newhart;
+
+--
+-- Name: soul_protect_audit_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE soul_protect_audit_id_seq TO nova;
+
+--
+-- Name: soul_protect_audit_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE soul_protect_audit_id_seq TO quill;
+
+--
+-- Name: soul_protect_audit_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE soul_protect_audit_id_seq TO scout;
+
+--
+-- Name: soul_protect_audit_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE soul_protect_audit_id_seq TO scribe;
+
+--
+-- Name: soul_protect_audit_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT USAGE ON SEQUENCE soul_protect_audit_id_seq TO ticker;
+
+--
 -- Name: tags_id_seq; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
@@ -19285,34 +19805,52 @@ GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE agent_actions TO cadence;
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE agent_actions TO graybeard;
 
 --
+-- Name: agent_actions; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE agent_actions TO newhart;
+
+--
 -- Name: agent_aliases; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
 GRANT SELECT ON TABLE agent_aliases TO cadence;
 
 --
--- Name: agent_bootstrap_context; Type: PRIVILEGE; Schema: privileges; Owner: -
+-- Name: agent_aliases; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-GRANT SELECT ON TABLE agent_bootstrap_context TO bootstrap_reader;
+GRANT DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE agent_aliases TO newhart;
 
 --
--- Name: agent_bootstrap_context; Type: PRIVILEGE; Schema: privileges; Owner: -
+-- Name: agent_bootstrap_context_local; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-GRANT INSERT, SELECT, UPDATE ON TABLE agent_bootstrap_context TO cadence;
+GRANT SELECT ON TABLE agent_bootstrap_context_local TO bootstrap_reader;
 
 --
--- Name: agent_bootstrap_context; Type: PRIVILEGE; Schema: privileges; Owner: -
+-- Name: agent_bootstrap_context_local; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-GRANT INSERT, SELECT, UPDATE ON TABLE agent_bootstrap_context TO graybeard;
+GRANT INSERT, SELECT, UPDATE ON TABLE agent_bootstrap_context_local TO cadence;
+
+--
+-- Name: agent_bootstrap_context_local; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT INSERT, SELECT, UPDATE ON TABLE agent_bootstrap_context_local TO graybeard;
 
 --
 -- Name: agent_domains; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
 GRANT SELECT ON TABLE agent_domains TO cadence;
+
+--
+-- Name: agent_domains; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE agent_domains TO newhart;
 
 --
 -- Name: agent_jobs; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -19327,6 +19865,18 @@ GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE agent_jobs TO cadence;
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE agent_jobs TO graybeard;
 
 --
+-- Name: agent_jobs; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE agent_jobs TO newhart;
+
+--
+-- Name: agent_model_denylists; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE agent_model_denylists TO newhart;
+
+--
 -- Name: agent_modifications; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
@@ -19337,6 +19887,12 @@ GRANT INSERT, SELECT, UPDATE ON TABLE agent_modifications TO cadence;
 --
 
 GRANT INSERT, SELECT, UPDATE ON TABLE agent_modifications TO graybeard;
+
+--
+-- Name: agent_modifications; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE agent_modifications TO newhart;
 
 --
 -- Name: agent_spawns; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -19351,10 +19907,22 @@ GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE agent_spawns TO cadence;
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE agent_spawns TO graybeard;
 
 --
+-- Name: agent_spawns; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE agent_spawns TO newhart;
+
+--
 -- Name: agent_system_config; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
 GRANT SELECT ON TABLE agent_system_config TO cadence;
+
+--
+-- Name: agent_system_config; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE agent_system_config TO newhart;
 
 --
 -- Name: agent_turn_context; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -19369,6 +19937,12 @@ GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE agent_turn_context TO cadence;
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE agent_turn_context TO graybeard;
 
 --
+-- Name: agent_turn_context; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE agent_turn_context TO newhart;
+
+--
 -- Name: agents; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
@@ -19378,7 +19952,25 @@ GRANT SELECT ON TABLE agents TO cadence;
 -- Name: ai_models; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
+GRANT SELECT ON TABLE ai_models TO bootstrap_reader;
+
+--
+-- Name: ai_models; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
 GRANT SELECT ON TABLE ai_models TO cadence;
+
+--
+-- Name: ai_models; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE ai_models TO newhart;
+
+--
+-- Name: ai_models; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE ai_models TO victoria;
 
 --
 -- Name: blockers; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -19487,6 +20079,12 @@ GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE entities TO cadence;
 --
 
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE entities TO graybeard;
+
+--
+-- Name: entity_credibility; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE entity_credibility TO newhart;
 
 --
 -- Name: entity_fact_conflicts; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -19855,6 +20453,12 @@ GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE motivation_d100 TO graybeard;
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE music_works TO cadence;
 
 --
+-- Name: music_works; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE music_works TO newhart;
+
+--
 -- Name: place_properties; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
@@ -20215,6 +20819,138 @@ GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE works TO cadence;
 GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE works TO graybeard;
 
 --
+-- Name: agent_bootstrap_context; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE agent_bootstrap_context TO argus;
+
+--
+-- Name: agent_bootstrap_context; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE agent_bootstrap_context TO athena;
+
+--
+-- Name: agent_bootstrap_context; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE agent_bootstrap_context TO bootstrap_reader;
+
+--
+-- Name: agent_bootstrap_context; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE agent_bootstrap_context TO coder;
+
+--
+-- Name: agent_bootstrap_context; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE agent_bootstrap_context TO conductor;
+
+--
+-- Name: agent_bootstrap_context; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE agent_bootstrap_context TO erato;
+
+--
+-- Name: agent_bootstrap_context; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE agent_bootstrap_context TO flint;
+
+--
+-- Name: agent_bootstrap_context; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE agent_bootstrap_context TO gem;
+
+--
+-- Name: agent_bootstrap_context; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE agent_bootstrap_context TO gidget;
+
+--
+-- Name: agent_bootstrap_context; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE agent_bootstrap_context TO hermes;
+
+--
+-- Name: agent_bootstrap_context; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE agent_bootstrap_context TO iris;
+
+--
+-- Name: agent_bootstrap_context; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE agent_bootstrap_context TO marcie;
+
+--
+-- Name: agent_bootstrap_context; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE agent_bootstrap_context TO newhart;
+
+--
+-- Name: agent_bootstrap_context; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE agent_bootstrap_context TO nova;
+
+--
+-- Name: agent_bootstrap_context; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE agent_bootstrap_context TO quill;
+
+--
+-- Name: agent_bootstrap_context; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE agent_bootstrap_context TO scout;
+
+--
+-- Name: agent_bootstrap_context; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE agent_bootstrap_context TO scribe;
+
+--
+-- Name: agent_bootstrap_context; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE agent_bootstrap_context TO ticker;
+
+--
+-- Name: ai_model_param_issues; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE ai_model_param_issues TO bootstrap_reader;
+
+--
+-- Name: ai_model_param_issues; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE ai_model_param_issues TO graybeard;
+
+--
+-- Name: ai_model_param_issues; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE ai_model_param_issues TO nova;
+
+--
+-- Name: ai_model_param_issues; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE ai_model_param_issues TO victoria;
+
+--
 -- Name: delegation_knowledge; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
@@ -20301,8 +21037,6 @@ GRANT SELECT ON TABLE delegation_knowledge TO newhart;
 --
 -- Name: delegation_knowledge; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
-
-GRANT SELECT ON TABLE delegation_knowledge TO "nova-staging";
 
 --
 -- Name: delegation_knowledge; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -20422,8 +21156,6 @@ GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_agent_spawn_stats TO newhart;
 -- Name: v_agent_spawn_stats; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-GRANT SELECT ON TABLE v_agent_spawn_stats TO "nova-staging";
-
 --
 -- Name: v_agent_spawn_stats; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
@@ -20542,8 +21274,6 @@ GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_agents TO newhart;
 -- Name: v_agents; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-GRANT SELECT ON TABLE v_agents TO "nova-staging";
-
 --
 -- Name: v_agents; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
@@ -20627,6 +21357,12 @@ GRANT SELECT ON TABLE v_current_stateful_facts TO iris;
 --
 
 GRANT SELECT ON TABLE v_current_stateful_facts TO marcie;
+
+--
+-- Name: v_current_stateful_facts; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE v_current_stateful_facts TO nova;
 
 --
 -- Name: v_current_stateful_facts; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -20739,8 +21475,6 @@ GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_entity_facts TO newhart;
 --
 -- Name: v_entity_facts; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
-
-GRANT SELECT ON TABLE v_entity_facts TO "nova-staging";
 
 --
 -- Name: v_entity_facts; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -20860,8 +21594,6 @@ GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_event_timeline TO newhart;
 -- Name: v_event_timeline; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-GRANT SELECT ON TABLE v_event_timeline TO "nova-staging";
-
 --
 -- Name: v_event_timeline; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
@@ -20945,6 +21677,12 @@ GRANT SELECT ON TABLE v_fact_grades TO iris;
 --
 
 GRANT SELECT ON TABLE v_fact_grades TO marcie;
+
+--
+-- Name: v_fact_grades; Type: PRIVILEGE; Schema: privileges; Owner: -
+--
+
+GRANT SELECT ON TABLE v_fact_grades TO nova;
 
 --
 -- Name: v_fact_grades; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -21057,8 +21795,6 @@ GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_gambling_summary TO newhart;
 --
 -- Name: v_gambling_summary; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
-
-GRANT SELECT ON TABLE v_gambling_summary TO "nova-staging";
 
 --
 -- Name: v_gambling_summary; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -21178,8 +21914,6 @@ GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_media_queue_pending TO newhart;
 -- Name: v_media_queue_pending; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-GRANT SELECT ON TABLE v_media_queue_pending TO "nova-staging";
-
 --
 -- Name: v_media_queue_pending; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
@@ -21297,8 +22031,6 @@ GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_media_with_tags TO newhart;
 --
 -- Name: v_media_with_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
-
-GRANT SELECT ON TABLE v_media_with_tags TO "nova-staging";
 
 --
 -- Name: v_media_with_tags; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -21418,8 +22150,6 @@ GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_metamours TO newhart;
 -- Name: v_metamours; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-GRANT SELECT ON TABLE v_metamours TO "nova-staging";
-
 --
 -- Name: v_metamours; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
@@ -21537,8 +22267,6 @@ GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_pending_tasks TO newhart;
 --
 -- Name: v_pending_tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
-
-GRANT SELECT ON TABLE v_pending_tasks TO "nova-staging";
 
 --
 -- Name: v_pending_tasks; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -21658,8 +22386,6 @@ GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_pending_test_failures TO newhart
 -- Name: v_pending_test_failures; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-GRANT SELECT ON TABLE v_pending_test_failures TO "nova-staging";
-
 --
 -- Name: v_pending_test_failures; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
@@ -21777,8 +22503,6 @@ GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_ralph_active TO newhart;
 --
 -- Name: v_ralph_active; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
-
-GRANT SELECT ON TABLE v_ralph_active TO "nova-staging";
 
 --
 -- Name: v_ralph_active; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -21898,8 +22622,6 @@ GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_relationships TO newhart;
 -- Name: v_relationships; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-GRANT SELECT ON TABLE v_relationships TO "nova-staging";
-
 --
 -- Name: v_relationships; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
@@ -22017,8 +22739,6 @@ GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_task_tree TO newhart;
 --
 -- Name: v_task_tree; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
-
-GRANT SELECT ON TABLE v_task_tree TO "nova-staging";
 
 --
 -- Name: v_task_tree; Type: PRIVILEGE; Schema: privileges; Owner: -
@@ -22138,8 +22858,6 @@ GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE v_users TO newhart;
 -- Name: v_users; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
 
-GRANT SELECT ON TABLE v_users TO "nova-staging";
-
 --
 -- Name: v_users; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
@@ -22257,8 +22975,6 @@ GRANT DELETE, INSERT, SELECT, UPDATE ON TABLE workflow_steps_detail TO newhart;
 --
 -- Name: workflow_steps_detail; Type: PRIVILEGE; Schema: privileges; Owner: -
 --
-
-GRANT SELECT ON TABLE workflow_steps_detail TO "nova-staging";
 
 --
 -- Name: workflow_steps_detail; Type: PRIVILEGE; Schema: privileges; Owner: -

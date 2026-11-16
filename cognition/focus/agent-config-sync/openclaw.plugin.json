@@ -31,6 +31,14 @@
       "outputPath": {
         "type": "string",
         "description": "Path to write agents.json (default: ~/.openclaw/agents.json)"
+      },
+      "openclawConfigPath": {
+        "type": "string",
+        "description": "Path to openclaw.json for adding the explicit-ownership root include (default: ~/.openclaw/openclaw.json)"
+      },
+      "explicitConfigPath": {
+        "type": "string",
+        "description": "Path to write the 11.3+ explicit-ownership include file (default: ~/.openclaw/agents-explicit.json)"
       }
     }
   }

@@ -48,24 +48,64 @@ export type AgentRow = {
 
 type HeartbeatConfig = { every?: string; target?: string; to?: string; isolatedSession?: boolean };
 
+/** How the caller wants the default agent expressed in the emitted entries. */
+export type OwnershipMode = "legacy" | "explicit";
+
 /** Value shape for a single agent inside `agents.entries`.
  *
- * Note: the legacy `default` marker is intentionally NOT emitted. Under
- * OpenClaw 2026.9.x `agents.ownership=explicit`, the system agent is
- * determined by `agents.systemAgent`; emitting `default: true` here would
- * make the gateway config invalid.
+ * The legacy `default: true` marker is only emitted under `ownershipMode:
+ * "legacy"` (OpenClaw 2026.9.x and earlier). Under `ownershipMode:
+ * "explicit"` (OpenClaw 2026.11.3+) the system agent is determined by
+ * `agents.defaults.systemAgent.agentId` and channel `bindings`; emitting the
+ * marker there would make the gateway config invalid.
  */
 export type AgentEntryConfig = {
+  default?: true;
   model: string | { primary: string; fallbacks: string[] };
   thinkingDefault?: string;
   subagents?: { allowAgents: string[] };
   heartbeat?: HeartbeatConfig;
 };
 
+/** Options for `buildAgentsList()`. */
+export type BuildAgentsListOptions = {
+  /** "legacy" emits `default: true` for the default agent; "explicit" never does. */
+  ownershipMode?: OwnershipMode;
+  logger?: BuildLogger;
+};
+
 /** Result of `buildAgentsList()` — keyed entries plus any skipped rows. */
 export type BuildAgentsListResult = {
   entries: Record<string, AgentEntryConfig>;
   skipped: Array<{ name: string; reason: string }>;
+};
+
+/** A single channel account that should route to the default agent. */
+export type ChannelAccount = {
+  channel: string;
+  accountId: string;
+};
+
+/** Shape of the managed 11.3+ explicit-ownership include file. */
+export type ExplicitOwnershipConfig = {
+  agents: {
+    ownership: "explicit";
+    defaults: {
+      heartbeat: {
+        directPolicy: "block";
+        target: "none";
+        agentId: string;
+      };
+      systemAgent: {
+        agentId: string;
+      };
+    };
+  };
+  bindings: Array<{
+    agentId: string;
+    comment?: string;
+    match: { channel: string; accountId: string };
+  }>;
 };
 
 // ── Constants ───────────────────────────────────────────────────────────────
@@ -116,6 +156,9 @@ export function resetProviderPrefixWarnings(): void {
 
 /** Minimal logger surface used by buildAgentsList for warnings. */
 export type BuildLogger = { warn: (msg: string) => void };
+
+/** Logger surface used by sync helpers that also emit info messages. */
+export type SyncLogger = { warn: (msg: string) => void; info: (msg: string) => void };
 
 // ── SQL ─────────────────────────────────────────────────────────────────────
 
@@ -255,8 +298,10 @@ function warnIfUnknownProviderPrefixes(
  * - Rows with a missing/NULL model are skipped (TC-707-009)
  * - Rows with malformed `fallback_models` are skipped or normalized (TC-707-008)
  * - Rows with an invalid agent id are skipped (defensive)
- * - Legacy `default` marker is NEVER emitted (system agent comes from
- *   `agents.systemAgent` / ownership=explicit)
+ * - Under `ownershipMode: "legacy"` the default agent gets `default: true`
+ *   (OpenClaw 2026.9.x). Under `ownershipMode: "explicit"` the marker is
+ *   omitted and default ownership is expressed via `agents.ownership`,
+ *   `agents.defaults.systemAgent`, and channel `bindings` (OpenClaw 2026.11.3+).
  * - Empty or NULL fallback_models → string model form (not object)
  * - DB `thinking` column mapped to `thinkingDefault` when it is a valid
  *   schema enum value; key omitted when null, empty, or unknown
@@ -267,9 +312,10 @@ function warnIfUnknownProviderPrefixes(
  */
 export function buildAgentsList(
   rows: AgentRow[],
-  logger?: BuildLogger,
+  options?: BuildAgentsListOptions,
 ): BuildAgentsListResult {
-  const log = logger ?? console;
+  const log = options?.logger ?? console;
+  const ownershipMode = options?.ownershipMode ?? "explicit";
   const entries: Record<string, AgentEntryConfig> = {};
   const skipped: Array<{ name: string; reason: string }> = [];
 
@@ -320,13 +366,18 @@ export function buildAgentsList(
 
     const hasFallbacks = fallbackModels.length > 0;
 
-    // Build entry value (no `id` — the object key IS the id; no `default` —
-    // system agent is determined by agents.systemAgent under ownership=explicit)
+    // Build entry value (no `id` — the object key IS the id).
     const entry: AgentEntryConfig = {
       model: hasFallbacks
         ? { primary: row.model, fallbacks: fallbackModels }
         : row.model,
     };
+
+    // Legacy OpenClaw 2026.9.x default marker. Only emit under legacy mode;
+    // 11.3+ with agents.ownership=explicit rejects this marker.
+    if (ownershipMode === "legacy" && row.is_default === true) {
+      entry.default = true;
+    }
 
     // #660 — Map DB `thinking` → `thinkingDefault` when it is a valid schema enum value.
     // Null, empty, unknown, wrong-type, mixed-case, or whitespace-padded values are omitted.
@@ -402,6 +453,7 @@ export function validateAgentsEntries(
   }
 
   const normalizedIds = new Map<string, string>();
+  let defaultCount = 0;
 
   for (const id of keys) {
     if (!AGENT_ID_REGEX.test(id)) {
@@ -484,6 +536,14 @@ export function validateAgentsEntries(
       }
     }
 
+    if (entry.default === true) {
+      defaultCount++;
+    } else if (entry.default !== undefined && entry.default !== true) {
+      throw new Error(
+        `agents.entries["${id}"].default must be true or undefined`,
+      );
+    }
+
     const normalized = id.toLowerCase();
     const firstKey = normalizedIds.get(normalized);
     if (firstKey) {
@@ -494,6 +554,162 @@ export function validateAgentsEntries(
     normalizedIds.set(normalized, id);
   }
 
+  if (defaultCount > 1) {
+    throw new Error(
+      `agents.entries must contain at most one default=true entry (found ${defaultCount})`,
+    );
+  }
+}
+
+// ── Explicit ownership config (OpenClaw 2026.11.3+) ─────────────────────────
+
+/** Known channel config keys that are not channel IDs. */
+const CHANNELS_META_KEYS = new Set(["defaults", "modelByChannel"]);
+
+/**
+ * Enumerate configured channel accounts from the resolved OpenClaw config.
+ *
+ * - Looks at `channels.<channelId>`.
+ * - Skips internal keys (`defaults`, `modelByChannel`).
+ * - Skips channels whose `enabled` flag is explicitly `false`.
+ * - If a channel has `accounts: { <accountId>: {...}, ... }`, emits one entry
+ *   per account that is not explicitly disabled.
+ * - If a channel has no `accounts`, emits a single `accountId: "default"` entry.
+ */
+export function detectConfiguredChannelAccounts(
+  config: Record<string, unknown>,
+): ChannelAccount[] {
+  const channels = config.channels as Record<string, unknown> | undefined;
+  if (!channels || typeof channels !== "object" || Array.isArray(channels)) {
+    return [];
+  }
+
+  const accounts: ChannelAccount[] = [];
+  for (const [channelId, channelValue] of Object.entries(channels)) {
+    if (CHANNELS_META_KEYS.has(channelId)) continue;
+    if (!channelValue || typeof channelValue !== "object" || Array.isArray(channelValue)) {
+      continue;
+    }
+    const channel = channelValue as Record<string, unknown>;
+    if (channel.enabled === false) continue;
+
+    const accountEntries = channel.accounts as Record<string, unknown> | undefined;
+    if (accountEntries && typeof accountEntries === "object" && !Array.isArray(accountEntries)) {
+      for (const [accountId, accountValue] of Object.entries(accountEntries)) {
+        if (
+          accountValue &&
+          typeof accountValue === "object" &&
+          !Array.isArray(accountValue) &&
+          (accountValue as Record<string, unknown>).enabled === false
+        ) {
+          continue;
+        }
+        accounts.push({ channel: channelId, accountId });
+      }
+    } else {
+      accounts.push({ channel: channelId, accountId: "default" });
+    }
+  }
+
+  // Stable ordering for idempotent serialization.
+  accounts.sort((a, b) => {
+    const byChannel = a.channel.localeCompare(b.channel);
+    return byChannel !== 0 ? byChannel : a.accountId.localeCompare(b.accountId);
+  });
+  return accounts;
+}
+
+/**
+ * Build the managed explicit-ownership include config for OpenClaw 2026.11.3+.
+ *
+ * The returned object is meant to be merged at the root of openclaw.json via
+ * a `"$include": "./agents-explicit.json"` directive. It contributes:
+ *   - `agents.ownership = "explicit"`
+ *   - `agents.defaults.heartbeat.agentId` / `directPolicy` / `target`
+ *   - `agents.defaults.systemAgent.agentId`
+ *   - top-level `bindings[]` routing every configured channel account to the
+ *     default peer agent.
+ */
+export function buildExplicitOwnershipConfig(
+  peerAgentName: string,
+  channelAccounts: ChannelAccount[],
+): ExplicitOwnershipConfig {
+  // Sort for stable, deterministic output regardless of input order.
+  const sortedAccounts = [...channelAccounts].sort((a, b) => {
+    const byChannel = a.channel.localeCompare(b.channel);
+    return byChannel !== 0 ? byChannel : a.accountId.localeCompare(b.accountId);
+  });
+  const bindings = sortedAccounts.map(({ channel, accountId }) => ({
+    agentId: peerAgentName,
+    comment: `${channel} ${accountId} account -> ${peerAgentName} (replaces legacy default:true; nova-mind#819)`,
+    match: { channel, accountId },
+  }));
+
+  return {
+    agents: {
+      ownership: "explicit",
+      defaults: {
+        heartbeat: {
+          directPolicy: "block",
+          target: "none",
+          agentId: peerAgentName,
+        },
+        systemAgent: {
+          agentId: peerAgentName,
+        },
+      },
+    },
+    bindings,
+  };
+}
+
+/**
+ * Validate that a candidate explicit-ownership config satisfies the 2026.11.3
+ * schema subset emitted by this generator.
+ */
+export function validateExplicitOwnershipConfig(
+  config: ExplicitOwnershipConfig,
+): void {
+  if (!config || typeof config !== "object" || Array.isArray(config)) {
+    throw new Error("explicit ownership config must be an object");
+  }
+  if (config.agents?.ownership !== "explicit") {
+    throw new Error("explicit ownership config must set agents.ownership to 'explicit'");
+  }
+  if (typeof config.agents?.defaults?.heartbeat?.agentId !== "string" ||
+      config.agents.defaults.heartbeat.agentId.length === 0) {
+    throw new Error("explicit ownership config must set agents.defaults.heartbeat.agentId");
+  }
+  if (config.agents.defaults.heartbeat.directPolicy !== "block") {
+    throw new Error("explicit ownership config must set agents.defaults.heartbeat.directPolicy to 'block'");
+  }
+  if (config.agents.defaults.heartbeat.target !== "none") {
+    throw new Error("explicit ownership config must set agents.defaults.heartbeat.target to 'none'");
+  }
+  if (typeof config.agents?.defaults?.systemAgent?.agentId !== "string" ||
+      config.agents.defaults.systemAgent.agentId.length === 0) {
+    throw new Error("explicit ownership config must set agents.defaults.systemAgent.agentId");
+  }
+  if (!Array.isArray(config.bindings)) {
+    throw new Error("explicit ownership config must set bindings to an array");
+  }
+  for (const binding of config.bindings) {
+    if (!binding || typeof binding !== "object" || Array.isArray(binding)) {
+      throw new Error("explicit ownership binding must be an object");
+    }
+    if (typeof binding.agentId !== "string" || binding.agentId.length === 0) {
+      throw new Error("explicit ownership binding must set agentId");
+    }
+    if (!binding.match || typeof binding.match !== "object" || Array.isArray(binding.match)) {
+      throw new Error("explicit ownership binding must set match object");
+    }
+    if (typeof binding.match.channel !== "string" || binding.match.channel.length === 0) {
+      throw new Error("explicit ownership binding must set match.channel");
+    }
+    if (typeof binding.match.accountId !== "string" || binding.match.accountId.length === 0) {
+      throw new Error("explicit ownership binding must set match.accountId");
+    }
+  }
 }
 
 // ── Query ───────────────────────────────────────────────────────────────────
@@ -533,7 +749,104 @@ export async function fetchHeartbeatRecords(
   return result.rows;
 }
 
-// ── Write ───────────────────────────────────────────────────────────────────
+// ── Write helpers ───────────────────────────────────────────────────────────
+
+/**
+ * Read a JSON file if it exists and is valid JSON. Returns `undefined` if the
+ * file is missing or cannot be parsed.
+ */
+async function readJsonFile<T>(filePath: string): Promise<T | undefined> {
+  try {
+    const raw = await fs.promises.readFile(filePath, "utf-8");
+    return JSON.parse(raw) as T;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Write a JSON file atomically (tmp + rename) with 0600 permissions.
+ * Validates the data with the provided validator before writing.
+ */
+async function writeJsonAtomically<T>(
+  filePath: string,
+  data: T,
+  validator: (data: T) => void,
+): Promise<void> {
+  validator(data);
+
+  const dir = path.dirname(filePath);
+  await fs.promises.mkdir(dir, { recursive: true });
+
+  const tmpFile = path.join(
+    dir,
+    `${path.basename(filePath)}.${crypto.randomUUID()}.tmp`,
+  );
+
+  const content = JSON.stringify(data, null, 2) + "\n";
+
+  await fs.promises.writeFile(tmpFile, content, { encoding: "utf-8", mode: 0o600 });
+  await fs.promises.rename(tmpFile, filePath);
+}
+
+// ── openclaw.json root-include helper ───────────────────────────────────────
+
+/**
+ * Idempotently ensure that `openclaw.json` contains a root-level `$include`
+ * directive for the managed explicit-ownership file.
+ *
+ * - If the include is already present (string or array), the file is left
+ *   untouched and `false` is returned.
+ * - If absent, it is added. A single existing string include is converted to
+ *   an array; otherwise the directive is added as a string.
+ * - Only the root file is modified; the plugin never edits $include-owned
+ *   children (it writes them directly instead).
+ *
+ * Returns `true` if openclaw.json was changed.
+ */
+export function ensureRootInclude(
+  openclawConfig: Record<string, unknown>,
+  includePath: string,
+): { changed: boolean; config: Record<string, unknown> } {
+  const INCLUDE_KEY = "$include";
+  const existing = openclawConfig[INCLUDE_KEY];
+
+  if (typeof existing === "string") {
+    if (existing === includePath) {
+      return { changed: false, config: openclawConfig };
+    }
+    return {
+      changed: true,
+      config: {
+        ...openclawConfig,
+        [INCLUDE_KEY]: [existing, includePath],
+      },
+    };
+  }
+
+  if (Array.isArray(existing)) {
+    if (existing.includes(includePath)) {
+      return { changed: false, config: openclawConfig };
+    }
+    return {
+      changed: true,
+      config: {
+        ...openclawConfig,
+        [INCLUDE_KEY]: [...existing, includePath],
+      },
+    };
+  }
+
+  return {
+    changed: true,
+    config: {
+      ...openclawConfig,
+      [INCLUDE_KEY]: includePath,
+    },
+  };
+}
+
+// ── Agents JSON write ───────────────────────────────────────────────────────
 
 /**
  * Write agents.json atomically (write to temp with 0600, validate, then rename).
@@ -629,10 +942,10 @@ export async function syncHeartbeatFiles(
 export async function syncAgentsConfig(
   client: pg.Client,
   outputPath: string,
-  logger?: BuildLogger,
+  options?: BuildAgentsListOptions,
 ): Promise<boolean> {
   const rows = await fetchAgentRows(client);
-  const { entries } = buildAgentsList(rows, logger);
+  const { entries } = buildAgentsList(rows, options);
   const newContent = JSON.stringify(entries, null, 2) + "\n";
 
   // Check if file already matches (avoid unnecessary writes / watcher triggers)
@@ -647,4 +960,71 @@ export async function syncAgentsConfig(
 
   await writeAgentsJsonAtomically(outputPath, entries);
   return true;
+}
+
+/**
+ * Sync the managed explicit-ownership include file and ensure openclaw.json
+ * includes it at the root.
+ *
+ * - Reads the resolved OpenClaw `config` to discover configured channel accounts.
+ * - Determines the default peer agent from the DB rows.
+ * - Writes `explicitConfigPath` with ownership, defaults, and bindings.
+ * - Adds `"$include": "./<basename>"` to `openclawConfigPath` if not present.
+ *
+ * Returns `{ explicitChanged, openclawChanged }` indicating which files were
+ * actually written. If both are false, the second restart is a no-op
+ * (idempotence).
+ */
+export async function syncExplicitOwnershipConfig(
+  client: pg.Client,
+  openclawConfigPath: string,
+  explicitConfigPath: string,
+  resolvedConfig: Record<string, unknown>,
+  logger?: SyncLogger,
+): Promise<{ explicitChanged: boolean; openclawChanged: boolean }> {
+  const log = logger ?? console;
+  const rows = await fetchAgentRows(client);
+  const defaultAgentName =
+    rows.find((r) => r.is_default === true)?.name ?? "nova";
+
+  const channelAccounts = detectConfiguredChannelAccounts(resolvedConfig);
+  const explicitConfig = buildExplicitOwnershipConfig(defaultAgentName, channelAccounts);
+
+  // Write the explicit-ownership include file if it changed.
+  let explicitChanged = false;
+  const newExplicitContent = JSON.stringify(explicitConfig, null, 2) + "\n";
+  try {
+    const existing = await fs.promises.readFile(explicitConfigPath, "utf-8");
+    if (existing !== newExplicitContent) {
+      await writeJsonAtomically(explicitConfigPath, explicitConfig, validateExplicitOwnershipConfig);
+      explicitChanged = true;
+    }
+  } catch {
+    await writeJsonAtomically(explicitConfigPath, explicitConfig, validateExplicitOwnershipConfig);
+    explicitChanged = true;
+  }
+
+  // Ensure openclaw.json root includes the managed file.
+  let openclawChanged = false;
+  const includePath = `./${path.basename(explicitConfigPath)}`;
+  const openclawConfig = await readJsonFile<Record<string, unknown>>(openclawConfigPath) ?? {};
+  const { changed, config: nextConfig } = ensureRootInclude(openclawConfig, includePath);
+
+  if (changed) {
+    const newOpenclawContent = JSON.stringify(nextConfig, null, 2) + "\n";
+    const dir = path.dirname(openclawConfigPath);
+    await fs.promises.mkdir(dir, { recursive: true });
+    const tmpFile = path.join(
+      dir,
+      `${path.basename(openclawConfigPath)}.${crypto.randomUUID()}.tmp`,
+    );
+    await fs.promises.writeFile(tmpFile, newOpenclawContent, { encoding: "utf-8", mode: 0o600 });
+    await fs.promises.rename(tmpFile, openclawConfigPath);
+    openclawChanged = true;
+    log.info(
+      `agent_config_sync: Added root $include '${includePath}' to ${openclawConfigPath}`,
+    );
+  }
+
+  return { explicitChanged, openclawChanged };
 }

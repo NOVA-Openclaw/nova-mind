@@ -26,7 +26,7 @@ import path from "node:path";
 import os from "node:os";
 import { Client } from "pg";
 import { buildAgentsList } from "../src/sync.js";
-import type { AgentEntryConfig } from "../src/sync.js";
+import type { AgentEntryConfig, OwnershipMode } from "../src/sync.js";
 
 const OPENCLAW_DIR = process.env.OPENCLAW_DIR ?? path.join(os.homedir(), ".openclaw");
 const OPENCLAW_CONFIG = path.join(OPENCLAW_DIR, "openclaw.json");
@@ -61,6 +61,10 @@ async function loadDbConfig(): Promise<{
 }
 
 // ── Read current inline agents.entries ──────────────────────────────────────
+
+function resolveOwnershipMode(config: Record<string, unknown>): OwnershipMode {
+  return config.agents?.ownership === "explicit" ? "explicit" : "legacy";
+}
 
 function loadInlineEntries(): Record<string, AgentEntryConfig> | null {
   if (!fs.existsSync(OPENCLAW_CONFIG)) {
@@ -159,7 +163,8 @@ async function main() {
              heartbeat_enabled, heartbeat_every, heartbeat_target, heartbeat_to
       FROM get_agent_export_rows();
     `);
-    const { entries: generatedEntries } = buildAgentsList(result.rows);
+    const ownershipMode = resolveOwnershipMode(raw);
+    const { entries: generatedEntries } = buildAgentsList(result.rows, { ownershipMode });
 
     const inlineIds = Object.keys(inlineEntries);
     const generatedIds = Object.keys(generatedEntries);

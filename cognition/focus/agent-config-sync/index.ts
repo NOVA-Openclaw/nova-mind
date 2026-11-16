@@ -4,7 +4,11 @@
  * Listens to PostgreSQL NOTIFY events on `agent_config_changed` and writes
  * ~/.openclaw/agents.json whenever agent model configuration changes in the DB.
  *
+ * On OpenClaw 2026.11.3+ (agents.ownership = "explicit"), also writes a
+ * managed explicit-ownership include file and ensures openclaw.json loads it.
+ *
  * Issue #146 — DB-to-Config Sync for Agent Model Configuration
+ * Issue #819 — OpenClaw 2026.11.3 explicit ownership compatibility
  */
 
 import type {
@@ -12,7 +16,13 @@ import type {
   OpenClawPluginServiceContext,
 } from "openclaw/plugin-sdk";
 import { createRequire } from "node:module";
-import { syncAgentsConfig, syncHeartbeatFiles, fetchAgentRows } from "./src/sync.js";
+import {
+  syncAgentsConfig,
+  syncHeartbeatFiles,
+  fetchAgentRows,
+  syncExplicitOwnershipConfig,
+  type OwnershipMode,
+} from "./src/sync.js";
 import path from "node:path";
 import os from "node:os";
 
@@ -21,6 +31,12 @@ type Logger = OpenClawPluginServiceContext["logger"];
 // ── Defaults ────────────────────────────────────────────────────────────────
 
 const DEFAULT_OUTPUT_PATH = path.join(os.homedir(), ".openclaw", "agents.json");
+const DEFAULT_OPENCLAW_CONFIG_PATH = path.join(os.homedir(), ".openclaw", "openclaw.json");
+const DEFAULT_EXPLICIT_CONFIG_PATH = path.join(
+  os.homedir(),
+  ".openclaw",
+  "agents-explicit.json",
+);
 const STATE_DIR = path.join(os.homedir(), ".openclaw");
 const KEEPALIVE_INTERVAL_MS = 30_000;
 const NOTIFY_CHANNEL = "agent_config_changed";
@@ -69,6 +85,19 @@ function resolveDbConfig(
   return null;
 }
 
+/**
+ * Determine how agents.default should be expressed.
+ *
+ * - "explicit" when the resolved config already uses agents.ownership="explicit"
+ *   (OpenClaw 2026.11.3+).
+ * - "legacy" otherwise (OpenClaw 2026.9.x and earlier), which emits the
+ *   `default: true` marker.
+ */
+function resolveOwnershipMode(config: Record<string, unknown>): OwnershipMode {
+  const agents = config.agents as Record<string, unknown> | undefined;
+  return agents?.ownership === "explicit" ? "explicit" : "legacy";
+}
+
 // ── Service ─────────────────────────────────────────────────────────────────
 
 function createConfigSyncService(api: OpenClawPluginApi) {
@@ -87,11 +116,18 @@ function createConfigSyncService(api: OpenClawPluginApi) {
 
   const outputPath =
     (api.pluginConfig?.outputPath as string | undefined) ?? DEFAULT_OUTPUT_PATH;
+  const openclawConfigPath =
+    (api.pluginConfig?.openclawConfigPath as string | undefined) ??
+    DEFAULT_OPENCLAW_CONFIG_PATH;
+  const explicitConfigPath =
+    (api.pluginConfig?.explicitConfigPath as string | undefined) ??
+    DEFAULT_EXPLICIT_CONFIG_PATH;
 
   async function startListener(log: Logger): Promise<void> {
+    const fullConfig = api.config as unknown as Record<string, unknown>;
     const dbConfig = resolveDbConfig(
       api.pluginConfig as Record<string, unknown> | undefined,
-      api.config as unknown as Record<string, unknown>,
+      fullConfig,
     );
 
     if (!dbConfig) {
@@ -101,6 +137,11 @@ function createConfigSyncService(api: OpenClawPluginApi) {
       );
       return;
     }
+
+    const ownershipMode = resolveOwnershipMode(fullConfig);
+    log.info(
+      `agent_config_sync: Detected ownership mode: '${ownershipMode}'`,
+    );
 
     // Dynamic import to match agent_chat pattern (pg may not be available)
     const pg = await import("pg");
@@ -116,8 +157,22 @@ function createConfigSyncService(api: OpenClawPluginApi) {
       // Reset reconnect delay on successful connection
       reconnectDelay = RECONNECT_DELAY_MS;
 
+      // Determine default agent name for heartbeat workspace routing and
+      // explicit-ownership bindings. This is stable for the lifetime of the
+      // listener; a NOTIFY-driven change that would alter it will be picked
+      // up on the next gateway restart.
+      const agentRows = await fetchAgentRows(client);
+      const defaultAgentName =
+        agentRows.find((r) => r.is_default === true)?.name ?? "nova";
+      log.info(
+        `agent_config_sync: Default agent for heartbeat routing: '${defaultAgentName}'`,
+      );
+
       // Initial agents.json sync on startup
-      const changed = await syncAgentsConfig(client, outputPath, log);
+      const changed = await syncAgentsConfig(client, outputPath, {
+        ownershipMode,
+        logger: log,
+      });
       if (changed) {
         log.info(`agent_config_sync: Initial sync wrote ${outputPath}`);
         log.info("agent_config_sync: Signaling gateway to reload config (SIGUSR1)");
@@ -126,13 +181,42 @@ function createConfigSyncService(api: OpenClawPluginApi) {
         log.info(`agent_config_sync: Initial sync — config already up to date`);
       }
 
-      // Determine default agent name for heartbeat workspace routing
-      const agentRows = await fetchAgentRows(client);
-      const defaultAgentName =
-        agentRows.find((r) => r.is_default === true)?.name ?? "nova";
-      log.info(
-        `agent_config_sync: Default agent for heartbeat routing: '${defaultAgentName}'`,
-      );
+      // On OpenClaw 2026.11.3+ with explicit ownership, also write the
+      // managed ownership/bindings include and ensure openclaw.json loads it.
+      if (ownershipMode === "explicit") {
+        try {
+          const { explicitChanged, openclawChanged } = await syncExplicitOwnershipConfig(
+            client,
+            openclawConfigPath,
+            explicitConfigPath,
+            fullConfig,
+            log,
+          );
+          if (explicitChanged) {
+            log.info(
+              `agent_config_sync: Explicit ownership config written → ${explicitConfigPath}`,
+            );
+          }
+          if (openclawChanged) {
+            log.info(
+              `agent_config_sync: openclaw.json updated to include ${explicitConfigPath}`,
+            );
+            log.info(
+              "agent_config_sync: Signaling gateway to reload config (SIGUSR1)",
+            );
+            process.kill(process.pid, "SIGUSR1");
+          }
+          if (!explicitChanged && !openclawChanged) {
+            log.info(
+              "agent_config_sync: Explicit ownership config already up to date",
+            );
+          }
+        } catch (err) {
+          log.error(
+            `agent_config_sync: Explicit ownership sync failed: ${err}`,
+          );
+        }
+      }
 
       // Initial heartbeat sync on startup
       const heartbeatUpdated = await syncHeartbeatFiles(
@@ -168,7 +252,10 @@ function createConfigSyncService(api: OpenClawPluginApi) {
           log.info("agent_config_sync: Received agent config change notification");
 
           try {
-            const changed = await syncAgentsConfig(client, outputPath, log);
+            const changed = await syncAgentsConfig(client, outputPath, {
+              ownershipMode,
+              logger: log,
+            });
             if (changed) {
               log.info(`agent_config_sync: Config updated → ${outputPath}`);
               log.info(
@@ -197,6 +284,37 @@ function createConfigSyncService(api: OpenClawPluginApi) {
             }
           } catch (err) {
             log.error(`agent_config_sync: Heartbeat sync failed (via agent_config_changed): ${err}`);
+          }
+
+          // Re-sync explicit ownership config on agent changes as well.
+          if (ownershipMode === "explicit") {
+            try {
+              const { explicitChanged, openclawChanged } =
+                await syncExplicitOwnershipConfig(
+                  client,
+                  openclawConfigPath,
+                  explicitConfigPath,
+                  fullConfig,
+                  log,
+                );
+              if (explicitChanged || openclawChanged) {
+                log.info(
+                  explicitChanged
+                    ? `agent_config_sync: Explicit ownership config updated → ${explicitConfigPath}`
+                    : "agent_config_sync: Explicit ownership config unchanged",
+                );
+                if (openclawChanged) {
+                  log.info(
+                    "agent_config_sync: openclaw.json include updated; signaling gateway reload (SIGUSR1)",
+                  );
+                  process.kill(process.pid, "SIGUSR1");
+                }
+              }
+            } catch (err) {
+              log.error(
+                `agent_config_sync: Explicit ownership sync failed (via agent_config_changed): ${err}`,
+              );
+            }
           }
         } else if (msg.channel === HEARTBEAT_NOTIFY_CHANNEL) {
           log.info(

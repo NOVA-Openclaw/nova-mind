@@ -113,48 +113,51 @@ export type ExplicitOwnershipConfig = {
 // Regex copied from OpenClaw 2026.9.x src/config/zod-schema.agents.ts:35-39
 const AGENT_ID_REGEX = /^[a-z0-9_][a-z0-9_-]{0,63}$/i;
 
-// Regex copied from OpenClaw 2026.11.3 packages/normalization-core/src/agent-id.ts
+// Regex copied from OpenClaw 2026.11.3 src/routing/account-id.ts (via
+// @openclaw/normalization-core/agent-id.ts).
 const ACCOUNT_ID_VALID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
 const ACCOUNT_ID_INVALID_CHARS_RE = /[^a-z0-9_-]+/g;
 const ACCOUNT_ID_LEADING_DASH_RE = /^-+/;
 const ACCOUNT_ID_TRAILING_DASH_RE = /-+$/;
 
-/**
- * Normalize a channel account id using the same rules as OpenClaw 2026.11.3
- * routing (src/routing/account-id.ts → normalizeAgentIdStrict).
- */
-export function normalizeRoutingAccountId(value: string | undefined | null): string {
-  const trimmed = (value ?? "").trim();
-  const normalized = trimmed.toLowerCase();
-  if (ACCOUNT_ID_VALID_RE.test(trimmed)) {
-    return normalized;
-  }
-  return (
-    normalized
-      .replace(ACCOUNT_ID_INVALID_CHARS_RE, "-")
-      .replace(ACCOUNT_ID_LEADING_DASH_RE, "")
-      .replace(ACCOUNT_ID_TRAILING_DASH_RE, "")
-      .slice(0, 64) || "default"
-  );
+// Keys blocked from object writes to avoid prototype pollution at untrusted
+// object boundaries. Copied from OpenClaw 2026.11.3 src/infra/prototype-keys.ts.
+const BLOCKED_OBJECT_KEYS = new Set(["__proto__", "prototype", "constructor"]);
+
+function isBlockedObjectKey(key: string): boolean {
+  return BLOCKED_OBJECT_KEYS.has(key);
 }
 
 /**
- * Optional variant: returns undefined when the normalized id would be empty.
+ * Normalize a channel account id using the same rules as OpenClaw 2026.11.3
+ * routing (src/routing/account-id.ts → normalizeAccountId), including the
+ * isBlockedObjectKey guard that rejects prototype-polluting keys.
+ */
+export function normalizeRoutingAccountId(value: string | undefined | null): string {
+  return normalizeOptionalRoutingAccountId(value) ?? "default";
+}
+
+/**
+ * Optional variant of normalizeRoutingAccountId. Returns undefined when the
+ * normalized id would be empty or is a blocked object key.
  */
 export function normalizeOptionalRoutingAccountId(
   value: string | undefined | null,
 ): string | undefined {
   const trimmed = (value ?? "").trim();
+  if (!trimmed) {
+    return undefined;
+  }
   const normalized = trimmed.toLowerCase();
   if (ACCOUNT_ID_VALID_RE.test(trimmed)) {
-    return normalized;
+    return isBlockedObjectKey(normalized) ? undefined : normalized;
   }
   const candidate = normalized
     .replace(ACCOUNT_ID_INVALID_CHARS_RE, "-")
     .replace(ACCOUNT_ID_LEADING_DASH_RE, "")
     .replace(ACCOUNT_ID_TRAILING_DASH_RE, "")
     .slice(0, 64);
-  return candidate || undefined;
+  return candidate && !isBlockedObjectKey(candidate) ? candidate : undefined;
 }
 
 // #660 — The config schema (zod-schema.agent-runtime.ts) accepts 9 values;
@@ -176,14 +179,33 @@ const VALID_THINKING_DEFAULTS = new Set([
 // We only ever store the keys; provider blocks containing secrets are never
 // logged or returned.
 const PROVIDER_REGISTRY_PATH = "/opt/agents/shared-config/models-providers.json";
+let providerRegistryReadable: boolean | null = null;
+
+/** Test and cache whether the shared provider registry is readable. */
+export function isProviderRegistryReadable(): boolean {
+  if (providerRegistryReadable !== null) {
+    return providerRegistryReadable;
+  }
+  try {
+    fs.accessSync(PROVIDER_REGISTRY_PATH, fs.constants.R_OK);
+    providerRegistryReadable = true;
+    return true;
+  } catch {
+    providerRegistryReadable = false;
+    return false;
+  }
+}
 
 function loadKnownProviders(): Set<string> {
+  if (!isProviderRegistryReadable()) {
+    return new Set();
+  }
   try {
     const raw = fs.readFileSync(PROVIDER_REGISTRY_PATH, "utf-8");
     const data = JSON.parse(raw) as Record<string, unknown>;
     return new Set(Object.keys(data));
   } catch {
-    // Registry unreadable — skip warnings rather than failing.
+    // Unexpected parse failure — skip warnings rather than failing.
     return new Set();
   }
 }

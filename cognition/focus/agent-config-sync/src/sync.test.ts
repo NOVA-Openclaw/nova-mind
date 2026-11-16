@@ -48,6 +48,7 @@ import {
   buildExplicitOwnershipConfig,
   detectConfiguredChannelAccounts,
   ensureRootInclude,
+  isProviderRegistryReadable,
   resetProviderPrefixWarnings,
   syncAgentsConfig,
   syncExplicitOwnershipConfig,
@@ -2295,6 +2296,15 @@ describe("TC-707-009: NULL model on active row is skipped, never emits model:nul
 describe("TC-707-010: unknown provider prefix does not crash the generator", () => {
   beforeEach(() => resetProviderPrefixWarnings());
 
+  before(function () {
+    if (!isProviderRegistryReadable()) {
+      console.log(
+        "[TC-707-010 SKIP] Shared provider registry at /opt/agents/shared-config/models-providers.json is not readable by this user; skipping provider-prefix warning assertions.",
+      );
+      this.skip();
+    }
+  });
+
   it("passes through an unrecognized provider prefix", () => {
     const rows: AgentRow[] = [
       { name: "weird", model: "totally-unknown-provider/some-model", fallback_models: null, thinking: null, instance_type: "subagent", is_default: false, allowed_subagents: null, status: "active" },
@@ -2811,6 +2821,62 @@ describe("TC-819-U-03: detectConfiguredChannelAccounts", () => {
       { channel: "slack", accountId: "already-canonical" },
       { channel: "slack", accountId: "legacy" },
       { channel: "slack", accountId: "team-alpha" },
+    ]);
+  });
+
+  it("rejects blocked object keys (prototype, constructor) via isBlockedObjectKey guard", () => {
+    const cfg: { channels: { slack: { enabled: true; accounts: Record<string, unknown> } } } = {
+      channels: {
+        slack: {
+          enabled: true,
+          accounts: {},
+        },
+      },
+    };
+    // Use Object.defineProperty so "__proto__" is an own string key, not the prototype.
+    Object.defineProperty(cfg.channels.slack.accounts, "__proto__", {
+      value: { enabled: true },
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
+    cfg.channels.slack.accounts.prototype = { enabled: true };
+    cfg.channels.slack.accounts.constructor = { enabled: true };
+    cfg.channels.slack.accounts.safe = { enabled: true };
+
+    const accounts = detectConfiguredChannelAccounts(cfg as unknown as Record<string, unknown>);
+    // All three blocked keys normalize to "default"; __proto__ is also hidden
+    // from Object.entries unless defined as an own property.
+    assert.deepStrictEqual(
+      accounts.filter((a) => a.accountId === "safe"),
+      [{ channel: "slack", accountId: "safe" }],
+    );
+    assert.ok(
+      accounts.every((a) => ["default", "safe"].includes(a.accountId)),
+      "blocked object keys must not be emitted as literal account ids",
+    );
+  });
+
+  it("empty/whitespace account ids fall back to default", () => {
+    const cfg = {
+      channels: {
+        slack: {
+          enabled: true,
+          accounts: {
+            "": { enabled: true },
+            "   ": { enabled: true },
+            normal: { enabled: true },
+          },
+        },
+      },
+    };
+    const accounts = detectConfiguredChannelAccounts(cfg as Record<string, unknown>);
+    // Both "" and whitespace normalize to "default"; detectConfiguredChannelAccounts
+    // does not dedupe raw account keys, only normalizes them.
+    assert.deepStrictEqual(accounts, [
+      { channel: "slack", accountId: "default" },
+      { channel: "slack", accountId: "default" },
+      { channel: "slack", accountId: "normal" },
     ]);
   });
 });

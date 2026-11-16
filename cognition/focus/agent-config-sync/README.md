@@ -222,31 +222,74 @@ CREATE TRIGGER agent_config_changed
 
 ## Installation
 
-The installer (`agent-install.sh`) handles everything automatically:
+There are two supported install paths. Choose the one that matches your peer.
 
-1. Installs and builds the `agent_config_sync` extension plugin
-2. Sets `agents.entries = { "$include": "./agents.json" }` in `openclaw.json`
-3. Installs the `notify_agent_config_changed()` trigger on the `agents` table
-4. Generates the initial `agents.json` from current DB state
+### Procedure 1 — Zero-edit (peers that already own their routing)
 
-To run manually:
+Use this for a peer such as **Newhart** whose `openclaw.json` already contains
+hand-authored explicit-ownership keys (`agents.ownership`,
+`agents.defaults.systemAgent`, `agents.defaults.heartbeat`, root `bindings[]`)
+or a hand-written default-agent heartbeat policy. The plugin detects those
+surfaces and refuses to write the legacy `default:true` marker, so it will not
+brick an 11.3 gateway.
 
-```bash
-./agent-install.sh
-```
+1. Make sure the plugin is enabled in `openclaw.json`:
+   ```json
+   {
+     "plugins": {
+       "entries": {
+         "agent_config_sync": {}
+       }
+     }
+   }
+   ```
+2. Verify `agents.entries` loads the generated file:
+   ```json
+   {
+     "agents": {
+       "entries": { "$include": "./agents.json" }
+     }
+   }
+   ```
+3. Restart the gateway.
+4. Validate the config: `openclaw config validate`.
 
-### Install steps for Newhart (hand-written ownership / bindings / heartbeat / systemAgent)
+The plugin writes `agents.json` only. It does not manage ownership, systemAgent,
+bindings, or heartbeat defaults; your hand-authored routing stays in control.
 
-If `openclaw.json` already has hand-authored explicit-ownership keys, the plugin will not fight them. To switch to the managed include:
+### Procedure 2 — Move routing to the managed include
+
+Use this if you want the plugin to own `agents.ownership`,
+`agents.defaults.heartbeat`, `agents.defaults.systemAgent`, and managed
+`bindings[]`. Because 11.3 fails to **load** (exit 1, no `doctor` offer) when a
+root `$include` points to a missing file, you must create the include file and
+add the `$include` directive in **one edit**, then validate, then restart.
+Never add the `$include` across a restart.
 
 1. Stop the gateway.
 2. Back up `~/.openclaw/openclaw.json`.
-3. Remove the hand-authored keys you want managed:
-   - `agents.ownership`
-   - `agents.defaults.heartbeat`
-   - `agents.defaults.systemAgent`
-   - `bindings[]`
-4. Add the root include directive at the top of `openclaw.json`:
+3. Create `~/.openclaw/agents-explicit.json` with the keys you are moving. For
+   example, if `newhart` is the default peer:
+   ```json
+   {
+     "agents": {
+       "ownership": "explicit",
+       "defaults": {
+         "heartbeat": {
+           "directPolicy": "block",
+           "target": "none",
+           "agentId": "newhart"
+         },
+         "systemAgent": {
+           "agentId": "newhart"
+         }
+       }
+     },
+     "bindings": []
+   }
+   ```
+4. In the **same edit**, add the root `$include` to `openclaw.json` and remove
+   the keys you just moved so they are not duplicated:
    ```json
    {
      "$include": "./agents-explicit.json",
@@ -255,9 +298,19 @@ If `openclaw.json` already has hand-authored explicit-ownership keys, the plugin
      }
    }
    ```
-5. Start the gateway. The plugin will write `agents-explicit.json` on startup.
-6. Validate the config: `openclaw config validate`.
-7. If you want to keep some hand-written bindings, leave them in `openclaw.json` as sibling keys; the plugin will skip generating duplicate matches.
+5. Run `openclaw config validate`. If validation fails, fix the config before
+   restarting; do not start the gateway with a missing include target.
+6. Start the gateway. The plugin will keep `agents-explicit.json` in sync.
+7. If you want to keep some hand-written bindings, leave them as sibling keys in
+   `openclaw.json`; the plugin will skip generating duplicate matches.
+
+### Installer
+
+`agent-install.sh` automates Procedure 1 on fresh peers. To run it manually:
+
+```bash
+./agent-install.sh
+```
 
 ---
 

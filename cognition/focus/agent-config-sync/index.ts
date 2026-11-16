@@ -85,17 +85,111 @@ function resolveDbConfig(
   return null;
 }
 
+// ── Ownership mode resolution ───────────────────────────────────────────────
+
+/**
+ * Detect 2026.11.3 explicit-owner surfaces in the resolved config. When these
+ * are present but agents.ownership is not "explicit", emitting a legacy
+ * default:true marker bricks an 11.3 gateway with exit 78 ("Legacy
+ * agents.entries default markers need explicit surface owners").
+ */
+/** @internal exported for unit tests */
+export function hasExplicitOwnerSurfaces(config: Record<string, unknown>): boolean {
+  const agents = config.agents as Record<string, unknown> | undefined;
+  if (agents && typeof agents === "object" && !Array.isArray(agents)) {
+    const defaults = agents.defaults as Record<string, unknown> | undefined;
+    if (defaults && typeof defaults === "object" && !Array.isArray(defaults)) {
+      const systemAgent = defaults.systemAgent as Record<string, unknown> | undefined;
+      if (typeof systemAgent?.agentId === "string" && systemAgent.agentId.length > 0) {
+        return true;
+      }
+    }
+  }
+  if (Array.isArray(config.bindings) && config.bindings.length > 0) {
+    return true;
+  }
+  const includes = config["$include"];
+  const explicitInclude = "./agents-explicit.json";
+  if (typeof includes === "string") {
+    return includes === explicitInclude;
+  }
+  if (Array.isArray(includes)) {
+    return includes.some((item) => item === explicitInclude);
+  }
+  return false;
+}
+
+/**
+ * Parse a dotted OpenClaw version string (e.g. "2026.11.3") into numeric
+ * [major, minor, patch] components, or null when unparseable.
+ */
+/** @internal exported for unit tests */
+export function parseOpenClawVersion(raw: string | undefined | null): [number, number, number] | null {
+  if (typeof raw !== "string" || !raw.trim()) return null;
+  // Tolerate legacy dot-beta suffixes like "2026.11.3-beta.1".
+  const normalized = raw.trim().replace(/-.*/, "");
+  const parts = normalized.split(".").map((p) => Number.parseInt(p, 10));
+  if (parts.length < 3 || parts.some((n) => Number.isNaN(n))) return null;
+  return [parts[0]!, parts[1]!, parts[2]!];
+}
+
+/** @internal exported for unit tests */
+export function isOpenClawVersionAtLeast(
+  raw: string | undefined | null,
+  major: number,
+  minor: number,
+  patch: number,
+): boolean {
+  const parsed = parseOpenClawVersion(raw);
+  if (!parsed) return false;
+  const [vMajor, vMinor, vPatch] = parsed;
+  if (vMajor !== major) return vMajor > major;
+  if (vMinor !== minor) return vMinor > minor;
+  return vPatch >= patch;
+}
+
 /**
  * Determine how agents.default should be expressed.
  *
- * - "explicit" when the resolved config already uses agents.ownership="explicit"
+ * - "explicit" when the resolved config uses agents.ownership="explicit"
  *   (OpenClaw 2026.11.3+).
+ * - "explicit" when the resolved config already contains 11.3 explicit-owner
+ *   surfaces (agents.defaults.systemAgent.agentId, root bindings[], or a root
+ *   $include of agents-explicit.json) even if agents.ownership is missing,
+ *   because writing a legacy default:true marker would brick the gateway.
+ *   A clear warning is logged in this case.
+ * - "explicit" when the gateway version (config.meta.lastTouchedVersion) is
+ *   2026.11.3 or newer, i.e. a gateway that rejects legacy markers.
  * - "legacy" otherwise (OpenClaw 2026.9.x and earlier), which emits the
- *   `default: true` marker.
+ *   `default: true` marker for backward compatibility.
  */
-function resolveOwnershipMode(config: Record<string, unknown>): OwnershipMode {
+/** @internal exported for unit tests */
+export function resolveOwnershipMode(
+  config: Record<string, unknown>,
+  log: Logger,
+): OwnershipMode {
   const agents = config.agents as Record<string, unknown> | undefined;
-  return agents?.ownership === "explicit" ? "explicit" : "legacy";
+  if (agents?.ownership === "explicit") {
+    return "explicit";
+  }
+
+  if (hasExplicitOwnerSurfaces(config)) {
+    log.warn(
+      "agent_config_sync: Resolved config has 11.3 explicit-owner surfaces " +
+        "(agents.defaults.systemAgent.agentId, root bindings[], or '$include': " +
+        "'./agents-explicit.json') but agents.ownership is not 'explicit'. " +
+        "Refusing to write the legacy default:true marker to avoid bricking the gateway. " +
+        "Set agents.ownership to 'explicit' to silence this warning.",
+    );
+    return "explicit";
+  }
+
+  const touchedVersion = (config.meta as Record<string, unknown> | undefined)?.lastTouchedVersion;
+  if (isOpenClawVersionAtLeast(touchedVersion as string | undefined, 2026, 11, 3)) {
+    return "explicit";
+  }
+
+  return "legacy";
 }
 
 // ── Service ─────────────────────────────────────────────────────────────────
@@ -138,7 +232,7 @@ function createConfigSyncService(api: OpenClawPluginApi) {
       return;
     }
 
-    const ownershipMode = resolveOwnershipMode(fullConfig);
+    const ownershipMode = resolveOwnershipMode(fullConfig, log);
     log.info(
       `agent_config_sync: Detected ownership mode: '${ownershipMode}'`,
     );

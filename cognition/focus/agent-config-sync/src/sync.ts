@@ -113,6 +113,50 @@ export type ExplicitOwnershipConfig = {
 // Regex copied from OpenClaw 2026.9.x src/config/zod-schema.agents.ts:35-39
 const AGENT_ID_REGEX = /^[a-z0-9_][a-z0-9_-]{0,63}$/i;
 
+// Regex copied from OpenClaw 2026.11.3 packages/normalization-core/src/agent-id.ts
+const ACCOUNT_ID_VALID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
+const ACCOUNT_ID_INVALID_CHARS_RE = /[^a-z0-9_-]+/g;
+const ACCOUNT_ID_LEADING_DASH_RE = /^-+/;
+const ACCOUNT_ID_TRAILING_DASH_RE = /-+$/;
+
+/**
+ * Normalize a channel account id using the same rules as OpenClaw 2026.11.3
+ * routing (src/routing/account-id.ts → normalizeAgentIdStrict).
+ */
+export function normalizeRoutingAccountId(value: string | undefined | null): string {
+  const trimmed = (value ?? "").trim();
+  const normalized = trimmed.toLowerCase();
+  if (ACCOUNT_ID_VALID_RE.test(trimmed)) {
+    return normalized;
+  }
+  return (
+    normalized
+      .replace(ACCOUNT_ID_INVALID_CHARS_RE, "-")
+      .replace(ACCOUNT_ID_LEADING_DASH_RE, "")
+      .replace(ACCOUNT_ID_TRAILING_DASH_RE, "")
+      .slice(0, 64) || "default"
+  );
+}
+
+/**
+ * Optional variant: returns undefined when the normalized id would be empty.
+ */
+export function normalizeOptionalRoutingAccountId(
+  value: string | undefined | null,
+): string | undefined {
+  const trimmed = (value ?? "").trim();
+  const normalized = trimmed.toLowerCase();
+  if (ACCOUNT_ID_VALID_RE.test(trimmed)) {
+    return normalized;
+  }
+  const candidate = normalized
+    .replace(ACCOUNT_ID_INVALID_CHARS_RE, "-")
+    .replace(ACCOUNT_ID_LEADING_DASH_RE, "")
+    .replace(ACCOUNT_ID_TRAILING_DASH_RE, "")
+    .slice(0, 64);
+  return candidate || undefined;
+}
+
 // #660 — The config schema (zod-schema.agent-runtime.ts) accepts 9 values;
 // the DB CHECK only enforces 7. We validate against the schema contract
 // (the consumer boundary), not the DB CHECK.
@@ -604,7 +648,7 @@ export function detectConfiguredChannelAccounts(
         ) {
           continue;
         }
-        accounts.push({ channel: channelId, accountId });
+        accounts.push({ channel: channelId, accountId: normalizeRoutingAccountId(accountId) });
       }
     } else {
       accounts.push({ channel: channelId, accountId: "default" });
@@ -630,20 +674,41 @@ export function detectConfiguredChannelAccounts(
  *   - top-level `bindings[]` routing every configured channel account to the
  *     default peer agent.
  */
+function explicitBindingMatchKey(channel: string, accountId: string): string {
+  return `${channel}:${normalizeRoutingAccountId(accountId)}`;
+}
+
 export function buildExplicitOwnershipConfig(
   peerAgentName: string,
   channelAccounts: ChannelAccount[],
+  existingSiblingBindings?: Array<{ match: { channel: string; accountId: string } }>,
 ): ExplicitOwnershipConfig {
   // Sort for stable, deterministic output regardless of input order.
   const sortedAccounts = [...channelAccounts].sort((a, b) => {
     const byChannel = a.channel.localeCompare(b.channel);
     return byChannel !== 0 ? byChannel : a.accountId.localeCompare(b.accountId);
   });
-  const bindings = sortedAccounts.map(({ channel, accountId }) => ({
-    agentId: peerAgentName,
-    comment: `${channel} ${accountId} account -> ${peerAgentName} (replaces legacy default:true; nova-mind#819)`,
-    match: { channel, accountId },
-  }));
+
+  const covered = new Set(
+    (existingSiblingBindings ?? []).map((b) =>
+      explicitBindingMatchKey(b.match.channel, b.match.accountId),
+    ),
+  );
+
+  const bindings: ExplicitOwnershipConfig["bindings"] = [];
+  const seen = new Set<string>();
+  for (const { channel, accountId } of sortedAccounts) {
+    const key = explicitBindingMatchKey(channel, accountId);
+    if (covered.has(key) || seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    bindings.push({
+      agentId: peerAgentName,
+      comment: `${channel} ${accountId} account -> ${peerAgentName} (replaces legacy default:true; nova-mind#819)`,
+      match: { channel, accountId },
+    });
+  }
 
   return {
     agents: {
@@ -693,6 +758,7 @@ export function validateExplicitOwnershipConfig(
   if (!Array.isArray(config.bindings)) {
     throw new Error("explicit ownership config must set bindings to an array");
   }
+  const seenMatches = new Set<string>();
   for (const binding of config.bindings) {
     if (!binding || typeof binding !== "object" || Array.isArray(binding)) {
       throw new Error("explicit ownership binding must be an object");
@@ -709,6 +775,13 @@ export function validateExplicitOwnershipConfig(
     if (typeof binding.match.accountId !== "string" || binding.match.accountId.length === 0) {
       throw new Error("explicit ownership binding must set match.accountId");
     }
+    const matchKey = explicitBindingMatchKey(binding.match.channel, binding.match.accountId);
+    if (seenMatches.has(matchKey)) {
+      throw new Error(
+        `explicit ownership config has duplicate binding for ${binding.match.channel}:${binding.match.accountId}`,
+      );
+    }
+    seenMatches.add(matchKey);
   }
 }
 
@@ -846,6 +919,59 @@ export function ensureRootInclude(
   };
 }
 
+const INCLUDE_KEY = "$include";
+
+function rootIncludes(
+  openclawConfig: Record<string, unknown>,
+  includePath: string,
+): boolean {
+  const existing = openclawConfig[INCLUDE_KEY];
+  if (typeof existing === "string") {
+    return existing === includePath;
+  }
+  if (Array.isArray(existing)) {
+    return existing.some((item) => item === includePath);
+  }
+  return false;
+}
+
+function hasHandAuthoredExplicitOwnershipKeys(
+  openclawConfig: Record<string, unknown>,
+): boolean {
+  const agents = openclawConfig.agents as Record<string, unknown> | undefined;
+  if (agents && typeof agents === "object" && !Array.isArray(agents)) {
+    if (agents.ownership !== undefined) return true;
+    const defaults = agents.defaults as Record<string, unknown> | undefined;
+    if (defaults && typeof defaults === "object" && !Array.isArray(defaults)) {
+      if (defaults.heartbeat !== undefined) return true;
+      if (defaults.systemAgent !== undefined) return true;
+    }
+  }
+  if (Array.isArray(openclawConfig.bindings)) {
+    return true;
+  }
+  return false;
+}
+
+const explicitOwnershipInstructionLogged = new Set<string>();
+
+function logExplicitOwnershipInstruction(
+  openclawConfigPath: string,
+  log: SyncLogger,
+  message: string,
+): void {
+  if (explicitOwnershipInstructionLogged.has(openclawConfigPath)) {
+    return;
+  }
+  explicitOwnershipInstructionLogged.add(openclawConfigPath);
+  log.info(`agent_config_sync: ${message}`);
+}
+
+/** Test-only: reset the once-per-process explicit-ownership instruction set. */
+export function resetExplicitOwnershipInstructions(): void {
+  explicitOwnershipInstructionLogged.clear();
+}
+
 // ── Agents JSON write ───────────────────────────────────────────────────────
 
 /**
@@ -963,17 +1089,20 @@ export async function syncAgentsConfig(
 }
 
 /**
- * Sync the managed explicit-ownership include file and ensure openclaw.json
- * includes it at the root.
+ * Sync the managed explicit-ownership include file.
  *
- * - Reads the resolved OpenClaw `config` to discover configured channel accounts.
- * - Determines the default peer agent from the DB rows.
- * - Writes `explicitConfigPath` with ownership, defaults, and bindings.
- * - Adds `"$include": "./<basename>"` to `openclawConfigPath` if not present.
+ * OpenClaw 2026.11.3's config file watcher reloads the runtime automatically
+ * when the include file changes, so this plugin never modifies openclaw.json
+ * itself. The operator must add the root `"$include": "./agents-explicit.json"`
+ * directive. Until then, we log a one-time instruction and stay out of the
+ * way. We also refuse to manage the file when openclaw.json already contains
+ * hand-authored explicit-ownership keys (agents.ownership,
+ * agents.defaults.heartbeat, agents.defaults.systemAgent, or bindings), so we
+ * never fight hand-written config.
  *
  * Returns `{ explicitChanged, openclawChanged }` indicating which files were
- * actually written. If both are false, the second restart is a no-op
- * (idempotence).
+ * actually written. openclawChanged is always false in this implementation.
+ * If both are false, the second restart is a no-op (idempotence).
  */
 export async function syncExplicitOwnershipConfig(
   client: pg.Client,
@@ -983,14 +1112,52 @@ export async function syncExplicitOwnershipConfig(
   logger?: SyncLogger,
 ): Promise<{ explicitChanged: boolean; openclawChanged: boolean }> {
   const log = logger ?? console;
+  const includePath = `./${path.basename(explicitConfigPath)}`;
+  const openclawConfig = await readJsonFile<Record<string, unknown>>(openclawConfigPath) ?? {};
+
+  const alreadyIncluded = rootIncludes(openclawConfig, includePath);
+  const handAuthored = hasHandAuthoredExplicitOwnershipKeys(openclawConfig);
+
+  if (!alreadyIncluded) {
+    if (handAuthored) {
+      logExplicitOwnershipInstruction(
+        openclawConfigPath,
+        log,
+        `openclaw.json has hand-authored explicit-ownership keys (agents.ownership, ` +
+          `agents.defaults.heartbeat, agents.defaults.systemAgent, and/or bindings). ` +
+          `Managed explicit ownership is disabled. To enable it, move those keys into ` +
+          `${path.basename(explicitConfigPath)} and add "\\"$include\\"": "${includePath}" ` +
+          `to ${openclawConfigPath}.`,
+      );
+    } else {
+      logExplicitOwnershipInstruction(
+        openclawConfigPath,
+        log,
+        `Managed explicit ownership file is not included. Add "\\"$include\\"": "${includePath}" ` +
+          `to ${openclawConfigPath} to enable managed explicit ownership bindings. ` +
+          `A channel added by config edit gets its binding only on the next sync ` +
+          `(gateway start or agent_config_changed NOTIFY).`,
+      );
+    }
+    return { explicitChanged: false, openclawChanged: false };
+  }
+
+  // The operator added the $include themselves. We manage the include file but
+  // never edit openclaw.json. Generated bindings skip any match already covered
+  // by hand-authored sibling bindings so routing never has duplicate first-match
+  // entries.
+
   const rows = await fetchAgentRows(client);
   const defaultAgentName =
     rows.find((r) => r.is_default === true)?.name ?? "nova";
 
   const channelAccounts = detectConfiguredChannelAccounts(resolvedConfig);
-  const explicitConfig = buildExplicitOwnershipConfig(defaultAgentName, channelAccounts);
+  const explicitConfig = buildExplicitOwnershipConfig(
+    defaultAgentName,
+    channelAccounts,
+    Array.isArray(openclawConfig.bindings) ? openclawConfig.bindings : undefined,
+  );
 
-  // Write the explicit-ownership include file if it changed.
   let explicitChanged = false;
   const newExplicitContent = JSON.stringify(explicitConfig, null, 2) + "\n";
   try {
@@ -1004,27 +1171,5 @@ export async function syncExplicitOwnershipConfig(
     explicitChanged = true;
   }
 
-  // Ensure openclaw.json root includes the managed file.
-  let openclawChanged = false;
-  const includePath = `./${path.basename(explicitConfigPath)}`;
-  const openclawConfig = await readJsonFile<Record<string, unknown>>(openclawConfigPath) ?? {};
-  const { changed, config: nextConfig } = ensureRootInclude(openclawConfig, includePath);
-
-  if (changed) {
-    const newOpenclawContent = JSON.stringify(nextConfig, null, 2) + "\n";
-    const dir = path.dirname(openclawConfigPath);
-    await fs.promises.mkdir(dir, { recursive: true });
-    const tmpFile = path.join(
-      dir,
-      `${path.basename(openclawConfigPath)}.${crypto.randomUUID()}.tmp`,
-    );
-    await fs.promises.writeFile(tmpFile, newOpenclawContent, { encoding: "utf-8", mode: 0o600 });
-    await fs.promises.rename(tmpFile, openclawConfigPath);
-    openclawChanged = true;
-    log.info(
-      `agent_config_sync: Added root $include '${includePath}' to ${openclawConfigPath}`,
-    );
-  }
-
-  return { explicitChanged, openclawChanged };
+  return { explicitChanged, openclawChanged: false };
 }

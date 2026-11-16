@@ -175,8 +175,9 @@ function createConfigSyncService(api: OpenClawPluginApi) {
       });
       if (changed) {
         log.info(`agent_config_sync: Initial sync wrote ${outputPath}`);
-        log.info("agent_config_sync: Signaling gateway to reload config (SIGUSR1)");
-        process.kill(process.pid, "SIGUSR1");
+        log.info(
+          "agent_config_sync: Config file written; gateway watcher will reload on next observation",
+        );
       } else {
         log.info(`agent_config_sync: Initial sync — config already up to date`);
       }
@@ -196,15 +197,14 @@ function createConfigSyncService(api: OpenClawPluginApi) {
             log.info(
               `agent_config_sync: Explicit ownership config written → ${explicitConfigPath}`,
             );
+            log.info(
+              "agent_config_sync: Include file written; gateway watcher will reload on next observation",
+            );
           }
           if (openclawChanged) {
             log.info(
               `agent_config_sync: openclaw.json updated to include ${explicitConfigPath}`,
             );
-            log.info(
-              "agent_config_sync: Signaling gateway to reload config (SIGUSR1)",
-            );
-            process.kill(process.pid, "SIGUSR1");
           }
           if (!explicitChanged && !openclawChanged) {
             log.info(
@@ -259,9 +259,8 @@ function createConfigSyncService(api: OpenClawPluginApi) {
             if (changed) {
               log.info(`agent_config_sync: Config updated → ${outputPath}`);
               log.info(
-                "agent_config_sync: Signaling gateway to reload config (SIGUSR1)",
+                "agent_config_sync: Config file written; gateway watcher will reload on next observation",
               );
-              process.kill(process.pid, "SIGUSR1");
             } else {
               log.info("agent_config_sync: Config unchanged after notification");
             }
@@ -303,11 +302,10 @@ function createConfigSyncService(api: OpenClawPluginApi) {
                     ? `agent_config_sync: Explicit ownership config updated → ${explicitConfigPath}`
                     : "agent_config_sync: Explicit ownership config unchanged",
                 );
-                if (openclawChanged) {
+                if (explicitChanged) {
                   log.info(
-                    "agent_config_sync: openclaw.json include updated; signaling gateway reload (SIGUSR1)",
+                    "agent_config_sync: Include file written; gateway watcher will reload on next observation",
                   );
-                  process.kill(process.pid, "SIGUSR1");
                 }
               }
             } catch (err) {

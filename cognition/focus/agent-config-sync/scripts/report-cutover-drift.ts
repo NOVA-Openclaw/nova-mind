@@ -63,7 +63,8 @@ async function loadDbConfig(): Promise<{
 // ── Read current inline agents.entries ──────────────────────────────────────
 
 function resolveOwnershipMode(config: Record<string, unknown>): OwnershipMode {
-  return config.agents?.ownership === "explicit" ? "explicit" : "legacy";
+  const agents = config.agents as Record<string, unknown> | undefined;
+  return agents?.ownership === "explicit" ? "explicit" : "legacy";
 }
 
 function loadInlineEntries(): Record<string, AgentEntryConfig> | null {
@@ -163,7 +164,8 @@ async function main() {
              heartbeat_enabled, heartbeat_every, heartbeat_target, heartbeat_to
       FROM get_agent_export_rows();
     `);
-    const ownershipMode = resolveOwnershipMode(raw);
+    const rawConfig = JSON.parse(fs.readFileSync(OPENCLAW_CONFIG, "utf-8")) as Record<string, unknown>;
+    const ownershipMode = resolveOwnershipMode(rawConfig);
     const { entries: generatedEntries } = buildAgentsList(result.rows, { ownershipMode });
 
     const inlineIds = Object.keys(inlineEntries);

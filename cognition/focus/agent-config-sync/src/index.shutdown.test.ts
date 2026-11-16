@@ -37,7 +37,7 @@ describe("agent_config_sync shutdown contract", () => {
     tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "acs-shutdown-"));
     outputPath = path.join(tmpDir, "agents.json");
     // Seed the output with the same content the initial sync would produce so
-    // syncAgentsConfig returns changed=false and does not SIGUSR1 the test process.
+    // syncAgentsConfig returns changed=false and does not signal the test process.
     await fs.promises.writeFile(
       outputPath,
       JSON.stringify({ nova: { model: "ollama/llama3" } }, null, 2) + "\n",

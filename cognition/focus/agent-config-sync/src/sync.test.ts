@@ -2720,6 +2720,27 @@ describe("TC-819-U-02: buildExplicitOwnershipConfig", () => {
     assert.strictEqual(config.bindings.length, 0);
     assert.strictEqual(config.agents.ownership, "explicit");
   });
+
+  it("skips channel accounts already covered by hand-authored sibling bindings", () => {
+    const config = buildExplicitOwnershipConfig(
+      "nova",
+      [
+        { channel: "discord", accountId: "default" },
+        { channel: "telegram", accountId: "beta" },
+      ],
+      [{ match: { channel: "discord", accountId: "default" } }],
+    );
+    const matches = config.bindings.map((b) => `${b.match.channel}/${b.match.accountId}`);
+    assert.deepStrictEqual(matches, ["telegram/beta"]);
+  });
+
+  it("never emits duplicate bindings for the same channel/account", () => {
+    const config = buildExplicitOwnershipConfig("nova", [
+      { channel: "discord", accountId: "default" },
+      { channel: "discord", accountId: "default" },
+    ]);
+    assert.strictEqual(config.bindings.length, 1);
+  });
 });
 
 // ── TC-819-U-03: Configured channel account detection ───────────────────────
@@ -2771,6 +2792,27 @@ describe("TC-819-U-03: detectConfiguredChannelAccounts", () => {
     const accounts = detectConfiguredChannelAccounts(cfg as Record<string, unknown>);
     assert.deepStrictEqual(accounts, [{ channel: "discord", accountId: "default" }]);
   });
+
+  it("normalizes account ids using the same rules as 11.3 routing", () => {
+    const cfg = {
+      channels: {
+        slack: {
+          enabled: true,
+          accounts: {
+            "Team Alpha": { enabled: true },
+            "!@legacy$": { enabled: true },
+            "already-canonical": { enabled: true },
+          },
+        },
+      },
+    };
+    const accounts = detectConfiguredChannelAccounts(cfg as Record<string, unknown>);
+    assert.deepStrictEqual(accounts, [
+      { channel: "slack", accountId: "already-canonical" },
+      { channel: "slack", accountId: "legacy" },
+      { channel: "slack", accountId: "team-alpha" },
+    ]);
+  });
 });
 
 // ── TC-819-U-04: ensureRootInclude idempotence ──────────────────────────────
@@ -2811,9 +2853,9 @@ describe("TC-819-U-04: ensureRootInclude", () => {
   });
 });
 
-// ── TC-819-U-05: syncExplicitOwnershipConfig idempotence ────────────────────
+// ── TC-819-U-05: syncExplicitOwnershipConfig respects hand-authored config ──
 
-describe("TC-819-U-05: syncExplicitOwnershipConfig idempotence", () => {
+describe("TC-819-U-05: syncExplicitOwnershipConfig respects hand-authored config", () => {
   async function makeMockClient(rows: AgentRow[]): Promise<import("pg").Client> {
     return {
       query: async (sql: string) => {
@@ -2825,12 +2867,16 @@ describe("TC-819-U-05: syncExplicitOwnershipConfig idempotence", () => {
     } as unknown as import("pg").Client;
   }
 
-  it("writes the explicit file and openclaw.json on first call, then no-ops", async () => {
+  it("writes the explicit file when the root $include is already present, but never edits openclaw.json", async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "sync-819-test-"));
     try {
       const openclawPath = path.join(tmpDir, "openclaw.json");
       const explicitPath = path.join(tmpDir, "agents-explicit.json");
-      fs.writeFileSync(openclawPath, JSON.stringify({ agents: { entries: { $include: "./agents.json" } } }, null, 2));
+      const originalOpenclaw = {
+        $include: "./agents-explicit.json",
+        agents: { entries: { $include: "./agents.json" } },
+      };
+      fs.writeFileSync(openclawPath, JSON.stringify(originalOpenclaw, null, 2));
 
       const rows: AgentRow[] = [
         {
@@ -2858,7 +2904,7 @@ describe("TC-819-U-05: syncExplicitOwnershipConfig idempotence", () => {
         resolvedConfig,
       );
       assert.strictEqual(first.explicitChanged, true);
-      assert.strictEqual(first.openclawChanged, true);
+      assert.strictEqual(first.openclawChanged, false);
 
       const second = await syncExplicitOwnershipConfig(
         client,
@@ -2875,7 +2921,140 @@ describe("TC-819-U-05: syncExplicitOwnershipConfig idempotence", () => {
       assert.strictEqual(explicitWritten.bindings.length, 2);
 
       const openclawWritten = JSON.parse(fs.readFileSync(openclawPath, "utf-8")) as Record<string, unknown>;
-      assert.strictEqual(openclawWritten["$include"], "./agents-explicit.json");
+      assert.deepStrictEqual(openclawWritten, originalOpenclaw);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not write the explicit file when the root $include is missing", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "sync-819-missing-"));
+    try {
+      const openclawPath = path.join(tmpDir, "openclaw.json");
+      const explicitPath = path.join(tmpDir, "agents-explicit.json");
+      fs.writeFileSync(openclawPath, JSON.stringify({ agents: {} }, null, 2));
+
+      const rows: AgentRow[] = [
+        {
+          name: "nova",
+          model: "anthropic/claude-opus-4",
+          fallback_models: null,
+          thinking: null,
+          instance_type: "primary",
+          is_default: true,
+          allowed_subagents: null,
+        },
+      ];
+      const client = await makeMockClient(rows);
+      const resolvedConfig = { channels: { discord: { enabled: true } } };
+
+      const result = await syncExplicitOwnershipConfig(
+        client,
+        openclawPath,
+        explicitPath,
+        resolvedConfig,
+      );
+      assert.strictEqual(result.explicitChanged, false);
+      assert.strictEqual(result.openclawChanged, false);
+      assert.ok(!fs.existsSync(explicitPath), "explicit file must not be written before include is added");
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not manage explicit ownership when hand-authored keys exist and the root $include is missing", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "sync-819-hand-"));
+    try {
+      const openclawPath = path.join(tmpDir, "openclaw.json");
+      const explicitPath = path.join(tmpDir, "agents-explicit.json");
+      fs.writeFileSync(
+        openclawPath,
+        JSON.stringify(
+          {
+            agents: {
+              ownership: "explicit",
+              defaults: {
+                heartbeat: { agentId: "nova", directPolicy: "block", target: "none" },
+                systemAgent: { agentId: "nova" },
+              },
+            },
+            bindings: [{ agentId: "nova", match: { channel: "discord", accountId: "default" } }],
+          },
+          null,
+          2,
+        ),
+      );
+
+      const rows: AgentRow[] = [
+        {
+          name: "nova",
+          model: "anthropic/claude-opus-4",
+          fallback_models: null,
+          thinking: null,
+          instance_type: "primary",
+          is_default: true,
+          allowed_subagents: null,
+        },
+      ];
+      const client = await makeMockClient(rows);
+      const resolvedConfig = { channels: { discord: { enabled: true } } };
+
+      const result = await syncExplicitOwnershipConfig(
+        client,
+        openclawPath,
+        explicitPath,
+        resolvedConfig,
+      );
+      assert.strictEqual(result.explicitChanged, false);
+      assert.strictEqual(result.openclawChanged, false);
+      assert.ok(!fs.existsSync(explicitPath), "explicit file must not be written when include is missing and hand-authored keys exist");
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("respects hand-authored sibling bindings when the root $include is present", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "sync-819-sibling-"));
+    try {
+      const openclawPath = path.join(tmpDir, "openclaw.json");
+      const explicitPath = path.join(tmpDir, "agents-explicit.json");
+      const originalOpenclaw = {
+        "$include": "./agents-explicit.json",
+        bindings: [
+          { agentId: "hand-written", match: { channel: "discord", accountId: "default" } },
+        ],
+      };
+      fs.writeFileSync(openclawPath, JSON.stringify(originalOpenclaw, null, 2));
+
+      const rows: AgentRow[] = [
+        {
+          name: "nova",
+          model: "anthropic/claude-opus-4",
+          fallback_models: null,
+          thinking: null,
+          instance_type: "primary",
+          is_default: true,
+          allowed_subagents: null,
+        },
+      ];
+      const client = await makeMockClient(rows);
+      const resolvedConfig = { channels: { discord: { enabled: true }, telegram: { enabled: true } } };
+
+      const result = await syncExplicitOwnershipConfig(
+        client,
+        openclawPath,
+        explicitPath,
+        resolvedConfig,
+      );
+      assert.strictEqual(result.explicitChanged, true);
+      assert.strictEqual(result.openclawChanged, false);
+
+      const explicitWritten = JSON.parse(fs.readFileSync(explicitPath, "utf-8")) as ExplicitOwnershipConfig;
+      const managedMatches = explicitWritten.bindings.map((b) => `${b.match.channel}/${b.match.accountId}`);
+      assert.deepStrictEqual(managedMatches, ["telegram/default"]);
+
+      const openclawWritten = JSON.parse(fs.readFileSync(openclawPath, "utf-8")) as Record<string, unknown>;
+      assert.deepStrictEqual(openclawWritten, originalOpenclaw);
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }

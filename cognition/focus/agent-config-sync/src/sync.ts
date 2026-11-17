@@ -2,7 +2,7 @@
  * Agent Config Sync — core logic
  *
  * Queries the `agents` table and builds the agents.json config as a keyed
- * object `{ "<id>": {...} }` matching the OpenClaw 2026.9.x
+ * object `{ "<id>": {...} }` matching the OpenClaw 2026.11.3+
  * `agents.entries` schema. Writes atomically (tmp + rename) to prevent
  * partial reads, and validates the generated shape BEFORE promoting the temp
  * file so a hot-reload watcher can never pick up an invalid file.
@@ -10,10 +10,9 @@
  * Also syncs HEARTBEAT.md files from `agent_bootstrap_context` to the correct
  * workspace directories for each agent.
  *
- * Schema contract (OpenClaw 2026.9.x):
+ * Schema contract (OpenClaw 2026.11.3+):
  *   src/config/zod-schema.agents.ts:35-39 — entries is a z.record keyed by
- *   /^[a-z0-9_][a-z0-9_-]{0,63}$/i, values are AgentEntrySchema.omit({id:true})
- *   .extend({default: z.boolean().optional()}).
+ *   /^[a-z0-9_][a-z0-9_-]{0,63}$/i, values are AgentEntrySchema.omit({id:true}).
  */
 
 import fs from "node:fs";
@@ -49,19 +48,13 @@ export type AgentRow = {
 
 type HeartbeatConfig = { every?: string; target?: string; to?: string; isolatedSession?: boolean };
 
-/** How the caller wants the default agent expressed in the emitted entries. */
-export type OwnershipMode = "legacy" | "explicit";
-
 /** Value shape for a single agent inside `agents.entries`.
  *
- * The legacy `default: true` marker is only emitted under `ownershipMode:
- * "legacy"` (OpenClaw 2026.9.x and earlier). Under `ownershipMode:
- * "explicit"` (OpenClaw 2026.11.3+) the system agent is determined by
- * `agents.defaults.systemAgent.agentId` and channel `bindings`; emitting the
- * marker there would make the gateway config invalid.
+ * The legacy `default: true` marker is never emitted. OpenClaw 2026.11.3+
+ * uses `agents.defaults.systemAgent.agentId` and channel `bindings`; emitting
+ * the marker would make the gateway config invalid.
  */
 export type AgentEntryConfig = {
-  default?: true;
   model: string | { primary: string; fallbacks: string[] };
   thinkingDefault?: string;
   subagents?: { allowAgents: string[] };
@@ -70,8 +63,6 @@ export type AgentEntryConfig = {
 
 /** Options for `buildAgentsList()`. */
 export type BuildAgentsListOptions = {
-  /** "legacy" emits `default: true` for the default agent; "explicit" never does. */
-  ownershipMode?: OwnershipMode;
   logger?: BuildLogger;
 };
 
@@ -397,10 +388,9 @@ function warnIfUnknownProviderPrefixes(
  * - Rows with a missing/NULL model are skipped (TC-707-009)
  * - Rows with malformed `fallback_models` are skipped or normalized (TC-707-008)
  * - Rows with an invalid agent id are skipped (defensive)
- * - Under `ownershipMode: "legacy"` the default agent gets `default: true`
- *   (OpenClaw 2026.9.x). Under `ownershipMode: "explicit"` the marker is
- *   omitted and default ownership is expressed via `agents.ownership`,
- *   `agents.defaults.systemAgent`, and channel `bindings` (OpenClaw 2026.11.3+).
+ * - The legacy `default: true` marker is never emitted. Default ownership is
+ *   expressed via `agents.ownership`, `agents.defaults.systemAgent`, and
+ *   channel `bindings` (OpenClaw 2026.11.3+).
  * - Empty or NULL fallback_models → string model form (not object)
  * - DB `thinking` column mapped to `thinkingDefault` when it is a valid
  *   schema enum value; key omitted when null, empty, or unknown
@@ -414,7 +404,6 @@ export function buildAgentsList(
   options?: BuildAgentsListOptions,
 ): BuildAgentsListResult {
   const log = options?.logger ?? console;
-  const ownershipMode = options?.ownershipMode ?? "explicit";
   const entries: Record<string, AgentEntryConfig> = {};
   const skipped: Array<{ name: string; reason: string }> = [];
 
@@ -471,12 +460,6 @@ export function buildAgentsList(
         ? { primary: row.model, fallbacks: fallbackModels }
         : row.model,
     };
-
-    // Legacy OpenClaw 2026.9.x default marker. Only emit under legacy mode;
-    // 11.3+ with agents.ownership=explicit rejects this marker.
-    if (ownershipMode === "legacy" && row.is_default === true) {
-      entry.default = true;
-    }
 
     // #660 — Map DB `thinking` → `thinkingDefault` when it is a valid schema enum value.
     // Null, empty, unknown, wrong-type, mixed-case, or whitespace-padded values are omitted.
@@ -552,7 +535,6 @@ export function validateAgentsEntries(
   }
 
   const normalizedIds = new Map<string, string>();
-  let defaultCount = 0;
 
   for (const id of keys) {
     if (!AGENT_ID_REGEX.test(id)) {
@@ -635,11 +617,9 @@ export function validateAgentsEntries(
       }
     }
 
-    if (entry.default === true) {
-      defaultCount++;
-    } else if (entry.default !== undefined && entry.default !== true) {
+    if (Object.hasOwn(entry, "default")) {
       throw new Error(
-        `agents.entries["${id}"].default must be true or undefined`,
+        `agents.entries["${id}"].default is not supported; remove the legacy default marker`,
       );
     }
 
@@ -653,11 +633,6 @@ export function validateAgentsEntries(
     normalizedIds.set(normalized, id);
   }
 
-  if (defaultCount > 1) {
-    throw new Error(
-      `agents.entries must contain at most one default=true entry (found ${defaultCount})`,
-    );
-  }
 }
 
 // ── Explicit ownership config (OpenClaw 2026.11.3+) ─────────────────────────

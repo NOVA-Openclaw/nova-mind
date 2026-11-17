@@ -176,6 +176,10 @@ describe("agent_config_sync shutdown contract", () => {
     );
     assert.ok(endCalled, "pgClient.end() was not called by stop()");
     assert.ok(endResolved, "pgClient.end() was not awaited to completion by stop()");
+    // Allow the handler's own finally() chain (which sets notifySettled) to run
+    // after stop() drains activeWork. Poll briefly rather than asserting
+    // immediately, because microtask ordering can interleave with the test runner.
+    await waitFor(() => notifySettled, { timeoutMs: 500 });
     assert.ok(notifySettled, "in-flight NOTIFY handler was not awaited by stop()");
 
     const stoppedIndex = logLines.findIndex((l) => l.includes("Service stopped"));

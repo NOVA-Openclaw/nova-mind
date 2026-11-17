@@ -1,11 +1,13 @@
 /**
  * Agent Config Sync — OpenClaw Extension Plugin
  *
- * Listens to PostgreSQL NOTIFY events on `agent_config_changed` and writes
- * ~/.openclaw/agents.json whenever agent model configuration changes in the DB.
+ * OpenClaw 2026.11.3+ plugin that listens to PostgreSQL NOTIFY events on
+ * `agent_config_changed` and writes the agents.json include whenever agent model
+ * configuration changes in the DB.
  *
- * On OpenClaw 2026.11.3+ (agents.ownership = "explicit"), also writes a
- * managed explicit-ownership include file and ensures openclaw.json loads it.
+ * Also writes the managed explicit-ownership include file when enabled.
+ *
+ * Requires OpenClaw >= 2026.11.3 (ships with the fork upgrade).
  *
  * Issue #146 — DB-to-Config Sync for Agent Model Configuration
  * Issue #819 — OpenClaw 2026.11.3 explicit ownership compatibility
@@ -15,15 +17,13 @@ import type {
   OpenClawPluginApi,
   OpenClawPluginServiceContext,
 } from "openclaw/plugin-sdk";
-import { createRequire } from "node:module";
 import {
   syncAgentsConfig,
   syncHeartbeatFiles,
   fetchAgentRows,
   syncExplicitOwnershipConfig,
-  type OwnershipMode,
 } from "./src/sync.js";
-import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import os from "node:os";
 
@@ -86,148 +86,6 @@ function resolveDbConfig(
   return null;
 }
 
-// ── Ownership mode resolution ───────────────────────────────────────────────
-
-/**
- * Detect the running gateway version from the host.
- *
- * Sources are tried in order:
- * 1. `api.runtime.version` — exposed by OpenClaw 2026.9.6+ to every plugin.
- * 2. `process.env.OPENCLAW_VERSION` — operator override.
- * 3. The `package.json` of the host `openclaw` package resolved from the
- *    gateway entry script (`process.argv[1]`).
- * 4. The `openclaw` package resolved from this plugin's own loader graph.
- *
- * Returns `undefined` when no source can provide a usable version string.
- */
-function detectRunningGatewayVersion(api: OpenClawPluginApi): string | undefined {
-  // 1. The host gateway exposes its version on api.runtime.version.
-  const runtimeVersion = api.runtime?.version;
-  if (typeof runtimeVersion === "string" && runtimeVersion.trim().length > 0) {
-    return runtimeVersion.trim();
-  }
-
-  // 2. Environment override.
-  const envVersion = process.env.OPENCLAW_VERSION;
-  if (typeof envVersion === "string" && envVersion.trim().length > 0) {
-    return envVersion.trim();
-  }
-
-  // 3. Resolve the host openclaw package.json from the gateway entry script.
-  try {
-    const require = createRequire(import.meta.url);
-    const gatewayEntry = process.argv[1];
-    if (gatewayEntry) {
-      const candidate = path.resolve(
-        path.dirname(gatewayEntry),
-        "node_modules",
-        "openclaw",
-        "package.json",
-      );
-      if (fs.existsSync(candidate)) {
-        const pkg = JSON.parse(fs.readFileSync(candidate, "utf-8")) as {
-          version?: string;
-        };
-        if (typeof pkg.version === "string" && pkg.version.trim().length > 0) {
-          return pkg.version.trim();
-        }
-      }
-    }
-
-    // 4. Fallback: resolve openclaw from this module's loader graph.
-    const resolved = require.resolve("openclaw/package.json");
-    if (resolved) {
-      const pkg = JSON.parse(fs.readFileSync(resolved, "utf-8")) as {
-        version?: string;
-      };
-      if (typeof pkg.version === "string" && pkg.version.trim().length > 0) {
-        return pkg.version.trim();
-      }
-    }
-  } catch {
-    // Ignore resolution failures; the plugin will fall back to legacy mode.
-  }
-
-  return undefined;
-}
-
-/**
- * Parse a dotted OpenClaw version string (e.g. "2026.11.3") into numeric
- * [major, minor, patch] components, or null when unparseable.
- */
-/** @internal exported for unit tests */
-export function parseOpenClawVersion(raw: string | undefined | null): [number, number, number] | null {
-  if (typeof raw !== "string" || !raw.trim()) return null;
-  // Tolerate legacy dot-beta suffixes like "2026.11.3-beta.1".
-  const normalized = raw.trim().replace(/-.*/, "");
-  const parts = normalized.split(".").map((p) => Number.parseInt(p, 10));
-  if (parts.length < 3 || parts.some((n) => Number.isNaN(n))) return null;
-  return [parts[0]!, parts[1]!, parts[2]!];
-}
-
-/** @internal exported for unit tests */
-export function isOpenClawVersionAtLeast(
-  raw: string | undefined | null,
-  major: number,
-  minor: number,
-  patch: number,
-): boolean {
-  const parsed = parseOpenClawVersion(raw);
-  if (!parsed) return false;
-  const [vMajor, vMinor, vPatch] = parsed;
-  if (vMajor !== major) return vMajor > major;
-  if (vMinor !== minor) return vMinor > minor;
-  return vPatch >= patch;
-}
-
-/**
- * Determine how agents.default should be expressed.
- *
- * The mode is chosen from the VERSION OF THE RUNNING GATEWAY, not from config
- * content (which may have been written by an earlier build):
- *
- * - "explicit" when `agents.ownership` is "explicit".
- * - "explicit" when the running gateway reports a version >= 2026.11.0.
- * - "legacy" when the running gateway reports a version < 2026.11.0.
- * - "legacy" when the version cannot be determined AND agents.ownership is
- *   not "explicit". A loud warning is logged because this emits the
- *   default:true marker; operators on 2026.11.0+ should never see this path
- *   unless the gateway failed to report its version.
- */
-/** @internal exported for unit tests */
-export function resolveOwnershipMode(
-  config: Record<string, unknown>,
-  runningVersion: string | undefined,
-  log: Logger,
-): OwnershipMode {
-  const agents = config.agents as Record<string, unknown> | undefined;
-  if (agents?.ownership === "explicit") {
-    return "explicit";
-  }
-
-  if (runningVersion) {
-    const parsed = parseOpenClawVersion(runningVersion);
-    if (parsed) {
-      if (isOpenClawVersionAtLeast(runningVersion, 2026, 11, 0)) {
-        return "explicit";
-      }
-      return "legacy";
-    }
-    // Version string was provided but unparseable; treat as unknown and warn.
-  }
-
-  // Version unknown or unparseable: keep legacy behaviour but warn loudly.
-  // Explicit ownership was already handled above, so we never reach here when
-  // ownership=explicit.
-  log.warn(
-    "agent_config_sync: Could not determine running gateway version. " +
-      "Assuming legacy mode and emitting the default:true marker for the default agent. " +
-      "Set agents.ownership='explicit' to suppress the marker, or run on OpenClaw 2026.11.0+ " +
-      "so the gateway can report its version to the plugin.",
-  );
-  return "legacy";
-}
-
 // ── Service ─────────────────────────────────────────────────────────────────
 
 function createConfigSyncService(api: OpenClawPluginApi) {
@@ -268,20 +126,7 @@ function createConfigSyncService(api: OpenClawPluginApi) {
       return;
     }
 
-    const runningVersion = detectRunningGatewayVersion(api);
-    if (!runningVersion) {
-      log.warn(
-        "agent_config_sync: Unable to determine running gateway version from " +
-          "api.runtime.version, OPENCLAW_VERSION, or the host openclaw package.json. " +
-          "Falling back to legacy-mode detection.",
-      );
-    }
-
-    const ownershipMode = resolveOwnershipMode(fullConfig, runningVersion, log);
-    log.info(
-      `agent_config_sync: Detected ownership mode: '${ownershipMode}' ` +
-        `(gateway version: ${runningVersion ?? "unknown"})`,
-    );
+    log.info("agent_config_sync: OpenClaw 2026.11.3+ explicit ownership mode");
 
     // Dynamic import to match agent_chat pattern (pg may not be available)
     const pg = await import("pg");
@@ -310,7 +155,6 @@ function createConfigSyncService(api: OpenClawPluginApi) {
 
       // Initial agents.json sync on startup
       const changed = await syncAgentsConfig(client, outputPath, {
-        ownershipMode,
         logger: log,
       });
       if (changed) {
@@ -322,40 +166,39 @@ function createConfigSyncService(api: OpenClawPluginApi) {
         log.info(`agent_config_sync: Initial sync — config already up to date`);
       }
 
-      // On OpenClaw 2026.11.3+ with explicit ownership, also write the
-      // managed ownership/bindings include and ensure openclaw.json loads it.
-      if (ownershipMode === "explicit") {
-        try {
-          const { explicitChanged, openclawChanged } = await syncExplicitOwnershipConfig(
-            client,
-            openclawConfigPath,
-            explicitConfigPath,
-            fullConfig,
-            log,
+      // Write the managed explicit-ownership include and ensure openclaw.json
+      // loads it. syncExplicitOwnershipConfig is a no-op when hand-authored
+      // explicit-ownership keys are present.
+      try {
+        const { explicitChanged, openclawChanged } = await syncExplicitOwnershipConfig(
+          client,
+          openclawConfigPath,
+          explicitConfigPath,
+          fullConfig,
+          log,
+        );
+        if (explicitChanged) {
+          log.info(
+            `agent_config_sync: Explicit ownership config written → ${explicitConfigPath}`,
           );
-          if (explicitChanged) {
-            log.info(
-              `agent_config_sync: Explicit ownership config written → ${explicitConfigPath}`,
-            );
-            log.info(
-              "agent_config_sync: Include file written; gateway watcher will reload on next observation",
-            );
-          }
-          if (openclawChanged) {
-            log.info(
-              `agent_config_sync: openclaw.json updated to include ${explicitConfigPath}`,
-            );
-          }
-          if (!explicitChanged && !openclawChanged) {
-            log.info(
-              "agent_config_sync: Explicit ownership config already up to date",
-            );
-          }
-        } catch (err) {
-          log.error(
-            `agent_config_sync: Explicit ownership sync failed: ${err}`,
+          log.info(
+            "agent_config_sync: Include file written; gateway watcher will reload on next observation",
           );
         }
+        if (openclawChanged) {
+          log.info(
+            `agent_config_sync: openclaw.json updated to include ${explicitConfigPath}`,
+          );
+        }
+        if (!explicitChanged && !openclawChanged) {
+          log.info(
+            "agent_config_sync: Explicit ownership config already up to date",
+          );
+        }
+      } catch (err) {
+        log.error(
+          `agent_config_sync: Explicit ownership sync failed: ${err}`,
+        );
       }
 
       // Initial heartbeat sync on startup
@@ -393,7 +236,6 @@ function createConfigSyncService(api: OpenClawPluginApi) {
 
           try {
             const changed = await syncAgentsConfig(client, outputPath, {
-              ownershipMode,
               logger: log,
             });
             if (changed) {
@@ -426,33 +268,31 @@ function createConfigSyncService(api: OpenClawPluginApi) {
           }
 
           // Re-sync explicit ownership config on agent changes as well.
-          if (ownershipMode === "explicit") {
-            try {
-              const { explicitChanged, openclawChanged } =
-                await syncExplicitOwnershipConfig(
-                  client,
-                  openclawConfigPath,
-                  explicitConfigPath,
-                  fullConfig,
-                  log,
-                );
-              if (explicitChanged || openclawChanged) {
-                log.info(
-                  explicitChanged
-                    ? `agent_config_sync: Explicit ownership config updated → ${explicitConfigPath}`
-                    : "agent_config_sync: Explicit ownership config unchanged",
-                );
-                if (explicitChanged) {
-                  log.info(
-                    "agent_config_sync: Include file written; gateway watcher will reload on next observation",
-                  );
-                }
-              }
-            } catch (err) {
-              log.error(
-                `agent_config_sync: Explicit ownership sync failed (via agent_config_changed): ${err}`,
+          try {
+            const { explicitChanged, openclawChanged } =
+              await syncExplicitOwnershipConfig(
+                client,
+                openclawConfigPath,
+                explicitConfigPath,
+                fullConfig,
+                log,
               );
+            if (explicitChanged || openclawChanged) {
+              log.info(
+                explicitChanged
+                  ? `agent_config_sync: Explicit ownership config updated → ${explicitConfigPath}`
+                  : "agent_config_sync: Explicit ownership config unchanged",
+              );
+              if (explicitChanged) {
+                log.info(
+                  "agent_config_sync: Include file written; gateway watcher will reload on next observation",
+                );
+              }
             }
+          } catch (err) {
+            log.error(
+              `agent_config_sync: Explicit ownership sync failed (via agent_config_changed): ${err}`,
+            );
           }
         } else if (msg.channel === HEARTBEAT_NOTIFY_CHANNEL) {
           log.info(
@@ -662,7 +502,7 @@ function createConfigSyncService(api: OpenClawPluginApi) {
       // from leaking unfinished promises.
       if (activeWork.size > 0) {
         await Promise.race([
-          Promise.allSettled(Array.from(activeWork.values())),
+          Promise.allSettled(Array.from(activeWork.keys())),
           new Promise<void>((resolve) => {
             setTimeout(resolve, 500);
           }),

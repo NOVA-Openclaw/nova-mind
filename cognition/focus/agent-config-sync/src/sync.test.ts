@@ -2616,71 +2616,6 @@ describe("TC-770-U-01: generated agents.json must never contain a legacy default
   });
 });
 
-// ── TC-819-U-01: Legacy 9.6 mode emits default:true marker ──────────────────
-
-describe("TC-819-U-01: legacy mode emits the default:true marker", () => {
-  it("marks the single is_default=true agent with default:true", () => {
-    const rows: AgentRow[] = [
-      {
-        name: "nova",
-        model: "anthropic/claude-opus-4",
-        fallback_models: null,
-        thinking: "high",
-        instance_type: "primary",
-        is_default: true,
-        allowed_subagents: ["gem", "coder"],
-      },
-      {
-        name: "coder",
-        model: "anthropic/claude-sonnet-4",
-        fallback_models: null,
-        thinking: "medium",
-        instance_type: "subagent",
-        is_default: false,
-        allowed_subagents: null,
-      },
-    ];
-    const { entries: result } = buildAgentsList(rows, { ownershipMode: "legacy" });
-
-    assert.strictEqual(result["nova"]?.default, true);
-    assert.ok(
-      !Object.prototype.hasOwnProperty.call(result["coder"], "default"),
-      "coder must not have a default field",
-    );
-    assert.doesNotThrow(() => validateAgentsEntries(result));
-  });
-
-  it("omits default key for rows with is_default=null even in legacy mode", () => {
-    const rows: AgentRow[] = [
-      {
-        name: "nova",
-        model: "anthropic/claude-opus-4",
-        fallback_models: null,
-        thinking: "high",
-        instance_type: "primary",
-        is_default: null,
-        allowed_subagents: null,
-      },
-    ];
-    const { entries: result } = buildAgentsList(rows, { ownershipMode: "legacy" });
-    assert.ok(
-      !Object.prototype.hasOwnProperty.call(result["nova"], "default"),
-      "is_default=null must not produce a default field",
-    );
-  });
-
-  it("rejects more than one default:true entry during validation", () => {
-    const entries: Record<string, AgentEntryConfig> = {
-      a: { default: true, model: "openai/gpt-4o" },
-      b: { default: true, model: "anthropic/claude-sonnet-4" },
-    };
-    assert.throws(
-      () => validateAgentsEntries(entries),
-      /at most one default=true entry/,
-    );
-  });
-});
-
 // ── TC-819-U-02: Explicit ownership config builder ──────────────────────────
 
 describe("TC-819-U-02: buildExplicitOwnershipConfig", () => {
@@ -3127,9 +3062,9 @@ describe("TC-819-U-05: syncExplicitOwnershipConfig respects hand-authored config
   });
 });
 
-// ── TC-819-I-01: syncAgentsConfig respects ownership mode ───────────────────
+// ── TC-819-I-01: syncAgentsConfig never writes a default marker ─────────────
 
-describe("TC-819-I-01: syncAgentsConfig ownership mode", () => {
+describe("TC-819-I-01: syncAgentsConfig never writes a default marker", () => {
   async function makeMockClient(rows: AgentRow[]): Promise<import("pg").Client> {
     return {
       query: async (sql: string) => {
@@ -3141,32 +3076,7 @@ describe("TC-819-I-01: syncAgentsConfig ownership mode", () => {
     } as unknown as import("pg").Client;
   }
 
-  it("writes legacy default marker in legacy mode", async () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "sync-819-legacy-"));
-    try {
-      const outputPath = path.join(tmpDir, "agents.json");
-      const rows: AgentRow[] = [
-        {
-          name: "nova",
-          model: "anthropic/claude-opus-4",
-          fallback_models: null,
-          thinking: null,
-          instance_type: "primary",
-          is_default: true,
-          allowed_subagents: null,
-        },
-      ];
-      const client = await makeMockClient(rows);
-      const changed = await syncAgentsConfig(client, outputPath, { ownershipMode: "legacy" });
-      assert.strictEqual(changed, true);
-      const written = fs.readFileSync(outputPath, "utf-8");
-      assert.ok(written.includes('"default": true'));
-    } finally {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
-    }
-  });
-
-  it("omits default marker in explicit mode", async () => {
+  it("omits default marker for the default agent", async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "sync-819-explicit-"));
     try {
       const outputPath = path.join(tmpDir, "agents.json");
@@ -3182,7 +3092,7 @@ describe("TC-819-I-01: syncAgentsConfig ownership mode", () => {
         },
       ];
       const client = await makeMockClient(rows);
-      const changed = await syncAgentsConfig(client, outputPath, { ownershipMode: "explicit" });
+      const changed = await syncAgentsConfig(client, outputPath);
       assert.strictEqual(changed, true);
       const written = fs.readFileSync(outputPath, "utf-8");
       assert.ok(!written.includes('"default"'));
@@ -3191,7 +3101,7 @@ describe("TC-819-I-01: syncAgentsConfig ownership mode", () => {
     }
   });
 
-  it("is idempotent across two explicit-mode syncs", async () => {
+  it("is idempotent across two syncs", async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "sync-819-idem-"));
     try {
       const outputPath = path.join(tmpDir, "agents.json");
@@ -3207,9 +3117,9 @@ describe("TC-819-I-01: syncAgentsConfig ownership mode", () => {
         },
       ];
       const client = await makeMockClient(rows);
-      const first = await syncAgentsConfig(client, outputPath, { ownershipMode: "explicit" });
+      const first = await syncAgentsConfig(client, outputPath);
       assert.strictEqual(first, true);
-      const second = await syncAgentsConfig(client, outputPath, { ownershipMode: "explicit" });
+      const second = await syncAgentsConfig(client, outputPath);
       assert.strictEqual(second, false);
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });

@@ -2,6 +2,8 @@
 
 An OpenClaw extension plugin that keeps `~/.openclaw/agents.json` in sync with your PostgreSQL database — automatically and in real time.
 
+> **Requirement:** This plugin requires **OpenClaw >= 2026.11.3** and is shipped together with the fork upgrade. It does not support OpenClaw 2026.9.x or earlier.
+
 It watches the `agents` DB table:
 
 - **`agents`** — agent definitions (model, fallback models, allowed subagents, default flag)
@@ -10,7 +12,7 @@ When the table changes, the plugin receives a PostgreSQL `NOTIFY` event, rebuild
 
 > **Note:** The `agent_system_config` table still exists and is used by the gateway, but its values (e.g. `maxSpawnDepth`) are stored directly in `openclaw.json` — they are **not** written to `agents.json`.
 
-> **OpenClaw 2026.11.3+:** When the resolved config uses `agents.ownership = "explicit"`, the plugin writes a managed `agents-explicit.json` include file. It does **not** edit `openclaw.json` automatically; the operator must add `"$include": "./agents-explicit.json"` to enable managed explicit ownership bindings.
+> **OpenClaw 2026.11.3:** This plugin always runs in explicit-ownership mode. It writes a managed `agents-explicit.json` include file when enabled. It does **not** edit `openclaw.json` automatically; the operator must add `"$include": "./agents-explicit.json"` to enable managed explicit ownership bindings.
 
 ---
 
@@ -39,7 +41,7 @@ On startup, the plugin performs an **initial sync** for both `agents.json` and a
 
 ## Output Format
 
-`agents.json` is a **keyed object** of agent entries matching the OpenClaw 2026.9.x+ `agents.entries` schema. The object key is the agent id; there is no `id` field inside each entry.
+`agents.json` is a **keyed object** of agent entries matching the OpenClaw 2026.11.3+ `agents.entries` schema. The object key is the agent id; there is no `id` field inside each entry.
 
 ### Example output
 
@@ -70,7 +72,7 @@ On startup, the plugin performs an **initial sync** for both `agents.json` and a
 | Field | Source | Notes |
 |---|---|---|
 | `id` | `agents.name` | Always present |
-| `default` | `agents.is_default` | `true` only when `is_default = true`; key **omitted** otherwise |
+| `default` | `agents.is_default` | **Never emitted.** OpenClaw 2026.11.3+ uses explicit ownership (`agents.defaults.systemAgent` and `bindings`) instead of the legacy `default:true` marker. |
 | `model` | `agents.model` + `agents.fallback_models` | String when no fallbacks; object `{ primary, fallbacks }` when fallbacks present |
 | `thinkingDefault` | `agents.thinking` | Included only when `thinking` is a non-empty string matching the config schema's 9-value enum (`off`/`minimal`/`low`/`medium`/`high`/`xhigh`/`adaptive`/`max`/`ultra`, nova-mind#660). `NULL`, empty string, unknown tiers, wrong JS type, mixed case, and whitespace-padded values are all silently omitted — the row degrades gracefully rather than crashing or emitting a bad value. |
 | `subagents.allowAgents` | `agents.allowed_subagents` | Included when non-empty, sorted alphabetically |
@@ -101,9 +103,9 @@ On startup, the plugin performs an **initial sync** for both `agents.json` and a
 
 The `$include` directive merges the keyed object into `agents.entries`. All other `agents.*` keys (defaults, etc.) remain in `openclaw.json` and are unaffected by syncs.
 
-## OpenClaw 2026.11.3+ Explicit Ownership
+## OpenClaw 2026.11.3 Explicit Ownership
 
-When the resolved config already uses `agents.ownership = "explicit"`, the plugin writes a managed include file — by default `~/.openclaw/agents-explicit.json` — containing:
+The plugin always writes the managed include file when enabled — by default `~/.openclaw/agents-explicit.json` — containing:
 
 - `agents.ownership = "explicit"`
 - `agents.defaults.heartbeat` (direct policy / target / agent id)
@@ -230,8 +232,7 @@ Use this for a peer such as **Newhart** whose `openclaw.json` already contains
 hand-authored explicit-ownership keys (`agents.ownership`,
 `agents.defaults.systemAgent`, `agents.defaults.heartbeat`, root `bindings[]`)
 or a hand-written default-agent heartbeat policy. The plugin detects those
-surfaces and refuses to write the legacy `default:true` marker, so it will not
-brick an 11.3 gateway.
+surfaces and does not manage them, so your hand-authored routing stays in control.
 
 1. Make sure the plugin is enabled in `openclaw.json`:
    ```json
@@ -259,6 +260,7 @@ brick an 11.3 gateway.
 
 The plugin writes `agents.json` only. It does not manage ownership, systemAgent,
 bindings, or heartbeat defaults; your hand-authored routing stays in control.
+No `$include` for `agents-explicit.json` is needed for this procedure.
 
 ### Procedure 2 — Move routing to the managed include
 

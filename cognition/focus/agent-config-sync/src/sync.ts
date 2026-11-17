@@ -2,7 +2,7 @@
  * Agent Config Sync — core logic
  *
  * Queries the `agents` table and builds the agents.json config as a keyed
- * object `{ "<id>": {...} }` matching the OpenClaw 2026.9.x
+ * object `{ "<id>": {...} }` matching the OpenClaw 2026.11.3+
  * `agents.entries` schema. Writes atomically (tmp + rename) to prevent
  * partial reads, and validates the generated shape BEFORE promoting the temp
  * file so a hot-reload watcher can never pick up an invalid file.
@@ -10,15 +10,15 @@
  * Also syncs HEARTBEAT.md files from `agent_bootstrap_context` to the correct
  * workspace directories for each agent.
  *
- * Schema contract (OpenClaw 2026.9.x):
+ * Schema contract (OpenClaw 2026.11.3+):
  *   src/config/zod-schema.agents.ts:35-39 — entries is a z.record keyed by
- *   /^[a-z0-9_][a-z0-9_-]{0,63}$/i, values are AgentEntrySchema.omit({id:true})
- *   .extend({default: z.boolean().optional()}).
+ *   /^[a-z0-9_][a-z0-9_-]{0,63}$/i, values are AgentEntrySchema.omit({id:true}).
  */
 
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
+import { createRequire } from "node:module";
 import type pg from "pg";
 
 // ── Types ───────────────────────────────────────────────────────────────────
@@ -50,10 +50,9 @@ type HeartbeatConfig = { every?: string; target?: string; to?: string; isolatedS
 
 /** Value shape for a single agent inside `agents.entries`.
  *
- * Note: the legacy `default` marker is intentionally NOT emitted. Under
- * OpenClaw 2026.9.x `agents.ownership=explicit`, the system agent is
- * determined by `agents.systemAgent`; emitting `default: true` here would
- * make the gateway config invalid.
+ * The legacy `default: true` marker is never emitted. OpenClaw 2026.11.3+
+ * uses `agents.defaults.systemAgent.agentId` and channel `bindings`; emitting
+ * the marker would make the gateway config invalid.
  */
 export type AgentEntryConfig = {
   model: string | { primary: string; fallbacks: string[] };
@@ -62,16 +61,128 @@ export type AgentEntryConfig = {
   heartbeat?: HeartbeatConfig;
 };
 
+/** Options for `buildAgentsList()`. */
+export type BuildAgentsListOptions = {
+  logger?: BuildLogger;
+};
+
 /** Result of `buildAgentsList()` — keyed entries plus any skipped rows. */
 export type BuildAgentsListResult = {
   entries: Record<string, AgentEntryConfig>;
   skipped: Array<{ name: string; reason: string }>;
 };
 
+/** A single channel account that should route to the default agent. */
+export type ChannelAccount = {
+  channel: string;
+  accountId: string;
+};
+
+/** Shape of the managed 11.3+ explicit-ownership include file. */
+export type ExplicitOwnershipConfig = {
+  agents: {
+    ownership: "explicit";
+    defaults: {
+      heartbeat: {
+        directPolicy: "block";
+        target: "none";
+        agentId: string;
+      };
+      systemAgent: {
+        agentId: string;
+      };
+    };
+  };
+  bindings: Array<{
+    agentId: string;
+    comment?: string;
+    match: { channel: string; accountId: string };
+  }>;
+};
+
 // ── Constants ───────────────────────────────────────────────────────────────
 
-// Regex copied from OpenClaw 2026.9.x src/config/zod-schema.agents.ts:35-39
+// Regex copied from OpenClaw 2026.11.3+ src/config/zod-schema.agents.ts:35-39
 const AGENT_ID_REGEX = /^[a-z0-9_][a-z0-9_-]{0,63}$/i;
+
+// Regex copied from OpenClaw 2026.11.3 src/routing/account-id.ts (via
+// @openclaw/normalization-core/agent-id.ts).
+const ACCOUNT_ID_VALID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
+const ACCOUNT_ID_INVALID_CHARS_RE = /[^a-z0-9_-]+/g;
+const ACCOUNT_ID_LEADING_DASH_RE = /^-+/;
+const ACCOUNT_ID_TRAILING_DASH_RE = /-+$/;
+
+// Keys blocked from object writes to avoid prototype pollution at untrusted
+// object boundaries. Copied from OpenClaw 2026.11.3 src/infra/prototype-keys.ts.
+const BLOCKED_OBJECT_KEYS = new Set(["__proto__", "prototype", "constructor"]);
+
+function isBlockedObjectKey(key: string): boolean {
+  return BLOCKED_OBJECT_KEYS.has(key);
+}
+
+/**
+ * Optional import of `normalizeAccountId` from the running gateway's
+ * `openclaw/plugin-sdk` export. The export was introduced in 2026.11.x routing
+ * code and mirrors the rules in src/routing/account-id.ts. On older hosts the
+ * import fails or the export is missing; in that case we fall back to the
+ * plugin's own implementation below.
+ *
+ * We use a synchronous `require()` rather than a dynamic `import()` so that the
+ * plugin's module evaluation does not yield to the event loop. This keeps the
+ * cost of resolving openclaw/plugin-sdk inside the gateway's startup budget and
+ * outside the tight timeouts of unit tests that mock pg.
+ */
+let hostNormalizeAccountId: ((value?: string) => string | undefined) | undefined;
+try {
+  const require = createRequire(import.meta.url);
+  const sdk = require("openclaw/plugin-sdk") as Record<string, unknown>;
+  if (typeof sdk.normalizeAccountId === "function") {
+    hostNormalizeAccountId = sdk.normalizeAccountId as (value?: string) => string | undefined;
+  }
+} catch {
+  hostNormalizeAccountId = undefined;
+}
+
+/**
+ * Normalize a channel account id using the same rules as OpenClaw 2026.11.3
+ * routing. Prefer the host SDK's `normalizeAccountId` when available, but keep
+ * the prototype-pollution guard regardless of which implementation is used.
+ */
+export function normalizeRoutingAccountId(value: string | undefined | null): string {
+  return normalizeOptionalRoutingAccountId(value) ?? "default";
+}
+
+/**
+ * Optional variant of normalizeRoutingAccountId. Returns undefined when the
+ * normalized id would be empty or is a blocked object key.
+ */
+export function normalizeOptionalRoutingAccountId(
+  value: string | undefined | null,
+): string | undefined {
+  const trimmed = (value ?? "").trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  if (hostNormalizeAccountId) {
+    const normalized = hostNormalizeAccountId(trimmed);
+    if (!normalized) {
+      return undefined;
+    }
+    return isBlockedObjectKey(normalized) ? undefined : normalized;
+  }
+
+  const normalized = trimmed.toLowerCase();
+  if (ACCOUNT_ID_VALID_RE.test(trimmed)) {
+    return isBlockedObjectKey(normalized) ? undefined : normalized;
+  }
+  const candidate = normalized
+    .replace(ACCOUNT_ID_INVALID_CHARS_RE, "-")
+    .replace(ACCOUNT_ID_LEADING_DASH_RE, "")
+    .replace(ACCOUNT_ID_TRAILING_DASH_RE, "")
+    .slice(0, 64);
+  return candidate && !isBlockedObjectKey(candidate) ? candidate : undefined;
+}
 
 // #660 — The config schema (zod-schema.agent-runtime.ts) accepts 9 values;
 // the DB CHECK only enforces 7. We validate against the schema contract
@@ -92,14 +203,33 @@ const VALID_THINKING_DEFAULTS = new Set([
 // We only ever store the keys; provider blocks containing secrets are never
 // logged or returned.
 const PROVIDER_REGISTRY_PATH = "/opt/agents/shared-config/models-providers.json";
+let providerRegistryReadable: boolean | null = null;
+
+/** Test and cache whether the shared provider registry is readable. */
+export function isProviderRegistryReadable(): boolean {
+  if (providerRegistryReadable !== null) {
+    return providerRegistryReadable;
+  }
+  try {
+    fs.accessSync(PROVIDER_REGISTRY_PATH, fs.constants.R_OK);
+    providerRegistryReadable = true;
+    return true;
+  } catch {
+    providerRegistryReadable = false;
+    return false;
+  }
+}
 
 function loadKnownProviders(): Set<string> {
+  if (!isProviderRegistryReadable()) {
+    return new Set();
+  }
   try {
     const raw = fs.readFileSync(PROVIDER_REGISTRY_PATH, "utf-8");
     const data = JSON.parse(raw) as Record<string, unknown>;
     return new Set(Object.keys(data));
   } catch {
-    // Registry unreadable — skip warnings rather than failing.
+    // Unexpected parse failure — skip warnings rather than failing.
     return new Set();
   }
 }
@@ -116,6 +246,9 @@ export function resetProviderPrefixWarnings(): void {
 
 /** Minimal logger surface used by buildAgentsList for warnings. */
 export type BuildLogger = { warn: (msg: string) => void };
+
+/** Logger surface used by sync helpers that also emit info messages. */
+export type SyncLogger = { warn: (msg: string) => void; info: (msg: string) => void };
 
 // ── SQL ─────────────────────────────────────────────────────────────────────
 
@@ -255,8 +388,9 @@ function warnIfUnknownProviderPrefixes(
  * - Rows with a missing/NULL model are skipped (TC-707-009)
  * - Rows with malformed `fallback_models` are skipped or normalized (TC-707-008)
  * - Rows with an invalid agent id are skipped (defensive)
- * - Legacy `default` marker is NEVER emitted (system agent comes from
- *   `agents.systemAgent` / ownership=explicit)
+ * - The legacy `default: true` marker is never emitted. Default ownership is
+ *   expressed via `agents.ownership`, `agents.defaults.systemAgent`, and
+ *   channel `bindings` (OpenClaw 2026.11.3+).
  * - Empty or NULL fallback_models → string model form (not object)
  * - DB `thinking` column mapped to `thinkingDefault` when it is a valid
  *   schema enum value; key omitted when null, empty, or unknown
@@ -267,9 +401,9 @@ function warnIfUnknownProviderPrefixes(
  */
 export function buildAgentsList(
   rows: AgentRow[],
-  logger?: BuildLogger,
+  options?: BuildAgentsListOptions,
 ): BuildAgentsListResult {
-  const log = logger ?? console;
+  const log = options?.logger ?? console;
   const entries: Record<string, AgentEntryConfig> = {};
   const skipped: Array<{ name: string; reason: string }> = [];
 
@@ -299,7 +433,7 @@ export function buildAgentsList(
       continue;
     }
 
-    // Defensive: every emitted entry key must satisfy the 2026.9.x agent-id regex
+    // Defensive: every emitted entry key must satisfy the OpenClaw agent-id regex
     if (typeof row.name !== "string" || !AGENT_ID_REGEX.test(row.name)) {
       skipped.push({ name: rowName, reason: "invalid or missing agent id" });
       continue;
@@ -320,8 +454,7 @@ export function buildAgentsList(
 
     const hasFallbacks = fallbackModels.length > 0;
 
-    // Build entry value (no `id` — the object key IS the id; no `default` —
-    // system agent is determined by agents.systemAgent under ownership=explicit)
+    // Build entry value (no `id` — the object key IS the id).
     const entry: AgentEntryConfig = {
       model: hasFallbacks
         ? { primary: row.model, fallbacks: fallbackModels }
@@ -381,9 +514,9 @@ export function buildAgentsList(
 // ── Validation ──────────────────────────────────────────────────────────────
 
 /**
- * Validate that a candidate `agents.entries` object satisfies the 2026.9.x
- * schema subset actually emitted by this generator. Throws a descriptive error
- * if the object would fail `openclaw config validate`.
+ * Validate that a candidate `agents.entries` object satisfies the OpenClaw
+ * 2026.11.3+ schema subset actually emitted by this generator. Throws a
+ * descriptive error if the object would fail `openclaw config validate`.
  *
  * This is called BEFORE the atomic rename in writeAgentsJsonAtomically() so a
  * bad generated file can never be promoted where hot reload could pick it up
@@ -484,6 +617,12 @@ export function validateAgentsEntries(
       }
     }
 
+    if (Object.hasOwn(entry, "default")) {
+      throw new Error(
+        `agents.entries["${id}"].default is not supported; remove the legacy default marker`,
+      );
+    }
+
     const normalized = id.toLowerCase();
     const firstKey = normalizedIds.get(normalized);
     if (firstKey) {
@@ -494,6 +633,186 @@ export function validateAgentsEntries(
     normalizedIds.set(normalized, id);
   }
 
+}
+
+// ── Explicit ownership config (OpenClaw 2026.11.3+) ─────────────────────────
+
+/** Known channel config keys that are not channel IDs. */
+const CHANNELS_META_KEYS = new Set(["defaults", "modelByChannel"]);
+
+/**
+ * Enumerate configured channel accounts from the resolved OpenClaw config.
+ *
+ * - Looks at `channels.<channelId>`.
+ * - Skips internal keys (`defaults`, `modelByChannel`).
+ * - Skips channels whose `enabled` flag is explicitly `false`.
+ * - If a channel has `accounts: { <accountId>: {...}, ... }`, emits one entry
+ *   per account that is not explicitly disabled.
+ * - If a channel has no `accounts`, emits a single `accountId: "default"` entry.
+ */
+export function detectConfiguredChannelAccounts(
+  config: Record<string, unknown>,
+): ChannelAccount[] {
+  const channels = config.channels as Record<string, unknown> | undefined;
+  if (!channels || typeof channels !== "object" || Array.isArray(channels)) {
+    return [];
+  }
+
+  const accounts: ChannelAccount[] = [];
+  for (const [channelId, channelValue] of Object.entries(channels)) {
+    if (CHANNELS_META_KEYS.has(channelId)) continue;
+    if (!channelValue || typeof channelValue !== "object" || Array.isArray(channelValue)) {
+      continue;
+    }
+    const channel = channelValue as Record<string, unknown>;
+    if (channel.enabled === false) continue;
+
+    const accountEntries = channel.accounts as Record<string, unknown> | undefined;
+    if (accountEntries && typeof accountEntries === "object" && !Array.isArray(accountEntries)) {
+      for (const [accountId, accountValue] of Object.entries(accountEntries)) {
+        if (
+          accountValue &&
+          typeof accountValue === "object" &&
+          !Array.isArray(accountValue) &&
+          (accountValue as Record<string, unknown>).enabled === false
+        ) {
+          continue;
+        }
+        accounts.push({ channel: channelId, accountId: normalizeRoutingAccountId(accountId) });
+      }
+    } else {
+      accounts.push({ channel: channelId, accountId: "default" });
+    }
+  }
+
+  // Stable ordering for idempotent serialization.
+  accounts.sort((a, b) => {
+    const byChannel = a.channel.localeCompare(b.channel);
+    return byChannel !== 0 ? byChannel : a.accountId.localeCompare(b.accountId);
+  });
+  return accounts;
+}
+
+/**
+ * Build the managed explicit-ownership include config for OpenClaw 2026.11.3+.
+ *
+ * The returned object is meant to be merged at the root of openclaw.json via
+ * a `"$include": "./agents-explicit.json"` directive. It contributes:
+ *   - `agents.ownership = "explicit"`
+ *   - `agents.defaults.heartbeat.agentId` / `directPolicy` / `target`
+ *   - `agents.defaults.systemAgent.agentId`
+ *   - top-level `bindings[]` routing every configured channel account to the
+ *     default peer agent.
+ */
+function explicitBindingMatchKey(channel: string, accountId: string): string {
+  return `${channel}:${normalizeRoutingAccountId(accountId)}`;
+}
+
+export function buildExplicitOwnershipConfig(
+  peerAgentName: string,
+  channelAccounts: ChannelAccount[],
+  existingSiblingBindings?: Array<{ match: { channel: string; accountId: string } }>,
+): ExplicitOwnershipConfig {
+  // Sort for stable, deterministic output regardless of input order.
+  const sortedAccounts = [...channelAccounts].sort((a, b) => {
+    const byChannel = a.channel.localeCompare(b.channel);
+    return byChannel !== 0 ? byChannel : a.accountId.localeCompare(b.accountId);
+  });
+
+  const covered = new Set(
+    (existingSiblingBindings ?? []).map((b) =>
+      explicitBindingMatchKey(b.match.channel, b.match.accountId),
+    ),
+  );
+
+  const bindings: ExplicitOwnershipConfig["bindings"] = [];
+  const seen = new Set<string>();
+  for (const { channel, accountId } of sortedAccounts) {
+    const key = explicitBindingMatchKey(channel, accountId);
+    if (covered.has(key) || seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    bindings.push({
+      agentId: peerAgentName,
+      comment: `${channel} ${accountId} account -> ${peerAgentName} (replaces legacy default:true; nova-mind#819)`,
+      match: { channel, accountId },
+    });
+  }
+
+  return {
+    agents: {
+      ownership: "explicit",
+      defaults: {
+        heartbeat: {
+          directPolicy: "block",
+          target: "none",
+          agentId: peerAgentName,
+        },
+        systemAgent: {
+          agentId: peerAgentName,
+        },
+      },
+    },
+    bindings,
+  };
+}
+
+/**
+ * Validate that a candidate explicit-ownership config satisfies the 2026.11.3
+ * schema subset emitted by this generator.
+ */
+export function validateExplicitOwnershipConfig(
+  config: ExplicitOwnershipConfig,
+): void {
+  if (!config || typeof config !== "object" || Array.isArray(config)) {
+    throw new Error("explicit ownership config must be an object");
+  }
+  if (config.agents?.ownership !== "explicit") {
+    throw new Error("explicit ownership config must set agents.ownership to 'explicit'");
+  }
+  if (typeof config.agents?.defaults?.heartbeat?.agentId !== "string" ||
+      config.agents.defaults.heartbeat.agentId.length === 0) {
+    throw new Error("explicit ownership config must set agents.defaults.heartbeat.agentId");
+  }
+  if (config.agents.defaults.heartbeat.directPolicy !== "block") {
+    throw new Error("explicit ownership config must set agents.defaults.heartbeat.directPolicy to 'block'");
+  }
+  if (config.agents.defaults.heartbeat.target !== "none") {
+    throw new Error("explicit ownership config must set agents.defaults.heartbeat.target to 'none'");
+  }
+  if (typeof config.agents?.defaults?.systemAgent?.agentId !== "string" ||
+      config.agents.defaults.systemAgent.agentId.length === 0) {
+    throw new Error("explicit ownership config must set agents.defaults.systemAgent.agentId");
+  }
+  if (!Array.isArray(config.bindings)) {
+    throw new Error("explicit ownership config must set bindings to an array");
+  }
+  const seenMatches = new Set<string>();
+  for (const binding of config.bindings) {
+    if (!binding || typeof binding !== "object" || Array.isArray(binding)) {
+      throw new Error("explicit ownership binding must be an object");
+    }
+    if (typeof binding.agentId !== "string" || binding.agentId.length === 0) {
+      throw new Error("explicit ownership binding must set agentId");
+    }
+    if (!binding.match || typeof binding.match !== "object" || Array.isArray(binding.match)) {
+      throw new Error("explicit ownership binding must set match object");
+    }
+    if (typeof binding.match.channel !== "string" || binding.match.channel.length === 0) {
+      throw new Error("explicit ownership binding must set match.channel");
+    }
+    if (typeof binding.match.accountId !== "string" || binding.match.accountId.length === 0) {
+      throw new Error("explicit ownership binding must set match.accountId");
+    }
+    const matchKey = explicitBindingMatchKey(binding.match.channel, binding.match.accountId);
+    if (seenMatches.has(matchKey)) {
+      throw new Error(
+        `explicit ownership config has duplicate binding for ${binding.match.channel}:${binding.match.accountId}`,
+      );
+    }
+    seenMatches.add(matchKey);
+  }
 }
 
 // ── Query ───────────────────────────────────────────────────────────────────
@@ -533,7 +852,157 @@ export async function fetchHeartbeatRecords(
   return result.rows;
 }
 
-// ── Write ───────────────────────────────────────────────────────────────────
+// ── Write helpers ───────────────────────────────────────────────────────────
+
+/**
+ * Read a JSON file if it exists and is valid JSON. Returns `undefined` if the
+ * file is missing or cannot be parsed.
+ */
+async function readJsonFile<T>(filePath: string): Promise<T | undefined> {
+  try {
+    const raw = await fs.promises.readFile(filePath, "utf-8");
+    return JSON.parse(raw) as T;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Write a JSON file atomically (tmp + rename) with 0600 permissions.
+ * Validates the data with the provided validator before writing.
+ */
+async function writeJsonAtomically<T>(
+  filePath: string,
+  data: T,
+  validator: (data: T) => void,
+): Promise<void> {
+  validator(data);
+
+  const dir = path.dirname(filePath);
+  await fs.promises.mkdir(dir, { recursive: true });
+
+  const tmpFile = path.join(
+    dir,
+    `${path.basename(filePath)}.${crypto.randomUUID()}.tmp`,
+  );
+
+  const content = JSON.stringify(data, null, 2) + "\n";
+
+  await fs.promises.writeFile(tmpFile, content, { encoding: "utf-8", mode: 0o600 });
+  await fs.promises.rename(tmpFile, filePath);
+}
+
+// ── openclaw.json root-include helper ───────────────────────────────────────
+
+/**
+ * Idempotently ensure that `openclaw.json` contains a root-level `$include`
+ * directive for the managed explicit-ownership file.
+ *
+ * - If the include is already present (string or array), the file is left
+ *   untouched and `false` is returned.
+ * - If absent, it is added. A single existing string include is converted to
+ *   an array; otherwise the directive is added as a string.
+ * - Only the root file is modified; the plugin never edits $include-owned
+ *   children (it writes them directly instead).
+ *
+ * Returns `true` if openclaw.json was changed.
+ */
+export function ensureRootInclude(
+  openclawConfig: Record<string, unknown>,
+  includePath: string,
+): { changed: boolean; config: Record<string, unknown> } {
+  const INCLUDE_KEY = "$include";
+  const existing = openclawConfig[INCLUDE_KEY];
+
+  if (typeof existing === "string") {
+    if (existing === includePath) {
+      return { changed: false, config: openclawConfig };
+    }
+    return {
+      changed: true,
+      config: {
+        ...openclawConfig,
+        [INCLUDE_KEY]: [existing, includePath],
+      },
+    };
+  }
+
+  if (Array.isArray(existing)) {
+    if (existing.includes(includePath)) {
+      return { changed: false, config: openclawConfig };
+    }
+    return {
+      changed: true,
+      config: {
+        ...openclawConfig,
+        [INCLUDE_KEY]: [...existing, includePath],
+      },
+    };
+  }
+
+  return {
+    changed: true,
+    config: {
+      ...openclawConfig,
+      [INCLUDE_KEY]: includePath,
+    },
+  };
+}
+
+const INCLUDE_KEY = "$include";
+
+function rootIncludes(
+  openclawConfig: Record<string, unknown>,
+  includePath: string,
+): boolean {
+  const existing = openclawConfig[INCLUDE_KEY];
+  if (typeof existing === "string") {
+    return existing === includePath;
+  }
+  if (Array.isArray(existing)) {
+    return existing.some((item) => item === includePath);
+  }
+  return false;
+}
+
+function hasHandAuthoredExplicitOwnershipKeys(
+  openclawConfig: Record<string, unknown>,
+): boolean {
+  const agents = openclawConfig.agents as Record<string, unknown> | undefined;
+  if (agents && typeof agents === "object" && !Array.isArray(agents)) {
+    if (agents.ownership !== undefined) return true;
+    const defaults = agents.defaults as Record<string, unknown> | undefined;
+    if (defaults && typeof defaults === "object" && !Array.isArray(defaults)) {
+      if (defaults.heartbeat !== undefined) return true;
+      if (defaults.systemAgent !== undefined) return true;
+    }
+  }
+  if (Array.isArray(openclawConfig.bindings)) {
+    return true;
+  }
+  return false;
+}
+
+const explicitOwnershipInstructionLogged = new Set<string>();
+
+function logExplicitOwnershipInstruction(
+  openclawConfigPath: string,
+  log: SyncLogger,
+  message: string,
+): void {
+  if (explicitOwnershipInstructionLogged.has(openclawConfigPath)) {
+    return;
+  }
+  explicitOwnershipInstructionLogged.add(openclawConfigPath);
+  log.info(`agent_config_sync: ${message}`);
+}
+
+/** Test-only: reset the once-per-process explicit-ownership instruction set. */
+export function resetExplicitOwnershipInstructions(): void {
+  explicitOwnershipInstructionLogged.clear();
+}
+
+// ── Agents JSON write ───────────────────────────────────────────────────────
 
 /**
  * Write agents.json atomically (write to temp with 0600, validate, then rename).
@@ -629,10 +1098,10 @@ export async function syncHeartbeatFiles(
 export async function syncAgentsConfig(
   client: pg.Client,
   outputPath: string,
-  logger?: BuildLogger,
+  options?: BuildAgentsListOptions,
 ): Promise<boolean> {
   const rows = await fetchAgentRows(client);
-  const { entries } = buildAgentsList(rows, logger);
+  const { entries } = buildAgentsList(rows, options);
   const newContent = JSON.stringify(entries, null, 2) + "\n";
 
   // Check if file already matches (avoid unnecessary writes / watcher triggers)
@@ -647,4 +1116,90 @@ export async function syncAgentsConfig(
 
   await writeAgentsJsonAtomically(outputPath, entries);
   return true;
+}
+
+/**
+ * Sync the managed explicit-ownership include file.
+ *
+ * OpenClaw 2026.11.3's config file watcher reloads the runtime automatically
+ * when the include file changes, so this plugin never modifies openclaw.json
+ * itself. The operator must add the root `"$include": "./agents-explicit.json"`
+ * directive. Until then, we log a one-time instruction and stay out of the
+ * way. We also refuse to manage the file when openclaw.json already contains
+ * hand-authored explicit-ownership keys (agents.ownership,
+ * agents.defaults.heartbeat, agents.defaults.systemAgent, or bindings), so we
+ * never fight hand-written config.
+ *
+ * Returns `{ explicitChanged, openclawChanged }` indicating which files were
+ * actually written. openclawChanged is always false in this implementation.
+ * If both are false, the second restart is a no-op (idempotence).
+ */
+export async function syncExplicitOwnershipConfig(
+  client: pg.Client,
+  openclawConfigPath: string,
+  explicitConfigPath: string,
+  resolvedConfig: Record<string, unknown>,
+  logger?: SyncLogger,
+): Promise<{ explicitChanged: boolean; openclawChanged: boolean }> {
+  const log = logger ?? console;
+  const includePath = `./${path.basename(explicitConfigPath)}`;
+  const openclawConfig = await readJsonFile<Record<string, unknown>>(openclawConfigPath) ?? {};
+
+  const alreadyIncluded = rootIncludes(openclawConfig, includePath);
+  const handAuthored = hasHandAuthoredExplicitOwnershipKeys(openclawConfig);
+
+  if (!alreadyIncluded) {
+    if (handAuthored) {
+      logExplicitOwnershipInstruction(
+        openclawConfigPath,
+        log,
+        `openclaw.json has hand-authored explicit-ownership keys (agents.ownership, ` +
+          `agents.defaults.heartbeat, agents.defaults.systemAgent, and/or bindings). ` +
+          `Managed explicit ownership is disabled. To enable it, move those keys into ` +
+          `${path.basename(explicitConfigPath)} and add "\\"$include\\"": "${includePath}" ` +
+          `to ${openclawConfigPath}.`,
+      );
+    } else {
+      logExplicitOwnershipInstruction(
+        openclawConfigPath,
+        log,
+        `Managed explicit ownership file is not included. Add "\\"$include\\"": "${includePath}" ` +
+          `to ${openclawConfigPath} to enable managed explicit ownership bindings. ` +
+          `A channel added by config edit gets its binding only on the next sync ` +
+          `(gateway start or agent_config_changed NOTIFY).`,
+      );
+    }
+    return { explicitChanged: false, openclawChanged: false };
+  }
+
+  // The operator added the $include themselves. We manage the include file but
+  // never edit openclaw.json. Generated bindings skip any match already covered
+  // by hand-authored sibling bindings so routing never has duplicate first-match
+  // entries.
+
+  const rows = await fetchAgentRows(client);
+  const defaultAgentName =
+    rows.find((r) => r.is_default === true)?.name ?? "nova";
+
+  const channelAccounts = detectConfiguredChannelAccounts(resolvedConfig);
+  const explicitConfig = buildExplicitOwnershipConfig(
+    defaultAgentName,
+    channelAccounts,
+    Array.isArray(openclawConfig.bindings) ? openclawConfig.bindings : undefined,
+  );
+
+  let explicitChanged = false;
+  const newExplicitContent = JSON.stringify(explicitConfig, null, 2) + "\n";
+  try {
+    const existing = await fs.promises.readFile(explicitConfigPath, "utf-8");
+    if (existing !== newExplicitContent) {
+      await writeJsonAtomically(explicitConfigPath, explicitConfig, validateExplicitOwnershipConfig);
+      explicitChanged = true;
+    }
+  } catch {
+    await writeJsonAtomically(explicitConfigPath, explicitConfig, validateExplicitOwnershipConfig);
+    explicitChanged = true;
+  }
+
+  return { explicitChanged, openclawChanged: false };
 }

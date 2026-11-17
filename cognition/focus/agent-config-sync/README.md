@@ -2,13 +2,17 @@
 
 An OpenClaw extension plugin that keeps `~/.openclaw/agents.json` in sync with your PostgreSQL database — automatically and in real time.
 
+> **Requirement:** This plugin requires **OpenClaw >= 2026.11.3** and is shipped together with the fork upgrade. It does not support OpenClaw 2026.9.x or earlier.
+
 It watches the `agents` DB table:
 
 - **`agents`** — agent definitions (model, fallback models, allowed subagents, default flag)
 
-When the table changes, the plugin receives a PostgreSQL `NOTIFY` event, rebuilds `agents.json` as a **bare JSON array**, writes it atomically, and signals the gateway to reload (`SIGUSR1`).
+When the table changes, the plugin receives a PostgreSQL `NOTIFY` event, rebuilds `agents.json` as a **keyed object**, writes it atomically, and lets the gateway's config file watcher reload it. **The plugin never signals the gateway process.**
 
 > **Note:** The `agent_system_config` table still exists and is used by the gateway, but its values (e.g. `maxSpawnDepth`) are stored directly in `openclaw.json` — they are **not** written to `agents.json`.
+
+> **OpenClaw 2026.11.3:** This plugin always runs in explicit-ownership mode. It writes a managed `agents-explicit.json` include file when enabled. It does **not** edit `openclaw.json` automatically; the operator must add `"$include": "./agents-explicit.json"` to enable managed explicit ownership bindings.
 
 ---
 
@@ -21,9 +25,9 @@ DB change (agents, agent_bootstrap_context for HEARTBEAT)
   ├─► trigger fires pg_notify('agent_config_changed')
   │       └─► plugin receives notification (LISTEN)
   │             └─► queries get_agent_export_rows() (session_user-scoped)
-  │                   └─► builds bare JSON array (including heartbeat config)
+  │                   └─► builds keyed entries object (including heartbeat config)
   │                         └─► atomic write (tmp + rename) → agents.json
-  │                               └─► SIGUSR1 → gateway hot-reload
+  │                               └─► gateway config watcher reloads on next observation
   │
   └─► trigger fires pg_notify('heartbeat_content_changed')
           └─► plugin receives notification (LISTEN)
@@ -37,15 +41,13 @@ On startup, the plugin performs an **initial sync** for both `agents.json` and a
 
 ## Output Format
 
-`agents.json` is a **bare JSON array** of agent entries. There is no wrapping object.
+`agents.json` is a **keyed object** of agent entries matching the OpenClaw 2026.11.3+ `agents.entries` schema. The object key is the agent id; there is no `id` field inside each entry.
 
 ### Example output
 
 ```json
-[
-  {
-    "id": "main",
-    "default": true,
+{
+  "main": {
     "model": {
       "primary": "openrouter/anthropic/claude-opus-4-6",
       "fallbacks": [
@@ -56,15 +58,13 @@ On startup, the plugin performs an **initial sync** for both `agents.json` and a
       "allowAgents": ["coder", "researcher"]
     }
   },
-  {
-    "id": "coder",
+  "coder": {
     "model": "openrouter/anthropic/claude-sonnet-4-6"
   },
-  {
-    "id": "researcher",
+  "researcher": {
     "model": "openrouter/anthropic/claude-sonnet-4-6"
   }
-]
+}
 ```
 
 ### Entry fields
@@ -72,7 +72,7 @@ On startup, the plugin performs an **initial sync** for both `agents.json` and a
 | Field | Source | Notes |
 |---|---|---|
 | `id` | `agents.name` | Always present |
-| `default` | `agents.is_default` | `true` only when `is_default = true`; key **omitted** otherwise |
+| `default` | `agents.is_default` | **Never emitted.** OpenClaw 2026.11.3+ uses explicit ownership (`agents.defaults.systemAgent` and `bindings`) instead of the legacy `default:true` marker. |
 | `model` | `agents.model` + `agents.fallback_models` | String when no fallbacks; object `{ primary, fallbacks }` when fallbacks present |
 | `thinkingDefault` | `agents.thinking` | Included only when `thinking` is a non-empty string matching the config schema's 9-value enum (`off`/`minimal`/`low`/`medium`/`high`/`xhigh`/`adaptive`/`max`/`ultra`, nova-mind#660). `NULL`, empty string, unknown tiers, wrong JS type, mixed case, and whitespace-padded values are all silently omitted — the row degrades gracefully rather than crashing or emitting a bad value. |
 | `subagents.allowAgents` | `agents.allowed_subagents` | Included when non-empty, sorted alphabetically |
@@ -86,12 +86,12 @@ On startup, the plugin performs an **initial sync** for both `agents.json` and a
 
 ## How agents.json Is Loaded
 
-`openclaw.json` uses `$include` at the **`agents.list`** level to load the array:
+`openclaw.json` uses `$include` at the **`agents.entries`** level to load the generated object:
 
 ```json
 {
   "agents": {
-    "list": { "$include": "./agents.json" },
+    "entries": { "$include": "./agents.json" },
     "defaults": {
       "subagents": {
         "maxSpawnDepth": 3
@@ -101,7 +101,31 @@ On startup, the plugin performs an **initial sync** for both `agents.json` and a
 }
 ```
 
-The `$include` directive splices the bare array directly into `agents.list`. All other `agents.*` keys (defaults, etc.) remain in `openclaw.json` and are unaffected by syncs.
+The `$include` directive merges the keyed object into `agents.entries`. All other `agents.*` keys (defaults, etc.) remain in `openclaw.json` and are unaffected by syncs.
+
+## OpenClaw 2026.11.3 Explicit Ownership
+
+The plugin always writes the managed include file when enabled — by default `~/.openclaw/agents-explicit.json` — containing:
+
+- `agents.ownership = "explicit"`
+- `agents.defaults.heartbeat` (direct policy / target / agent id)
+- `agents.defaults.systemAgent.agentId`
+- Top-level `bindings[]` routing every configured channel account to the default peer agent
+
+**Important:** the plugin never edits `openclaw.json` automatically. To enable managed explicit ownership, add the root include directive yourself:
+
+```json
+{
+  "$include": "./agents-explicit.json",
+  "agents": {
+    "entries": { "$include": "./agents.json" }
+  }
+}
+```
+
+If `openclaw.json` already contains hand-authored explicit-ownership keys (`agents.ownership`, `agents.defaults.heartbeat`, `agents.defaults.systemAgent`, or `bindings[]`), the plugin logs a one-time instruction and does not manage them, so your hand-written routing is preserved.
+
+A channel that is added by editing `openclaw.json` will get a managed binding only on the next sync — either at the next gateway start or when the plugin receives an `agent_config_changed` NOTIFY.
 
 ---
 
@@ -168,7 +192,7 @@ DB INSERT / UPDATE / DELETE on agents
                           │
                           └─► atomic write → agents.json
                                 │
-                                └─► SIGUSR1 → gateway hot-reload
+                                └─► gateway config watcher reloads on next observation
 ```
 
 ### SQL Trigger
@@ -200,14 +224,94 @@ CREATE TRIGGER agent_config_changed
 
 ## Installation
 
-The installer (`agent-install.sh`) handles everything automatically:
+There are two supported install paths. Choose the one that matches your peer.
 
-1. Installs and builds the `agent_config_sync` extension plugin
-2. Sets `agents.list = { "$include": "./agents.json" }` in `openclaw.json`
-3. Installs the `notify_agent_config_changed()` trigger on the `agents` table
-4. Generates the initial `agents.json` from current DB state
+### Procedure 1 — Zero-edit (peers that already own their routing)
 
-To run manually:
+Use this for a peer such as **Newhart** whose `openclaw.json` already contains
+hand-authored explicit-ownership keys (`agents.ownership`,
+`agents.defaults.systemAgent`, `agents.defaults.heartbeat`, root `bindings[]`)
+or a hand-written default-agent heartbeat policy. The plugin detects those
+surfaces and does not manage them, so your hand-authored routing stays in control.
+
+1. Make sure the plugin is enabled in `openclaw.json`:
+   ```json
+   {
+     "plugins": {
+       "entries": {
+         "agent_config_sync": {
+           "enabled": true
+         }
+       }
+     }
+   }
+   ```
+   A bare `{}` merge leaves `enabled: false`; you must set `enabled: true` explicitly.
+2. Verify `agents.entries` loads the generated file:
+   ```json
+   {
+     "agents": {
+       "entries": { "$include": "./agents.json" }
+     }
+   }
+   ```
+3. Restart the gateway.
+4. Validate the config: `openclaw config validate`.
+
+The plugin writes `agents.json` only. It does not manage ownership, systemAgent,
+bindings, or heartbeat defaults; your hand-authored routing stays in control.
+No `$include` for `agents-explicit.json` is needed for this procedure.
+
+### Procedure 2 — Move routing to the managed include
+
+Use this if you want the plugin to own `agents.ownership`,
+`agents.defaults.heartbeat`, `agents.defaults.systemAgent`, and managed
+`bindings[]`. Because 11.3 fails to **load** (exit 1, no `doctor` offer) when a
+root `$include` points to a missing file, you must create the include file and
+add the `$include` directive in **one edit**, then validate, then restart.
+Never add the `$include` across a restart.
+
+1. Stop the gateway.
+2. Back up `~/.openclaw/openclaw.json`.
+3. Create `~/.openclaw/agents-explicit.json` with the keys you are moving. For
+   example, if `newhart` is the default peer:
+   ```json
+   {
+     "agents": {
+       "ownership": "explicit",
+       "defaults": {
+         "heartbeat": {
+           "directPolicy": "block",
+           "target": "none",
+           "agentId": "newhart"
+         },
+         "systemAgent": {
+           "agentId": "newhart"
+         }
+       }
+     },
+     "bindings": []
+   }
+   ```
+4. In the **same edit**, add the root `$include` to `openclaw.json` and remove
+   the keys you just moved so they are not duplicated:
+   ```json
+   {
+     "$include": "./agents-explicit.json",
+     "agents": {
+       "entries": { "$include": "./agents.json" }
+     }
+   }
+   ```
+5. Run `openclaw config validate`. If validation fails, fix the config before
+   restarting; do not start the gateway with a missing include target.
+6. Start the gateway. The plugin will keep `agents-explicit.json` in sync.
+7. If you want to keep some hand-written bindings, leave them as sibling keys in
+   `openclaw.json`; the plugin will skip generating duplicate matches.
+
+### Installer
+
+`agent-install.sh` automates Procedure 1 on fresh peers. To run it manually:
 
 ```bash
 ./agent-install.sh
@@ -242,13 +346,28 @@ If `config` is omitted, the plugin falls back to `channels.agent_chat` DB creden
 
 ---
 
+## Doctor `--fix` Interactions
+
+When managed explicit ownership is enabled (`"$include": "./agents-explicit.json"` at the root of `openclaw.json`), the keys inside that include are owned by the include file. `openclaw doctor --fix` will refuse to flatten those `$include`-owned values into `openclaw.json`. The affected automatic repairs are:
+
+| Doctor fix | Managed path it touches | How to apply it manually |
+|---|---|---|
+| Legacy system-agent / ambient-owner migration | `agents.defaults.systemAgent.agentId`, `agents.defaults.heartbeat.agentId` | Edit `agents-explicit.json` (or remove the `$include` and manage these keys by hand). |
+| Heartbeat defaults repair | `agents.defaults.heartbeat.*` (e.g. `every`, `directPolicy`, `target`) | Edit `agents-explicit.json`. |
+| Ownership mode migration | `agents.ownership` | Edit `agents-explicit.json` or remove the `$include`. |
+| Binding repairs (remove missing-agent bindings, `dm`→`direct` peer migration, add default-account bindings) | `bindings[]` | Edit `agents-explicit.json` directly, or keep hand-written bindings as sibling keys in `openclaw.json`. |
+
+The plugin intentionally keeps the managed surface minimal (`agents.ownership`, `agents.defaults.heartbeat`, `agents.defaults.systemAgent`, and `bindings[]`) so everything else in `openclaw.json` remains editable by `openclaw doctor --fix`.
+
 ## File Structure
 
 ```
 focus/agent-config-sync/
-├── index.ts          # Plugin entrypoint: LISTEN loop, reconnection, SIGUSR1 reload
+├── index.ts          # Plugin entrypoint: LISTEN loop, reconnection, file-watcher reload
 ├── src/
-│   └── sync.ts       # Core logic: query, build, write agents.json
+│   └── sync.ts       # Core logic: query, build, write agents.json / agents-explicit.json
+├── scripts/
+│   └── report-cutover-drift.ts   # Read-only drift report for cutover planning
 ├── package.json
 ├── tsconfig.json
 └── openclaw.plugin.json
@@ -258,10 +377,13 @@ focus/agent-config-sync/
 
 ## Key Behaviours
 
-- **Bare array output**: `agents.json` is a plain JSON array, not a wrapped object
+- **Keyed object output**: `agents.json` is a keyed object matching `agents.entries`, not a bare array
+- **No gateway signals**: The plugin never calls `process.kill(..., "SIGUSR1")`; OpenClaw 2026.11.3's config file watcher reloads after file changes
+- **Hands off hand-written config**: If `openclaw.json` already has `agents.ownership`, `agents.defaults.heartbeat`, `agents.defaults.systemAgent`, or `bindings[]`, the plugin leaves them alone
+- **Managed explicit ownership via include**: Writes `agents-explicit.json` only when the operator has added `"$include": "./agents-explicit.json"` to `openclaw.json`
 - **Atomic writes**: Uses a tmp file + rename to prevent partial reads during write
 - **Idempotent sync**: Compares new content to existing file — skips write if identical
 - **Graceful error handling**: Invalid DB values are warned about and skipped, never crash
 - **Reconnection**: Exponential backoff (5s → 60s) on connection loss
 - **Keep-alive**: 30s heartbeat query to detect stale connections early
-- **Hot reload**: Sends `SIGUSR1` to gateway process after every successful write
+- **Hot reload**: Gateway config watcher reloads on next observation after every successful write

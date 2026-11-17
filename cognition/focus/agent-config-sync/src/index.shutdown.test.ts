@@ -37,7 +37,7 @@ describe("agent_config_sync shutdown contract", () => {
     tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "acs-shutdown-"));
     outputPath = path.join(tmpDir, "agents.json");
     // Seed the output with the same content the initial sync would produce so
-    // syncAgentsConfig returns changed=false and does not SIGUSR1 the test process.
+    // syncAgentsConfig returns changed=false and does not signal the test process.
     await fs.promises.writeFile(
       outputPath,
       JSON.stringify({ nova: { model: "ollama/llama3" } }, null, 2) + "\n",
@@ -53,6 +53,7 @@ describe("agent_config_sync shutdown contract", () => {
     const logLines: string[] = [];
     const logger = {
       info: (msg: string) => logLines.push(`INFO ${msg}`),
+      warn: (msg: string) => logLines.push(`WARN ${msg}`),
       error: (msg: string) => logLines.push(`ERROR ${msg}`),
       debug: (msg: string) => logLines.push(`DEBUG ${msg}`),
     };
@@ -175,6 +176,10 @@ describe("agent_config_sync shutdown contract", () => {
     );
     assert.ok(endCalled, "pgClient.end() was not called by stop()");
     assert.ok(endResolved, "pgClient.end() was not awaited to completion by stop()");
+    // Allow the handler's own finally() chain (which sets notifySettled) to run
+    // after stop() drains activeWork. Poll briefly rather than asserting
+    // immediately, because microtask ordering can interleave with the test runner.
+    await waitFor(() => notifySettled, { timeoutMs: 500 });
     assert.ok(notifySettled, "in-flight NOTIFY handler was not awaited by stop()");
 
     const stoppedIndex = logLines.findIndex((l) => l.includes("Service stopped"));
@@ -187,6 +192,7 @@ describe("agent_config_sync shutdown contract", () => {
     const logLines: string[] = [];
     const logger = {
       info: (msg: string) => logLines.push(`INFO ${msg}`),
+      warn: (msg: string) => logLines.push(`WARN ${msg}`),
       error: (msg: string) => logLines.push(`ERROR ${msg}`),
       debug: (msg: string) => logLines.push(`DEBUG ${msg}`),
     };
@@ -266,6 +272,7 @@ describe("agent_config_sync shutdown contract", () => {
     const logLines: string[] = [];
     const logger = {
       info: (msg: string) => logLines.push(`INFO ${msg}`),
+      warn: (msg: string) => logLines.push(`WARN ${msg}`),
       error: (msg: string) => logLines.push(`ERROR ${msg}`),
       debug: (msg: string) => logLines.push(`DEBUG ${msg}`),
     };

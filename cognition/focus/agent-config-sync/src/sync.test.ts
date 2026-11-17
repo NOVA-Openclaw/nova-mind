@@ -43,8 +43,25 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { buildAgentsList, resetProviderPrefixWarnings, syncHeartbeatFiles, validateAgentsEntries, writeAgentsJsonAtomically } from "./sync.js";
-import type { AgentRow, HeartbeatRow, AgentEntryConfig } from "./sync.js";
+import {
+  buildAgentsList,
+  buildExplicitOwnershipConfig,
+  detectConfiguredChannelAccounts,
+  ensureRootInclude,
+  isProviderRegistryReadable,
+  resetProviderPrefixWarnings,
+  syncAgentsConfig,
+  syncExplicitOwnershipConfig,
+  syncHeartbeatFiles,
+  validateAgentsEntries,
+  writeAgentsJsonAtomically,
+} from "./sync.js";
+import type {
+  AgentRow,
+  HeartbeatRow,
+  AgentEntryConfig,
+  ExplicitOwnershipConfig,
+} from "./sync.js";
 
 // ── Mock pg.Client helper ───────────────────────────────────────────────────
 
@@ -2276,7 +2293,16 @@ describe("TC-707-009: NULL model on active row is skipped, never emits model:nul
 
 // ── TC-707-010: unknown/malformed provider prefix ────────────────────────────
 
-describe("TC-707-010: unknown provider prefix does not crash the generator", () => {
+// Compute readability once at suite-registration time; node:test's SuiteContext
+// does not expose skip(), so this.skip() inside a describe-level before() hook
+// throws and cancels sibling tests.
+const providerRegistryReadable = isProviderRegistryReadable();
+
+describe("TC-707-010: unknown provider prefix does not crash the generator", {
+  skip:
+    !providerRegistryReadable &&
+    "Shared provider registry at /opt/agents/shared-config/models-providers.json is not readable by this user; skipping provider-prefix warning assertions.",
+}, () => {
   beforeEach(() => resetProviderPrefixWarnings());
 
   it("passes through an unrecognized provider prefix", () => {
@@ -2297,7 +2323,7 @@ describe("TC-707-010: unknown provider prefix does not crash the generator", () 
       { name: "known", model: "anthropic/claude-sonnet-4", fallback_models: null, thinking: null, instance_type: "subagent", is_default: false, allowed_subagents: null, status: "active" },
       { name: "weird", model: "totally-unknown-provider/some-model", fallback_models: null, thinking: null, instance_type: "subagent", is_default: false, allowed_subagents: null, status: "active" },
     ];
-    const { entries: result } = buildAgentsList(rows, logger);
+    const { entries: result } = buildAgentsList(rows, { logger });
     assert.strictEqual(result["weird"]?.model, "totally-unknown-provider/some-model");
     assert.strictEqual(warnings.length, 1);
     assert.ok(warnings[0]?.includes("weird"));
@@ -2310,7 +2336,7 @@ describe("TC-707-010: unknown provider prefix does not crash the generator", () 
     const rows: AgentRow[] = [
       { name: "bare", model: "some-model-name", fallback_models: null, thinking: null, instance_type: "subagent", is_default: false, allowed_subagents: null, status: "active" },
     ];
-    const { entries: result } = buildAgentsList(rows, logger);
+    const { entries: result } = buildAgentsList(rows, { logger });
     assert.strictEqual(result["bare"]?.model, "some-model-name");
     assert.strictEqual(warnings.length, 1);
     assert.ok(warnings[0]?.includes("bare"));
@@ -2332,7 +2358,7 @@ describe("TC-707-010: unknown provider prefix does not crash the generator", () 
         status: "active",
       },
     ];
-    const { entries: result } = buildAgentsList(rows, logger);
+    const { entries: result } = buildAgentsList(rows, { logger });
     const model = result["multi"]?.model;
     assert.ok(typeof model === "object" && "fallbacks" in model);
     assert.deepStrictEqual(model.fallbacks, ["unknown-provider/fallback", "google/gemini-flash"]);
@@ -2355,16 +2381,16 @@ describe("TC-707-010: unknown provider prefix does not crash the generator", () 
       status: "active",
     };
 
-    buildAgentsList([rowA], logger);
+    buildAgentsList([rowA], { logger });
     assert.strictEqual(warnings.length, 1);
 
     // Same agent, same unknown prefix -> no new warning.
-    buildAgentsList([rowA], logger);
+    buildAgentsList([rowA], { logger });
     assert.strictEqual(warnings.length, 1);
 
     // Different agent, same unknown prefix -> one more warning.
     const rowB: AgentRow = { ...rowA, name: "dedup-b" };
-    buildAgentsList([rowB], logger);
+    buildAgentsList([rowB], { logger });
     assert.strictEqual(warnings.length, 2);
   });
 });
@@ -2584,6 +2610,517 @@ describe("TC-770-U-01: generated agents.json must never contain a legacy default
         !written.includes('"default"'),
         `written agents.json must not contain a "default" key; got: ${written}`,
       );
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ── TC-819-U-02: Explicit ownership config builder ──────────────────────────
+
+describe("TC-819-U-02: buildExplicitOwnershipConfig", () => {
+  it("produces ownership, defaults, and bindings for each channel account", () => {
+    const config = buildExplicitOwnershipConfig("newhart", [
+      { channel: "discord", accountId: "default" },
+      { channel: "telegram", accountId: "default" },
+    ]);
+
+    assert.strictEqual(config.agents.ownership, "explicit");
+    assert.deepStrictEqual(config.agents.defaults.heartbeat, {
+      directPolicy: "block",
+      target: "none",
+      agentId: "newhart",
+    });
+    assert.deepStrictEqual(config.agents.defaults.systemAgent, {
+      agentId: "newhart",
+    });
+    assert.strictEqual(config.bindings.length, 2);
+    assert.deepStrictEqual(config.bindings[0]?.match, {
+      channel: "discord",
+      accountId: "default",
+    });
+    assert.strictEqual(config.bindings[0]?.agentId, "newhart");
+    assert.deepStrictEqual(config.bindings[1]?.match, {
+      channel: "telegram",
+      accountId: "default",
+    });
+  });
+
+  it("sorts bindings by channel then accountId", () => {
+    const config = buildExplicitOwnershipConfig("peer", [
+      { channel: "telegram", accountId: "beta" },
+      { channel: "discord", accountId: "default" },
+      { channel: "telegram", accountId: "alpha" },
+    ]);
+    const channels = config.bindings.map((b) => `${b.match.channel}/${b.match.accountId}`);
+    assert.deepStrictEqual(channels, [
+      "discord/default",
+      "telegram/alpha",
+      "telegram/beta",
+    ]);
+  });
+
+  it("produces empty bindings when no channels are configured", () => {
+    const config = buildExplicitOwnershipConfig("nova", []);
+    assert.strictEqual(config.bindings.length, 0);
+    assert.strictEqual(config.agents.ownership, "explicit");
+  });
+
+  it("skips channel accounts already covered by hand-authored sibling bindings", () => {
+    const config = buildExplicitOwnershipConfig(
+      "nova",
+      [
+        { channel: "discord", accountId: "default" },
+        { channel: "telegram", accountId: "beta" },
+      ],
+      [{ match: { channel: "discord", accountId: "default" } }],
+    );
+    const matches = config.bindings.map((b) => `${b.match.channel}/${b.match.accountId}`);
+    assert.deepStrictEqual(matches, ["telegram/beta"]);
+  });
+
+  it("never emits duplicate bindings for the same channel/account", () => {
+    const config = buildExplicitOwnershipConfig("nova", [
+      { channel: "discord", accountId: "default" },
+      { channel: "discord", accountId: "default" },
+    ]);
+    assert.strictEqual(config.bindings.length, 1);
+  });
+});
+
+// ── TC-819-U-03: Configured channel account detection ───────────────────────
+
+describe("TC-819-U-03: detectConfiguredChannelAccounts", () => {
+  it("returns empty when channels is absent", () => {
+    assert.deepStrictEqual(detectConfiguredChannelAccounts({}), []);
+  });
+
+  it("ignores internal keys and disabled channels", () => {
+    const cfg = {
+      channels: {
+        defaults: {},
+        modelByChannel: {},
+        discord: { enabled: true },
+        telegram: { enabled: false },
+        matrix: { enabled: true },
+      },
+    };
+    const accounts = detectConfiguredChannelAccounts(cfg as Record<string, unknown>);
+    assert.deepStrictEqual(accounts, [
+      { channel: "discord", accountId: "default" },
+      { channel: "matrix", accountId: "default" },
+    ]);
+  });
+
+  it("enumerates explicit accounts when present", () => {
+    const cfg = {
+      channels: {
+        slack: {
+          enabled: true,
+          accounts: {
+            team: { enabled: true },
+            other: { enabled: false },
+          },
+        },
+      },
+    };
+    const accounts = detectConfiguredChannelAccounts(cfg as Record<string, unknown>);
+    assert.deepStrictEqual(accounts, [{ channel: "slack", accountId: "team" }]);
+  });
+
+  it("falls back to default account when no accounts block exists", () => {
+    const cfg = {
+      channels: {
+        discord: { enabled: true, token: "x" },
+      },
+    };
+    const accounts = detectConfiguredChannelAccounts(cfg as Record<string, unknown>);
+    assert.deepStrictEqual(accounts, [{ channel: "discord", accountId: "default" }]);
+  });
+
+  it("normalizes account ids using the same rules as 11.3 routing", () => {
+    const cfg = {
+      channels: {
+        slack: {
+          enabled: true,
+          accounts: {
+            "Team Alpha": { enabled: true },
+            "!@legacy$": { enabled: true },
+            "already-canonical": { enabled: true },
+          },
+        },
+      },
+    };
+    const accounts = detectConfiguredChannelAccounts(cfg as Record<string, unknown>);
+    assert.deepStrictEqual(accounts, [
+      { channel: "slack", accountId: "already-canonical" },
+      { channel: "slack", accountId: "legacy" },
+      { channel: "slack", accountId: "team-alpha" },
+    ]);
+  });
+
+  it("rejects blocked object keys (prototype, constructor) via isBlockedObjectKey guard", () => {
+    const cfg: { channels: { slack: { enabled: true; accounts: Record<string, unknown> } } } = {
+      channels: {
+        slack: {
+          enabled: true,
+          accounts: {},
+        },
+      },
+    };
+    // Use Object.defineProperty so "__proto__" is an own string key, not the prototype.
+    Object.defineProperty(cfg.channels.slack.accounts, "__proto__", {
+      value: { enabled: true },
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
+    cfg.channels.slack.accounts.prototype = { enabled: true };
+    cfg.channels.slack.accounts.constructor = { enabled: true };
+    cfg.channels.slack.accounts.safe = { enabled: true };
+
+    const accounts = detectConfiguredChannelAccounts(cfg as unknown as Record<string, unknown>);
+    // All three blocked keys normalize to "default"; __proto__ is also hidden
+    // from Object.entries unless defined as an own property.
+    assert.deepStrictEqual(
+      accounts.filter((a) => a.accountId === "safe"),
+      [{ channel: "slack", accountId: "safe" }],
+    );
+    assert.ok(
+      accounts.every((a) => ["default", "safe"].includes(a.accountId)),
+      "blocked object keys must not be emitted as literal account ids",
+    );
+  });
+
+  it("empty/whitespace account ids fall back to default", () => {
+    const cfg = {
+      channels: {
+        slack: {
+          enabled: true,
+          accounts: {
+            "": { enabled: true },
+            "   ": { enabled: true },
+            normal: { enabled: true },
+          },
+        },
+      },
+    };
+    const accounts = detectConfiguredChannelAccounts(cfg as Record<string, unknown>);
+    // Both "" and whitespace normalize to "default"; detectConfiguredChannelAccounts
+    // does not dedupe raw account keys, only normalizes them.
+    assert.deepStrictEqual(accounts, [
+      { channel: "slack", accountId: "default" },
+      { channel: "slack", accountId: "default" },
+      { channel: "slack", accountId: "normal" },
+    ]);
+  });
+});
+
+// ── TC-819-U-04: ensureRootInclude idempotence ──────────────────────────────
+
+describe("TC-819-U-04: ensureRootInclude", () => {
+  it("adds a string $include when none exists", () => {
+    const { changed, config } = ensureRootInclude({ agents: {} }, "./agents-explicit.json");
+    assert.strictEqual(changed, true);
+    assert.strictEqual(config["$include"], "./agents-explicit.json");
+  });
+
+  it("is a no-op when the include is already present as a string", () => {
+    const start = { $include: "./agents-explicit.json", agents: {} };
+    const { changed, config } = ensureRootInclude(start, "./agents-explicit.json");
+    assert.strictEqual(changed, false);
+    assert.strictEqual(config["$include"], "./agents-explicit.json");
+  });
+
+  it("converts a single unrelated include to an array and appends", () => {
+    const start = { $include: "./base.json", agents: {} };
+    const { changed, config } = ensureRootInclude(start, "./agents-explicit.json");
+    assert.strictEqual(changed, true);
+    assert.deepStrictEqual(config["$include"], ["./base.json", "./agents-explicit.json"]);
+  });
+
+  it("is a no-op when the include is already in the array", () => {
+    const start = { $include: ["./base.json", "./agents-explicit.json"], agents: {} };
+    const { changed, config } = ensureRootInclude(start, "./agents-explicit.json");
+    assert.strictEqual(changed, false);
+    assert.deepStrictEqual(config["$include"], ["./base.json", "./agents-explicit.json"]);
+  });
+
+  it("appends to an existing array when missing", () => {
+    const start = { $include: ["./base.json"], agents: {} };
+    const { changed, config } = ensureRootInclude(start, "./agents-explicit.json");
+    assert.strictEqual(changed, true);
+    assert.deepStrictEqual(config["$include"], ["./base.json", "./agents-explicit.json"]);
+  });
+});
+
+// ── TC-819-U-05: syncExplicitOwnershipConfig respects hand-authored config ──
+
+describe("TC-819-U-05: syncExplicitOwnershipConfig respects hand-authored config", () => {
+  async function makeMockClient(rows: AgentRow[]): Promise<import("pg").Client> {
+    return {
+      query: async (sql: string) => {
+        if (typeof sql === "string" && sql.includes("information_schema.columns")) {
+          return { rows: [{ exists: true }] };
+        }
+        return { rows };
+      },
+    } as unknown as import("pg").Client;
+  }
+
+  it("writes the explicit file when the root $include is already present, but never edits openclaw.json", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "sync-819-test-"));
+    try {
+      const openclawPath = path.join(tmpDir, "openclaw.json");
+      const explicitPath = path.join(tmpDir, "agents-explicit.json");
+      const originalOpenclaw = {
+        $include: "./agents-explicit.json",
+        agents: { entries: { $include: "./agents.json" } },
+      };
+      fs.writeFileSync(openclawPath, JSON.stringify(originalOpenclaw, null, 2));
+
+      const rows: AgentRow[] = [
+        {
+          name: "nova-staging",
+          model: "anthropic/claude-sonnet-5",
+          fallback_models: null,
+          thinking: null,
+          instance_type: "primary",
+          is_default: true,
+          allowed_subagents: null,
+        },
+      ];
+      const client = await makeMockClient(rows);
+      const resolvedConfig = {
+        channels: {
+          discord: { enabled: true },
+          telegram: { enabled: true },
+        },
+      };
+
+      const first = await syncExplicitOwnershipConfig(
+        client,
+        openclawPath,
+        explicitPath,
+        resolvedConfig,
+      );
+      assert.strictEqual(first.explicitChanged, true);
+      assert.strictEqual(first.openclawChanged, false);
+
+      const second = await syncExplicitOwnershipConfig(
+        client,
+        openclawPath,
+        explicitPath,
+        resolvedConfig,
+      );
+      assert.strictEqual(second.explicitChanged, false);
+      assert.strictEqual(second.openclawChanged, false);
+
+      const explicitWritten = JSON.parse(fs.readFileSync(explicitPath, "utf-8")) as ExplicitOwnershipConfig;
+      assert.strictEqual(explicitWritten.agents.ownership, "explicit");
+      assert.strictEqual(explicitWritten.agents.defaults.systemAgent.agentId, "nova-staging");
+      assert.strictEqual(explicitWritten.bindings.length, 2);
+
+      const openclawWritten = JSON.parse(fs.readFileSync(openclawPath, "utf-8")) as Record<string, unknown>;
+      assert.deepStrictEqual(openclawWritten, originalOpenclaw);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not write the explicit file when the root $include is missing", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "sync-819-missing-"));
+    try {
+      const openclawPath = path.join(tmpDir, "openclaw.json");
+      const explicitPath = path.join(tmpDir, "agents-explicit.json");
+      fs.writeFileSync(openclawPath, JSON.stringify({ agents: {} }, null, 2));
+
+      const rows: AgentRow[] = [
+        {
+          name: "nova",
+          model: "anthropic/claude-opus-4",
+          fallback_models: null,
+          thinking: null,
+          instance_type: "primary",
+          is_default: true,
+          allowed_subagents: null,
+        },
+      ];
+      const client = await makeMockClient(rows);
+      const resolvedConfig = { channels: { discord: { enabled: true } } };
+
+      const result = await syncExplicitOwnershipConfig(
+        client,
+        openclawPath,
+        explicitPath,
+        resolvedConfig,
+      );
+      assert.strictEqual(result.explicitChanged, false);
+      assert.strictEqual(result.openclawChanged, false);
+      assert.ok(!fs.existsSync(explicitPath), "explicit file must not be written before include is added");
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not manage explicit ownership when hand-authored keys exist and the root $include is missing", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "sync-819-hand-"));
+    try {
+      const openclawPath = path.join(tmpDir, "openclaw.json");
+      const explicitPath = path.join(tmpDir, "agents-explicit.json");
+      fs.writeFileSync(
+        openclawPath,
+        JSON.stringify(
+          {
+            agents: {
+              ownership: "explicit",
+              defaults: {
+                heartbeat: { agentId: "nova", directPolicy: "block", target: "none" },
+                systemAgent: { agentId: "nova" },
+              },
+            },
+            bindings: [{ agentId: "nova", match: { channel: "discord", accountId: "default" } }],
+          },
+          null,
+          2,
+        ),
+      );
+
+      const rows: AgentRow[] = [
+        {
+          name: "nova",
+          model: "anthropic/claude-opus-4",
+          fallback_models: null,
+          thinking: null,
+          instance_type: "primary",
+          is_default: true,
+          allowed_subagents: null,
+        },
+      ];
+      const client = await makeMockClient(rows);
+      const resolvedConfig = { channels: { discord: { enabled: true } } };
+
+      const result = await syncExplicitOwnershipConfig(
+        client,
+        openclawPath,
+        explicitPath,
+        resolvedConfig,
+      );
+      assert.strictEqual(result.explicitChanged, false);
+      assert.strictEqual(result.openclawChanged, false);
+      assert.ok(!fs.existsSync(explicitPath), "explicit file must not be written when include is missing and hand-authored keys exist");
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("respects hand-authored sibling bindings when the root $include is present", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "sync-819-sibling-"));
+    try {
+      const openclawPath = path.join(tmpDir, "openclaw.json");
+      const explicitPath = path.join(tmpDir, "agents-explicit.json");
+      const originalOpenclaw = {
+        "$include": "./agents-explicit.json",
+        bindings: [
+          { agentId: "hand-written", match: { channel: "discord", accountId: "default" } },
+        ],
+      };
+      fs.writeFileSync(openclawPath, JSON.stringify(originalOpenclaw, null, 2));
+
+      const rows: AgentRow[] = [
+        {
+          name: "nova",
+          model: "anthropic/claude-opus-4",
+          fallback_models: null,
+          thinking: null,
+          instance_type: "primary",
+          is_default: true,
+          allowed_subagents: null,
+        },
+      ];
+      const client = await makeMockClient(rows);
+      const resolvedConfig = { channels: { discord: { enabled: true }, telegram: { enabled: true } } };
+
+      const result = await syncExplicitOwnershipConfig(
+        client,
+        openclawPath,
+        explicitPath,
+        resolvedConfig,
+      );
+      assert.strictEqual(result.explicitChanged, true);
+      assert.strictEqual(result.openclawChanged, false);
+
+      const explicitWritten = JSON.parse(fs.readFileSync(explicitPath, "utf-8")) as ExplicitOwnershipConfig;
+      const managedMatches = explicitWritten.bindings.map((b) => `${b.match.channel}/${b.match.accountId}`);
+      assert.deepStrictEqual(managedMatches, ["telegram/default"]);
+
+      const openclawWritten = JSON.parse(fs.readFileSync(openclawPath, "utf-8")) as Record<string, unknown>;
+      assert.deepStrictEqual(openclawWritten, originalOpenclaw);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ── TC-819-I-01: syncAgentsConfig never writes a default marker ─────────────
+
+describe("TC-819-I-01: syncAgentsConfig never writes a default marker", () => {
+  async function makeMockClient(rows: AgentRow[]): Promise<import("pg").Client> {
+    return {
+      query: async (sql: string) => {
+        if (typeof sql === "string" && sql.includes("information_schema.columns")) {
+          return { rows: [{ exists: true }] };
+        }
+        return { rows };
+      },
+    } as unknown as import("pg").Client;
+  }
+
+  it("omits default marker for the default agent", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "sync-819-explicit-"));
+    try {
+      const outputPath = path.join(tmpDir, "agents.json");
+      const rows: AgentRow[] = [
+        {
+          name: "nova",
+          model: "anthropic/claude-opus-4",
+          fallback_models: null,
+          thinking: null,
+          instance_type: "primary",
+          is_default: true,
+          allowed_subagents: null,
+        },
+      ];
+      const client = await makeMockClient(rows);
+      const changed = await syncAgentsConfig(client, outputPath);
+      assert.strictEqual(changed, true);
+      const written = fs.readFileSync(outputPath, "utf-8");
+      assert.ok(!written.includes('"default"'));
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("is idempotent across two syncs", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "sync-819-idem-"));
+    try {
+      const outputPath = path.join(tmpDir, "agents.json");
+      const rows: AgentRow[] = [
+        {
+          name: "nova",
+          model: "anthropic/claude-opus-4",
+          fallback_models: null,
+          thinking: null,
+          instance_type: "primary",
+          is_default: true,
+          allowed_subagents: null,
+        },
+      ];
+      const client = await makeMockClient(rows);
+      const first = await syncAgentsConfig(client, outputPath);
+      assert.strictEqual(first, true);
+      const second = await syncAgentsConfig(client, outputPath);
+      assert.strictEqual(second, false);
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }

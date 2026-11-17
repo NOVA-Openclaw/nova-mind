@@ -102,7 +102,7 @@ export type ExplicitOwnershipConfig = {
 
 // ── Constants ───────────────────────────────────────────────────────────────
 
-// Regex copied from OpenClaw 2026.9.x src/config/zod-schema.agents.ts:35-39
+// Regex copied from OpenClaw 2026.11.3+ src/config/zod-schema.agents.ts:35-39
 const AGENT_ID_REGEX = /^[a-z0-9_][a-z0-9_-]{0,63}$/i;
 
 // Regex copied from OpenClaw 2026.11.3 src/routing/account-id.ts (via
@@ -433,7 +433,7 @@ export function buildAgentsList(
       continue;
     }
 
-    // Defensive: every emitted entry key must satisfy the 2026.9.x agent-id regex
+    // Defensive: every emitted entry key must satisfy the OpenClaw agent-id regex
     if (typeof row.name !== "string" || !AGENT_ID_REGEX.test(row.name)) {
       skipped.push({ name: rowName, reason: "invalid or missing agent id" });
       continue;
@@ -514,9 +514,9 @@ export function buildAgentsList(
 // ── Validation ──────────────────────────────────────────────────────────────
 
 /**
- * Validate that a candidate `agents.entries` object satisfies the 2026.9.x
- * schema subset actually emitted by this generator. Throws a descriptive error
- * if the object would fail `openclaw config validate`.
+ * Validate that a candidate `agents.entries` object satisfies the OpenClaw
+ * 2026.11.3+ schema subset actually emitted by this generator. Throws a
+ * descriptive error if the object would fail `openclaw config validate`.
  *
  * This is called BEFORE the atomic rename in writeAgentsJsonAtomically() so a
  * bad generated file can never be promoted where hot reload could pick it up

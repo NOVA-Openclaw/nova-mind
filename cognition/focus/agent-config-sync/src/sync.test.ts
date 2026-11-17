@@ -2293,17 +2293,17 @@ describe("TC-707-009: NULL model on active row is skipped, never emits model:nul
 
 // ── TC-707-010: unknown/malformed provider prefix ────────────────────────────
 
-describe("TC-707-010: unknown provider prefix does not crash the generator", () => {
-  beforeEach(() => resetProviderPrefixWarnings());
+// Compute readability once at suite-registration time; node:test's SuiteContext
+// does not expose skip(), so this.skip() inside a describe-level before() hook
+// throws and cancels sibling tests.
+const providerRegistryReadable = isProviderRegistryReadable();
 
-  before(function () {
-    if (!isProviderRegistryReadable()) {
-      console.log(
-        "[TC-707-010 SKIP] Shared provider registry at /opt/agents/shared-config/models-providers.json is not readable by this user; skipping provider-prefix warning assertions.",
-      );
-      this.skip();
-    }
-  });
+describe("TC-707-010: unknown provider prefix does not crash the generator", {
+  skip:
+    !providerRegistryReadable &&
+    "Shared provider registry at /opt/agents/shared-config/models-providers.json is not readable by this user; skipping provider-prefix warning assertions.",
+}, () => {
+  beforeEach(() => resetProviderPrefixWarnings());
 
   it("passes through an unrecognized provider prefix", () => {
     const rows: AgentRow[] = [

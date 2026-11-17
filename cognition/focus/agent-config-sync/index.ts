@@ -23,6 +23,7 @@ import {
   syncExplicitOwnershipConfig,
   type OwnershipMode,
 } from "./src/sync.js";
+import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 
@@ -88,35 +89,66 @@ function resolveDbConfig(
 // ── Ownership mode resolution ───────────────────────────────────────────────
 
 /**
- * Detect 2026.11.3 explicit-owner surfaces in the resolved config. When these
- * are present but agents.ownership is not "explicit", emitting a legacy
- * default:true marker bricks an 11.3 gateway with exit 78 ("Legacy
- * agents.entries default markers need explicit surface owners").
+ * Detect the running gateway version from the host.
+ *
+ * Sources are tried in order:
+ * 1. `api.runtime.version` — exposed by OpenClaw 2026.9.6+ to every plugin.
+ * 2. `process.env.OPENCLAW_VERSION` — operator override.
+ * 3. The `package.json` of the host `openclaw` package resolved from the
+ *    gateway entry script (`process.argv[1]`).
+ * 4. The `openclaw` package resolved from this plugin's own loader graph.
+ *
+ * Returns `undefined` when no source can provide a usable version string.
  */
-/** @internal exported for unit tests */
-export function hasExplicitOwnerSurfaces(config: Record<string, unknown>): boolean {
-  const agents = config.agents as Record<string, unknown> | undefined;
-  if (agents && typeof agents === "object" && !Array.isArray(agents)) {
-    const defaults = agents.defaults as Record<string, unknown> | undefined;
-    if (defaults && typeof defaults === "object" && !Array.isArray(defaults)) {
-      const systemAgent = defaults.systemAgent as Record<string, unknown> | undefined;
-      if (typeof systemAgent?.agentId === "string" && systemAgent.agentId.length > 0) {
-        return true;
+function detectRunningGatewayVersion(api: OpenClawPluginApi): string | undefined {
+  // 1. The host gateway exposes its version on api.runtime.version.
+  const runtimeVersion = api.runtime?.version;
+  if (typeof runtimeVersion === "string" && runtimeVersion.trim().length > 0) {
+    return runtimeVersion.trim();
+  }
+
+  // 2. Environment override.
+  const envVersion = process.env.OPENCLAW_VERSION;
+  if (typeof envVersion === "string" && envVersion.trim().length > 0) {
+    return envVersion.trim();
+  }
+
+  // 3. Resolve the host openclaw package.json from the gateway entry script.
+  try {
+    const require = createRequire(import.meta.url);
+    const gatewayEntry = process.argv[1];
+    if (gatewayEntry) {
+      const candidate = path.resolve(
+        path.dirname(gatewayEntry),
+        "node_modules",
+        "openclaw",
+        "package.json",
+      );
+      if (fs.existsSync(candidate)) {
+        const pkg = JSON.parse(fs.readFileSync(candidate, "utf-8")) as {
+          version?: string;
+        };
+        if (typeof pkg.version === "string" && pkg.version.trim().length > 0) {
+          return pkg.version.trim();
+        }
       }
     }
+
+    // 4. Fallback: resolve openclaw from this module's loader graph.
+    const resolved = require.resolve("openclaw/package.json");
+    if (resolved) {
+      const pkg = JSON.parse(fs.readFileSync(resolved, "utf-8")) as {
+        version?: string;
+      };
+      if (typeof pkg.version === "string" && pkg.version.trim().length > 0) {
+        return pkg.version.trim();
+      }
+    }
+  } catch {
+    // Ignore resolution failures; the plugin will fall back to legacy mode.
   }
-  if (Array.isArray(config.bindings) && config.bindings.length > 0) {
-    return true;
-  }
-  const includes = config["$include"];
-  const explicitInclude = "./agents-explicit.json";
-  if (typeof includes === "string") {
-    return includes === explicitInclude;
-  }
-  if (Array.isArray(includes)) {
-    return includes.some((item) => item === explicitInclude);
-  }
-  return false;
+
+  return undefined;
 }
 
 /**
@@ -151,21 +183,21 @@ export function isOpenClawVersionAtLeast(
 /**
  * Determine how agents.default should be expressed.
  *
- * - "explicit" when the resolved config uses agents.ownership="explicit"
- *   (OpenClaw 2026.11.3+).
- * - "explicit" when the resolved config already contains 11.3 explicit-owner
- *   surfaces (agents.defaults.systemAgent.agentId, root bindings[], or a root
- *   $include of agents-explicit.json) even if agents.ownership is missing,
- *   because writing a legacy default:true marker would brick the gateway.
- *   A clear warning is logged in this case.
- * - "explicit" when the gateway version (config.meta.lastTouchedVersion) is
- *   2026.11.3 or newer, i.e. a gateway that rejects legacy markers.
- * - "legacy" otherwise (OpenClaw 2026.9.x and earlier), which emits the
- *   `default: true` marker for backward compatibility.
+ * The mode is chosen from the VERSION OF THE RUNNING GATEWAY, not from config
+ * content (which may have been written by an earlier build):
+ *
+ * - "explicit" when `agents.ownership` is "explicit".
+ * - "explicit" when the running gateway reports a version >= 2026.11.0.
+ * - "legacy" when the running gateway reports a version < 2026.11.0.
+ * - "legacy" when the version cannot be determined AND agents.ownership is
+ *   not "explicit". A loud warning is logged because this emits the
+ *   default:true marker; operators on 2026.11.0+ should never see this path
+ *   unless the gateway failed to report its version.
  */
 /** @internal exported for unit tests */
 export function resolveOwnershipMode(
   config: Record<string, unknown>,
+  runningVersion: string | undefined,
   log: Logger,
 ): OwnershipMode {
   const agents = config.agents as Record<string, unknown> | undefined;
@@ -173,22 +205,26 @@ export function resolveOwnershipMode(
     return "explicit";
   }
 
-  if (hasExplicitOwnerSurfaces(config)) {
-    log.warn(
-      "agent_config_sync: Resolved config has 11.3 explicit-owner surfaces " +
-        "(agents.defaults.systemAgent.agentId, root bindings[], or '$include': " +
-        "'./agents-explicit.json') but agents.ownership is not 'explicit'. " +
-        "Refusing to write the legacy default:true marker to avoid bricking the gateway. " +
-        "Set agents.ownership to 'explicit' to silence this warning.",
-    );
-    return "explicit";
+  if (runningVersion) {
+    const parsed = parseOpenClawVersion(runningVersion);
+    if (parsed) {
+      if (isOpenClawVersionAtLeast(runningVersion, 2026, 11, 0)) {
+        return "explicit";
+      }
+      return "legacy";
+    }
+    // Version string was provided but unparseable; treat as unknown and warn.
   }
 
-  const touchedVersion = (config.meta as Record<string, unknown> | undefined)?.lastTouchedVersion;
-  if (isOpenClawVersionAtLeast(touchedVersion as string | undefined, 2026, 11, 3)) {
-    return "explicit";
-  }
-
+  // Version unknown or unparseable: keep legacy behaviour but warn loudly.
+  // Explicit ownership was already handled above, so we never reach here when
+  // ownership=explicit.
+  log.warn(
+    "agent_config_sync: Could not determine running gateway version. " +
+      "Assuming legacy mode and emitting the default:true marker for the default agent. " +
+      "Set agents.ownership='explicit' to suppress the marker, or run on OpenClaw 2026.11.0+ " +
+      "so the gateway can report its version to the plugin.",
+  );
   return "legacy";
 }
 
@@ -232,9 +268,19 @@ function createConfigSyncService(api: OpenClawPluginApi) {
       return;
     }
 
-    const ownershipMode = resolveOwnershipMode(fullConfig, log);
+    const runningVersion = detectRunningGatewayVersion(api);
+    if (!runningVersion) {
+      log.warn(
+        "agent_config_sync: Unable to determine running gateway version from " +
+          "api.runtime.version, OPENCLAW_VERSION, or the host openclaw package.json. " +
+          "Falling back to legacy-mode detection.",
+      );
+    }
+
+    const ownershipMode = resolveOwnershipMode(fullConfig, runningVersion, log);
     log.info(
-      `agent_config_sync: Detected ownership mode: '${ownershipMode}'`,
+      `agent_config_sync: Detected ownership mode: '${ownershipMode}' ` +
+        `(gateway version: ${runningVersion ?? "unknown"})`,
     );
 
     // Dynamic import to match agent_chat pattern (pg may not be available)

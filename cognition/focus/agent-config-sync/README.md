@@ -238,11 +238,14 @@ brick an 11.3 gateway.
    {
      "plugins": {
        "entries": {
-         "agent_config_sync": {}
+         "agent_config_sync": {
+           "enabled": true
+         }
        }
      }
    }
    ```
+   A bare `{}` merge leaves `enabled: false`; you must set `enabled: true` explicitly.
 2. Verify `agents.entries` loads the generated file:
    ```json
    {

@@ -19,6 +19,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
+import { createRequire } from "node:module";
 import type pg from "pg";
 
 // ── Types ───────────────────────────────────────────────────────────────────
@@ -129,9 +130,32 @@ function isBlockedObjectKey(key: string): boolean {
 }
 
 /**
+ * Optional import of `normalizeAccountId` from the running gateway's
+ * `openclaw/plugin-sdk` export. The export was introduced in 2026.11.x routing
+ * code and mirrors the rules in src/routing/account-id.ts. On older hosts the
+ * import fails or the export is missing; in that case we fall back to the
+ * plugin's own implementation below.
+ *
+ * We use a synchronous `require()` rather than a dynamic `import()` so that the
+ * plugin's module evaluation does not yield to the event loop. This keeps the
+ * cost of resolving openclaw/plugin-sdk inside the gateway's startup budget and
+ * outside the tight timeouts of unit tests that mock pg.
+ */
+let hostNormalizeAccountId: ((value?: string) => string | undefined) | undefined;
+try {
+  const require = createRequire(import.meta.url);
+  const sdk = require("openclaw/plugin-sdk") as Record<string, unknown>;
+  if (typeof sdk.normalizeAccountId === "function") {
+    hostNormalizeAccountId = sdk.normalizeAccountId as (value?: string) => string | undefined;
+  }
+} catch {
+  hostNormalizeAccountId = undefined;
+}
+
+/**
  * Normalize a channel account id using the same rules as OpenClaw 2026.11.3
- * routing (src/routing/account-id.ts → normalizeAccountId), including the
- * isBlockedObjectKey guard that rejects prototype-polluting keys.
+ * routing. Prefer the host SDK's `normalizeAccountId` when available, but keep
+ * the prototype-pollution guard regardless of which implementation is used.
  */
 export function normalizeRoutingAccountId(value: string | undefined | null): string {
   return normalizeOptionalRoutingAccountId(value) ?? "default";
@@ -148,6 +172,15 @@ export function normalizeOptionalRoutingAccountId(
   if (!trimmed) {
     return undefined;
   }
+
+  if (hostNormalizeAccountId) {
+    const normalized = hostNormalizeAccountId(trimmed);
+    if (!normalized) {
+      return undefined;
+    }
+    return isBlockedObjectKey(normalized) ? undefined : normalized;
+  }
+
   const normalized = trimmed.toLowerCase();
   if (ACCOUNT_ID_VALID_RE.test(trimmed)) {
     return isBlockedObjectKey(normalized) ? undefined : normalized;

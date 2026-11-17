@@ -53,6 +53,7 @@ describe("agent_config_sync shutdown contract", () => {
     const logLines: string[] = [];
     const logger = {
       info: (msg: string) => logLines.push(`INFO ${msg}`),
+      warn: (msg: string) => logLines.push(`WARN ${msg}`),
       error: (msg: string) => logLines.push(`ERROR ${msg}`),
       debug: (msg: string) => logLines.push(`DEBUG ${msg}`),
     };
@@ -187,6 +188,7 @@ describe("agent_config_sync shutdown contract", () => {
     const logLines: string[] = [];
     const logger = {
       info: (msg: string) => logLines.push(`INFO ${msg}`),
+      warn: (msg: string) => logLines.push(`WARN ${msg}`),
       error: (msg: string) => logLines.push(`ERROR ${msg}`),
       debug: (msg: string) => logLines.push(`DEBUG ${msg}`),
     };
@@ -266,6 +268,7 @@ describe("agent_config_sync shutdown contract", () => {
     const logLines: string[] = [];
     const logger = {
       info: (msg: string) => logLines.push(`INFO ${msg}`),
+      warn: (msg: string) => logLines.push(`WARN ${msg}`),
       error: (msg: string) => logLines.push(`ERROR ${msg}`),
       debug: (msg: string) => logLines.push(`DEBUG ${msg}`),
     };

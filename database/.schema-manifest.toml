@@ -63,6 +63,12 @@
 [functions]
 patterns = [
   "append_run_note(integer, text)",
+  "roll_d100()",
+]
+
+[columns]
+patterns = [
+  "weight numeric DEFAULT 1 NOT NULL,",
 ]
 
 # Optional per-function security-property assertions (B-1, SE run #804 QA
@@ -85,3 +91,4 @@ patterns = [
 # manifest checker would catch the new entries once they belong.
 [function_security]
 "append_run_note" = ["SECURITY DEFINER", "SET search_path = public"]
+"roll_d100" = ["SECURITY DEFINER", "SET search_path = public"]

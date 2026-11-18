@@ -925,15 +925,22 @@ _run_full_installer_pipeline() {
     total_steps=$(jq '[(.groups // [])[] | .steps[] | select(.type != "privilege")] | length' "$FILTERED" 2>/dev/null || echo 0)
     apply_ran=0
     if [ "$total_steps" -gt 0 ]; then
-        pgschema apply \
-            --host /var/run/postgresql \
-            --user nova \
-            --db "$DB" \
-            --schema public \
-            --plan "$FILTERED" \
-            --auto-approve \
-            --no-color >/dev/null 2>&1
-        local apply_status=$?
+        # Run apply from the scratch directory so pgschema discovers the same
+        # .pgschemaignore file used during planning.  This keeps the source
+        # fingerprint consistent when peer-shadowed objects exist in the DB.
+        local apply_status
+        (
+            cd "$SCRATCH" || exit 1
+            pgschema apply \
+                --host /var/run/postgresql \
+                --user nova \
+                --db "$DB" \
+                --schema public \
+                --plan "$FILTERED" \
+                --auto-approve \
+                --no-color >/dev/null 2>&1
+        )
+        apply_status=$?
         apply_ran=1
         echo "STEPS:$total_steps"
         echo "APPLY_RAN:$apply_ran"
@@ -1049,6 +1056,26 @@ PY
     [ -z "$output" ]
 }
 
+# Drop a column from a nova-mind-owned table to create real additive drift.
+# This guarantees the full installer pipeline has at least one legitimate
+# CREATE/ALTER step to apply, preventing a vacuous zero-step success.  The
+# chosen table (d100_roll_log) has no incoming or outgoing dependencies and is
+# not referenced by any Victoria or peer fixture.
+# Args: DB_NAME
+_seed_additive_drift() {
+    local DB="$1"
+    psql -U nova -d "$DB" -v ON_ERROR_STOP=1 -c "ALTER TABLE d100_roll_log DROP COLUMN IF EXISTS announced_at;" >/dev/null
+}
+
+# Assert the additive drift object was repaired by the pipeline.
+# Args: DB_NAME
+_assert_additive_drift_repaired() {
+    local DB="$1"
+    local col_exists
+    col_exists=$(psql -U nova -d "$DB" -tAc "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='d100_roll_log' AND column_name='announced_at';")
+    [ "$col_exists" -eq 1 ]
+}
+
 @test "TC-792-020: Victoria-shaped peer DB full apply succeeds with zero row loss" {
     if [ ! -x "$VENV_PYTHON" ]; then skip "venv python not available at $VENV_PYTHON"; fi
     if ! "$VENV_PYTHON" -c "import pglast" 2>/dev/null; then skip "pglast not installed"; fi
@@ -1064,6 +1091,9 @@ PY
     [ "$status" -eq 0 ]
 
     psql -U nova -d "$DB" -c "DROP TABLE IF EXISTS agent_bootstrap_context;" >/dev/null 2>&1
+    # Seed real additive drift so the pipeline ends with a non-vacuous apply
+    # (TC-792-020 requires the real pipeline to conclude in pgschema apply).
+    _seed_additive_drift "$DB"
     _seed_peer_fixture "$DB" 1 1
     _assert_peer_fixture_is_fdw "$DB"
     _seed_victoria_trading_fixture "$DB"
@@ -1074,12 +1104,14 @@ PY
     run _run_full_installer_pipeline "$DB" 1 "$STRIP_LOG" "$FILTERED"
     [ "$status" -eq 0 ]
     _parse_full_installer_summary "$output"
-    [ "$_rfc_steps" -eq 0 ]
-    [ "$_rfc_apply_ran" -eq 0 ]
+    [ "$_rfc_steps" -gt 0 ]
+    [ "$_rfc_apply_ran" -eq 1 ]
 
     _capture_victoria_row_counts "$DB" "$AFTER"
     diff "$BEFORE" "$AFTER"
 
+    _assert_additive_drift_repaired "$DB"
+    _assert_no_victoria_refs "$FILTERED"
     _assert_no_bootstrap_refs "$FILTERED"
 
     rm -f "$STRIP_LOG" "$FILTERED" "$BEFORE" "$AFTER"
@@ -1093,27 +1125,34 @@ PY
 
     DB=$(_make_test_db)
     STRIP_LOG=$(mktemp)
+    FILTERED=$(mktemp)
     BEFORE=$(mktemp)
     AFTER=$(mktemp)
 
     run _apply_schema_sql_to_db "$DB"
     [ "$status" -eq 0 ]
 
+    # Seed real additive drift so the standalone pipeline exercises a real
+    # pgschema apply (TC-792-021 expects the full apply to run).
+    _seed_additive_drift "$DB"
     _seed_victoria_trading_fixture "$DB"
     _seed_victoria_trading_rows "$DB"
 
     _capture_victoria_row_counts "$DB" "$BEFORE"
 
-    run _run_full_installer_pipeline "$DB" 0 "$STRIP_LOG"
+    run _run_full_installer_pipeline "$DB" 0 "$STRIP_LOG" "$FILTERED"
     [ "$status" -eq 0 ]
     _parse_full_installer_summary "$output"
-    [ "$_rfc_steps" -eq 0 ]
-    [ "$_rfc_apply_ran" -eq 0 ]
+    [ "$_rfc_steps" -gt 0 ]
+    [ "$_rfc_apply_ran" -eq 1 ]
 
     _capture_victoria_row_counts "$DB" "$AFTER"
     diff "$BEFORE" "$AFTER"
 
-    rm -f "$STRIP_LOG" "$BEFORE" "$AFTER"
+    _assert_additive_drift_repaired "$DB"
+    _assert_no_victoria_refs "$FILTERED"
+
+    rm -f "$STRIP_LOG" "$FILTERED" "$BEFORE" "$AFTER"
     _drop_test_db "$DB"
 }
 
@@ -1124,6 +1163,7 @@ PY
 
     DB=$(_make_test_db)
     STRIP_LOG=$(mktemp)
+    FILTERED=$(mktemp)
     BEFORE=$(mktemp)
     AFTER=$(mktemp)
 
@@ -1131,6 +1171,7 @@ PY
     [ "$status" -eq 0 ]
 
     psql -U nova -d "$DB" -c "DROP TABLE IF EXISTS agent_bootstrap_context;" >/dev/null 2>&1
+    _seed_additive_drift "$DB"
     _seed_peer_fixture "$DB" 1 1
     _assert_peer_fixture_is_fdw "$DB"
     _seed_victoria_trading_fixture "$DB"
@@ -1138,14 +1179,17 @@ PY
 
     _capture_victoria_object_inventory "$DB" "$BEFORE"
 
-    run _run_full_installer_pipeline "$DB" 1 "$STRIP_LOG"
+    run _run_full_installer_pipeline "$DB" 1 "$STRIP_LOG" "$FILTERED"
     [ "$status" -eq 0 ]
     _parse_full_installer_summary "$output"
-    [ "$_rfc_steps" -eq 0 ]
-    [ "$_rfc_apply_ran" -eq 0 ]
+    [ "$_rfc_steps" -gt 0 ]
+    [ "$_rfc_apply_ran" -eq 1 ]
 
     _capture_victoria_object_inventory "$DB" "$AFTER"
     diff "$BEFORE" "$AFTER"
+
+    _assert_additive_drift_repaired "$DB"
+    _assert_no_victoria_refs "$FILTERED"
 
     rm -f "$STRIP_LOG" "$BEFORE" "$AFTER"
     _drop_test_db "$DB"
@@ -1158,6 +1202,7 @@ PY
 
     DB=$(_make_test_db)
     STRIP_LOG=$(mktemp)
+    FILTERED=$(mktemp)
     BEFORE=$(mktemp)
     AFTER=$(mktemp)
 
@@ -1165,6 +1210,7 @@ PY
     [ "$status" -eq 0 ]
 
     psql -U nova -d "$DB" -c "DROP TABLE IF EXISTS agent_bootstrap_context;" >/dev/null 2>&1
+    _seed_additive_drift "$DB"
     _seed_peer_fixture "$DB" 1 1
     _assert_peer_fixture_is_fdw "$DB"
     _seed_victoria_trading_fixture "$DB"
@@ -1172,16 +1218,19 @@ PY
 
     _capture_victoria_row_counts "$DB" "$BEFORE"
 
-    run _run_full_installer_pipeline "$DB" 1 "$STRIP_LOG"
+    run _run_full_installer_pipeline "$DB" 1 "$STRIP_LOG" "$FILTERED"
     [ "$status" -eq 0 ]
     _parse_full_installer_summary "$output"
-    [ "$_rfc_steps" -eq 0 ]
-    [ "$_rfc_apply_ran" -eq 0 ]
+    [ "$_rfc_steps" -gt 0 ]
+    [ "$_rfc_apply_ran" -eq 1 ]
 
     _capture_victoria_row_counts "$DB" "$AFTER"
     diff "$BEFORE" "$AFTER"
 
-    rm -f "$STRIP_LOG" "$BEFORE" "$AFTER"
+    _assert_additive_drift_repaired "$DB"
+    _assert_no_victoria_refs "$FILTERED"
+
+    rm -f "$STRIP_LOG" "$FILTERED" "$BEFORE" "$AFTER"
     _drop_test_db "$DB"
 }
 
@@ -1192,6 +1241,7 @@ PY
 
     DB=$(_make_test_db)
     STRIP_LOG=$(mktemp)
+    FILTERED=$(mktemp)
     BEFORE=$(mktemp)
     AFTER=$(mktemp)
     FIXTURE=$(mktemp)
@@ -1200,6 +1250,7 @@ PY
     [ "$status" -eq 0 ]
 
     psql -U nova -d "$DB" -c "DROP TABLE IF EXISTS agent_bootstrap_context;" >/dev/null 2>&1
+    _seed_additive_drift "$DB"
     _seed_peer_fixture "$DB" 1 1
     _assert_peer_fixture_is_fdw "$DB"
 
@@ -1214,16 +1265,19 @@ PY
 
     _capture_victoria_row_counts "$DB" "$BEFORE"
 
-    run _run_full_installer_pipeline "$DB" 1 "$STRIP_LOG"
+    run _run_full_installer_pipeline "$DB" 1 "$STRIP_LOG" "$FILTERED"
     [ "$status" -eq 0 ]
     _parse_full_installer_summary "$output"
-    [ "$_rfc_steps" -eq 0 ]
-    [ "$_rfc_apply_ran" -eq 0 ]
+    [ "$_rfc_steps" -gt 0 ]
+    [ "$_rfc_apply_ran" -eq 1 ]
 
     _capture_victoria_row_counts "$DB" "$AFTER"
     diff "$BEFORE" "$AFTER"
 
-    rm -f "$STRIP_LOG" "$BEFORE" "$AFTER" "$FIXTURE"
+    _assert_additive_drift_repaired "$DB"
+    _assert_no_victoria_refs "$FILTERED"
+
+    rm -f "$STRIP_LOG" "$FILTERED" "$BEFORE" "$AFTER" "$FIXTURE"
     _drop_test_db "$DB"
 }
 
@@ -1247,6 +1301,7 @@ PY
 
     DB=$(_make_test_db)
     STRIP_LOG=$(mktemp)
+    FILTERED=$(mktemp)
     BEFORE=$(mktemp)
     AFTER=$(mktemp)
 
@@ -1254,6 +1309,7 @@ PY
     [ "$status" -eq 0 ]
 
     psql -U nova -d "$DB" -c "DROP TABLE IF EXISTS agent_bootstrap_context;" >/dev/null 2>&1
+    _seed_additive_drift "$DB"
     _seed_peer_fixture "$DB" 1 1
     _assert_peer_fixture_is_fdw "$DB"
     _seed_victoria_trading_fixture "$DB" "$owner_role"
@@ -1261,14 +1317,17 @@ PY
 
     _capture_victoria_row_counts "$DB" "$BEFORE"
 
-    run _run_full_installer_pipeline "$DB" 1 "$STRIP_LOG"
+    run _run_full_installer_pipeline "$DB" 1 "$STRIP_LOG" "$FILTERED"
     [ "$status" -eq 0 ]
     _parse_full_installer_summary "$output"
-    [ "$_rfc_steps" -eq 0 ]
-    [ "$_rfc_apply_ran" -eq 0 ]
+    [ "$_rfc_steps" -gt 0 ]
+    [ "$_rfc_apply_ran" -eq 1 ]
 
     _capture_victoria_row_counts "$DB" "$AFTER"
     diff "$BEFORE" "$AFTER"
+
+    _assert_additive_drift_repaired "$DB"
+    _assert_no_victoria_refs "$FILTERED"
 
     # Assert that the ownership gate (not just the universal drop-strip) did
     # real work on the newly-un-ignored Victoria objects.
@@ -1276,7 +1335,7 @@ PY
     [ "$status" -eq 0 ]
     [ -n "$output" ]
 
-    rm -f "$STRIP_LOG" "$BEFORE" "$AFTER"
+    rm -f "$STRIP_LOG" "$FILTERED" "$BEFORE" "$AFTER"
     _drop_test_db "$DB"
 }
 
@@ -1293,6 +1352,7 @@ PY
     [ "$status" -eq 0 ]
 
     psql -U nova -d "$DB" -c "DROP TABLE IF EXISTS agent_bootstrap_context;" >/dev/null 2>&1
+    _seed_additive_drift "$DB"
     _seed_peer_fixture "$DB" 1 1
     _assert_peer_fixture_is_fdw "$DB"
     _seed_victoria_trading_fixture "$DB"
@@ -1301,8 +1361,10 @@ PY
     run _run_full_installer_pipeline "$DB" 1 "$STRIP_LOG" "$FILTERED"
     [ "$status" -eq 0 ]
     _parse_full_installer_summary "$output"
-    [ "$_rfc_steps" -eq 0 ]
-    [ "$_rfc_apply_ran" -eq 0 ]
+    [ "$_rfc_steps" -gt 0 ]
+    [ "$_rfc_apply_ran" -eq 1 ]
+
+    _assert_additive_drift_repaired "$DB"
 
     # The filtered plan must contain no steps referencing Victoria tables.
     _assert_no_victoria_refs "$FILTERED"
@@ -1678,6 +1740,7 @@ PY
     [ "$status" -eq 0 ]
 
     psql -U nova -d "$DB" -c "DROP TABLE IF EXISTS agent_bootstrap_context;" >/dev/null 2>&1
+    _seed_additive_drift "$DB"
     _seed_peer_fixture "$DB" 1 1
     _assert_peer_fixture_is_fdw "$DB"
     _seed_victoria_trading_fixture "$DB"
@@ -1694,8 +1757,10 @@ SQL
     run _run_full_installer_pipeline "$DB" 1 "$STRIP_LOG" "$FILTERED"
     [ "$status" -eq 0 ]
     _parse_full_installer_summary "$output"
-    [ "$_rfc_steps" -eq 0 ]
-    [ "$_rfc_apply_ran" -eq 0 ]
+    [ "$_rfc_steps" -gt 0 ]
+    [ "$_rfc_apply_ran" -eq 1 ]
+
+    _assert_additive_drift_repaired "$DB"
 
     # The filtered plan must have zero constraint/index/trigger-level steps
     # touching trades (or any other Victoria table).

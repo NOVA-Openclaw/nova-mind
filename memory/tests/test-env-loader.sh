@@ -1,6 +1,6 @@
 #!/bin/bash
 # test-env-loader.sh — Test runner for lib/env-loader.sh
-# Issue: nova-memory #98
+# Issue: nova-workspace#309 — env-loader now resolves secrets via nova-op.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -16,18 +16,48 @@ fail() { echo "FAIL: $1 — $2"; FAIL=$((FAIL+1)); }
 TMPDIR_BASE=$(mktemp -d)
 trap 'rm -rf "$TMPDIR_BASE"' EXIT
 
-make_config() {
+make_map() {
   local dir="$TMPDIR_BASE/$1"
-  mkdir -p "$dir/.openclaw"
-  echo "$2" > "$dir/.openclaw/openclaw.json"
+  mkdir -p "$dir/.openclaw/scripts"
+  echo "$2" > "$dir/.openclaw/scripts/nova-op-item-map.json"
   echo "$dir"
 }
 
-# Each test runs in a subshell with isolated HOME
+make_nova_op() {
+  local bin_dir="$1"
+  mkdir -p "$bin_dir"
+  cat > "$bin_dir/nova-op" <<'EOF'
+#!/usr/bin/env bash
+# Stub nova-op for tests: echoes fake values based on item id.
+set -euo pipefail
+item=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    item|get) shift ;;
+    --vault|--field|--reveal) shift ;;
+    *)
+      if [ -z "$item" ]; then
+        item="$1"
+      fi
+      shift
+      ;;
+  esac
+done
+case "$item" in
+  w3pkbapwocl6twwcajk5ksy4tm) echo "fake-openrouter-key" ;;
+  eefc3r3hh4lzb7dasihufmqmoy) echo "fake-anthropic-key" ;;
+  4jmgair7umpfk4bwahpz56elge) echo "fake-openai-key" ;;
+  zk72pqdffik6rtd36kuddxvi7a) echo "fake-gemini-key" ;;
+  *) echo "nova-op: item not found: $item" >&2; exit 1 ;;
+esac
+EOF
+  chmod +x "$bin_dir/nova-op"
+}
+
+# Each test runs in a subshell with isolated HOME/PATH
 run_test() {
   local name="$1"
   shift
-  # Run test function in subshell, capture exit code
   if "$@"; then
     pass "$name"
   else
@@ -35,24 +65,33 @@ run_test() {
   fi
 }
 
-# ── TEST 1.1: loads vars from valid config ──
+# ── TEST 1.1: loads vars from valid map via nova-op ──
 test_bash_loads_vars_from_valid_config() (
   local home
-  home=$(make_config t1_1 '{"env":{"vars":{"FOO":"bar","BAZ":"qux"}}}')
+  home=$(make_map t1_1 '{
+    "OPENROUTER_API_KEY": {"vault":"NOVA Shared Vault","item":"w3pkbapwocl6twwcajk5ksy4tm","field":"API Key"},
+    "ANTHROPIC_API_KEY": {"vault":"NOVA Shared Vault","item":"eefc3r3hh4lzb7dasihufmqmoy","field":"credential"}
+  }')
+  local bin_dir="$TMPDIR_BASE/t1_1_bin"
+  make_nova_op "$bin_dir"
   export HOME="$home"
-  unset FOO BAZ 2>/dev/null || true
+  export PATH="$bin_dir:$PATH"
+  unset OPENROUTER_API_KEY ANTHROPIC_API_KEY 2>/dev/null || true
   source "$LIB"
   load_openclaw_env
-  [[ "$FOO" == "bar" && "$BAZ" == "qux" ]]
+  [[ "$OPENROUTER_API_KEY" == "fake-openrouter-key" && "$ANTHROPIC_API_KEY" == "fake-anthropic-key" ]]
 )
-run_test "TEST-1.1: loads vars from valid config" test_bash_loads_vars_from_valid_config
+run_test "TEST-1.1: loads vars from valid map via nova-op" test_bash_loads_vars_from_valid_config
 
 # ── TEST 1.3: return code 0 on success ──
 test_bash_return_code_zero() (
   local home
-  home=$(make_config t1_3 '{"env":{"vars":{"X1":"val"}}}')
+  home=$(make_map t1_3 '{"OPENROUTER_API_KEY":{"vault":"V","item":"w3pkbapwocl6twwcajk5ksy4tm","field":"f"}}')
+  local bin_dir="$TMPDIR_BASE/t1_3_bin"
+  make_nova_op "$bin_dir"
   export HOME="$home"
-  unset X1 2>/dev/null || true
+  export PATH="$bin_dir:$PATH"
+  unset OPENROUTER_API_KEY 2>/dev/null || true
   source "$LIB"
   load_openclaw_env
 )
@@ -61,174 +100,190 @@ run_test "TEST-1.3: return code 0 on success" test_bash_return_code_zero
 # ── TEST 2.1: existing env var NOT overwritten ──
 test_bash_existing_env_not_overwritten() (
   local home
-  home=$(make_config t2_1 '{"env":{"vars":{"FOO":"from_config"}}}')
+  home=$(make_map t2_1 '{"OPENROUTER_API_KEY":{"vault":"V","item":"w3pkbapwocl6twwcajk5ksy4tm","field":"f"}}')
+  local bin_dir="$TMPDIR_BASE/t2_1_bin"
+  make_nova_op "$bin_dir"
   export HOME="$home"
-  export FOO=original
+  export PATH="$bin_dir:$PATH"
+  export OPENROUTER_API_KEY=original
   source "$LIB"
   load_openclaw_env
-  [[ "$FOO" == "original" ]]
+  [[ "$OPENROUTER_API_KEY" == "original" ]]
 )
 run_test "TEST-2.1: existing env var NOT overwritten" test_bash_existing_env_not_overwritten
 
 # ── TEST 2.3: empty env var IS overwritten ──
 test_bash_empty_env_overwritten() (
   local home
-  home=$(make_config t2_3 '{"env":{"vars":{"FOO":"from_config"}}}')
+  home=$(make_map t2_3 '{"OPENROUTER_API_KEY":{"vault":"V","item":"w3pkbapwocl6twwcajk5ksy4tm","field":"f"}}')
+  local bin_dir="$TMPDIR_BASE/t2_3_bin"
+  make_nova_op "$bin_dir"
   export HOME="$home"
-  export FOO=""
+  export PATH="$bin_dir:$PATH"
+  export OPENROUTER_API_KEY=""
   source "$LIB"
   load_openclaw_env
-  [[ "$FOO" == "from_config" ]]
+  [[ "$OPENROUTER_API_KEY" == "fake-openrouter-key" ]]
 )
 run_test "TEST-2.3: empty env var IS overwritten" test_bash_empty_env_overwritten
 
-# ── TEST 3.1: null value skipped ──
-test_bash_null_value_skipped() (
+# ── TEST 3.1: metadata keys skipped ──
+test_bash_metadata_key_skipped() (
   local home
-  home=$(make_config t3_1 '{"env":{"vars":{"FOO":null,"BAR":"hello"}}}')
+  home=$(make_map t3_1 '{
+    "_description": "ignored",
+    "OPENROUTER_API_KEY": {"vault":"V","item":"w3pkbapwocl6twwcajk5ksy4tm","field":"f"}
+  }')
+  local bin_dir="$TMPDIR_BASE/t3_1_bin"
+  make_nova_op "$bin_dir"
   export HOME="$home"
-  unset FOO BAR 2>/dev/null || true
+  export PATH="$bin_dir:$PATH"
+  unset OPENROUTER_API_KEY 2>/dev/null || true
   source "$LIB"
   load_openclaw_env
-  [[ -z "${FOO:-}" && "$BAR" == "hello" ]]
+  [[ "$OPENROUTER_API_KEY" == "fake-openrouter-key" ]]
 )
-run_test "TEST-3.1: null value skipped" test_bash_null_value_skipped
-
-# ── TEST 4.1: empty string value skipped ──
-test_bash_empty_string_skipped() (
-  local home
-  home=$(make_config t4_1 '{"env":{"vars":{"FOO":"","BAR":"hello"}}}')
-  export HOME="$home"
-  unset FOO BAR 2>/dev/null || true
-  source "$LIB"
-  load_openclaw_env
-  [[ -z "${FOO:-}" && "$BAR" == "hello" ]]
-)
-run_test "TEST-4.1: empty string value skipped" test_bash_empty_string_skipped
+run_test "TEST-3.1: metadata keys skipped" test_bash_metadata_key_skipped
 
 # ── TEST 5.1: malformed JSON warns and returns 1 ──
 test_bash_malformed_json_warns() (
   local home
-  home=$(make_config t5_1 '{not valid json')
+  home=$(make_map t5_1 '{not valid json')
+  local bin_dir="$TMPDIR_BASE/t5_1_bin"
+  make_nova_op "$bin_dir"
   export HOME="$home"
+  export PATH="$bin_dir:$PATH"
   source "$LIB"
   local stderr_file="$TMPDIR_BASE/stderr_5_1.txt"
   local rc=0
   load_openclaw_env 2>"$stderr_file" || rc=$?
-  [[ $rc -eq 1 ]] && grep -q "WARNING: Malformed JSON" "$stderr_file"
+  [[ $rc -eq 1 ]] && grep -q "item map is not valid JSON" "$stderr_file"
 )
 run_test "TEST-5.1: malformed JSON warns and returns 1" test_bash_malformed_json_warns
 
-# ── TEST 6.1: missing config returns 0 silently ──
-test_bash_missing_config_no_error() (
+# ── TEST 6.1: missing config returns 1 loudly ──
+test_bash_missing_config_errors() (
   local home="$TMPDIR_BASE/t6_1_empty"
   mkdir -p "$home"
+  local bin_dir="$TMPDIR_BASE/t6_1_bin"
+  make_nova_op "$bin_dir"
   export HOME="$home"
+  export PATH="$bin_dir:$PATH"
   source "$LIB"
   local stderr_file="$TMPDIR_BASE/stderr_6_1.txt"
-  load_openclaw_env 2>"$stderr_file"
-  local rc=$?
-  [[ $rc -eq 0 && ! -s "$stderr_file" ]]
+  local rc=0
+  load_openclaw_env 2>"$stderr_file" || rc=$?
+  [[ $rc -eq 1 && -s "$stderr_file" ]]
 )
-run_test "TEST-6.1: missing config returns 0 silently" test_bash_missing_config_no_error
+run_test "TEST-6.1: missing config returns 1 loudly" test_bash_missing_config_errors
 
-# ── TEST 7.1: unreadable config returns 0 silently ──
-test_bash_unreadable_config_silent() (
+# ── TEST 7.1: unreadable config returns 1 ──
+test_bash_unreadable_config_errors() (
   local home
-  home=$(make_config t7_1 '{"env":{"vars":{"FOO":"bar"}}}')
-  chmod 000 "$home/.openclaw/openclaw.json"
+  home=$(make_map t7_1 '{"OPENROUTER_API_KEY":{"vault":"V","item":"i","field":"f"}}')
+  chmod 000 "$home/.openclaw/scripts/nova-op-item-map.json"
+  local bin_dir="$TMPDIR_BASE/t7_1_bin"
+  make_nova_op "$bin_dir"
   export HOME="$home"
+  export PATH="$bin_dir:$PATH"
   source "$LIB"
   local stderr_file="$TMPDIR_BASE/stderr_7_1.txt"
-  load_openclaw_env 2>"$stderr_file"
-  local rc=$?
-  chmod 644 "$home/.openclaw/openclaw.json"  # cleanup
-  [[ $rc -eq 0 && -z "${FOO:-}" ]]
+  local rc=0
+  load_openclaw_env 2>"$stderr_file" || rc=$?
+  chmod 644 "$home/.openclaw/scripts/nova-op-item-map.json"  # cleanup
+  [[ $rc -eq 1 ]]
 )
-run_test "TEST-7.1: unreadable config returns 0 silently" test_bash_unreadable_config_silent
+run_test "TEST-7.1: unreadable config returns 1" test_bash_unreadable_config_errors
 
-# ── TEST 8.1: no env section ──
-test_bash_no_env_section() (
-  local home
-  home=$(make_config t8_1 '{"gateway":{"port":3000}}')
+# ── TEST 10.1: custom config path is respected ──
+test_bash_custom_config_path() (
+  local home="$TMPDIR_BASE/t10_1_home"
+  mkdir -p "$home/.openclaw/scripts"
+  local custom_map="$home/.openclaw/scripts/custom-item-map.json"
+  echo '{"OPENROUTER_API_KEY":{"vault":"V","item":"w3pkbapwocl6twwcajk5ksy4tm","field":"f"}}' > "$custom_map"
+  local bin_dir="$TMPDIR_BASE/t10_1_bin"
+  make_nova_op "$bin_dir"
   export HOME="$home"
+  export PATH="$bin_dir:$PATH"
+  unset OPENROUTER_API_KEY 2>/dev/null || true
+  source "$LIB"
+  load_openclaw_env "$custom_map"
+  [[ "$OPENROUTER_API_KEY" == "fake-openrouter-key" ]]
+)
+run_test "TEST-10.1: custom config path is respected" test_bash_custom_config_path
+
+# ── TEST 10.2: no plaintext file reads ──
+test_bash_no_plaintext_file_reads() (
+  local home
+  home=$(make_map t10_2 '{"OPENROUTER_API_KEY":{"vault":"V","item":"w3pkbapwocl6twwcajk5ksy4tm","field":"f"}}')
+  local bin_dir="$TMPDIR_BASE/t10_2_bin"
+  make_nova_op "$bin_dir"
+  echo 'OPENROUTER_API_KEY=plaintext-env-key' > "$home/.openclaw/.env"
+  echo 'OPENROUTER_API_KEY=plaintext-secrets-key' > "$home/.openclaw/secrets.env"
+  echo 'export OPENROUTER_API_KEY=plaintext-bash-key' > "$home/.bash_env"
+  export HOME="$home"
+  export PATH="$bin_dir:$PATH"
+  unset OPENROUTER_API_KEY 2>/dev/null || true
   source "$LIB"
   load_openclaw_env
+  [[ "$OPENROUTER_API_KEY" == "fake-openrouter-key" ]]
 )
-run_test "TEST-8.1: no env section" test_bash_no_env_section
+run_test "TEST-10.2: plaintext files are ignored" test_bash_no_plaintext_file_reads
 
-# ── TEST 8.2: env without vars ──
-test_bash_env_without_vars() (
+# ── TEST 10.3: missing nova-op fails loudly ──
+test_bash_missing_nova_op_fails() (
   local home
-  home=$(make_config t8_2 '{"env":{"model":"gpt-4"}}')
+  home=$(make_map t10_3 '{"OPENROUTER_API_KEY":{"vault":"V","item":"i","field":"f"}}')
+  local empty_bin="$TMPDIR_BASE/t10_3_empty_bin"
+  /bin/mkdir -p "$empty_bin"
   export HOME="$home"
+  export PATH="$empty_bin"
+  unset OPENROUTER_API_KEY 2>/dev/null || true
   source "$LIB"
-  load_openclaw_env
+  local rc=0
+  load_openclaw_env 2>/dev/null || rc=$?
+  [[ $rc -ne 0 ]]
 )
-run_test "TEST-8.2: env without vars" test_bash_env_without_vars
+run_test "TEST-10.3: missing nova-op fails loudly" test_bash_missing_nova_op_fails
 
-# ── TEST 10.1: special characters in values ──
-test_bash_special_chars_in_value() (
+# ── TEST 10.4: wrong item ID fails loudly and names item ID ──
+test_bash_wrong_item_id_fails() (
   local home
-  home=$(make_config t10_1 '{
-    "env":{"vars":{
-      "SC_SPACE":"hello world",
-      "SC_SQUOTE":"it'\''s fine",
-      "SC_DQUOTE":"say \"hi\"",
-      "SC_BTICK":"run `cmd`",
-      "SC_DOLLAR":"costs $100",
-      "SC_BSLASH":"path\\to\\file",
-      "SC_SHELL":"a && b; c"
-    }}
-  }')
+  home=$(make_map t10_4 '{"OPENROUTER_API_KEY":{"vault":"NOVA Shared Vault","item":"wrong-item-id","field":"API Key"}}')
+  local bin_dir="$TMPDIR_BASE/t10_4_bin"
+  make_nova_op "$bin_dir"
   export HOME="$home"
-  unset SC_SPACE SC_SQUOTE SC_DQUOTE SC_BTICK SC_DOLLAR SC_BSLASH SC_SHELL 2>/dev/null || true
+  export PATH="$bin_dir:$PATH"
+  unset OPENROUTER_API_KEY 2>/dev/null || true
   source "$LIB"
-  load_openclaw_env
-  local ok=true
-  [[ "$SC_SPACE" == "hello world" ]] || { echo "  sub-fail: SC_SPACE='$SC_SPACE'"; ok=false; }
-  [[ "$SC_SQUOTE" == "it's fine" ]] || { echo "  sub-fail: SC_SQUOTE='$SC_SQUOTE'"; ok=false; }
-  [[ "$SC_DQUOTE" == 'say "hi"' ]] || { echo "  sub-fail: SC_DQUOTE='$SC_DQUOTE'"; ok=false; }
-  [[ "$SC_BTICK" == 'run `cmd`' ]] || { echo "  sub-fail: SC_BTICK='$SC_BTICK'"; ok=false; }
-  [[ "$SC_DOLLAR" == 'costs $100' ]] || { echo "  sub-fail: SC_DOLLAR='$SC_DOLLAR'"; ok=false; }
-  [[ "$SC_BSLASH" == 'path\to\file' ]] || { echo "  sub-fail: SC_BSLASH='$SC_BSLASH'"; ok=false; }
-  [[ "$SC_SHELL" == 'a && b; c' ]] || { echo "  sub-fail: SC_SHELL='$SC_SHELL'"; ok=false; }
-  $ok
+  local stderr_file="$TMPDIR_BASE/stderr_10_4.txt"
+  local rc=0
+  load_openclaw_env 2>"$stderr_file" || rc=$?
+  [[ $rc -ne 0 ]]
+  grep -q "wrong-item-id" "$stderr_file"
 )
-run_test "TEST-10.1: special characters in values" test_bash_special_chars_in_value
+run_test "TEST-10.4: wrong item ID fails loudly and names item ID" test_bash_wrong_item_id_fails
 
-# ── TEST 10.2: env.vars is a string ──
-test_bash_env_vars_not_dict_string() (
+# ── TEST 10.5: empty resolved value fails loudly ──
+test_bash_empty_value_fails() (
   local home
-  home=$(make_config t10_2 '{"env":{"vars":"not_a_dict"}}')
+  home=$(make_map t10_5 '{"OPENROUTER_API_KEY":{"vault":"V","item":"i","field":"f"}}')
+  local bin_dir="$TMPDIR_BASE/t10_5_bin"
+  mkdir -p "$bin_dir"
+  cat > "$bin_dir/nova-op" <<'EOF'
+#!/usr/bin/env bash
+echo ""
+EOF
+  chmod +x "$bin_dir/nova-op"
   export HOME="$home"
+  export PATH="$bin_dir:$PATH"
+  unset OPENROUTER_API_KEY 2>/dev/null || true
   source "$LIB"
-  load_openclaw_env 2>/dev/null
+  local rc=0
+  load_openclaw_env 2>/dev/null || rc=$?
+  [[ $rc -ne 0 ]]
 )
-run_test "TEST-10.2: env.vars is a string (graceful)" test_bash_env_vars_not_dict_string
-
-# ── TEST 10.3: env.vars is an array ──
-test_bash_env_vars_not_dict_array() (
-  local home
-  home=$(make_config t10_3 '{"env":{"vars":[1,2,3]}}')
-  export HOME="$home"
-  source "$LIB"
-  load_openclaw_env 2>/dev/null
-)
-run_test "TEST-10.3: env.vars is an array (graceful with type guard)" test_bash_env_vars_not_dict_array
-
-# ── TEST 10.4: idempotent double call ──
-test_bash_idempotent_double_call() (
-  local home
-  home=$(make_config t10_4 '{"env":{"vars":{"FOO":"bar"}}}')
-  export HOME="$home"
-  unset FOO 2>/dev/null || true
-  source "$LIB"
-  load_openclaw_env
-  load_openclaw_env
-  [[ "$FOO" == "bar" ]]
-)
-run_test "TEST-10.4: idempotent double call" test_bash_idempotent_double_call
+run_test "TEST-10.5: empty resolved value fails loudly" test_bash_empty_value_fails
 
 # ── Summary ──
 echo ""

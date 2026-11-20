@@ -1,52 +1,95 @@
 #!/bin/bash
-# env-loader.sh — Load env.vars from ~/.openclaw/openclaw.json
+# env-loader.sh — Resolve secrets via nova-op and export them into the environment.
+#
 # Source this file and call load_openclaw_env() to export env vars.
 #
-# Resolution order: ENV vars already set take precedence → openclaw.json env.vars
-# Issue: nova-memory #98
+# Design:
+#   - Reads a JSON item map (default: ~/.openclaw/scripts/nova-op-item-map.json).
+#   - For each variable in the map that is not already set and non-empty,
+#     resolves the value with `nova-op item get <item> --vault <vault>
+#     --field <field> --reveal`.
+#   - Fails loudly on missing nova-op, unreadable map, or resolution failure.
+#   - Never reads .env, secrets.env, .bash_env, or openclaw.json env.vars for
+#     secret values.
+#
+# Issue: nova-workspace#309
 
 load_openclaw_env() {
-  local config="${HOME}/.openclaw/openclaw.json"
-  local json=""
+  local config_path="${1:-${HOME}/.openclaw/scripts/nova-op-item-map.json}"
 
-  # Try to read config file
-  if [ -f "$config" ] && [ -r "$config" ]; then
-    json=$(cat "$config" 2>/dev/null) || json=""
-    # Validate JSON
-    if [ -n "$json" ]; then
-      if ! echo "$json" | jq empty 2>/dev/null; then
-        echo "WARNING: Malformed JSON in $config, ignoring config file" >&2
-        json=""
-        return 1
-      fi
-    fi
-  else
-    return 0
+  # Ensure nova-op is available.
+  if ! command -v nova-op >/dev/null 2>&1; then
+    echo "env-loader: nova-op not found in PATH" >&2
+    return 1
   fi
 
-  if [ -z "$json" ]; then
-    return 0
+  # Ensure the item map exists and is readable.
+  if [ ! -f "$config_path" ]; then
+    echo "env-loader: item map not found: $config_path" >&2
+    return 1
+  fi
+  if [ ! -r "$config_path" ]; then
+    echo "env-loader: item map not readable: $config_path" >&2
+    return 1
   fi
 
-  # Extract env.vars keys
-  local keys
-  keys=$(echo "$json" | jq -r '.env.vars | if type == "object" then keys[] else empty end' 2>/dev/null) || return 0
+  # Validate JSON.
+  if ! jq empty "$config_path" 2>/dev/null; then
+    echo "env-loader: item map is not valid JSON: $config_path" >&2
+    return 1
+  fi
 
-  local key val
-  while IFS= read -r key; do
-    [ -z "$key" ] && continue
+  # Collect variable names from the map, skipping metadata keys.
+  local vars
+  vars=$(jq -r 'to_entries[] | select(.value | type == "object") | .key' "$config_path" 2>/dev/null)
+  if [ -z "$vars" ]; then
+    echo "env-loader: no secret entries found in item map: $config_path" >&2
+    return 1
+  fi
 
-    # If ENV var is already set and non-empty, keep it (precedence)
+  local had_error=0
+  local var
+  while IFS= read -r var; do
+    [ -z "$var" ] && continue
+
+    # Already set and non-empty: keep existing value (plugin-injected keys win).
     local current
-    eval "current=\${$key:-}"
+    eval "current=\${$var:-}"
     if [ -n "$current" ]; then
       continue
     fi
 
-    # Get value from config
-    val=$(echo "$json" | jq -r --arg k "$key" '.env.vars[$k] // empty' 2>/dev/null)
-    if [ -n "$val" ]; then
-      export "$key=$val"
+    local item field vault
+    item=$(jq -r --arg k "$var" '.[$k].item // empty' "$config_path" 2>/dev/null)
+    field=$(jq -r --arg k "$var" '.[$k].field // empty' "$config_path" 2>/dev/null)
+    vault=$(jq -r --arg k "$var" '.[$k].vault // empty' "$config_path" 2>/dev/null)
+
+    if [ -z "$item" ] || [ -z "$field" ] || [ -z "$vault" ]; then
+      echo "env-loader: incomplete map entry for $var in $config_path" >&2
+      had_error=1
+      continue
     fi
-  done <<< "$keys"
+
+    local value
+    value=$(nova-op item get "$item" --vault "$vault" --field "$field" --reveal 2>&1) || {
+      local rc=$?
+      echo "env-loader: failed to resolve $var (item=$item field=$field vault=$vault, rc=$rc): $value" >&2
+      had_error=1
+      continue
+    }
+
+    if [ -z "$value" ]; then
+      echo "env-loader: resolved empty value for $var (item=$item field=$field vault=$vault)" >&2
+      had_error=1
+      continue
+    fi
+
+    export "$var=$value"
+  done <<< "$vars"
+
+  if [ "$had_error" -ne 0 ]; then
+    return 1
+  fi
+
+  return 0
 }

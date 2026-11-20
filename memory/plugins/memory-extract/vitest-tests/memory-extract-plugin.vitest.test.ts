@@ -132,6 +132,7 @@ describe("memory-extract plugin registration (#726)", () => {
   it("register captures api.logger and emits startup line", () => {
     makePostgresConfig(homeDir, "nova_memory");
     const api = makeFakeApi();
+    api.pluginConfig = { extraction: { apiKey: "sk-test" } };
 
     register(api);
 
@@ -162,6 +163,7 @@ describe("memory-extract plugin registration (#726)", () => {
   it("gateway_start and gateway_stop both route through the captured logger", async () => {
     makePostgresConfig(homeDir, "nova_memory");
     const api = makeFakeApi();
+    api.pluginConfig = { extraction: { apiKey: "sk-test" } };
     register(api);
 
     vi.mocked(spawn).mockImplementation(() => makeSuccessfulChild() as any);
@@ -192,6 +194,7 @@ describe("memory-extract plugin registration (#726)", () => {
   it("message_received maps every sender field from host event/context", async () => {
     makePostgresConfig(homeDir, "nova_memory");
     const api = makeFakeApi();
+    api.pluginConfig = { extraction: { apiKey: "sk-test" } };
     register(api);
     vi.mocked(spawn).mockImplementation(() => makeSuccessfulChild() as any);
     mockPsql();

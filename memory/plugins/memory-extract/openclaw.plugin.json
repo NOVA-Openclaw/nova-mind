@@ -12,10 +12,31 @@
   "activation": {
     "onStartup": true
   },
+  "configContracts": {
+    "secretInputs": {
+      "paths": [
+        {
+          "path": "extraction.apiKey",
+          "expected": "string",
+          "ownerKind": "capability"
+        }
+      ]
+    }
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
     "properties": {
+      "extraction": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "apiKey": {
+            "type": "string",
+            "description": "OpenRouter API key for memory extraction (resolved from a SecretRef at runtime)"
+          }
+        }
+      },
       "summaryIntervalMs": {
         "type": "integer",
         "description": "Milliseconds between periodic summary log lines (default 30 min)",

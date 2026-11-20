@@ -121,6 +121,7 @@ function resolveConfigFromApi(pluginConfig: Record<string, unknown> | undefined)
   stallRepeatIntervalMs?: number;
   stallCheckIntervalMs?: number;
   dbUnresolvedRateLimitMs?: number;
+  extraction?: { apiKey?: string };
 } {
   if (!pluginConfig) return {};
   const pick = (key: string): number | undefined => {
@@ -130,12 +131,27 @@ function resolveConfigFromApi(pluginConfig: Record<string, unknown> | undefined)
     }
     return undefined;
   };
+
+  let extraction: { apiKey?: string } | undefined;
+  const rawExtraction = pluginConfig.extraction;
+  if (
+    rawExtraction !== null &&
+    typeof rawExtraction === "object" &&
+    !Array.isArray(rawExtraction)
+  ) {
+    const apiKey = (rawExtraction as Record<string, unknown>).apiKey;
+    if (typeof apiKey === "string") {
+      extraction = { apiKey };
+    }
+  }
+
   return {
     summaryIntervalMs: pick("summaryIntervalMs"),
     stallThresholdMs: pick("stallThresholdMs"),
     stallRepeatIntervalMs: pick("stallRepeatIntervalMs"),
     stallCheckIntervalMs: pick("stallCheckIntervalMs"),
     dbUnresolvedRateLimitMs: pick("dbUnresolvedRateLimitMs"),
+    extraction,
   };
 }
 

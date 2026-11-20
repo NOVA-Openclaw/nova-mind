@@ -46,6 +46,90 @@ TMPDIRS=()
 cleanup_tmp() { rm -f "${TMPFILES[@]}"; rm -rf "${TMPDIRS[@]}"; }
 trap cleanup_tmp EXIT
 
+# Helper: wire extraction.apiKey as a SecretRef in openclaw.json.
+# Called by _install_memory_extract_plugin after the base plugin entry is
+# written. Returns 0 if the config was written/left intact, 1 on error.
+# Uses MEMORY_EXTRACT_SECRET_PROVIDER (default op_openrouter) and
+# MEMORY_EXTRACT_SECRET_ID (default value).
+_wire_memory_extract_secretref() {
+    local cfg="$1"
+    local cfg_tmp="$2"
+    local secret_provider="${MEMORY_EXTRACT_SECRET_PROVIDER:-op_openrouter}"
+    local secret_id="${MEMORY_EXTRACT_SECRET_ID:-value}"
+
+    local provider_exists
+    provider_exists=$(jq --arg p "$secret_provider" -e '.secrets.providers[$p]' "$cfg" >/dev/null 2>&1 && echo 1 || echo 0)
+    local existing_apikey_exists
+    existing_apikey_exists=$(jq -e '.plugins.entries."memory-extract".config.extraction | has("apiKey")' "$cfg" >/dev/null 2>&1 && echo 1 || echo 0)
+
+    if [ "$existing_apikey_exists" -eq 1 ]; then
+        local existing_apikey_type
+        existing_apikey_type=$(jq -r '.plugins.entries."memory-extract".config.extraction.apiKey | type' "$cfg" 2>/dev/null)
+        if [ "$existing_apikey_type" = "string" ]; then
+            echo -e "  ${WARNING} memory-extract extraction.apiKey is a plaintext string; leaving it unchanged but it should be migrated to a SecretRef"
+        else
+            echo -e "  ${INFO} memory-extract extraction.apiKey already configured (left unchanged)"
+        fi
+        return 0
+    fi
+
+    if [ "$provider_exists" -ne 1 ]; then
+        echo -e "  ${WARNING} memory-extract extraction.apiKey not wired: provider '$secret_provider' is not defined in openclaw.json secrets.providers"
+        echo "      Add a provider like the following to ~/.openclaw/openclaw.json:"
+        echo ""
+        echo "      \"secrets\": {"
+        echo "        \"providers\": {"
+        echo "          \"$secret_provider\": {"
+        echo "            \"source\": \"exec\","
+        echo "            \"command\": \"\${node}\","
+        echo "            \"args\": [\"/path/to/onepassword-resolver.js\"]"
+        echo "          }"
+        echo "        }"
+        echo "      }"
+        echo ""
+        echo "      Then re-run agent-install.sh to wire the SecretRef automatically."
+        return 0
+    fi
+
+    jq --arg provider "$secret_provider" --arg id "$secret_id" '
+        .plugins.entries."memory-extract".config = (.plugins.entries."memory-extract".config // {})
+        | .plugins.entries."memory-extract".config.extraction = {
+            "apiKey": {
+              "source": "exec",
+              "provider": $provider,
+              "id": $id
+            }
+          }
+    ' "$cfg_tmp" >"${cfg_tmp}.secret" && mv "${cfg_tmp}.secret" "$cfg_tmp"
+
+    # Validate with openclaw if available; restore backup on failure.
+    # openclaw config validate reads the current config (no path argument), so
+    # we move the temp file into place first, then validate.
+    local backup_cfg
+    backup_cfg=$(mktemp "${cfg}.bak.validate.XXXXXX")
+    cp "$cfg" "$backup_cfg"
+    if mv "$cfg_tmp" "$cfg"; then
+        if command -v openclaw &>/dev/null && openclaw config validate --help &>/dev/null; then
+            if openclaw config validate >/dev/null 2>&1; then
+                echo -e "  ${CHECK_MARK} memory-extract extraction.apiKey SecretRef wired (provider=$secret_provider, id=$secret_id)"
+            else
+                echo -e "  ${CROSS_MARK} openclaw config validate failed after wiring SecretRef; restoring backup"
+                mv "$backup_cfg" "$cfg"
+                rm -f "$cfg_tmp"
+                return 1
+            fi
+        else
+            echo -e "  ${CHECK_MARK} memory-extract extraction.apiKey SecretRef wired (provider=$secret_provider, id=$secret_id)"
+        fi
+    else
+        echo -e "  ${CROSS_MARK} Could not write updated OpenClaw config"
+        rm -f "$backup_cfg"
+        return 1
+    fi
+    rm -f "$backup_cfg"
+    return 0
+}
+
 # Helper: install the memory-extract plugin.  Builds in the source tree,
 # copies dist/ to the target, installs only runtime dependencies (#598/#724),
 # and enables the plugin in OpenClaw config.
@@ -104,6 +188,43 @@ _install_memory_extract_plugin() {
         cfg_tmp=$(mktemp "${cfg}.tmp.XXXXXX")
         TMPFILES+=("$cfg_tmp")
 
+        # Post-#309: wire extraction.apiKey as a SecretRef only when the
+        # target exec provider already exists in openclaw.json. Never overwrite
+        # an existing value (string or object). Defaults match NOVA's live
+        # provider naming: provider alias "op_openrouter", ref id "value".
+        local secret_provider="${MEMORY_EXTRACT_SECRET_PROVIDER:-op_openrouter}"
+        local secret_id="${MEMORY_EXTRACT_SECRET_ID:-value}"
+        local provider_exists
+        provider_exists=$(jq --arg p "$secret_provider" -e '.secrets.providers[$p]' "$cfg" >/dev/null 2>&1 && echo 1 || echo 0)
+        local existing_apikey_type
+        existing_apikey_type=$(jq -r '.plugins.entries."memory-extract".config.extraction.apiKey // "__missing__" | type' "$cfg" 2>/dev/null)
+
+        local skip_secretref=0
+        if [ "$existing_apikey_type" != "__missing__" ]; then
+            skip_secretref=1
+            if [ "$existing_apikey_type" = "string" ]; then
+                echo -e "  ${WARNING} memory-extract extraction.apiKey is a plaintext string; leaving it unchanged but it should be migrated to a SecretRef"
+            else
+                echo -e "  ${INFO} memory-extract extraction.apiKey already configured (left unchanged)"
+            fi
+        elif [ "$provider_exists" -ne 1 ]; then
+            skip_secretref=1
+            echo -e "  ${WARNING} memory-extract extraction.apiKey not wired: provider '$secret_provider' is not defined in openclaw.json secrets.providers"
+            echo "      Add a provider like the following to ~/.openclaw/openclaw.json:"
+            echo ""
+            echo "      \"secrets\": {"
+            echo "        \"providers\": {"
+            echo "          \"$secret_provider\": {"
+            echo "            \"source\": \"exec\","
+            echo "            \"command\": \"\${node}\","
+            echo "            \"args\": [\"/path/to/onepassword-resolver.js\"]"
+            echo "          }"
+            echo "        }"
+            echo "      }"
+            echo ""
+            echo "      Then re-run agent-install.sh to wire the SecretRef automatically."
+        fi
+
         if jq --arg path "$MEMORY_EXTRACT_TARGET" '
             .plugins.load.paths = ((.plugins.load.paths // []) + [$path] | unique)
             | .plugins.entries."memory-extract" = (.plugins.entries."memory-extract" // {}) * {
@@ -113,15 +234,20 @@ _install_memory_extract_plugin() {
                 }
               }
         ' "$cfg" >"$cfg_tmp" && \
-            jq -e '(.plugins.entries."memory-extract".enabled == true) and ((.plugins.load.paths // []) | index($path) != null)' --arg path "$MEMORY_EXTRACT_TARGET" "$cfg_tmp" >/dev/null 2>&1 && \
-            mv "$cfg_tmp" "$cfg"; then
-            echo -e "  ${CHECK_MARK} memory-extract plugin enabled in OpenClaw config"
+            jq -e '(.plugins.entries."memory-extract".enabled == true) and ((.plugins.load.paths // []) | index($path) != null)' --arg path "$MEMORY_EXTRACT_TARGET" "$cfg_tmp" >/dev/null 2>&1; then
+            : # base config looks good
         else
             echo -e "  ${CROSS_MARK} Could not enable memory-extract plugin in config"
             VERIFICATION_ERRORS=$((VERIFICATION_ERRORS + 1))
             rm -f "$cfg_tmp"
             return 1
         fi
+
+        _wire_memory_extract_secretref "$cfg" "$cfg_tmp" || {
+            VERIFICATION_ERRORS=$((VERIFICATION_ERRORS + 1))
+            rm -f "$cfg_tmp"
+            return 1
+        }
 
         # Remove the legacy internal hook config entry if present. The r4
         # installer and the restored staging config both use
@@ -2073,6 +2199,30 @@ if [ -n "$DB_NAME_OVERRIDE" ]; then
     DB_NAME="$DB_NAME_OVERRIDE"
 fi
 
+# _install_nova_op_item_map: Seed ~/.openclaw/scripts/nova-op-item-map.json
+# from the repo example ONLY if absent. Never overwrites an existing map.
+_install_nova_op_item_map() {
+    local scripts_target="$HOME/.openclaw/scripts"
+    local example="$SCRIPT_DIR/memory/scripts/nova-op-item-map.example.json"
+    local target="$scripts_target/nova-op-item-map.json"
+
+    if [ ! -f "$example" ]; then
+        echo -e "  ${WARNING} nova-op-item-map.example.json not found in repo"
+        return 0
+    fi
+
+    mkdir -p "$scripts_target"
+
+    if [ -f "$target" ]; then
+        echo -e "  ${INFO} nova-op item map already exists at $target (left unchanged)"
+    else
+        cp "$example" "$target"
+        chmod 600 "$target"
+        echo -e "  ${CHECK_MARK} Seeded nova-op item map at $target (mode 600)"
+        echo "      Edit it to replace placeholder vault/item IDs before running memory scripts."
+    fi
+}
+
 # install_lib_files: Install shared PG loader files to ~/.openclaw/lib/
 install_lib_files() {
     local lib_src="$SCRIPT_DIR/memory/lib"
@@ -2728,18 +2878,20 @@ echo ""
 echo "Installing shared PG loader libraries..."
 install_lib_files
 
-# --- API key check ---
+# --- SecretRef / nova-op item map check ---
 echo ""
 echo "API key configuration..."
 
-if [ -z "${OPENAI_API_KEY:-}" ]; then
-    echo -e "  ${WARNING} OPENAI_API_KEY not set"
-    echo "      Required for semantic recall (embeddings)."
-    echo "      Set it in openclaw.json env.vars or export before running."
+# Post-#309: API keys are never written as plaintext env.vars. The installer
+# only ensures the nova-op item map exists (seeded from the example once) and
+# that the memory-extract plugin config declares a SecretRef.
+if [ -f "$HOME/.openclaw/scripts/nova-op-item-map.json" ]; then
+    echo -e "  ${CHECK_MARK} nova-op item map exists at ~/.openclaw/scripts/nova-op-item-map.json"
 else
-    echo -e "  ${CHECK_MARK} OPENAI_API_KEY set: ${OPENAI_API_KEY:0:8}..."
+    echo -e "  ${WARNING} nova-op item map not found at ~/.openclaw/scripts/nova-op-item-map.json"
+    echo "      Memory scripts run outside the gateway will not be able to resolve secrets."
+    echo "      Run agent-install.sh to seed it from the repo example."
 fi
-
 
 # --- Python virtual environment ---
 echo ""
@@ -2865,6 +3017,9 @@ SCRIPTS_TARGET_OPENCLAW="$HOME/.openclaw/scripts"
 
 mkdir -p "$OPENCLAW_LOGS_DIR"
 echo -e "  ${INFO} Logs directory: $OPENCLAW_LOGS_DIR"
+
+# Seed the nova-op item map from the repo example (only if absent).
+_install_nova_op_item_map
 
 if [ -d "$SCRIPTS_SOURCE" ]; then
     mkdir -p "$SCRIPTS_TARGET_WORKSPACE"
@@ -3108,7 +3263,8 @@ echo ""
 echo "generate-delegation-context.sh..."
 
 GENERATE_DELEGATION_SOURCE="$SCRIPT_DIR/cognition/scripts/generate-delegation-context.sh"
-GENERATE_DELEGATION_TARGET="$HOME/.openclaw/workspace/scripts/generate-delegation-context.sh"
+GENERATE_DELEGATION_TARGET="$HOME/.openclaw/scripts/generate-delegation-context.sh"
+GENERATE_DELEGATION_OLD_TARGET="$HOME/.openclaw/workspace/scripts/generate-delegation-context.sh"
 
 if [ ! -f "$GENERATE_DELEGATION_SOURCE" ]; then
     echo -e "  ${WARNING} generate-delegation-context.sh source not found (skipping)"
@@ -3117,6 +3273,21 @@ else
     cp "$GENERATE_DELEGATION_SOURCE" "$GENERATE_DELEGATION_TARGET"
     chmod +x "$GENERATE_DELEGATION_TARGET"
     echo -e "  ${CHECK_MARK} Installed generate-delegation-context.sh → $GENERATE_DELEGATION_TARGET"
+
+    # Remove the old workspace copy only if it is byte-identical to the
+    # newly-installed version; otherwise warn and leave it for the operator.
+    if [ -f "$GENERATE_DELEGATION_OLD_TARGET" ]; then
+        local old_hash new_hash
+        old_hash=$(sha256sum "$GENERATE_DELEGATION_OLD_TARGET" | awk '{print $1}')
+        new_hash=$(sha256sum "$GENERATE_DELEGATION_TARGET" | awk '{print $1}')
+        if [ "$old_hash" = "$new_hash" ]; then
+            rm -f "$GENERATE_DELEGATION_OLD_TARGET"
+            echo -e "  ${CHECK_MARK} Removed byte-identical old copy at $GENERATE_DELEGATION_OLD_TARGET"
+        else
+            echo -e "  ${WARNING} Old copy at $GENERATE_DELEGATION_OLD_TARGET differs from the new install; leaving it in place"
+            VERIFICATION_WARNINGS=$((VERIFICATION_WARNINGS + 1))
+        fi
+    fi
 fi
 
 # --- agent_chat extension (moved to NOVA-Openclaw/agent-chat, nova-mind#579) ---

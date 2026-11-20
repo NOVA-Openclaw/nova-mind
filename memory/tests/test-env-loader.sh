@@ -69,8 +69,8 @@ run_test() {
 test_bash_loads_vars_from_valid_config() (
   local home
   home=$(make_map t1_1 '{
-    "OPENROUTER_API_KEY": {"vault":"NOVA Shared Vault","item":"w3pkbapwocl6twwcajk5ksy4tm","field":"API Key"},
-    "ANTHROPIC_API_KEY": {"vault":"NOVA Shared Vault","item":"eefc3r3hh4lzb7dasihufmqmoy","field":"credential"}
+    "OPENROUTER_API_KEY": {"vault":"yavwzhqh3sdlh3rke5qo56gvoq","item":"w3pkbapwocl6twwcajk5ksy4tm","field":"API Key"},
+    "ANTHROPIC_API_KEY": {"vault":"yavwzhqh3sdlh3rke5qo56gvoq","item":"eefc3r3hh4lzb7dasihufmqmoy","field":"credential"}
   }')
   local bin_dir="$TMPDIR_BASE/t1_1_bin"
   make_nova_op "$bin_dir"
@@ -249,7 +249,7 @@ run_test "TEST-10.3: missing nova-op fails loudly" test_bash_missing_nova_op_fai
 # ── TEST 10.4: wrong item ID fails loudly and names item ID ──
 test_bash_wrong_item_id_fails() (
   local home
-  home=$(make_map t10_4 '{"OPENROUTER_API_KEY":{"vault":"NOVA Shared Vault","item":"wrong-item-id","field":"API Key"}}')
+  home=$(make_map t10_4 '{"OPENROUTER_API_KEY":{"vault":"yavwzhqh3sdlh3rke5qo56gvoq","item":"wrong-item-id","field":"API Key"}}')
   local bin_dir="$TMPDIR_BASE/t10_4_bin"
   make_nova_op "$bin_dir"
   export HOME="$home"
@@ -267,7 +267,7 @@ run_test "TEST-10.4: wrong item ID fails loudly and names item ID" test_bash_wro
 # ── TEST 10.5: empty resolved value fails loudly ──
 test_bash_empty_value_fails() (
   local home
-  home=$(make_map t10_5 '{"OPENROUTER_API_KEY":{"vault":"V","item":"i","field":"f"}}')
+  home=$(make_map t10_5 '{"OPENROUTER_API_KEY":{"vault":"yavwzhqh3sdlh3rke5qo56gvoq","item":"i","field":"f"}}')
   local bin_dir="$TMPDIR_BASE/t10_5_bin"
   mkdir -p "$bin_dir"
   cat > "$bin_dir/nova-op" <<'EOF'
@@ -284,6 +284,26 @@ EOF
   [[ $rc -ne 0 ]]
 )
 run_test "TEST-10.5: empty resolved value fails loudly" test_bash_empty_value_fails
+
+# ── TEST 10.6: placeholder values fail loudly ──
+test_bash_placeholder_fails() (
+  local home
+  home=$(make_map t10_6 '{
+    "OPENROUTER_API_KEY": {"vault":"REPLACE_WITH_VAULT_ID","item":"REPLACE_WITH_ITEM_ID","field":"API Key"}
+  }')
+  local bin_dir="$TMPDIR_BASE/t10_6_bin"
+  make_nova_op "$bin_dir"
+  export HOME="$home"
+  export PATH="$bin_dir:$PATH"
+  unset OPENROUTER_API_KEY 2>/dev/null || true
+  source "$LIB"
+  local stderr_file="$TMPDIR_BASE/stderr_10_6.txt"
+  local rc=0
+  load_openclaw_env 2>"$stderr_file" || rc=$?
+  [[ $rc -ne 0 ]]
+  grep -q "placeholder" "$stderr_file"
+)
+run_test "TEST-10.6: placeholder values fail loudly" test_bash_placeholder_fails
 
 # ── Summary ──
 echo ""

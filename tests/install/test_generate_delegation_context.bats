@@ -355,10 +355,11 @@ setup() {
 # -----------------------------------------------------------------------------
 # TC-16 — Installer wiring
 # -----------------------------------------------------------------------------
-@test "TC-16: installer copies script to runtime scripts directory" {
+@test "TC-16: installer copies script to ~/.openclaw/scripts" {
     [ -x "$SCRIPT" ]
     grep -q 'generate-delegation-context.sh' "$REPO_ROOT/agent-install.sh"
-    grep -q '\$HOME/.openclaw/workspace/scripts/generate-delegation-context.sh' "$REPO_ROOT/agent-install.sh"
+    # The install target must be the new ~/.openclaw/scripts path (#309).
+    grep -q 'GENERATE_DELEGATION_TARGET="\$HOME/.openclaw/scripts/generate-delegation-context.sh"' "$REPO_ROOT/agent-install.sh"
 }
 
 # -----------------------------------------------------------------------------

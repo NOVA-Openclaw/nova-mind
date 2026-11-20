@@ -98,8 +98,8 @@ def test_python_loads_vars_from_valid_map():
     clean_env("OPENROUTER_API_KEY", "ANTHROPIC_API_KEY")
     tmpdir = tempfile.mkdtemp()
     cfg = write_map({
-        "OPENROUTER_API_KEY": {"vault": "V", "item": "w3pkbapwocl6twwcajk5ksy4tm", "field": "f"},
-        "ANTHROPIC_API_KEY": {"vault": "V", "item": "eefc3r3hh4lzb7dasihufmqmoy", "field": "f"},
+        "OPENROUTER_API_KEY": {"vault": "yavwzhqh3sdlh3rke5qo56gvoq", "item": "w3pkbapwocl6twwcajk5ksy4tm", "field": "f"},
+        "ANTHROPIC_API_KEY": {"vault": "yavwzhqh3sdlh3rke5qo56gvoq", "item": "eefc3r3hh4lzb7dasihufmqmoy", "field": "f"},
     }, tmpdir)
     bin_dir = make_nova_op(tmpdir, {
         "w3pkbapwocl6twwcajk5ksy4tm": "fake-openrouter-key",
@@ -132,7 +132,7 @@ def test_python_existing_env_not_overwritten():
     os.environ["OPENROUTER_API_KEY"] = "original"
     tmpdir = tempfile.mkdtemp()
     cfg = write_map({
-        "OPENROUTER_API_KEY": {"vault": "V", "item": "w3pkbapwocl6twwcajk5ksy4tm", "field": "f"},
+        "OPENROUTER_API_KEY": {"vault": "yavwzhqh3sdlh3rke5qo56gvoq", "item": "w3pkbapwocl6twwcajk5ksy4tm", "field": "f"},
     }, tmpdir)
     bin_dir = make_nova_op(tmpdir, {"w3pkbapwocl6twwcajk5ksy4tm": "fake-openrouter-key"})
 
@@ -154,7 +154,7 @@ def test_python_empty_env_overwritten():
     os.environ["OPENROUTER_API_KEY"] = ""
     tmpdir = tempfile.mkdtemp()
     cfg = write_map({
-        "OPENROUTER_API_KEY": {"vault": "V", "item": "w3pkbapwocl6twwcajk5ksy4tm", "field": "f"},
+        "OPENROUTER_API_KEY": {"vault": "yavwzhqh3sdlh3rke5qo56gvoq", "item": "w3pkbapwocl6twwcajk5ksy4tm", "field": "f"},
     }, tmpdir)
     bin_dir = make_nova_op(tmpdir, {"w3pkbapwocl6twwcajk5ksy4tm": "fake-openrouter-key"})
 
@@ -177,7 +177,7 @@ def test_python_metadata_key_skipped():
     tmpdir = tempfile.mkdtemp()
     cfg = write_map({
         "_description": "ignored",
-        "OPENROUTER_API_KEY": {"vault": "V", "item": "w3pkbapwocl6twwcajk5ksy4tm", "field": "f"},
+        "OPENROUTER_API_KEY": {"vault": "yavwzhqh3sdlh3rke5qo56gvoq", "item": "w3pkbapwocl6twwcajk5ksy4tm", "field": "f"},
     }, tmpdir)
     bin_dir = make_nova_op(tmpdir, {"w3pkbapwocl6twwcajk5ksy4tm": "fake-openrouter-key"})
 
@@ -260,7 +260,7 @@ def test_python_unreadable_config_raises():
     name = "TEST-7.2: unreadable config raises RuntimeError"
     tmpdir = tempfile.mkdtemp()
     cfg = write_map({
-        "OPENROUTER_API_KEY": {"vault": "V", "item": "i", "field": "f"},
+        "OPENROUTER_API_KEY": {"vault": "yavwzhqh3sdlh3rke5qo56gvoq", "item": "i", "field": "f"},
     }, tmpdir)
     os.chmod(cfg, 0o000)
     bin_dir = make_nova_op(tmpdir, {})
@@ -308,8 +308,8 @@ def test_python_idempotent_double_call():
     clean_env("OPENROUTER_API_KEY", "ANTHROPIC_API_KEY")
     tmpdir = tempfile.mkdtemp()
     cfg = write_map({
-        "OPENROUTER_API_KEY": {"vault": "V", "item": "w3pkbapwocl6twwcajk5ksy4tm", "field": "f"},
-        "ANTHROPIC_API_KEY": {"vault": "V", "item": "eefc3r3hh4lzb7dasihufmqmoy", "field": "f"},
+        "OPENROUTER_API_KEY": {"vault": "yavwzhqh3sdlh3rke5qo56gvoq", "item": "w3pkbapwocl6twwcajk5ksy4tm", "field": "f"},
+        "ANTHROPIC_API_KEY": {"vault": "yavwzhqh3sdlh3rke5qo56gvoq", "item": "eefc3r3hh4lzb7dasihufmqmoy", "field": "f"},
     }, tmpdir)
     bin_dir = make_nova_op(tmpdir, {
         "w3pkbapwocl6twwcajk5ksy4tm": "fake-openrouter-key",
@@ -341,7 +341,7 @@ def test_python_wrong_item_id_fails():
     clean_env("OPENROUTER_API_KEY")
     tmpdir = tempfile.mkdtemp()
     cfg = write_map({
-        "OPENROUTER_API_KEY": {"vault": "V", "item": "wrong-item-id", "field": "f"},
+        "OPENROUTER_API_KEY": {"vault": "yavwzhqh3sdlh3rke5qo56gvoq", "item": "wrong-item-id", "field": "f"},
     }, tmpdir)
     bin_dir = make_nova_op(tmpdir, {})
 
@@ -371,7 +371,7 @@ def test_python_custom_config_path():
     clean_env("OPENROUTER_API_KEY")
     tmpdir = tempfile.mkdtemp()
     cfg = write_map({
-        "OPENROUTER_API_KEY": {"vault": "V", "item": "w3pkbapwocl6twwcajk5ksy4tm", "field": "f"},
+        "OPENROUTER_API_KEY": {"vault": "yavwzhqh3sdlh3rke5qo56gvoq", "item": "w3pkbapwocl6twwcajk5ksy4tm", "field": "f"},
     }, tmpdir)
     bin_dir = make_nova_op(tmpdir, {"w3pkbapwocl6twwcajk5ksy4tm": "fake-openrouter-key"})
 
@@ -384,6 +384,31 @@ def test_python_custom_config_path():
         pass_test(name)
     else:
         fail_test(name, f"result={result}")
+    clean_env("OPENROUTER_API_KEY")
+
+
+# ── TEST 10.8: placeholder values fail loudly ──
+def test_python_placeholder_fails():
+    name = "TEST-10.8: placeholder values fail loudly"
+    clean_env("OPENROUTER_API_KEY")
+    tmpdir = tempfile.mkdtemp()
+    cfg = write_map({
+        "OPENROUTER_API_KEY": {"vault": "REPLACE_WITH_VAULT_ID", "item": "REPLACE_WITH_ITEM_ID", "field": "f"},
+    }, tmpdir)
+    bin_dir = make_nova_op(tmpdir, {})
+
+    def _run():
+        try:
+            load_openclaw_env(config_path=cfg)
+            return False
+        except RuntimeError as exc:
+            return "placeholder" in str(exc)
+
+    ok = run_with_path(bin_dir, _run)
+    if ok:
+        pass_test(name)
+    else:
+        fail_test(name, "did not raise expected RuntimeError")
     clean_env("OPENROUTER_API_KEY")
 
 
@@ -400,6 +425,7 @@ if __name__ == "__main__":
     test_python_idempotent_double_call()
     test_python_wrong_item_id_fails()
     test_python_custom_config_path()
+    test_python_placeholder_fails()
 
     print()
     print("================================")

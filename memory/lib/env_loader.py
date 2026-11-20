@@ -131,6 +131,14 @@ def load_openclaw_env(config_path: Optional[str] = None) -> dict:
             errors.append(f"incomplete map entry for {var}")
             continue
 
+        # Reject placeholder values that have not been replaced.
+        if item == "REPLACE_WITH_ITEM_ID" or vault == "REPLACE_WITH_VAULT_ID":
+            errors.append(
+                f"{var} still contains placeholder values in {config_path}; "
+                "replace them with real vault/item IDs"
+            )
+            continue
+
         try:
             value = _resolve_secret(var, item, field, vault, nova_op)
         except RuntimeError as exc:

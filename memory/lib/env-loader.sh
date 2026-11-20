@@ -70,6 +70,13 @@ load_openclaw_env() {
       continue
     fi
 
+    # Reject placeholder values that have not been replaced.
+    if [ "$item" = "REPLACE_WITH_ITEM_ID" ] || [ "$vault" = "REPLACE_WITH_VAULT_ID" ]; then
+      echo "env-loader: $var still contains placeholder values in $config_path; replace them with real vault/item IDs" >&2
+      had_error=1
+      continue
+    fi
+
     local value
     value=$(nova-op item get "$item" --vault "$vault" --field "$field" --reveal 2>&1) || {
       local rc=$?

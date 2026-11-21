@@ -249,7 +249,7 @@ if ! _validate_pg_ownership; then
 fi
 
 # ============================================
-# Part 2: API keys (openclaw.json env.vars)
+# Part 2: API keys (openclaw.json env.vars as SecretRefs)
 # ============================================
 echo ""
 echo "API key configuration..."
@@ -266,63 +266,94 @@ if ! command -v jq &>/dev/null; then
     exit 1
 fi
 
-# Check OPENAI_API_KEY
-OPENAI_KEY=$(jq -r '.env.vars.OPENAI_API_KEY // empty' "$OPENCLAW_CONFIG" 2>/dev/null)
-if [ -z "$OPENAI_KEY" ] && [ -z "${OPENAI_API_KEY:-}" ]; then
-    echo -e "  ${YELLOW}⚠️  OPENAI_API_KEY not found${NC}"
-    echo "      Required for semantic recall (embeddings)."
-    echo "      Get a key from: https://platform.openai.com/api-keys"
-    echo ""
-    if ! [ -t 0 ]; then
-        echo -e "  ${YELLOW}⚠️  Non-interactive mode — skipping OPENAI_API_KEY prompt${NC}"
-    else
-        read -rp "    Enter your OpenAI API key (or press Enter to skip): " INPUT_OPENAI_KEY
-        if [ -n "$INPUT_OPENAI_KEY" ]; then
-            # Write to openclaw.json env.vars
-            TMP_CONFIG=$(mktemp)
-            jq --arg key "$INPUT_OPENAI_KEY" '.env.vars.OPENAI_API_KEY = $key' "$OPENCLAW_CONFIG" > "$TMP_CONFIG"
-            mv "$TMP_CONFIG" "$OPENCLAW_CONFIG"
-            export OPENAI_API_KEY="$INPUT_OPENAI_KEY"
-            echo -e "  ${GREEN}✅${NC} OPENAI_API_KEY written to $OPENCLAW_CONFIG"
-        else
-            echo -e "  ${YELLOW}⚠️  Skipped — semantic recall will not work without OPENAI_API_KEY${NC}"
-        fi
-    fi
-elif [ -n "$OPENAI_KEY" ]; then
-    export OPENAI_API_KEY="$OPENAI_KEY"
-    echo -e "  ${GREEN}✅${NC} OPENAI_API_KEY found in $OPENCLAW_CONFIG"
-else
-    echo -e "  ${GREEN}✅${NC} OPENAI_API_KEY set in environment"
-fi
+# Wire an env.var as a SecretRef. Caller must set cfg/cfg_tmp.
+# Args: <env_var_name> <provider_name> <secret_id>
+_wire_env_secretref() {
+    local var_name="$1"
+    local provider="$2"
+    local secret_id="$3"
+    local cfg="$OPENCLAW_CONFIG"
+    local cfg_tmp="$OPENCLAW_CONFIG_TMP"
 
-# Check ANTHROPIC_API_KEY
-ANTHROPIC_KEY=$(jq -r '.env.vars.ANTHROPIC_API_KEY // empty' "$OPENCLAW_CONFIG" 2>/dev/null)
-if [ -z "$ANTHROPIC_KEY" ] && [ -z "${ANTHROPIC_API_KEY:-}" ]; then
-    echo -e "  ${YELLOW}⚠️  ANTHROPIC_API_KEY not found${NC}"
-    echo "      Used by OpenClaw as the primary LLM provider."
-    echo "      Get a key from: https://console.anthropic.com/settings/keys"
-    echo ""
-    if ! [ -t 0 ]; then
-        echo -e "  ${YELLOW}⚠️  Non-interactive mode — skipping ANTHROPIC_API_KEY prompt${NC}"
-    else
-        read -rp "    Enter your Anthropic API key (or press Enter to skip): " INPUT_ANTHROPIC_KEY
-        if [ -n "$INPUT_ANTHROPIC_KEY" ]; then
-            # Write to openclaw.json env.vars
-            TMP_CONFIG=$(mktemp)
-            jq --arg key "$INPUT_ANTHROPIC_KEY" '.env.vars.ANTHROPIC_API_KEY = $key' "$OPENCLAW_CONFIG" > "$TMP_CONFIG"
-            mv "$TMP_CONFIG" "$OPENCLAW_CONFIG"
-            export ANTHROPIC_API_KEY="$INPUT_ANTHROPIC_KEY"
-            echo -e "  ${GREEN}✅${NC} ANTHROPIC_API_KEY written to $OPENCLAW_CONFIG"
-        else
-            echo -e "  ${YELLOW}⚠️  Skipped — some hooks and LLM features may not work without ANTHROPIC_API_KEY${NC}"
-        fi
+    # Caller can pre-inject the value (e.g. from a parent plugin or test).
+    if [ -n "${!var_name:-}" ]; then
+        echo -e "  ${GREEN}✅${NC} $var_name set in environment"
+        return 0
     fi
-elif [ -n "$ANTHROPIC_KEY" ]; then
-    export ANTHROPIC_API_KEY="$ANTHROPIC_KEY"
-    echo -e "  ${GREEN}✅${NC} ANTHROPIC_API_KEY found in $OPENCLAW_CONFIG"
-else
-    echo -e "  ${GREEN}✅${NC} ANTHROPIC_API_KEY set in environment"
-fi
+
+    local existing_exists existing_type
+    existing_exists=$(jq -e --arg v "$var_name" '.env.vars | has($v)' "$cfg" >/dev/null 2>&1 && echo 1 || echo 0)
+    if [ "$existing_exists" -eq 1 ]; then
+        existing_type=$(jq -r --arg v "$var_name" '.env.vars[$v] | type' "$cfg" 2>/dev/null)
+        if [ "$existing_type" = "string" ]; then
+            echo -e "  ${YELLOW}⚠️${NC} $var_name is a plaintext string in $cfg; leaving it unchanged but it should be migrated to a SecretRef"
+        else
+            echo -e "  ${GREEN}✅${NC} $var_name already configured as SecretRef in $cfg"
+        fi
+        return 0
+    fi
+
+    local provider_exists
+    provider_exists=$(jq --arg p "$provider" -e '.secrets.providers[$p]' "$cfg" >/dev/null 2>&1 && echo 1 || echo 0)
+    if [ "$provider_exists" -ne 1 ]; then
+        echo -e "  ${YELLOW}⚠️${NC} $var_name not wired: provider '$provider' is not defined in openclaw.json secrets.providers"
+        echo "      Add the provider and re-run shell-install.sh to wire the SecretRef automatically."
+        return 0
+    fi
+
+    jq --arg v "$var_name" --arg provider "$provider" --arg id "$secret_id" '
+        .env.vars = (.env.vars // {})
+        | .env.vars[$v] = {
+            "source": "exec",
+            "provider": $provider,
+            "id": $id
+          }
+    ' "$cfg_tmp" >"${cfg_tmp}.secret" && mv "${cfg_tmp}.secret" "$cfg_tmp"
+
+    local backup_cfg
+    backup_cfg=$(mktemp "${cfg}.bak.validate.XXXXXX")
+    cp "$cfg" "$backup_cfg"
+    if mv "$cfg_tmp" "$cfg"; then
+        if command -v openclaw &>/dev/null && openclaw config validate --help &>/dev/null; then
+            if openclaw config validate >/dev/null 2>&1; then
+                echo -e "  ${GREEN}✅${NC} $var_name SecretRef wired (provider=$provider, id=$secret_id)"
+            else
+                echo -e "  ${RED}❌${NC} openclaw config validate failed after wiring $var_name SecretRef; restoring backup"
+                mv "$backup_cfg" "$cfg"
+                rm -f "$cfg_tmp"
+                OPENCLAW_CONFIG_TMP=$(mktemp "${cfg}.tmp.XXXXXX")
+                cp "$cfg" "$OPENCLAW_CONFIG_TMP"
+                return 1
+            fi
+        else
+            echo -e "  ${GREEN}✅${NC} $var_name SecretRef wired (provider=$provider, id=$secret_id)"
+        fi
+        # Recreate the working temp file so subsequent keys can be wired.
+        cp "$cfg" "$cfg_tmp"
+    else
+        echo -e "  ${RED}❌${NC} Could not write updated OpenClaw config for $var_name"
+        rm -f "$backup_cfg"
+        return 1
+    fi
+    rm -f "$backup_cfg"
+}
+
+OPENCLAW_CONFIG_TMP=$(mktemp "${OPENCLAW_CONFIG}.tmp.XXXXXX")
+cp "$OPENCLAW_CONFIG" "$OPENCLAW_CONFIG_TMP"
+
+# OPENAI_API_KEY: default provider op_openai, secret id "value".
+# Override provider/id via OPENAI_SECRET_PROVIDER / OPENAI_SECRET_ID.
+OPENAI_SECRET_PROVIDER="${OPENAI_SECRET_PROVIDER:-op_openai}"
+OPENAI_SECRET_ID="${OPENAI_SECRET_ID:-value}"
+_wire_env_secretref "OPENAI_API_KEY" "$OPENAI_SECRET_PROVIDER" "$OPENAI_SECRET_ID" || true
+
+# ANTHROPIC_API_KEY: default provider op_anthropic, secret id "value".
+# Override provider/id via ANTHROPIC_SECRET_PROVIDER / ANTHROPIC_SECRET_ID.
+ANTHROPIC_SECRET_PROVIDER="${ANTHROPIC_SECRET_PROVIDER:-op_anthropic}"
+ANTHROPIC_SECRET_ID="${ANTHROPIC_SECRET_ID:-value}"
+_wire_env_secretref "ANTHROPIC_API_KEY" "$ANTHROPIC_SECRET_PROVIDER" "$ANTHROPIC_SECRET_ID" || true
+
+rm -f "$OPENCLAW_CONFIG_TMP"
 
 # ============================================
 # Part 3: Hand off to agent-install.sh
@@ -330,5 +361,9 @@ fi
 echo ""
 echo "Config setup complete. Running agent-install.sh..."
 echo ""
+if [ -n "${SHELL_INSTALL_TEST_SKIP_AGENT_INSTALL:-}" ]; then
+    echo "  (test mode: skipping agent-install.sh invocation)"
+    exit 0
+fi
 exec "$SCRIPT_DIR/agent-install.sh" "$@"
 

@@ -266,12 +266,13 @@ if ! command -v jq &>/dev/null; then
     exit 1
 fi
 
-# Wire an env.var as a SecretRef. Caller must set cfg/cfg_tmp.
-# Args: <env_var_name> <provider_name> <secret_id>
-_wire_env_secretref() {
-    local var_name="$1"
-    local provider="$2"
-    local secret_id="$3"
+# Wire a model provider apiKey as a SecretRef. Caller must set cfg/cfg_tmp.
+# Args: <provider_key> <env_var_name> <provider_name> <secret_id>
+_wire_model_provider_apikey() {
+    local provider_key="$1"
+    local var_name="$2"
+    local provider="$3"
+    local secret_id="$4"
     local cfg="$OPENCLAW_CONFIG"
     local cfg_tmp="$OPENCLAW_CONFIG_TMP"
 
@@ -281,14 +282,28 @@ _wire_env_secretref() {
         return 0
     fi
 
-    local existing_exists existing_type
-    existing_exists=$(jq -e --arg v "$var_name" '.env.vars | has($v)' "$cfg" >/dev/null 2>&1 && echo 1 || echo 0)
-    if [ "$existing_exists" -eq 1 ]; then
-        existing_type=$(jq -r --arg v "$var_name" '.env.vars[$v] | type' "$cfg" 2>/dev/null)
-        if [ "$existing_type" = "string" ]; then
-            echo -e "  ${YELLOW}⚠️${NC} $var_name is a plaintext string in $cfg; leaving it unchanged but it should be migrated to a SecretRef"
+    # Primary surface: models.providers.<provider_key>.apiKey
+    local model_apikey_exists model_apikey_type
+    model_apikey_exists=$(jq -e --arg p "$provider_key" '.models.providers[$p].apiKey // empty' "$cfg" >/dev/null 2>&1 && echo 1 || echo 0)
+    if [ "$model_apikey_exists" -eq 1 ]; then
+        model_apikey_type=$(jq -r --arg p "$provider_key" '.models.providers[$p].apiKey | type' "$cfg" 2>/dev/null)
+        if [ "$model_apikey_type" = "string" ]; then
+            echo -e "  ${YELLOW}⚠️${NC} $var_name is a plaintext string in models.providers.$provider_key.apiKey; leaving it unchanged but it should be migrated to a SecretRef"
         else
-            echo -e "  ${GREEN}✅${NC} $var_name already configured as SecretRef in $cfg"
+            echo -e "  ${GREEN}✅${NC} $var_name already configured as SecretRef in models.providers.$provider_key.apiKey"
+        fi
+        return 0
+    fi
+
+    # Legacy surface: env.vars.<KEY>
+    local env_exists env_type
+    env_exists=$(jq -e --arg v "$var_name" '.env.vars | has($v)' "$cfg" >/dev/null 2>&1 && echo 1 || echo 0)
+    if [ "$env_exists" -eq 1 ]; then
+        env_type=$(jq -r --arg v "$var_name" '.env.vars[$v] | type' "$cfg" 2>/dev/null)
+        if [ "$env_type" = "string" ]; then
+            echo -e "  ${YELLOW}⚠️${NC} $var_name is a plaintext string in env.vars; leaving it unchanged but it should be migrated to a SecretRef"
+        else
+            echo -e "  ${GREEN}✅${NC} $var_name already configured as SecretRef in env.vars"
         fi
         return 0
     fi
@@ -301,9 +316,11 @@ _wire_env_secretref() {
         return 0
     fi
 
-    jq --arg v "$var_name" --arg provider "$provider" --arg id "$secret_id" '
-        .env.vars = (.env.vars // {})
-        | .env.vars[$v] = {
+    jq --arg p "$provider_key" --arg provider "$provider" --arg id "$secret_id" '
+        .models = (.models // {})
+        | .models.providers = (.models.providers // {})
+        | .models.providers[$p] = (.models.providers[$p] // {})
+        | .models.providers[$p].apiKey = {
             "source": "exec",
             "provider": $provider,
             "id": $id
@@ -316,7 +333,7 @@ _wire_env_secretref() {
     if mv "$cfg_tmp" "$cfg"; then
         if command -v openclaw &>/dev/null && openclaw config validate --help &>/dev/null; then
             if openclaw config validate >/dev/null 2>&1; then
-                echo -e "  ${GREEN}✅${NC} $var_name SecretRef wired (provider=$provider, id=$secret_id)"
+                echo -e "  ${GREEN}✅${NC} $var_name SecretRef wired to models.providers.$provider_key.apiKey (provider=$provider, id=$secret_id)"
             else
                 echo -e "  ${RED}❌${NC} openclaw config validate failed after wiring $var_name SecretRef; restoring backup"
                 mv "$backup_cfg" "$cfg"
@@ -326,7 +343,7 @@ _wire_env_secretref() {
                 return 1
             fi
         else
-            echo -e "  ${GREEN}✅${NC} $var_name SecretRef wired (provider=$provider, id=$secret_id)"
+            echo -e "  ${GREEN}✅${NC} $var_name SecretRef wired to models.providers.$provider_key.apiKey (provider=$provider, id=$secret_id)"
         fi
         # Recreate the working temp file so subsequent keys can be wired.
         cp "$cfg" "$cfg_tmp"
@@ -345,13 +362,13 @@ cp "$OPENCLAW_CONFIG" "$OPENCLAW_CONFIG_TMP"
 # Override provider/id via OPENAI_SECRET_PROVIDER / OPENAI_SECRET_ID.
 OPENAI_SECRET_PROVIDER="${OPENAI_SECRET_PROVIDER:-op_openai}"
 OPENAI_SECRET_ID="${OPENAI_SECRET_ID:-value}"
-_wire_env_secretref "OPENAI_API_KEY" "$OPENAI_SECRET_PROVIDER" "$OPENAI_SECRET_ID" || true
+_wire_model_provider_apikey "openai" "OPENAI_API_KEY" "$OPENAI_SECRET_PROVIDER" "$OPENAI_SECRET_ID" || true
 
 # ANTHROPIC_API_KEY: default provider op_anthropic, secret id "value".
 # Override provider/id via ANTHROPIC_SECRET_PROVIDER / ANTHROPIC_SECRET_ID.
 ANTHROPIC_SECRET_PROVIDER="${ANTHROPIC_SECRET_PROVIDER:-op_anthropic}"
 ANTHROPIC_SECRET_ID="${ANTHROPIC_SECRET_ID:-value}"
-_wire_env_secretref "ANTHROPIC_API_KEY" "$ANTHROPIC_SECRET_PROVIDER" "$ANTHROPIC_SECRET_ID" || true
+_wire_model_provider_apikey "anthropic" "ANTHROPIC_API_KEY" "$ANTHROPIC_SECRET_PROVIDER" "$ANTHROPIC_SECRET_ID" || true
 
 rm -f "$OPENCLAW_CONFIG_TMP"
 

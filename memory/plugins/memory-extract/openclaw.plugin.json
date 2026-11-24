@@ -32,8 +32,11 @@
         "additionalProperties": false,
         "properties": {
           "apiKey": {
-            "type": "string",
-            "description": "OpenRouter API key for memory extraction (resolved from a SecretRef at runtime)"
+            "type": [
+              "string",
+              "object"
+            ],
+            "description": "OpenRouter API key for memory extraction (plaintext string or SecretRef object resolved at runtime)"
           }
         }
       },

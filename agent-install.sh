@@ -196,12 +196,14 @@ _install_memory_extract_plugin() {
         local secret_id="${MEMORY_EXTRACT_SECRET_ID:-value}"
         local provider_exists
         provider_exists=$(jq --arg p "$secret_provider" -e '.secrets.providers[$p]' "$cfg" >/dev/null 2>&1 && echo 1 || echo 0)
-        local existing_apikey_type
-        existing_apikey_type=$(jq -r '.plugins.entries."memory-extract".config.extraction.apiKey // "__missing__" | type' "$cfg" 2>/dev/null)
+        local existing_apikey_exists
+        existing_apikey_exists=$(jq -e '.plugins.entries."memory-extract".config.extraction | has("apiKey")' "$cfg" >/dev/null 2>&1 && echo 1 || echo 0)
 
         local skip_secretref=0
-        if [ "$existing_apikey_type" != "__missing__" ]; then
+        if [ "$existing_apikey_exists" -eq 1 ]; then
             skip_secretref=1
+            local existing_apikey_type
+            existing_apikey_type=$(jq -r '.plugins.entries."memory-extract".config.extraction.apiKey | type' "$cfg" 2>/dev/null)
             if [ "$existing_apikey_type" = "string" ]; then
                 echo -e "  ${WARNING} memory-extract extraction.apiKey is a plaintext string; leaving it unchanged but it should be migrated to a SecretRef"
             else

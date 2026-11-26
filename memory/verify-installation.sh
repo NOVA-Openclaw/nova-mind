@@ -124,18 +124,51 @@ else
 fi
 
 echo ""
-echo "Checking environment variables..."
-if [ -n "$ANTHROPIC_API_KEY" ]; then
-    echo -e "  ${GREEN}✅${NC} ANTHROPIC_API_KEY is set"
+echo "Checking API key configuration..."
+
+OPENCLAW_CONFIG="$HOME/.openclaw/openclaw.json"
+NOVA_OP_MAP="$HOME/.openclaw/scripts/nova-op-item-map.json"
+
+# Check gateway SecretRef wiring for memory-extract.
+if [ -f "$OPENCLAW_CONFIG" ] && command -v jq &>/dev/null; then
+    memory_extract_apikey=$(jq -r '.plugins.entries."memory-extract".config.extraction.apiKey // empty' "$OPENCLAW_CONFIG" 2>/dev/null)
+    if [ -n "$memory_extract_apikey" ]; then
+        apikey_source=$(jq -r '.plugins.entries."memory-extract".config.extraction.apiKey.source // empty' "$OPENCLAW_CONFIG" 2>/dev/null)
+        apikey_provider=$(jq -r '.plugins.entries."memory-extract".config.extraction.apiKey.provider // empty' "$OPENCLAW_CONFIG" 2>/dev/null)
+        if [ -n "$apikey_source" ] && [ -n "$apikey_provider" ]; then
+            provider_exists=$(jq --arg p "$apikey_provider" -e '.secrets.providers[$p]' "$OPENCLAW_CONFIG" >/dev/null 2>&1 && echo 1 || echo 0)
+            if [ "$provider_exists" -eq 1 ]; then
+                echo -e "  ${GREEN}✅${NC} memory-extract extraction.apiKey SecretRef resolves via provider '$apikey_provider'"
+            else
+                echo -e "  ${RED}❌${NC} memory-extract extraction.apiKey SecretRef present but provider '$apikey_provider' is undefined"
+            fi
+        else
+            echo -e "  ${YELLOW}⚠${NC} memory-extract extraction.apiKey is set but does not look like a SecretRef"
+        fi
+    else
+        echo -e "  ${YELLOW}⚠${NC} memory-extract extraction.apiKey SecretRef not configured"
+    fi
 else
-    echo -e "  ${YELLOW}⚠${NC} ANTHROPIC_API_KEY not set"
+    echo -e "  ${YELLOW}⚠${NC} Cannot check OpenClaw config for SecretRef wiring"
 fi
 
-if [ -n "$OPENAI_API_KEY" ]; then
-    echo -e "  ${GREEN}✅${NC} OPENAI_API_KEY is set"
+# Check nova-op item map for scripts run outside the gateway.
+if [ -f "$NOVA_OP_MAP" ]; then
+    if command -v jq &>/dev/null; then
+        placeholders=$(jq -r '[to_entries[] | select(.value.item? == "REPLACE_WITH_ITEM_ID" or .value.vault? == "REPLACE_WITH_VAULT_ID") | .key] | join(", ")' "$NOVA_OP_MAP" 2>/dev/null)
+        if [ -n "$placeholders" ]; then
+            echo -e "  ${YELLOW}⚠${NC} nova-op item map has unreplaced placeholders for: $placeholders"
+        else
+            echo -e "  ${GREEN}✅${NC} nova-op item map exists with no placeholders"
+        fi
+    else
+        echo -e "  ${GREEN}✅${NC} nova-op item map exists (jq unavailable for placeholder check)"
+    fi
 else
-    echo -e "  ${YELLOW}⚠${NC} OPENAI_API_KEY not set"
+    echo -e "  ${YELLOW}⚠${NC} nova-op item map not found at $NOVA_OP_MAP"
 fi
+
+# Legacy env-var checks are intentionally removed post-#309.
 
 echo ""
 echo "Checking Python dependencies..."

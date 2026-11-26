@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Docs (nova-workspace#309, nova-mind#830 — SecretRef migration documentation pass)
+
+- **`agent-install.sh` printed operator instructions** (both the `_wire_memory_extract_secretref`
+  function and the inline duplicate in `_install_memory_extract_plugin`) now include `passEnv`,
+  `jsonOnly`, and `trustedDirs` in the example `secrets.providers` exec-provider config, plus a
+  pointer to `memory/INSTALLATION.md`'s new "Exec Secret Provider Requirements" section — closes
+  nova-mind#830 (a gap confirmed to cause a `SECRET_SURFACE_UNAVAILABLE` staging failure during
+  nova-workspace#309 QA validation, since the prior example omitted all three keys and the
+  gateway runs exec secret providers in a sanitized environment that drops them silently without
+  `passEnv`).
+
 ### Fixed (#660 — agent_config_sync: map DB `thinking` to `thinkingDefault`)
 
 - **`buildAgentsList()` now maps each agent row's `thinking` column to `entry.thinkingDefault`** (`cognition/focus/agent-config-sync/src/sync.ts`) — validated against the config schema's 9-value `thinking` enum (`off`/`minimal`/`low`/`medium`/`high`/`xhigh`/`adaptive`/`max`/`ultra`), not the DB `CHECK` constraint's narrower 7-value list, since the schema enum is the actual consumer contract. `NULL`, empty string, unknown tiers, wrong JS type, mixed case, and whitespace-padded values are all omitted (degrade only the malformed row; never crash, never silently emit an invalid value). Previously `thinking` was never written to `agents.json` at all, based on a stale (now-removed) comment claiming it was "not a valid per-agent config key" — that comment predated the config schema's `thinkingDefault` support and was factually wrong at the time this fix landed. Per-agent DB tiers that were previously silently dropped now reach the runtime's `normalizeThinkLevel` resolution chain and take effect. Adds `TC-660-U-01..18` unit tests (happy path, adversarial/malformed inputs, boundaries, fleet-shape regression) and `TC-660-I-01..04` integration tests exercising the real nova-openclaw consumer seam (`resolveAgentConfig`/`normalizeThinkLevel`/`listAgentEntries`) to prove the emitted value is actually consumed, not just written.
@@ -70,7 +81,7 @@ See root `CHANGELOG.md` (batch `agent-chat-reply-to-548`) for full detail. Summa
 
 ### Fixed (#414 — restore and fix `generate-delegation-context.sh`)
 
-- **`cognition/scripts/generate-delegation-context.sh` restored to version control** ([#414](https://github.com/NOVA-Openclaw/nova-mind/issues/414)) — The script had been deployed and run on the live workspace but was never committed to the repo, so the copy at `~/.openclaw/workspace/scripts/generate-delegation-context.sh` was the only surviving version until it was deleted. Recreated from an introspection transcript and fixed in place; it is now tracked at `cognition/scripts/generate-delegation-context.sh` and wired into `agent-install.sh`.
+- **`cognition/scripts/generate-delegation-context.sh` restored to version control** ([#414](https://github.com/NOVA-Openclaw/nova-mind/issues/414)) — The script had been deployed and run on the live workspace but was never committed to the repo, so the copy at `~/.openclaw/scripts/generate-delegation-context.sh` was the only surviving version until it was deleted. Recreated from an introspection transcript and fixed in place; it is now tracked at `cognition/scripts/generate-delegation-context.sh` and wired into `agent-install.sh`.
 - **Two dead SQL queries fixed** (#414) — Agent Roster/Spawn Instructions section and the per-workflow Steps query both referenced schema that no longer exists:
   - `workflow_steps_detail.agent_name` does not exist on the view (columns are `domain`/`domains`). The steps query now selects `array_to_string(domains, ', ') AS domains` and renders a **Domains** column instead of **Agent**.
   - `agents.seed_context` does not exist on the `agents` table. The Spawn Instructions section is rebuilt from live `agents` columns instead: `nickname`, `model`, `thinking`, `context_type`, `allowed_subagents`, `decision_criteria`.
@@ -79,7 +90,7 @@ See root `CHANGELOG.md` (batch `agent-chat-reply-to-548`) for full detail. Summa
 - **Apostrophe/quoting hazard fixed** (#414) — Workflow names are escaped for safe SQL string-literal interpolation (`sed "s/'/''/g"`) before being substituted into the per-workflow description and steps queries, fixing breakage on names like `Neva & Edmund's Edification`.
 - **Leading `#` in workflow descriptions escaped** (#414) — Workflow description text is piped through `sed 's/^#/\\#/'` before being written to the output file, preventing embedded description text from being interpreted as a markdown heading and colliding with the document's own heading hierarchy.
 - **`PGPASSWORD` dependency removed** (#414) — The script authenticates via `~/.pgpass` only; it never references the gateway-injected `PGPASSWORD` environment variable.
-- **Installer wiring** (#414) — `agent-install.sh` now copies `cognition/scripts/generate-delegation-context.sh` to `$HOME/.openclaw/workspace/scripts/generate-delegation-context.sh` and `chmod +x`s it, with a warning-and-skip (not a hard failure) if the source file is missing.
+- **Installer wiring** (#414) — `agent-install.sh` now copies `cognition/scripts/generate-delegation-context.sh` to `$HOME/.openclaw/scripts/generate-delegation-context.sh` and `chmod +x`s it, with a warning-and-skip (not a hard failure) if the source file is missing.
 
 #### Tests (#414)
 - `tests/install/test_generate_delegation_context.bats` — 18-case BATS suite covering the happy path, each of the three sections' query-failure degradation (with per-section markers and non-zero exit), the apostrophe/quoting fix, heading-collision escaping, zero-step and empty-workflow-set edge cases, NULL `decision_criteria` omission, multi-domain step rendering, output-path override, UTC timestamp format, absence of `PGPASSWORD`/`2>/dev/null`, idempotent re-run (no duplicate header/footer), and a schema-regression guard asserting the dead `agent_name`/`seed_context` references do not reappear. Uses a dedicated `delegation_context_test` schema with an `assert_fixture_isolation()` pre-flight guard (checks `current_schema()` before any destructive DDL/DML) to keep destructive test statements from touching production `nova_memory` data. `tests/fixtures/delegation_context_seed.sql` provides the schema-agnostic fixture data. See `tests/TEST-CASES-ISSUE-414.md` for the implementation-mapping document.

@@ -16,7 +16,7 @@ When an agent needs to delegate work, it should know:
 
 **Source (tracked in this repo):** `cognition/scripts/generate-delegation-context.sh`
 
-**Installed location:** `$HOME/.openclaw/workspace/scripts/generate-delegation-context.sh` (copied there by `agent-install.sh`)
+**Installed location:** `$HOME/.openclaw/scripts/generate-delegation-context.sh` (copied there by `agent-install.sh`)
 
 **Output:** `~/.openclaw/workspace/DELEGATION_CONTEXT.md` (configurable via first positional argument)
 
@@ -105,11 +105,11 @@ Per-agent `###` subsections listing Model, Thinking, Context type, Allowed subag
 
 ### Manual Generation
 ```bash
-$HOME/.openclaw/workspace/scripts/generate-delegation-context.sh
+$HOME/.openclaw/scripts/generate-delegation-context.sh
 # Outputs to ~/.openclaw/workspace/DELEGATION_CONTEXT.md
 
 # Custom output location:
-$HOME/.openclaw/workspace/scripts/generate-delegation-context.sh /tmp/custom-context.md
+$HOME/.openclaw/scripts/generate-delegation-context.sh /tmp/custom-context.md
 ```
 
 ### Integration Points

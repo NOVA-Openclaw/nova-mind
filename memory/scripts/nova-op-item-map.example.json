@@ -1,0 +1,23 @@
+{
+  "_description": "Example 1Password item map for nova-mind memory scripts. Copy to ~/.openclaw/scripts/nova-op-item-map.json and replace the placeholder item IDs with your vault's actual item IDs. The loader will refuse to run while 'REPLACE_WITH_ITEM_ID' placeholders are present.",
+  "OPENROUTER_API_KEY": {
+    "vault": "REPLACE_WITH_VAULT_ID",
+    "item": "REPLACE_WITH_ITEM_ID",
+    "field": "API Key"
+  },
+  "ANTHROPIC_API_KEY": {
+    "vault": "REPLACE_WITH_VAULT_ID",
+    "item": "REPLACE_WITH_ITEM_ID",
+    "field": "credential"
+  },
+  "OPENAI_API_KEY": {
+    "vault": "REPLACE_WITH_VAULT_ID",
+    "item": "REPLACE_WITH_ITEM_ID",
+    "field": "credential"
+  },
+  "GEMINI_API_KEY": {
+    "vault": "REPLACE_WITH_VAULT_ID",
+    "item": "REPLACE_WITH_ITEM_ID",
+    "field": "credential"
+  }
+}

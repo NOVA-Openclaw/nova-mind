@@ -24,7 +24,7 @@ psql -U nova -d nova_memory -h localhost -f pre-migrations/005-fix-snapshots-ind
 # the (reordered) plan — there is no --hazards flag; hazard/destructive-drop
 # detection is done by the installer via jq against the plan JSON before
 # calling apply, not by a pgschema flag; see the repo-root agent-install.sh
-# (memory/agent-install.sh is a stale, uninvoked pre-merge copy)
+# (the repo-root agent-install.sh is the only live installer)
 pgschema plan --host localhost --port 5432 --db nova_memory --user nova \
   --schema public --file database/schema.sql \
   --plan-host localhost --plan-port 5432 --plan-db nova_memory --plan-user nova \

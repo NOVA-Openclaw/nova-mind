@@ -90,6 +90,10 @@ let activeConfig = {
   dbUnresolvedRateLimitMs: DEFAULT_DB_UNRESOLVED_RATE_LIMIT_MS,
 };
 
+// Resolved OpenRouter API key supplied by plugin config (SecretRef).
+// Kept separate from activeConfig so it never leaks into logs.
+let extractionApiKey: string | null = null;
+
 let startupEmitted = false;
 let shutdownEmitted = false;
 let lifecycleInitialized = false;
@@ -229,6 +233,7 @@ export function resetModuleState(): void {
   startupEmitted = false;
   shutdownEmitted = false;
   lifecycleInitialized = false;
+  extractionApiKey = null;
   moduleLogger = createDefaultLogger();
   if (summaryTimer) {
     clearInterval(summaryTimer);
@@ -936,19 +941,45 @@ export async function handleMessageReceived(event: any): Promise<void> {
       return Number.isFinite(n) && n > 0 ? n : loadExtractionTimeoutMs();
     })();
 
+    const resolvedApiKey = extractionApiKey;
+    if (!resolvedApiKey) {
+      logError(
+        `[memory-extract] extraction apiKey unresolved; skipping extraction ` +
+          `sessionKey=${sessionKey}`
+      );
+      incrementFailed();
+      return;
+    }
+
+    // Minimal child environment: never pass the full gateway process.env.
+    // Include only what the Python extractor genuinely needs, plus the
+    // resolved API key injected explicitly from plugin config.
+    const childEnv: NodeJS.ProcessEnv = {
+      PATH: process.env.PATH,
+      HOME: process.env.HOME,
+      USER: process.env.USER,
+      LANG: process.env.LANG,
+      PGDATABASE: memoryDatabase,
+      SENDER_NAME: senderName,
+      SENDER_ID: senderId,
+      IS_GROUP: String(isGroup),
+      SOURCE_SESSION_ID: sessionKey,
+      SOURCE_TIMESTAMP: messageTimestamp,
+      SOURCE_CHANNEL_TRANSCRIPT_ID: channelTranscriptId,
+      SOURCE_CHANNEL_SESSION_ID: channelSessionId,
+      OPENROUTER_API_KEY: resolvedApiKey,
+    };
+
+    // Preserve any PG* connection variables that the host already has set.
+    for (const key of ["PGHOST", "PGPORT", "PGUSER", "PGPASSWORD"]) {
+      if (process.env[key]) {
+        childEnv[key] = process.env[key];
+      }
+    }
+
     const child = spawn(pythonCmd, [scriptPath], {
       stdio: ["pipe", "pipe", "pipe"],
-      env: {
-        ...process.env,
-        PGDATABASE: memoryDatabase,
-        SENDER_NAME: senderName,
-        SENDER_ID: senderId,
-        IS_GROUP: String(isGroup),
-        SOURCE_SESSION_ID: sessionKey,
-        SOURCE_TIMESTAMP: messageTimestamp,
-        SOURCE_CHANNEL_TRANSCRIPT_ID: channelTranscriptId,
-        SOURCE_CHANNEL_SESSION_ID: channelSessionId,
-      },
+      env: childEnv,
     });
 
     const getStderrTail = attachTailBuffer(child.stderr, PIPE_TAIL_CAP_BYTES);
@@ -1132,17 +1163,33 @@ function ensureInitialized(): void {
 /** Test-only hook to inject a mock logger and optionally override lifecycle config. */
 export function setModuleLogger(
   logger: PluginLogger | null,
-  config?: Partial<typeof activeConfig>
+  config?: Partial<typeof activeConfig> & { extraction?: { apiKey?: string } }
 ): void {
   moduleLogger = logger ?? createDefaultLogger();
   if (config) {
-    activeConfig = { ...activeConfig, ...config };
+    const { extraction, ...lifecycleConfig } = config;
+    activeConfig = { ...activeConfig, ...lifecycleConfig };
+    if (extraction) {
+      if (extraction.apiKey !== undefined) {
+        extractionApiKey = extraction.apiKey ?? null;
+      }
+    }
   }
   emitStartupInfo();
   if (!lifecycleInitialized) {
     startLifecycleTimers();
     lifecycleInitialized = true;
   }
+}
+
+/** Set or clear the resolved extraction API key (used by plugin registration). */
+export function setExtractionApiKey(apiKey: string | null | undefined): void {
+  extractionApiKey = typeof apiKey === "string" ? apiKey : null;
+}
+
+/** Return the resolved extraction API key, or null if unresolved. */
+export function getExtractionApiKey(): string | null {
+  return extractionApiKey;
 }
 
 // ── Legacy hook entry point ──

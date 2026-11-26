@@ -232,7 +232,7 @@ describe("memory-extract handler DB resolution (#703 integration)", () => {
     process.env.PGDATABASE = "nova_memory";
     errors = [];
     resetForTests();
-    setModuleLogger(makeLoggerForTest());
+    setModuleLogger(makeLoggerForTest(), { extraction: { apiKey: "sk-test" } });
     errors.length = 0;
     api = {} as any;
     vi.mocked(spawn).mockImplementation(() => makeSuccessfulChild() as any);

@@ -36,6 +36,16 @@ try:
     load_openclaw_env()
 except ImportError:
     pass  # Library not available; keys already in env
+except RuntimeError as _env_loader_err:
+    # When the plugin pre-injects OPENROUTER_API_KEY we do not need the
+    # item map or nova-op to be reachable. Fail loudly only if the key is
+    # still missing after the loader attempt.
+    if not os.environ.get("OPENROUTER_API_KEY", "").strip():
+        print(
+            f"[extract_memories] ERROR: env_loader failed and OPENROUTER_API_KEY is not set: {_env_loader_err}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
 from pg_env import load_pg_env
 load_pg_env()

@@ -155,7 +155,7 @@ describe("#716 lifecycle and summary logging", () => {
   it("TC-716-001: Startup INFO line fires exactly once at registration", () => {
     makePostgresConfig(homeDir, "nova_memory");
     const logger = makeMockLogger();
-    setModuleLogger(logger);
+    setModuleLogger(logger, { extraction: { apiKey: "sk-test" } });
 
     const infoCalls = logger.info.mock.calls.map((c: any) => c[0] as string);
     const startupCalls = infoCalls.filter((m) => m.includes("[memory-extract] startup"));
@@ -165,7 +165,7 @@ describe("#716 lifecycle and summary logging", () => {
   it("TC-716-002: Startup line contains version, DB name, source, Python path, model", () => {
     makePostgresConfig(homeDir, "nova_memory");
     const logger = makeMockLogger();
-    setModuleLogger(logger);
+    setModuleLogger(logger, { extraction: { apiKey: "sk-test" } });
 
     const startupMsg = logger.info.mock.calls.find((c: any) =>
       (c[0] as string).includes("[memory-extract] startup")
@@ -180,7 +180,7 @@ describe("#716 lifecycle and summary logging", () => {
 
   it("TC-716-003: DB resolution failure at startup logs ERROR immediately", () => {
     const logger = makeMockLogger();
-    setModuleLogger(logger);
+    setModuleLogger(logger, { extraction: { apiKey: "sk-test" } });
 
     const errorMsg = logger.error.mock.calls.find((c: any) =>
       (c[0] as string).includes("[memory-extract] startup failed")
@@ -192,7 +192,7 @@ describe("#716 lifecycle and summary logging", () => {
   it("TC-716-004: Shutdown INFO line fires on gateway_stop, exactly once", async () => {
     makePostgresConfig(homeDir, "nova_memory");
     const logger = makeMockLogger();
-    setModuleLogger(logger);
+    setModuleLogger(logger, { extraction: { apiKey: "sk-test" } });
     logger.info.mockClear();
 
     await emitShutdown();
@@ -207,7 +207,7 @@ describe("#716 lifecycle and summary logging", () => {
     makePostgresConfig(homeDir, "nova_memory");
     mockPsql();
     const logger = makeMockLogger();
-    setModuleLogger(logger);
+    setModuleLogger(logger, { extraction: { apiKey: "sk-test" } });
 
     // Simulate two successful extractions.
     vi.mocked(spawn).mockImplementation(() => makeSuccessfulChild() as any);
@@ -227,7 +227,7 @@ describe("#716 lifecycle and summary logging", () => {
   it("TC-716-006: Shutdown line fires even with zero activity", async () => {
     makePostgresConfig(homeDir, "nova_memory");
     const logger = makeMockLogger();
-    setModuleLogger(logger);
+    setModuleLogger(logger, { extraction: { apiKey: "sk-test" } });
     logger.info.mockClear();
 
     await emitShutdown();
@@ -248,7 +248,7 @@ describe("#716 lifecycle and summary logging", () => {
     makePostgresConfig(homeDir, "nova_memory");
     mockPsql();
     const logger = makeMockLogger();
-    setModuleLogger(logger);
+    setModuleLogger(logger, { extraction: { apiKey: "sk-test" } });
 
     vi.mocked(spawn).mockImplementation(() => makeSuccessfulChild() as any);
     await handleMessageReceived(makeEvent());
@@ -268,7 +268,7 @@ describe("#716 lifecycle and summary logging", () => {
   it("TC-716-008: NO summary line when idle", async () => {
     makePostgresConfig(homeDir, "nova_memory");
     const logger = makeMockLogger();
-    setModuleLogger(logger);
+    setModuleLogger(logger, { extraction: { apiKey: "sk-test" } });
     logger.info.mockClear();
 
     await vi.advanceTimersByTimeAsync(30 * 60 * 1000);
@@ -283,7 +283,7 @@ describe("#716 lifecycle and summary logging", () => {
     makePostgresConfig(homeDir, "nova_memory");
     mockPsql();
     const logger = makeMockLogger();
-    setModuleLogger(logger, { summaryIntervalMs: 5 * 60 * 1000 });
+    setModuleLogger(logger, { summaryIntervalMs: 5 * 60 * 1000, extraction: { apiKey: "sk-test" } });
 
     vi.mocked(spawn).mockImplementation(() => makeSuccessfulChild() as any);
     await handleMessageReceived(makeEvent());
@@ -304,7 +304,7 @@ describe("#716 lifecycle and summary logging", () => {
     makePostgresConfig(homeDir, "nova_memory");
     mockPsql();
     const logger = makeMockLogger();
-    setModuleLogger(logger);
+    setModuleLogger(logger, { extraction: { apiKey: "sk-test" } });
 
     // First extraction succeeds.
     vi.mocked(spawn).mockImplementation(() => makeSuccessfulChild() as any);
@@ -328,7 +328,7 @@ describe("#716 lifecycle and summary logging", () => {
 
   it("TC-716-011a: db_unresolved token logged when DB cannot be resolved", async () => {
     const logger = makeMockLogger();
-    setModuleLogger(logger);
+    setModuleLogger(logger, { extraction: { apiKey: "sk-test" } });
     logger.error.mockClear();
 
     await handleMessageReceived(makeEvent());
@@ -352,7 +352,7 @@ describe("#716 lifecycle and summary logging", () => {
     });
 
     const logger = makeMockLogger();
-    setModuleLogger(logger);
+    setModuleLogger(logger, { extraction: { apiKey: "sk-test" } });
 
     await handleMessageReceived(makeEvent({ sessionKey: "agent:nova:discord:channel:123" }));
 
@@ -368,7 +368,7 @@ describe("#716 lifecycle and summary logging", () => {
     mockPsql(new Set(["graybeard", "newhart"]));
 
     const logger = makeMockLogger();
-    setModuleLogger(logger);
+    setModuleLogger(logger, { extraction: { apiKey: "sk-test" } });
 
     await handleMessageReceived(makeEvent({ sessionKey: "agent:newhart:agent_chat" }));
 
@@ -385,7 +385,7 @@ describe("#716 lifecycle and summary logging", () => {
     process.env.EXTRACTION_PYTHON_CMD_OVERRIDE = "mock-python-716";
 
     const logger = makeMockLogger();
-    setModuleLogger(logger);
+    setModuleLogger(logger, { extraction: { apiKey: "sk-test" } });
 
     vi.mocked(spawn).mockImplementation(() => {
       return {
@@ -412,7 +412,7 @@ describe("#716 lifecycle and summary logging", () => {
     makePostgresConfig(homeDir, "nova_memory");
     mockPsql();
     const logger = makeMockLogger();
-    setModuleLogger(logger);
+    setModuleLogger(logger, { extraction: { apiKey: "sk-test" } });
 
     vi.mocked(spawn).mockImplementation(() => makeFailingChild(1, "") as any);
     await handleMessageReceived(makeEvent());
@@ -428,7 +428,7 @@ describe("#716 lifecycle and summary logging", () => {
     makePostgresConfig(homeDir, "nova_memory");
     mockPsql();
     const logger = makeMockLogger();
-    setModuleLogger(logger);
+    setModuleLogger(logger, { extraction: { apiKey: "sk-test" } });
 
     vi.mocked(spawn).mockImplementation(
       () => makeFailingChild(1, "[extract_memories] ERROR: OPENROUTER_API_KEY not set") as any
@@ -448,7 +448,7 @@ describe("#716 lifecycle and summary logging", () => {
     mockPsql();
     process.env.EXTRACTION_TIMEOUT_MS_OVERRIDE = "50";
     const logger = makeMockLogger();
-    setModuleLogger(logger);
+    setModuleLogger(logger, { extraction: { apiKey: "sk-test" } });
 
     vi.mocked(spawn).mockImplementation(() => makeHangingChild() as any);
     const extractionPromise = handleMessageReceived(makeEvent());
@@ -467,7 +467,7 @@ describe("#716 lifecycle and summary logging", () => {
     makePostgresConfig(homeDir, "nova_memory");
     mockPsql();
     const logger = makeMockLogger();
-    setModuleLogger(logger, { stallCheckIntervalMs: 1000 });
+    setModuleLogger(logger, { stallCheckIntervalMs: 1000, extraction: { apiKey: "sk-test" } });
 
     // One successful store at t=0.
     vi.mocked(spawn).mockImplementation(() => makeSuccessfulChild() as any);
@@ -487,7 +487,7 @@ describe("#716 lifecycle and summary logging", () => {
     makePostgresConfig(homeDir, "nova_memory");
     mockPsql();
     const logger = makeMockLogger();
-    setModuleLogger(logger, { stallCheckIntervalMs: 1000 });
+    setModuleLogger(logger, { stallCheckIntervalMs: 1000, extraction: { apiKey: "sk-test" } });
 
     vi.mocked(spawn).mockImplementation(() => makeSuccessfulChild() as any);
     await handleMessageReceived(makeEvent());
@@ -513,6 +513,7 @@ describe("#716 lifecycle and summary logging", () => {
     setModuleLogger(logger, {
       stallThresholdMs: 60 * 60 * 1000,
       stallCheckIntervalMs: 1000,
+      extraction: { apiKey: "sk-test" },
     });
 
     vi.mocked(spawn).mockImplementation(() => makeSuccessfulChild() as any);
@@ -536,7 +537,7 @@ describe("#716 lifecycle and summary logging", () => {
     makePostgresConfig(homeDir, "nova_memory");
     mockPsql();
     const logger = makeMockLogger();
-    setModuleLogger(logger, { stallCheckIntervalMs: 1000 });
+    setModuleLogger(logger, { stallCheckIntervalMs: 1000, extraction: { apiKey: "sk-test" } });
 
     vi.mocked(spawn).mockImplementation(() => makeSuccessfulChild() as any);
     await handleMessageReceived(makeEvent());
@@ -569,7 +570,7 @@ describe("#716 lifecycle and summary logging", () => {
     makePostgresConfig(homeDir, "nova_memory");
     mockPsql();
     const logger = makeMockLogger();
-    setModuleLogger(logger, { stallCheckIntervalMs: 1000 });
+    setModuleLogger(logger, { stallCheckIntervalMs: 1000, extraction: { apiKey: "sk-test" } });
 
     vi.mocked(spawn).mockImplementation(() => makeSuccessfulChild() as any);
     await handleMessageReceived(makeEvent());
@@ -604,7 +605,7 @@ describe("#716 lifecycle and summary logging", () => {
   it("TC-716-017: module logger is usable for startup and shutdown", async () => {
     makePostgresConfig(homeDir, "nova_memory");
     const logger = makeMockLogger();
-    setModuleLogger(logger);
+    setModuleLogger(logger, { extraction: { apiKey: "sk-test" } });
 
     expect(
       logger.info.mock.calls.some((c: any) => (c[0] as string).includes("[memory-extract] startup"))
@@ -674,7 +675,7 @@ describe("#716 lifecycle and summary logging", () => {
     const secretValue = "super-secret-key-12345";
     process.env.OPENROUTER_API_KEY = secretValue;
     const logger = makeMockLogger();
-    setModuleLogger(logger);
+    setModuleLogger(logger, { extraction: { apiKey: "sk-test" } });
 
     vi.mocked(spawn).mockImplementation(() => makeSuccessfulChild() as any);
     await handleMessageReceived(makeEvent());
@@ -698,7 +699,7 @@ describe("#716 lifecycle and summary logging", () => {
     mockPsql();
     const distinctiveBody = "UNIQUE_TEST_MESSAGE_BODY_716_abcXYZ";
     const logger = makeMockLogger();
-    setModuleLogger(logger);
+    setModuleLogger(logger, { extraction: { apiKey: "sk-test" } });
 
     vi.mocked(spawn).mockImplementation(() => makeSuccessfulChild() as any);
     await handleMessageReceived(
@@ -720,7 +721,7 @@ describe("#716 lifecycle and summary logging", () => {
 
   it("TC-716-011a-rate-limit: 9 min apart -> 1 line, 11 min apart -> 2 lines", async () => {
     const logger = makeMockLogger();
-    setModuleLogger(logger);
+    setModuleLogger(logger, { extraction: { apiKey: "sk-test" } });
 
     await handleMessageReceived(makeEvent());
     logger.error.mockClear();

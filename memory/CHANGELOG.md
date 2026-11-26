@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### Docs
+- **SecretRef migration documentation pass** (nova-workspace#309, nova-mind#830, SE run #1507
+  step 9) — Fixed stale env-var/plaintext-file/`op read` instructions left over from before the
+  `nova-op` + per-agent item map (`~/.openclaw/scripts/nova-op-item-map.json`) secret-resolution
+  migration: `memory/INSTALLATION.md` (Prerequisites, Environment Variables, and a new "Exec
+  Secret Provider Requirements (passEnv / jsonOnly / trustedDirs)" section documenting the
+  `secrets.providers` exec-provider config the `extraction.apiKey` SecretRef depends on — closes
+  nova-mind#830, a staging QA gap that caused a `SECRET_SURFACE_UNAVAILABLE` failure), `agent-install.sh`'s
+  printed operator instructions (both occurrences now include `passEnv`/`jsonOnly`/`trustedDirs`),
+  `memory/README.md`, `memory/docs/memory-extraction-pipeline.md`, and
+  `memory/docs/deployment-setup-guide.md`. Also removed two dangling `memory/INSTALLATION.md`
+  Architecture-tree references to `memory/agent-install.sh` and `memory/shell-install.sh`, both
+  deleted by this same batch.
+
 ### Removed
 - **`agent_chat` documentation de-scoped from the memory subsystem** (nova-mind#579) — `memory/README.md`'s "Agent Chat Tables" section (table definitions, case-insensitive matching, outbound send examples) and `memory/docs/database-schema-guide.md`'s `agent_chat` table section + its GIN index reference are removed; both now point to the dedicated `NOVA-Openclaw/agent-chat` repository instead of describing the table shape locally. `memory/docs/database-config.md`'s installer-provisioned `agentChatDatabase` section is replaced with "Optional agent_chat Bus Peer Integration" describing the new detect-and-delegate model. See `memory/INSTALLATION.md`'s "2026-08-11: agent_chat Extraction to Dedicated Repo" entry and root `CHANGELOG.md` (batch `agent-chat-extraction-579`) for the full picture.
 

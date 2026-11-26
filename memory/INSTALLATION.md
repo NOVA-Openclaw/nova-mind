@@ -33,16 +33,21 @@ Before installing the nova-mind memory subsystem, ensure you have the following:
 
 ### Recommended
 
-- **ANTHROPIC_API_KEY** - Claude API key for memory extraction
-  - Used by the memory-extract hook to analyze messages
-  - Get your API key from: [https://console.anthropic.com/](https://console.anthropic.com/)
-
-- **OPENAI_API_KEY** - OpenAI API key (optional, for other features like image generation)
-  - The installer will prompt you for this if not set in your environment
-  - Alternatively, set it before running the installer:
-    ```bash
-    export OPENAI_API_KEY='your-key-here'
-    ```
+- **An OpenRouter API key for memory extraction** (nova-workspace#309) — used by the
+  `memory-extract` plugin's `extraction.apiKey` config (OpenRouter, not Anthropic directly;
+  see `memory/plugins/memory-extract/openclaw.plugin.json`'s `configSchema`). `agent-install.sh`
+  wires this as a SecretRef pointing at an `exec`-type secret provider (see
+  [Exec Secret Provider Requirements](#exec-secret-provider-requirements-passenv--jsononly--trusteddirs-nova-mind830)
+  below) — it is **not** set as a plain environment variable and the installer never prompts
+  for or writes a raw key into `openclaw.json`.
+- **Script-level secrets** (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, etc., used
+  by standalone scripts like `memory-catchup.sh`/`extraction-replay.sh`, not the plugin) are
+  resolved via `nova-op`, looked up by item ID in the per-agent item map
+  (`~/.openclaw/scripts/nova-op-item-map.json`, seeded from
+  `memory/scripts/nova-op-item-map.example.json`; see `memory/lib/env-loader.sh` /
+  `memory/lib/env_loader.py`). An already-set environment variable still wins without calling
+  `nova-op`. There is no `.env`/`secrets.env`/`~/.bashrc` plaintext fallback — resolution
+  failure is loud and non-zero-exit.
 
 - **pgvector extension** - For semantic search performance
   - Install: `sudo apt install postgresql-16-pgvector` (Ubuntu/Debian)
@@ -379,7 +384,9 @@ Verification...
 The installer and hooks use these environment variables:
 
 ### Required for Operation
-- `ANTHROPIC_API_KEY` - For memory extraction (Claude API)
+- The memory-extract plugin's OpenRouter API key, resolved via a `secrets.providers` exec
+  SecretRef (see [Exec Secret Provider Requirements](#exec-secret-provider-requirements-passenv--jsononly--trusteddirs-nova-mind830)
+  below) — not a plain `ANTHROPIC_API_KEY` environment variable.
 - **Embeddings**: Uses local Ollama with `snowflake-arctic-embed2` model (no API key required)
 
 ### Optional Configuration
@@ -392,6 +399,67 @@ The installer and hooks use these environment variables:
 ### Hook-Specific Settings
 - `SEMANTIC_RECALL_TOKEN_BUDGET` - Max tokens for recall (default: 1000)
 - `SEMANTIC_RECALL_HIGH_CONFIDENCE` - Confidence threshold (default: 0.7)
+
+## Exec Secret Provider Requirements (passEnv / jsonOnly / trustedDirs, nova-mind#830)
+
+`agent-install.sh` wires the `memory-extract` plugin's `extraction.apiKey` as a SecretRef that
+points at a `secrets.providers` entry of `"source": "exec"` in `~/.openclaw/openclaw.json`
+(see the installer's own printed instructions when no matching provider exists). The gateway
+runs that provider's `command` in a **sanitized environment** — it does **not** inherit the
+gateway process's own env (including `HOME`) unless the provider config explicitly says so, and
+it expects the command's stdout to be **JSON** unless told otherwise. Both expectations broke a
+staging install (`SECRET_SURFACE_UNAVAILABLE`, see QA validation for nova-workspace#309 step 8)
+because the documented example omitted them. An exec provider config needs:
+
+- **`passEnv`** — an explicit array of environment variable names to forward from the gateway
+  process into the spawned command. At minimum this must include `"HOME"` if the command (e.g.
+  the `op` CLI) reads anything under `$HOME` (config, session cache); it must also include
+  whatever variable carries the 1Password Service Account token for a non-interactive `op`
+  invocation (e.g. `"OP_SERVICE_ACCOUNT_TOKEN"`). Without `passEnv`, the command runs with
+  **no** `HOME` and no token — it fails every time, not intermittently.
+- **`jsonOnly`** — set to `false` when the `command` prints a bare value (e.g. `op item get ...
+  --reveal`, which prints the raw secret string with a trailing newline, not a JSON document).
+  The gateway's default assumes JSON-formatted provider output; leaving `jsonOnly` unset (or
+  `true`) against a bare-string command produces a parse failure, not a clear error about the
+  provider itself.
+- **`trustedDirs`** — an array of directories the provider's `command` must live in. This is a
+  security gate: it prevents a `secrets.providers` entry from pointing at an arbitrary or
+  untrusted executable path. Set it to the directory that actually contains `command` (e.g. the
+  install directory of the `op` binary or of `nova-op` itself).
+- **Owner/mode of `command`** — the executable referenced by `command` should follow the same
+  ownership and permission discipline as `nova-op` itself: owned by the agent's own unix user,
+  not group- or world-writable, so a different local user cannot swap in a different binary at
+  that path and have the gateway execute it with the token `passEnv`'d to it.
+
+### Worked example (placeholder IDs — replace before use, never commit real item/vault IDs)
+
+```json
+{
+  "secrets": {
+    "providers": {
+      "op_openrouter": {
+        "source": "exec",
+        "command": "/home/nova/.local/bin/op",
+        "args": [
+          "item", "get", "REPLACE_WITH_ITEM_ID",
+          "--vault", "REPLACE_WITH_VAULT_ID",
+          "--fields", "label=credential",
+          "--reveal"
+        ],
+        "passEnv": ["OP_SERVICE_ACCOUNT_TOKEN", "HOME"],
+        "jsonOnly": false,
+        "timeoutMs": 15000,
+        "trustedDirs": ["/home/nova/.local/bin"]
+      }
+    }
+  }
+}
+```
+
+With this provider configured, re-run `agent-install.sh` to wire the `extraction.apiKey`
+SecretRef automatically. See `memory/scripts/nova-op-item-map.example.json` for the parallel
+item-map format used by scripts that call `nova-op` directly rather than through a gateway
+exec secret provider.
 
 ### Semantic Recall Context Budget Architecture
 
@@ -691,8 +759,6 @@ SELECT COUNT(*) FROM memory_embeddings;
 ### Source Repository
 ```
 nova-mind/memory/
-├── agent-install.sh        # Stale pre-merge copy from the old standalone nova-memory repo — NOT invoked by anything; the live installer is the repo-root `agent-install.sh`
-├── shell-install.sh        # Memory subsystem interactive installer
 ├── verify-installation.sh  # Verification script
 ├── .pgschemaignore         # Objects excluded from pgschema management (TOML format)
 ├── schema/

@@ -91,8 +91,13 @@ createdb "$DB_NAME"
 # Schema is applied declaratively by agent-install.sh via pgschema
 ./agent-install.sh
 
-# 3. Set your Anthropic API key
-export ANTHROPIC_API_KEY="your-key-here"
+# 3. Configure secrets (nova-workspace#309): add OPENROUTER_API_KEY (used by
+#    extract_memories.py) to ~/.openclaw/scripts/nova-op-item-map.json, resolved
+#    via nova-op — see memory/scripts/nova-op-item-map.example.json and
+#    memory/INSTALLATION.md's "Exec Secret Provider Requirements" section.
+#    (ANTHROPIC_API_KEY, if set, is only checked for presence by the
+#    memory-catchup.sh/extraction-replay.sh wrapper scripts — see "Environment
+#    Variables" below; it is not read by extract_memories.py itself.)
 
 # 4. Test extraction (send a real message through a channel with memory-extract
 #    enabled and check entity_facts — there is no standalone CLI test script)
@@ -667,7 +672,7 @@ Full mechanism, schema, and state machine: `memory/docs/memory-extraction-pipeli
 
 ## Environment Variables
 
-- `ANTHROPIC_API_KEY` - Checked for presence by the wrapper scripts `memory-catchup.sh` and `extraction-replay.sh` (warn-and-continue if unset); `extract_memories.py` itself calls OpenRouter and reads `OPENROUTER_API_KEY` instead (nova-mind#497) — the two are not interchangeable, and an unset `ANTHROPIC_API_KEY` does not actually block extraction since `extract_memories.py` never reads it
+- `ANTHROPIC_API_KEY` - Checked for presence by the wrapper scripts `memory-catchup.sh` and `extraction-replay.sh` (warn-and-continue if unset); `extract_memories.py` itself calls OpenRouter and reads `OPENROUTER_API_KEY` instead (nova-mind#497) — the two are not interchangeable, and an unset `ANTHROPIC_API_KEY` does not actually block extraction since `extract_memories.py` never reads it. Both variables, when needed, are resolved via `nova-op` from the per-agent item map (`~/.openclaw/scripts/nova-op-item-map.json`, see `memory/lib/env-loader.sh`) rather than a plaintext `.env`/`~/.bashrc` export (nova-workspace#309); an already-set environment variable still wins without calling `nova-op`.
 - `PGHOST`, `PGPORT`, `PGUSER`, `PGDATABASE`, `PGPASSWORD` - PostgreSQL connection (see [Database Configuration](#database-configuration) above)
 
 > **Note:** All scripts use the centralized database configuration loaders installed at `~/.openclaw/lib/` (`pg-env.sh` for Bash, `pg_env.py` for Python). No script contains hardcoded connection logic — see #94 for the config system, #95 for the full migration, and #102 for the lib install mechanism.

@@ -158,13 +158,18 @@ Database credentials are managed through `~/.openclaw/postgres.json` (created by
 
 See [Database Configuration](database-config.md) for full details on the config file format and resolution order.
 
-API keys go in `~/.openclaw/openclaw.json` (also created by `shell-install.sh`):
-
-```bash
-# Or set directly in environment:
-export ANTHROPIC_API_KEY=your_anthropic_key_here
-export OPENAI_API_KEY=your_openai_key_here  # Required for semantic recall embeddings
-```
+**Updated for the SecretRef migration (nova-workspace#309):** API keys are no
+longer set as plaintext environment variables or stored directly in
+`openclaw.json`. `extract_memories.py`'s `OPENROUTER_API_KEY` is resolved via
+`nova-op` from the per-agent item map (`~/.openclaw/scripts/nova-op-item-map.json`,
+see `memory/scripts/nova-op-item-map.example.json`), and the `memory-extract`
+plugin's `extraction.apiKey` is wired by `agent-install.sh` as a SecretRef
+pointing at an `exec`-type `secrets.providers` entry — see
+`memory/INSTALLATION.md`'s "Exec Secret Provider Requirements" section
+(nova-mind#830) for the required `passEnv`/`jsonOnly`/`trustedDirs` provider
+config. An already-set environment variable (e.g. `OPENAI_API_KEY` for
+semantic recall embeddings, or a pre-injected `OPENROUTER_API_KEY`/
+`ANTHROPIC_API_KEY` for testing) still wins without calling `nova-op`.
 
 ### 2. Script Permissions
 
@@ -442,11 +447,14 @@ else
 fi
 
 # API connectivity (extract_memories.py is the current script; there is no extract-memories.sh)
-echo -n "Anthropic API: "
-if [ -n "$ANTHROPIC_API_KEY" ]; then
-    echo -e "${GREEN}OK (key present — run a real message through a channel with memory-extract enabled to verify end-to-end)${NC}"
+# extract_memories.py reads OPENROUTER_API_KEY (not ANTHROPIC_API_KEY — see memory/README.md's
+# Environment Variables section), resolved via nova-op + the per-agent item map if not already
+# set in the environment (nova-workspace#309).
+echo -n "OpenRouter API key resolvable: "
+if [ -n "$OPENROUTER_API_KEY" ] || nova-op item get --help >/dev/null 2>&1; then
+    echo -e "${GREEN}OK (env var set, or nova-op available to resolve from the item map — run a real message through a channel with memory-extract enabled to verify end-to-end)${NC}"
 else
-    echo -e "${RED}NO API KEY${NC}"
+    echo -e "${RED}NO API KEY AND NO nova-op${NC}"
 fi
 
 # Cron job status  
@@ -536,17 +544,26 @@ chmod 750 ~/.openclaw/logs
 
 ### 3. API Key Management
 
-```bash
-# Use 1Password CLI for secure API key storage
-op item create \
-    --category "API Credential" \
-    --title "Anthropic API - NOVA Memory" \
-    --vault "Development" \
-    "api_key[password]=$ANTHROPIC_API_KEY"
+**Updated for the SecretRef migration (nova-workspace#309):** store the key as
+a 1Password item (via the UI or `op item create`, whichever your vault's
+convention is), then point the per-agent item map
+(`~/.openclaw/scripts/nova-op-item-map.json`) at it by item ID:
 
-# Reference from scripts instead of environment
-# export ANTHROPIC_API_KEY=$(op read "op://Development/Anthropic API - NOVA Memory/api_key")
+```json
+{
+  "OPENROUTER_API_KEY": {
+    "vault": "REPLACE_WITH_VAULT_ID",
+    "item": "REPLACE_WITH_ITEM_ID",
+    "field": "API Key"
+  }
+}
 ```
+
+Scripts then resolve it via `nova-op` (`memory/lib/env-loader.sh` /
+`memory/lib/env_loader.py`) — there is no direct `op read "op://..."` call to
+wire by hand, and no script should export the raw value into its own
+environment ahead of time except as a deliberate pre-injection override for
+testing.
 
 ## Troubleshooting Common Issues
 

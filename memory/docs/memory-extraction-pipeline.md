@@ -311,8 +311,11 @@ Real-time extraction context resolution happens per-message via the plugin's own
 # 1. PostgreSQL with the nova-mind database, schema applied via pgschema
 #    (see memory/INSTALLATION.md for the full installer-based flow)
 
-# 2. Anthropic API key
-export ANTHROPIC_API_KEY="your-key-here"
+# 2. Secrets (nova-workspace#309): extract_memories.py reads OPENROUTER_API_KEY,
+#    resolved via nova-op from the per-agent item map
+#    (~/.openclaw/scripts/nova-op-item-map.json) rather than a plaintext export —
+#    see memory/INSTALLATION.md's "Exec Secret Provider Requirements" section.
+#    An already-set environment variable still wins without calling nova-op.
 
 # 3. Required tools
 sudo apt install postgresql-client jq curl
@@ -401,7 +404,7 @@ tail -50 ~/.openclaw/logs/memory-catchup.log
 ```
 
 **Solutions:**
-1. **Missing API key:** Ensure `ANTHROPIC_API_KEY` is exported in the relevant environment (hook process or cron environment)
+1. **Missing API key:** `extract_memories.py` needs `OPENROUTER_API_KEY` (not `ANTHROPIC_API_KEY` — see `memory/README.md`'s Environment Variables section for the distinction), resolved via a SecretRef/`secrets.providers` exec provider for the real-time plugin path or via `nova-op` + the per-agent item map for the `memory-catchup.sh`/`extraction-replay.sh` cron paths (nova-workspace#309). Verify the relevant resolution path is configured and non-empty in the hook process or cron environment.
 2. **Script permissions:** `chmod +x memory/scripts/*.sh memory/scripts/*.py`
 3. **Path issues:** Use absolute paths in crontab
 4. **PostgreSQL down:** `sudo systemctl start postgresql`

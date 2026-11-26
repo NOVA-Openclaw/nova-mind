@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Docs (nova-workspace#309, nova-mind#830 — SecretRef migration documentation pass)
+
+- **`agent-install.sh` printed operator instructions** (both the `_wire_memory_extract_secretref`
+  function and the inline duplicate in `_install_memory_extract_plugin`) now include `passEnv`,
+  `jsonOnly`, and `trustedDirs` in the example `secrets.providers` exec-provider config, plus a
+  pointer to `memory/INSTALLATION.md`'s new "Exec Secret Provider Requirements" section — closes
+  nova-mind#830 (a gap confirmed to cause a `SECRET_SURFACE_UNAVAILABLE` staging failure during
+  nova-workspace#309 QA validation, since the prior example omitted all three keys and the
+  gateway runs exec secret providers in a sanitized environment that drops them silently without
+  `passEnv`).
+
 ### Fixed (#660 — agent_config_sync: map DB `thinking` to `thinkingDefault`)
 
 - **`buildAgentsList()` now maps each agent row's `thinking` column to `entry.thinkingDefault`** (`cognition/focus/agent-config-sync/src/sync.ts`) — validated against the config schema's 9-value `thinking` enum (`off`/`minimal`/`low`/`medium`/`high`/`xhigh`/`adaptive`/`max`/`ultra`), not the DB `CHECK` constraint's narrower 7-value list, since the schema enum is the actual consumer contract. `NULL`, empty string, unknown tiers, wrong JS type, mixed case, and whitespace-padded values are all omitted (degrade only the malformed row; never crash, never silently emit an invalid value). Previously `thinking` was never written to `agents.json` at all, based on a stale (now-removed) comment claiming it was "not a valid per-agent config key" — that comment predated the config schema's `thinkingDefault` support and was factually wrong at the time this fix landed. Per-agent DB tiers that were previously silently dropped now reach the runtime's `normalizeThinkLevel` resolution chain and take effect. Adds `TC-660-U-01..18` unit tests (happy path, adversarial/malformed inputs, boundaries, fleet-shape regression) and `TC-660-I-01..04` integration tests exercising the real nova-openclaw consumer seam (`resolveAgentConfig`/`normalizeThinkLevel`/`listAgentEntries`) to prove the emitted value is actually consumed, not just written.

@@ -208,9 +208,7 @@ _install_memory_extract_plugin() {
         local existing_apikey_exists
         existing_apikey_exists=$(jq -e '.plugins.entries."memory-extract".config.extraction | has("apiKey")' "$cfg" >/dev/null 2>&1 && echo 1 || echo 0)
 
-        local skip_secretref=0
         if [ "$existing_apikey_exists" -eq 1 ]; then
-            skip_secretref=1
             local existing_apikey_type
             existing_apikey_type=$(jq -r '.plugins.entries."memory-extract".config.extraction.apiKey | type' "$cfg" 2>/dev/null)
             if [ "$existing_apikey_type" = "string" ]; then
@@ -219,7 +217,6 @@ _install_memory_extract_plugin() {
                 echo -e "  ${INFO} memory-extract extraction.apiKey already configured (left unchanged)"
             fi
         elif [ "$provider_exists" -ne 1 ]; then
-            skip_secretref=1
             echo -e "  ${WARNING} memory-extract extraction.apiKey not wired: provider '$secret_provider' is not defined in openclaw.json secrets.providers"
             echo "      Add a provider like the following to ~/.openclaw/openclaw.json:"
             echo ""
@@ -3297,7 +3294,6 @@ else
     # Remove the old workspace copy only if it is byte-identical to the
     # newly-installed version; otherwise warn and leave it for the operator.
     if [ -f "$GENERATE_DELEGATION_OLD_TARGET" ]; then
-        local old_hash new_hash
         old_hash=$(sha256sum "$GENERATE_DELEGATION_OLD_TARGET" | awk '{print $1}')
         new_hash=$(sha256sum "$GENERATE_DELEGATION_TARGET" | awk '{print $1}')
         if [ "$old_hash" = "$new_hash" ]; then

@@ -5496,14 +5496,18 @@ LANGUAGE plpgsql
 VOLATILE
 AS $$
 BEGIN
-    IF OLD.name IN ('nova', 'graybeard', 'newhart') THEN
-        IF (OLD.model IS DISTINCT FROM NEW.model) OR (OLD.fallback_models IS DISTINCT FROM NEW.fallback_models) THEN
-            IF current_user NOT IN ('postgres', 'newhart') AND NOT (SELECT rolsuper FROM pg_roles WHERE rolname = current_user) THEN
-                RAISE EXCEPTION 'Model changes to peer agents (nova, graybeard, newhart) require human authorization. Use postgres user or contact I)ruid.';
-            END IF;
-        END IF;
+  -- Protect only peer PLACEHOLDER rows (instance_type='peer'; model/fallback_models must stay NULL).
+  -- The agent's own row (instance_type='primary') and its subagents are its own to edit.
+  IF OLD.instance_type = 'peer' THEN
+    IF (OLD.model IS DISTINCT FROM NEW.model)
+       OR (OLD.fallback_models IS DISTINCT FROM NEW.fallback_models)
+       OR (NEW.instance_type IS DISTINCT FROM OLD.instance_type) THEN
+      IF current_user <> 'postgres' AND NOT (SELECT rolsuper FROM pg_roles WHERE rolname = current_user) THEN
+        RAISE EXCEPTION 'Peer placeholder rows (instance_type=peer) are not editable: model/fallback_models stay NULL. Use postgres or contact I)ruid.';
+      END IF;
     END IF;
-    RETURN NEW;
+  END IF;
+  RETURN NEW;
 END;
 $$;
 

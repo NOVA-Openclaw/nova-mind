@@ -7,6 +7,7 @@ database/schema.sql.
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import re
 import sys
@@ -529,6 +530,44 @@ class TestMainExitCodes:
             ]
         )
         assert exit_code == 0
+
+
+EXPECTED_PEER_MODEL_PROSRC_HASH = "4276531db3cf3ce3273f27d5f79cbbd1"
+
+
+class TestIssue833PeerAgentModelProtection:
+    """nova-mind#833: schema.sql must carry the live body of
+    protect_peer_agent_model_changes(), which guards by instance_type='peer'
+    instead of a hardcoded agent name list. A mismatched schema.sql would let
+    the installer revert the live #833 fix.
+    """
+
+    def test_schema_function_uses_instance_type_peer_not_name_list(self):
+        schema_path = REPO_ROOT / "database" / "schema.sql"
+        schema_sql = schema_path.read_text()
+        body = check_schema_manifest.extract_function_body(
+            schema_sql, "protect_peer_agent_model_changes"
+        )
+        assert body is not None, "protect_peer_agent_model_changes() not found in schema.sql"
+        assert "OLD.instance_type = 'peer'" in body, "expected instance_type='peer' check"
+        assert (
+            "OLD.name IN ('nova', 'graybeard', 'newhart')" not in body
+        ), "old hardcoded name list still present"
+
+    def test_schema_function_body_matches_live_prosrc_hash(self):
+        schema_path = REPO_ROOT / "database" / "schema.sql"
+        schema_sql = schema_path.read_text()
+        body = check_schema_manifest.extract_function_body(
+            schema_sql, "protect_peer_agent_model_changes"
+        )
+        assert body is not None, "protect_peer_agent_model_changes() not found in schema.sql"
+        m = re.search(r"AS \$\$(.*?)\$\$;", body, re.DOTALL)
+        assert m is not None, "could not extract function source body between $$ delimiters"
+        prosrc = m.group(1)
+        actual = hashlib.md5(prosrc.encode("utf-8")).hexdigest()
+        assert actual == EXPECTED_PEER_MODEL_PROSRC_HASH, (
+            f"schema.sql prosrc md5 {actual} does not match live hash"
+        )
 
 
 if __name__ == "__main__":

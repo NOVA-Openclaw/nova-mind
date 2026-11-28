@@ -158,18 +158,32 @@ Database credentials are managed through `~/.openclaw/postgres.json` (created by
 
 See [Database Configuration](database-config.md) for full details on the config file format and resolution order.
 
-**Updated for the SecretRef migration (nova-workspace#309):** API keys are no
-longer set as plaintext environment variables or stored directly in
-`openclaw.json`. `extract_memories.py`'s `OPENROUTER_API_KEY` is resolved via
-`nova-op` from the per-agent item map (`~/.openclaw/scripts/nova-op-item-map.json`,
-see `memory/scripts/nova-op-item-map.example.json`), and the `memory-extract`
+**Updated for the SecretRef migration (nova-workspace#309) and the #818 recall
+fix:** API keys are no longer set as plaintext environment variables or stored
+directly in `openclaw.json`. `extract_memories.py`'s `OPENROUTER_API_KEY` is
+resolved via `nova-op` from the per-agent item map
+(`~/.openclaw/scripts/nova-op-item-map.json`, see
+`memory/scripts/nova-op-item-map.example.json`), and the `memory-extract`
 plugin's `extraction.apiKey` is wired by `agent-install.sh` as a SecretRef
 pointing at an `exec`-type `secrets.providers` entry — see
 `memory/INSTALLATION.md`'s "Exec Secret Provider Requirements" section
 (nova-mind#830) for the required `passEnv`/`jsonOnly`/`trustedDirs` provider
-config. An already-set environment variable (e.g. `OPENAI_API_KEY` for
-semantic recall embeddings, or a pre-injected `OPENROUTER_API_KEY`/
-`ANTHROPIC_API_KEY` for testing) still wins without calling `nova-op`.
+config.
+
+`env_loader.py` (`~/.openclaw/lib/env_loader.py`) now resolves secrets
+targetedly: callers should pass `keys=["VAR_NAME", ...]` to load only the
+variables they need. Already-set, non-empty environment variables are skipped
+entirely, so a pre-injected `OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY`, or
+`OPENAI_API_KEY` still wins without calling `nova-op`. `nova-op` is located on
+`PATH` first, with a fallback to `$HOME/.local/bin/nova-op`. Each key gets a
+per-call subprocess timeout (`timeout_s`, default 15 seconds). Transient
+`nova-op` problems (missing binary, timeout, non-zero exit, empty value) log a
+warning to stderr and skip the affected key; map/config authoring problems
+(missing map, malformed JSON, incomplete entry, placeholder values) still raise
+`RuntimeError`. The DB-only scripts `proactive-recall.py`, `dedup_helper.py`,
+`confidence_helper.py`, and `memory-maintenance.py` no longer call
+`load_openclaw_env()` at import time; only `extract_memories.py` still resolves
+`OPENROUTER_API_KEY` via the item map.
 
 ### 2. Script Permissions
 

@@ -86,6 +86,49 @@ function makeFakeHostTree(version: string): { entryPath: string; cleanup: () => 
   };
 }
 
+/**
+ * Create a source-checkout layout: the gateway executable lives inside the
+ * openclaw package root next to its package.json. This matches real peers:
+ * ExecStart = /usr/bin/node /home/<peer>/nova-openclaw-production/openclaw.mjs
+ */
+function makeSourceCheckoutHostTree(version: string): { entryPath: string; cleanup: () => void } {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "acs-checkout-"));
+  const entryPath = path.join(tmpDir, "openclaw.mjs");
+  fs.writeFileSync(entryPath, "#!/usr/bin/env node\n", "utf-8");
+  fs.writeFileSync(
+    path.join(tmpDir, "package.json"),
+    JSON.stringify({ name: "openclaw", version }),
+    "utf-8",
+  );
+  return {
+    entryPath,
+    cleanup: () => fs.rmSync(tmpDir, { recursive: true, force: true }),
+  };
+}
+
+/**
+ * Create a global npm install layout: the gateway executable lives inside
+ * <prefix>/lib/node_modules/openclaw/bin/openclaw.mjs, with package.json at
+ * the package root.
+ */
+function makeGlobalInstallHostTree(version: string): { entryPath: string; cleanup: () => void } {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "acs-global-"));
+  const packageRoot = path.join(tmpDir, "lib", "node_modules", "openclaw");
+  const binDir = path.join(packageRoot, "bin");
+  fs.mkdirSync(binDir, { recursive: true });
+  const entryPath = path.join(binDir, "openclaw.mjs");
+  fs.writeFileSync(entryPath, "#!/usr/bin/env node\n", "utf-8");
+  fs.writeFileSync(
+    path.join(packageRoot, "package.json"),
+    JSON.stringify({ name: "openclaw", version }),
+    "utf-8",
+  );
+  return {
+    entryPath,
+    cleanup: () => fs.rmSync(tmpDir, { recursive: true, force: true }),
+  };
+}
+
 // ── Section 4: Detection / classification ───────────────────────────────────
 
 describe("TC-824-V-01..V-07: numeric version boundary", () => {
@@ -138,17 +181,57 @@ describe("TC-824-V-11..V-14: prerelease / suffix / metadata handling", () => {
   }
 });
 
-describe("TC-824-V-20: wrong-copy guard", () => {
-  it("reads the host gateway's openclaw version, not the plugin-local copy", () => {
-    const host = makeFakeHostTree("2026.11.10");
+describe("TC-824-V-20a: source-checkout host detection", () => {
+  it("classifies source-checkout 2026.11.3 as legacy", () => {
+    const host = makeSourceCheckoutHostTree("2026.11.3");
     try {
-      // Place a plugin-local copy with an older version in a sibling directory.
-      // The detector must still use the host entry path we supply.
-      const pluginLocal = path.join(path.dirname(host.entryPath), "..", "plugin-local");
-      fs.mkdirSync(path.join(pluginLocal, "node_modules", "openclaw"), { recursive: true });
+      const result = detectHostHeartbeatCompat({ hostEntryPath: host.entryPath });
+      assert.strictEqual(result.mode, "legacy");
+      assert.strictEqual(result.version, "2026.11.3");
+      assert.ok(result.reason.includes("version-parsed"));
+    } finally {
+      host.cleanup();
+    }
+  });
+
+  it("classifies source-checkout 2026.11.10 as retired", () => {
+    const host = makeSourceCheckoutHostTree("2026.11.10");
+    try {
+      const result = detectHostHeartbeatCompat({ hostEntryPath: host.entryPath });
+      assert.strictEqual(result.mode, "retired");
+      assert.strictEqual(result.version, "2026.11.10");
+      assert.ok(result.reason.includes("version-parsed"));
+    } finally {
+      host.cleanup();
+    }
+  });
+});
+
+describe("TC-824-V-20b: global-install host detection", () => {
+  it("classifies global-install 2026.11.10 as retired", () => {
+    const host = makeGlobalInstallHostTree("2026.11.10");
+    try {
+      const result = detectHostHeartbeatCompat({ hostEntryPath: host.entryPath });
+      assert.strictEqual(result.mode, "retired");
+      assert.strictEqual(result.version, "2026.11.10");
+      assert.ok(result.reason.includes("version-parsed"));
+    } finally {
+      host.cleanup();
+    }
+  });
+});
+
+describe("TC-824-V-20c: wrong-copy guard with plugin-local dev dependency", () => {
+  it("ignores plugin-local openclaw 2026.2.9 and reads source-checkout host 2026.11.10", () => {
+    const host = makeSourceCheckoutHostTree("2026.11.10");
+    try {
+      // Simulate the plugin's own node_modules/openclaw peer/dev dependency.
+      const pluginRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
+      const pluginLocalOpenclaw = path.join(pluginRoot, "node_modules", "openclaw");
+      fs.mkdirSync(pluginLocalOpenclaw, { recursive: true });
       fs.writeFileSync(
-        path.join(pluginLocal, "node_modules", "openclaw", "package.json"),
-        JSON.stringify({ name: "openclaw", version: "2026.11.3" }),
+        path.join(pluginLocalOpenclaw, "package.json"),
+        JSON.stringify({ name: "openclaw", version: "2026.2.9" }),
         "utf-8",
       );
 

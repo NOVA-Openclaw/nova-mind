@@ -362,10 +362,18 @@ function isPluginLocalPath(candidate: string): boolean {
  * Read the host OpenClaw version from the package.json of the gateway process
  * that loaded this plugin.
  *
+ * Real hosts run from a source checkout or a global install where the entry
+ * script lives inside the openclaw package root, so the authoritative
+ * package.json is `<entry-dir>/package.json` (name === "openclaw"). We also
+ * accept `<entry-dir>/node_modules/openclaw/package.json` for environments
+ * where the gateway binary is a separate package that depends on openclaw.
+ * At each directory level the package root is checked first because it is the
+ * more direct identity of the host; the node_modules copy is a dependency.
+ *
  * The plugin's own node_modules may carry a different (peer/dev) copy of the
- * openclaw package, so we deliberately read from the host executable's module
- * tree via process.argv[1] rather than from the plugin directory. This avoids
- * the wrong-copy bug described in nova-mind#824 / TC-824-V-20.
+ * openclaw package, so any candidate inside this plugin's directory tree is
+ * ignored. This avoids the wrong-copy bug described in nova-mind#824 /
+ * TC-824-V-20.
  *
  * Returns undefined when the version cannot be discovered.
  */
@@ -379,20 +387,27 @@ function readHostOpenclawVersion(hostEntryPath?: string): string | undefined {
     let dir = path.dirname(realEntry);
     const root = path.parse(dir).root;
     while (dir !== root) {
-      const candidate = path.join(dir, "node_modules", "openclaw", "package.json");
-      try {
-        const raw = fs.readFileSync(candidate, "utf-8");
-        const pkg = JSON.parse(raw) as { name?: string; version?: string };
-        if (
-          pkg.name === "openclaw" &&
-          typeof pkg.version === "string" &&
-          pkg.version.length > 0 &&
-          !isPluginLocalPath(candidate)
-        ) {
-          return pkg.version;
+      // Check the package root first (source checkout / global install), then
+      // the dependency layout. The nearest match wins.
+      const candidates = [
+        path.join(dir, "package.json"),
+        path.join(dir, "node_modules", "openclaw", "package.json"),
+      ];
+      for (const candidate of candidates) {
+        try {
+          const raw = fs.readFileSync(candidate, "utf-8");
+          const pkg = JSON.parse(raw) as { name?: string; version?: string };
+          if (
+            pkg.name === "openclaw" &&
+            typeof pkg.version === "string" &&
+            pkg.version.length > 0 &&
+            !isPluginLocalPath(candidate)
+          ) {
+            return pkg.version;
+          }
+        } catch {
+          // Try the next candidate or keep walking upward.
         }
-      } catch {
-        // Keep walking upward.
       }
       dir = path.dirname(dir);
     }

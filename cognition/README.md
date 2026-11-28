@@ -99,41 +99,15 @@ The **`agent-config-sync`** extension plugin keeps OpenClaw's agent model config
 
 1. **DB is the source of truth** — Agent `model`, `fallback_models`, `is_default`, and `allowed_subagents` settings are managed in the `agents` table (in the nova-mind database); each agent's HEARTBEAT.md content is managed in `agent_bootstrap_context` (`file_key = 'HEARTBEAT'`).
 2. **LISTEN/NOTIFY** — The plugin opens a persistent PostgreSQL connection and runs `LISTEN agent_config_changed` and `LISTEN heartbeat_content_changed`. Triggers fire `pg_notify(...)` on the respective channel whenever relevant rows change.
-3. **Writes `agents.json`** — On each `agent_config_changed` notification (and once at gateway startup), the plugin queries `get_agent_export_rows()` and writes `~/.openclaw/agents.json` atomically (temp file + `rename(2)`) as a bare JSON array.
+3. **Writes `agents.json`** — On each `agent_config_changed` notification (and once at gateway startup), the plugin queries `get_agent_export_rows()` and writes `~/.openclaw/agents.json` atomically (temp file + `rename(2)`) as a **keyed object** matching the OpenClaw 2026.11.3+ `agents.entries` schema — `{ "<id>": { model, thinkingDefault?, subagents?, heartbeat? } }` — not a bare array, and with no `id`/`default` fields inside each entry (the object key is the id; default-agent ownership is expressed via `agents.defaults.systemAgent` and `bindings` in the explicit-ownership include instead — see `focus/agent-config-sync/README.md`).
 4. **Syncs `HEARTBEAT.md` files** — On `heartbeat_content_changed` (and at startup), the plugin writes each agent's HEARTBEAT.md into its workspace directory (`workspace/` for the default agent, `workspace-<agent_name>/` for others), skipping the write when content is unchanged.
-5. **Hot-reload via `$include`** — `openclaw.json` includes `"$include": "./agents.json"`. The gateway's file watcher detects the change and hot-reloads the `agents.*` config keys — no gateway restart needed. HEARTBEAT.md updates don't require a reload signal; the gateway reads the file fresh on each heartbeat cycle.
+5. **Hot-reload via `$include`** — `openclaw.json`'s `agents.entries` includes `"$include": "./agents.json"`. The gateway's file watcher detects the change and hot-reloads the `agents.*` config keys — no gateway restart needed. HEARTBEAT.md updates don't require a reload signal; the gateway reads the file fresh on each heartbeat cycle.
 
 ### `agents.json` Format
 
-```json
-{
-  "agents": {
-    "defaults": {
-      "models": {
-        "openrouter/anthropic/claude-opus-4.6": {},
-        "openrouter/google/gemini-3-flash-preview": {}
-      }
-    },
-    "list": [
-      {
-        "id": "coder",
-        "model": {
-          "primary": "openrouter/anthropic/claude-sonnet-4.6",
-          "fallbacks": ["openrouter/openai/gpt-5.2-codex"]
-        }
-      },
-      {
-        "id": "gem",
-        "model": "openrouter/google/gemini-3-flash-preview",
-        "default": true
-      }
-    ]
-  }
-}
-```
+See `focus/agent-config-sync/README.md`'s "Output Format" section for the full per-field
+mapping and an up-to-date example. Highlights:
 
-- **`defaults.models`** — Allow-list of all unique models (primaries + fallbacks).
-- **`list`** — Per-agent config. `model` is a plain string when there are no fallbacks, or an object with `primary`/`fallbacks` when fallbacks exist.
 - **`thinking` is mapped to `thinkingDefault` in `agents.json`** (nova-mind#660). The `agents`
   table's `thinking` column is validated against the config schema's 9-value enum
   (`off`/`minimal`/`low`/`medium`/`high`/`xhigh`/`adaptive`/`max`/`ultra`) in `buildAgentsList()`
@@ -144,9 +118,13 @@ The **`agent-config-sync`** extension plugin keeps OpenClaw's agent model config
   per-agent default that OpenClaw's runtime consults (`normalizeThinkLevel`) when no spawn-time
   override is given, so a per-agent DB tier now actually reaches the runtime instead of being
   silently dropped.
-- Each peer gateway's `agents.json` is scoped to that gateway: the connecting peer appears as
-  `default: true`, and subagents linked to that peer via `parent_agents` appear as non-default
-  entries. Both the peer and its own subagents appear in their respective gateway's `agents.json`.
+- **`heartbeat` is gated by a heartbeat compatibility mode** (nova-mind#824). OpenClaw >= 2026.11.5
+  (`retired` mode, auto-detected from the host's own version) rejects the `heartbeat` key in its
+  strict agent schema, so neither per-agent `heartbeat` nor `agents.defaults.heartbeat` is emitted
+  on those hosts. OpenClaw < 2026.11.5 (`legacy` mode) emits both exactly as before. See
+  `focus/agent-config-sync/README.md#heartbeatconfigmode` for the override and detection details.
+- Each peer gateway's `agents.json` is scoped to that gateway: `get_agent_export_rows()` returns the
+  connecting peer's own row plus subagents linked to that peer via `parent_agents` array overlap.
   Agents belonging to a different peer do not appear.
 
 ### Replaces: `agent-config-db` Hook
@@ -170,7 +148,8 @@ The plugin reads its database connection from `openclaw.json`:
           "host": "localhost",
           "port": 5432,
           "user": "nova",
-          "password": ""
+          "password": "",
+          "heartbeatConfigMode": "auto"
         }
       }
     }
@@ -179,6 +158,9 @@ The plugin reads its database connection from `openclaw.json`:
 ```
 
 If no dedicated config is provided, it falls back to the `agent_chat` channel settings.
+`heartbeatConfigMode` (`"auto"` default | `"legacy"` | `"retired"`) overrides the plugin's
+auto-detection of the host OpenClaw version for heartbeat config emission — see
+`focus/agent-config-sync/README.md#heartbeatconfigmode` (nova-mind#824).
 
 ### Requirements
 

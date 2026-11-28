@@ -357,6 +357,8 @@ If `config` is omitted, the plugin falls back to `channels.agent_chat` DB creden
 
 The boundary is **inclusive** at `2026.11.5`. Prerelease and fork suffixes (e.g. `2026.11.10-nova`) are classified by their numeric core version, so a fork-tagged 11.10 host is treated the same as a clean 11.10 host.
 
+A value outside `"auto"`/`"legacy"`/`"retired"` that still reaches the plugin at runtime falls back to the detected mode and logs one WARN naming the bad value and the allowed set — it never throws or silently defaults to `"legacy"`.
+
 ---
 
 ## Doctor `--fix` Interactions

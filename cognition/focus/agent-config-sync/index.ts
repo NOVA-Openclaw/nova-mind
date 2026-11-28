@@ -138,6 +138,7 @@ function createConfigSyncService(api: OpenClawPluginApi) {
     const { mode: compatMode, reason: compatReason } = resolveHeartbeatCompatMode(
       heartbeatConfigMode,
       detected,
+      log,
     );
     if (compatReason === "detection-failed-safe-default") {
       log.warn(

@@ -264,10 +264,95 @@ describe("TC-824-V-21: operator override via resolveHeartbeatCompatMode", () => 
     assert.strictEqual(result.reason, "detected");
   });
 
-  it("falls back to detected mode for unknown values", () => {
-    const result = resolveHeartbeatCompatMode("banana", { mode: "legacy", reason: "detected" });
+  it("falls back to detected mode for unknown values and logs one WARN", () => {
+    const warnings: string[] = [];
+    const logger = {
+      warn: (msg: string) => warnings.push(msg),
+      info: (msg: string) => {},
+    };
+    const result = resolveHeartbeatCompatMode(
+      "banana",
+      { mode: "legacy", reason: "detected" },
+      logger,
+    );
     assert.strictEqual(result.mode, "legacy");
     assert.strictEqual(result.reason, "detected");
+    assert.strictEqual(warnings.length, 1);
+    assert.ok(warnings[0].includes("banana"));
+    assert.ok(warnings[0].includes('"auto"'));
+    assert.ok(warnings[0].includes('"legacy"'));
+    assert.ok(warnings[0].includes('"retired"'));
+  });
+});
+
+describe("TC-824-V-22: nested node_modules copy must not shadow true root", () => {
+  it("prefers the package root 2026.11.10 over a nested 2026.2.9 node_modules copy", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "acs-collision-"));
+    try {
+      // True host root at /gateway/package.json
+      fs.writeFileSync(
+        path.join(tmpDir, "package.json"),
+        JSON.stringify({ name: "openclaw", version: "2026.11.10" }),
+        "utf-8",
+      );
+      // Entry script deep inside the package
+      const distDir = path.join(tmpDir, "dist");
+      fs.mkdirSync(distDir, { recursive: true });
+      const entryPath = path.join(distDir, "cli-entry.js");
+      fs.writeFileSync(entryPath, "#!/usr/bin/env node\n", "utf-8");
+      // Nested impostor copy (matches real ~/nova-openclaw-production/dist/extensions/node_modules/openclaw)
+      const nestedOpenclaw = path.join(distDir, "extensions", "node_modules", "openclaw");
+      fs.mkdirSync(nestedOpenclaw, { recursive: true });
+      fs.writeFileSync(
+        path.join(nestedOpenclaw, "package.json"),
+        JSON.stringify({ name: "openclaw", version: "2026.2.9" }),
+        "utf-8",
+      );
+
+      const result = detectHostHeartbeatCompat({ hostEntryPath: entryPath });
+      assert.strictEqual(result.mode, "retired");
+      assert.strictEqual(result.version, "2026.11.10");
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("TC-824-V-23: plugin-local exclusion via symlink", () => {
+  it("ignores a plugin-local openclaw reached through a symlinked node_modules", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "acs-symlink-"));
+    try {
+      // Create a plugin-local openclaw inside the real plugin tree.
+      const pluginRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
+      const pluginLocalOpenclaw = path.join(pluginRoot, "node_modules", "openclaw");
+      fs.mkdirSync(pluginLocalOpenclaw, { recursive: true });
+      fs.writeFileSync(
+        path.join(pluginLocalOpenclaw, "package.json"),
+        JSON.stringify({ name: "openclaw", version: "2026.2.9" }),
+        "utf-8",
+      );
+
+      // Host entry tree with no package root; only a symlinked node_modules/openclaw.
+      const hostDir = path.join(tmpDir, "host");
+      fs.mkdirSync(hostDir, { recursive: true });
+      const entryPath = path.join(hostDir, "openclaw.mjs");
+      fs.writeFileSync(entryPath, "#!/usr/bin/env node\n", "utf-8");
+
+      // Symlink node_modules/openclaw -> real plugin-local copy. realpathSync
+      // on the candidate resolves through the symlink to the plugin tree,
+      // which isPluginLocalPath must recognize and exclude.
+      const hostNodeModules = path.join(tmpDir, "node_modules");
+      fs.mkdirSync(hostNodeModules, { recursive: true });
+      fs.symlinkSync(pluginLocalOpenclaw, path.join(hostNodeModules, "openclaw"), "dir");
+
+      const result = detectHostHeartbeatCompat({ hostEntryPath: entryPath });
+      assert.strictEqual(result.mode, "retired");
+      assert.strictEqual(result.reason, "detection-failed-safe-default");
+
+      fs.rmSync(pluginLocalOpenclaw, { recursive: true, force: true });
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 });
 

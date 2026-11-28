@@ -18,6 +18,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
+import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import type pg from "pg";
 
@@ -345,17 +346,42 @@ export function classifyHeartbeatCompat(versionInput: unknown): { mode: Heartbea
  * Determine whether a candidate path lives inside this plugin's own directory
  * tree. The plugin may carry its own node_modules/openclaw as a peer/dev
  * dependency; that copy must not be mistaken for the host gateway's package.
+ *
+ * Both paths are realpath'd so symlinks do not hide the true location.
  */
 function isPluginLocalPath(candidate: string): boolean {
   try {
-    const pluginFile = new URL(import.meta.url).pathname;
-    const pluginRoot = path.resolve(path.dirname(pluginFile), "..");
-    const resolved = path.resolve(candidate);
+    const pluginFile = fileURLToPath(import.meta.url);
+    const pluginRoot = fs.realpathSync(path.resolve(path.dirname(pluginFile), ".."));
+    const resolved = fs.realpathSync(candidate);
     const relative = path.relative(pluginRoot, resolved);
     return !relative.startsWith("..") && !path.isAbsolute(relative);
   } catch {
     return false;
   }
+}
+
+/**
+ * Try to read an OpenClaw version from a single candidate package.json.
+ * Returns undefined when the file is missing, unreadable, not named openclaw,
+ * or belongs to this plugin's own directory tree.
+ */
+function tryReadHostOpenclawVersion(candidate: string): string | undefined {
+  try {
+    const raw = fs.readFileSync(candidate, "utf-8");
+    const pkg = JSON.parse(raw) as { name?: string; version?: string };
+    if (
+      pkg.name === "openclaw" &&
+      typeof pkg.version === "string" &&
+      pkg.version.length > 0 &&
+      !isPluginLocalPath(candidate)
+    ) {
+      return pkg.version;
+    }
+  } catch {
+    // Fall through to undefined.
+  }
+  return undefined;
 }
 
 /**
@@ -367,8 +393,14 @@ function isPluginLocalPath(candidate: string): boolean {
  * package.json is `<entry-dir>/package.json` (name === "openclaw"). We also
  * accept `<entry-dir>/node_modules/openclaw/package.json` for environments
  * where the gateway binary is a separate package that depends on openclaw.
- * At each directory level the package root is checked first because it is the
- * more direct identity of the host; the node_modules copy is a dependency.
+ *
+ * To avoid the collision bug described in TC-824-V-22, detection uses two
+ * separate passes:
+ *   1. Walk all the way up looking only for package roots named "openclaw".
+ *      The nearest such root wins. This prevents a nested node_modules/openclaw
+ *      copy from shadowing the true root further up.
+ *   2. Only if pass 1 finds nothing, walk all the way up looking for
+ *      node_modules/openclaw/package.json dependency copies.
  *
  * The plugin's own node_modules may carry a different (peer/dev) copy of the
  * openclaw package, so any candidate inside this plugin's directory tree is
@@ -386,28 +418,24 @@ function readHostOpenclawVersion(hostEntryPath?: string): string | undefined {
     const realEntry = fs.realpathSync(entry);
     let dir = path.dirname(realEntry);
     const root = path.parse(dir).root;
+
+    // Pass 1: nearest package root named "openclaw".
     while (dir !== root) {
-      // Check the package root first (source checkout / global install), then
-      // the dependency layout. The nearest match wins.
-      const candidates = [
-        path.join(dir, "package.json"),
-        path.join(dir, "node_modules", "openclaw", "package.json"),
-      ];
-      for (const candidate of candidates) {
-        try {
-          const raw = fs.readFileSync(candidate, "utf-8");
-          const pkg = JSON.parse(raw) as { name?: string; version?: string };
-          if (
-            pkg.name === "openclaw" &&
-            typeof pkg.version === "string" &&
-            pkg.version.length > 0 &&
-            !isPluginLocalPath(candidate)
-          ) {
-            return pkg.version;
-          }
-        } catch {
-          // Try the next candidate or keep walking upward.
-        }
+      const candidate = path.join(dir, "package.json");
+      const version = tryReadHostOpenclawVersion(candidate);
+      if (version !== undefined) {
+        return version;
+      }
+      dir = path.dirname(dir);
+    }
+
+    // Pass 2: nearest node_modules/openclaw dependency.
+    dir = path.dirname(realEntry);
+    while (dir !== root) {
+      const candidate = path.join(dir, "node_modules", "openclaw", "package.json");
+      const version = tryReadHostOpenclawVersion(candidate);
+      if (version !== undefined) {
+        return version;
       }
       dir = path.dirname(dir);
     }
@@ -440,15 +468,25 @@ export function detectHostHeartbeatCompat(options?: { hostEntryPath?: string }):
  * override and the detected host mode.
  *
  * - If override is "legacy" or "retired", use it (reason "config-override").
- * - If override is "auto", undefined, or anything else, use the detected mode.
+ * - If override is "auto" or undefined, use the detected mode.
+ * - Any other value falls back to the detected mode and logs one WARN naming
+ *   the bad value and the allowed set (V-21).
  * - Detection failures already default to "retired" inside detectHostHeartbeatCompat.
  */
 export function resolveHeartbeatCompatMode(
   override: unknown,
   detected: { mode: HeartbeatCompatMode; reason: string },
+  log?: SyncLogger,
 ): { mode: HeartbeatCompatMode; reason: string } {
   if (override === "legacy" || override === "retired") {
     return { mode: override, reason: "config-override" };
+  }
+  if (override !== "auto" && override !== undefined && log !== undefined) {
+    log.warn(
+      `agent_config_sync: Unknown heartbeatConfigMode '${String(override)}'; ` +
+        `using detected mode '${detected.mode}'. ` +
+        `Allowed values: "auto", "legacy", "retired".`,
+    );
   }
   return { mode: detected.mode, reason: detected.reason };
 }

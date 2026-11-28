@@ -41,7 +41,7 @@ pg_env_stub = MagicMock()
 pg_env_stub.load_pg_env = lambda: None
 sys.modules["pg_env"] = pg_env_stub
 env_loader_stub = MagicMock()
-env_loader_stub.load_openclaw_env = lambda: None
+env_loader_stub.load_openclaw_env = lambda *args, **kwargs: None
 sys.modules["env_loader"] = env_loader_stub
 
 import extract_memories as em  # noqa: E402  (after stubs)

@@ -39,6 +39,11 @@
       "explicitConfigPath": {
         "type": "string",
         "description": "Path to write the 11.3+ explicit-ownership include file (default: ~/.openclaw/agents-explicit.json)"
+      },
+      "heartbeatConfigMode": {
+        "type": "string",
+        "enum": ["auto", "legacy", "retired"],
+        "description": "Heartbeat config emission mode. 'auto' detects from the host OpenClaw version (default). 'legacy' (<2026.11.5) emits per-agent heartbeat and agents.defaults.heartbeat. 'retired' (>=2026.11.5) emits neither, because the strict agent schema rejects the heartbeat key."
       }
     }
   }

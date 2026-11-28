@@ -48,6 +48,16 @@ export type AgentRow = {
 
 type HeartbeatConfig = { every?: string; target?: string; to?: string; isolatedSession?: boolean };
 
+/**
+ * Heartbeat config emission mode (nova-mind#824).
+ *
+ * - "legacy"  — OpenClaw < 2026.11.5: emit per-agent heartbeat and
+ *               agents.defaults.heartbeat exactly as before.
+ * - "retired" — OpenClaw >= 2026.11.5: heartbeat config is rejected by the
+ *               strict agent schema, so the plugin must not emit it.
+ */
+export type HeartbeatCompatMode = "legacy" | "retired";
+
 /** Value shape for a single agent inside `agents.entries`.
  *
  * The legacy `default: true` marker is never emitted. OpenClaw 2026.11.3+
@@ -64,6 +74,11 @@ export type AgentEntryConfig = {
 /** Options for `buildAgentsList()`. */
 export type BuildAgentsListOptions = {
   logger?: BuildLogger;
+  /**
+   * Heartbeat compatibility mode. Defaults to "legacy" for callers that do
+   * not supply it; the plugin entrypoint resolves "auto" via host detection.
+   */
+  heartbeatCompatMode?: HeartbeatCompatMode;
 };
 
 /** Result of `buildAgentsList()` — keyed entries plus any skipped rows. */
@@ -83,7 +98,11 @@ export type ExplicitOwnershipConfig = {
   agents: {
     ownership: "explicit";
     defaults: {
-      heartbeat: {
+      /**
+       * Optional heartbeat defaults. Omitted on OpenClaw >= 2026.11.5 because
+       * the strict agent schema rejects this key (nova-mind#824).
+       */
+      heartbeat?: {
         directPolicy: "block";
         target: "none";
         agentId: string;
@@ -249,6 +268,175 @@ export type BuildLogger = { warn: (msg: string) => void };
 
 /** Logger surface used by sync helpers that also emit info messages. */
 export type SyncLogger = { warn: (msg: string) => void; info: (msg: string) => void };
+
+// ── Heartbeat compatibility classification (nova-mind#824) ──────────────────
+
+/**
+ * Parse an OpenClaw version string into numeric [year, minor, patch].
+ *
+ * Accepts:
+ * - core calver strings like "2026.11.5"
+ * - prerelease suffixes like "2026.11.10-beta.1" or "2026.11.10-nova"
+ * - build metadata like "2026.11.10+build.5"
+ * - leading/trailing whitespace and a leading "v"
+ *
+ * Only the numeric core (year.minor.patch) is used for the 11.5 boundary
+ * comparison. Prerelease/build labels are ignored so that a fork-tagged
+ * 11.10 host is classified the same as a clean 11.10 host.
+ *
+ * Returns undefined when the input is not a string or does not start with a
+ * recognizable "YYYY.MM.PPP" core.
+ */
+function parseOpenclawVersionCore(versionInput: unknown): [number, number, number] | undefined {
+  if (typeof versionInput !== "string") {
+    return undefined;
+  }
+  const trimmed = versionInput.trim();
+  const withoutV = trimmed.replace(/^v/i, "");
+  const coreMatch = withoutV.match(/^(\d{4})\.(\d{1,2})\.(\d+)/);
+  if (!coreMatch) {
+    return undefined;
+  }
+  const year = Number(coreMatch[1]);
+  const minor = Number(coreMatch[2]);
+  const patch = Number(coreMatch[3]);
+  if (
+    !Number.isFinite(year) ||
+    !Number.isFinite(minor) ||
+    !Number.isFinite(patch)
+  ) {
+    return undefined;
+  }
+  return [year, minor, patch];
+}
+
+/**
+ * Classify a host OpenClaw version into the heartbeat compatibility mode.
+ *
+ * OpenClaw >= 2026.11.5 removed the heartbeat field from the strict agent
+ * defaults/entry schemas; emitting it causes config-load failures (exit 78).
+ * Older hosts still rely on the plugin to write the managed heartbeat block.
+ *
+ * Returns:
+ *   - mode "legacy"  for core versions < 2026.11.5
+ *   - mode "retired" for core versions >= 2026.11.5
+ *   - mode "retired" with reason "detection-failed-safe-default" when the
+ *     input cannot be parsed, because a false-legacy write is fatal on a
+ *     retired host while a false-retired omission is only degraded.
+ */
+export function classifyHeartbeatCompat(versionInput: unknown): { mode: HeartbeatCompatMode; reason: string } {
+  const core = parseOpenclawVersionCore(versionInput);
+  if (!core) {
+    return { mode: "retired", reason: "detection-failed-safe-default" };
+  }
+  const [year, minor, patch] = core;
+  // Numeric comparison is required: 2026.11.100 must be >= 2026.11.5.
+  const isRetired =
+    year > 2026 ||
+    (year === 2026 && minor > 11) ||
+    (year === 2026 && minor === 11 && patch >= 5);
+  return {
+    mode: isRetired ? "retired" : "legacy",
+    reason: `version-parsed (${year}.${minor}.${patch})`,
+  };
+}
+
+/**
+ * Determine whether a candidate path lives inside this plugin's own directory
+ * tree. The plugin may carry its own node_modules/openclaw as a peer/dev
+ * dependency; that copy must not be mistaken for the host gateway's package.
+ */
+function isPluginLocalPath(candidate: string): boolean {
+  try {
+    const pluginFile = new URL(import.meta.url).pathname;
+    const pluginRoot = path.resolve(path.dirname(pluginFile), "..");
+    const resolved = path.resolve(candidate);
+    const relative = path.relative(pluginRoot, resolved);
+    return !relative.startsWith("..") && !path.isAbsolute(relative);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Read the host OpenClaw version from the package.json of the gateway process
+ * that loaded this plugin.
+ *
+ * The plugin's own node_modules may carry a different (peer/dev) copy of the
+ * openclaw package, so we deliberately read from the host executable's module
+ * tree via process.argv[1] rather than from the plugin directory. This avoids
+ * the wrong-copy bug described in nova-mind#824 / TC-824-V-20.
+ *
+ * Returns undefined when the version cannot be discovered.
+ */
+function readHostOpenclawVersion(hostEntryPath?: string): string | undefined {
+  try {
+    const entry = hostEntryPath ?? process.argv[1];
+    if (!entry) {
+      return undefined;
+    }
+    const realEntry = fs.realpathSync(entry);
+    let dir = path.dirname(realEntry);
+    const root = path.parse(dir).root;
+    while (dir !== root) {
+      const candidate = path.join(dir, "node_modules", "openclaw", "package.json");
+      try {
+        const raw = fs.readFileSync(candidate, "utf-8");
+        const pkg = JSON.parse(raw) as { name?: string; version?: string };
+        if (
+          pkg.name === "openclaw" &&
+          typeof pkg.version === "string" &&
+          pkg.version.length > 0 &&
+          !isPluginLocalPath(candidate)
+        ) {
+          return pkg.version;
+        }
+      } catch {
+        // Keep walking upward.
+      }
+      dir = path.dirname(dir);
+    }
+  } catch {
+    // Fall through to undefined.
+  }
+  return undefined;
+}
+
+/**
+ * Detect the heartbeat compatibility mode from the running host gateway.
+ *
+ * Falls back to "retired" when detection fails, because writing heartbeat
+ * config on a host that rejects it is a fatal, gateway-down failure, while
+ * omitting it on an ambiguous host is only a degradation.
+ *
+ * The optional hostEntryPath is used only by tests; production callers omit it.
+ */
+export function detectHostHeartbeatCompat(options?: { hostEntryPath?: string }): { mode: HeartbeatCompatMode; reason: string; version?: string } {
+  const version = readHostOpenclawVersion(options?.hostEntryPath);
+  if (version === undefined) {
+    return { mode: "retired", reason: "detection-failed-safe-default" };
+  }
+  const { mode, reason } = classifyHeartbeatCompat(version);
+  return { mode, reason, version };
+}
+
+/**
+ * Resolve the effective heartbeat compatibility mode from an optional operator
+ * override and the detected host mode.
+ *
+ * - If override is "legacy" or "retired", use it (reason "config-override").
+ * - If override is "auto", undefined, or anything else, use the detected mode.
+ * - Detection failures already default to "retired" inside detectHostHeartbeatCompat.
+ */
+export function resolveHeartbeatCompatMode(
+  override: unknown,
+  detected: { mode: HeartbeatCompatMode; reason: string },
+): { mode: HeartbeatCompatMode; reason: string } {
+  if (override === "legacy" || override === "retired") {
+    return { mode: override, reason: "config-override" };
+  }
+  return { mode: detected.mode, reason: detected.reason };
+}
 
 // ── SQL ─────────────────────────────────────────────────────────────────────
 
@@ -476,11 +664,15 @@ export function buildAgentsList(
       entry.subagents = { allowAgents: [...row.allowed_subagents].sort() };
     }
 
-    // #262/#273/#714 — Per-agent heartbeat config
+    // #262/#273/#714/#824 — Per-agent heartbeat config
     // OpenClaw schema requires heartbeat to be an object, not a boolean.
     // heartbeat_enabled = true  → emit heartbeat object with non-NULL sub-fields only
     // heartbeat_enabled = false | NULL → omit key (inherits agents.defaults.heartbeat)
-    if (row.heartbeat_enabled === true) {
+    // On OpenClaw >= 2026.11.5 the strict agent schema rejects the heartbeat
+    // key entirely, so retired mode must never emit it. Legacy mode preserves
+    // the pre-fix behaviour byte-for-byte.
+    const compatMode = options?.heartbeatCompatMode ?? "legacy";
+    if (compatMode === "legacy" && row.heartbeat_enabled === true) {
       const hb: HeartbeatConfig = {};
       if (row.heartbeat_every != null) hb.every = row.heartbeat_every;
       if (row.heartbeat_target != null) hb.target = row.heartbeat_target;
@@ -700,6 +892,7 @@ export function detectConfiguredChannelAccounts(
  * a `"$include": "./agents-explicit.json"` directive. It contributes:
  *   - `agents.ownership = "explicit"`
  *   - `agents.defaults.heartbeat.agentId` / `directPolicy` / `target`
+ *     (legacy mode only; omitted in retired mode)
  *   - `agents.defaults.systemAgent.agentId`
  *   - top-level `bindings[]` routing every configured channel account to the
  *     default peer agent.
@@ -712,6 +905,7 @@ export function buildExplicitOwnershipConfig(
   peerAgentName: string,
   channelAccounts: ChannelAccount[],
   existingSiblingBindings?: Array<{ match: { channel: string; accountId: string } }>,
+  mode: HeartbeatCompatMode = "legacy",
 ): ExplicitOwnershipConfig {
   // Sort for stable, deterministic output regardless of input order.
   const sortedAccounts = [...channelAccounts].sort((a, b) => {
@@ -740,19 +934,23 @@ export function buildExplicitOwnershipConfig(
     });
   }
 
+  const defaults: ExplicitOwnershipConfig["agents"]["defaults"] = {
+    systemAgent: {
+      agentId: peerAgentName,
+    },
+  };
+  if (mode === "legacy") {
+    defaults.heartbeat = {
+      directPolicy: "block",
+      target: "none",
+      agentId: peerAgentName,
+    };
+  }
+
   return {
     agents: {
       ownership: "explicit",
-      defaults: {
-        heartbeat: {
-          directPolicy: "block",
-          target: "none",
-          agentId: peerAgentName,
-        },
-        systemAgent: {
-          agentId: peerAgentName,
-        },
-      },
+      defaults,
     },
     bindings,
   };
@@ -761,9 +959,14 @@ export function buildExplicitOwnershipConfig(
 /**
  * Validate that a candidate explicit-ownership config satisfies the 2026.11.3
  * schema subset emitted by this generator.
+ *
+ * In retired mode (OpenClaw >= 2026.11.5) the heartbeat key is omitted, so
+ * the validator must not require it. In legacy mode it is still required so
+ * the existing safety net stays intact.
  */
 export function validateExplicitOwnershipConfig(
   config: ExplicitOwnershipConfig,
+  mode: HeartbeatCompatMode = "legacy",
 ): void {
   if (!config || typeof config !== "object" || Array.isArray(config)) {
     throw new Error("explicit ownership config must be an object");
@@ -771,15 +974,17 @@ export function validateExplicitOwnershipConfig(
   if (config.agents?.ownership !== "explicit") {
     throw new Error("explicit ownership config must set agents.ownership to 'explicit'");
   }
-  if (typeof config.agents?.defaults?.heartbeat?.agentId !== "string" ||
-      config.agents.defaults.heartbeat.agentId.length === 0) {
-    throw new Error("explicit ownership config must set agents.defaults.heartbeat.agentId");
-  }
-  if (config.agents.defaults.heartbeat.directPolicy !== "block") {
-    throw new Error("explicit ownership config must set agents.defaults.heartbeat.directPolicy to 'block'");
-  }
-  if (config.agents.defaults.heartbeat.target !== "none") {
-    throw new Error("explicit ownership config must set agents.defaults.heartbeat.target to 'none'");
+  if (mode === "legacy") {
+    if (typeof config.agents?.defaults?.heartbeat?.agentId !== "string" ||
+        config.agents.defaults.heartbeat.agentId.length === 0) {
+      throw new Error("explicit ownership config must set agents.defaults.heartbeat.agentId");
+    }
+    if (config.agents.defaults.heartbeat.directPolicy !== "block") {
+      throw new Error("explicit ownership config must set agents.defaults.heartbeat.directPolicy to 'block'");
+    }
+    if (config.agents.defaults.heartbeat.target !== "none") {
+      throw new Error("explicit ownership config must set agents.defaults.heartbeat.target to 'none'");
+    }
   }
   if (typeof config.agents?.defaults?.systemAgent?.agentId !== "string" ||
       config.agents.defaults.systemAgent.agentId.length === 0) {
@@ -967,13 +1172,17 @@ function rootIncludes(
 
 function hasHandAuthoredExplicitOwnershipKeys(
   openclawConfig: Record<string, unknown>,
+  mode: HeartbeatCompatMode = "legacy",
 ): boolean {
   const agents = openclawConfig.agents as Record<string, unknown> | undefined;
   if (agents && typeof agents === "object" && !Array.isArray(agents)) {
     if (agents.ownership !== undefined) return true;
     const defaults = agents.defaults as Record<string, unknown> | undefined;
     if (defaults && typeof defaults === "object" && !Array.isArray(defaults)) {
-      if (defaults.heartbeat !== undefined) return true;
+      // On retired hosts agents.defaults.heartbeat is a stale legacy key that
+      // the plugin itself used to emit. It no longer conflicts with managed
+      // mode, so it is exempted from the hand-authored check (nova-mind#824).
+      if (mode === "legacy" && defaults.heartbeat !== undefined) return true;
       if (defaults.systemAgent !== undefined) return true;
     }
   }
@@ -1140,13 +1349,14 @@ export async function syncExplicitOwnershipConfig(
   explicitConfigPath: string,
   resolvedConfig: Record<string, unknown>,
   logger?: SyncLogger,
+  mode: HeartbeatCompatMode = "legacy",
 ): Promise<{ explicitChanged: boolean; openclawChanged: boolean }> {
   const log = logger ?? console;
   const includePath = `./${path.basename(explicitConfigPath)}`;
   const openclawConfig = await readJsonFile<Record<string, unknown>>(openclawConfigPath) ?? {};
 
   const alreadyIncluded = rootIncludes(openclawConfig, includePath);
-  const handAuthored = hasHandAuthoredExplicitOwnershipKeys(openclawConfig);
+  const handAuthored = hasHandAuthoredExplicitOwnershipKeys(openclawConfig, mode);
 
   if (!alreadyIncluded) {
     if (handAuthored) {
@@ -1186,6 +1396,7 @@ export async function syncExplicitOwnershipConfig(
     defaultAgentName,
     channelAccounts,
     Array.isArray(openclawConfig.bindings) ? openclawConfig.bindings : undefined,
+    mode,
   );
 
   let explicitChanged = false;
@@ -1193,11 +1404,11 @@ export async function syncExplicitOwnershipConfig(
   try {
     const existing = await fs.promises.readFile(explicitConfigPath, "utf-8");
     if (existing !== newExplicitContent) {
-      await writeJsonAtomically(explicitConfigPath, explicitConfig, validateExplicitOwnershipConfig);
+      await writeJsonAtomically(explicitConfigPath, explicitConfig, (c) => validateExplicitOwnershipConfig(c, mode));
       explicitChanged = true;
     }
   } catch {
-    await writeJsonAtomically(explicitConfigPath, explicitConfig, validateExplicitOwnershipConfig);
+    await writeJsonAtomically(explicitConfigPath, explicitConfig, (c) => validateExplicitOwnershipConfig(c, mode));
     explicitChanged = true;
   }
 

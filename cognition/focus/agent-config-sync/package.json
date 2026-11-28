@@ -1,6 +1,6 @@
 {
   "name": "@nova-cognition/agent_config_sync",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "DB-to-Config sync for agent model configuration (LISTEN/NOTIFY)",
   "type": "module",
   "main": "dist/index.js",

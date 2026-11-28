@@ -385,3 +385,411 @@ async function waitFor(
     check();
   });
 }
+
+// ── TC-824-S-*: heartbeat-enabled shutdown fixtures ─────────────────────────
+
+function makeHeartbeatDbPluginConfig(outputPath: string, explicitConfigPath: string, openclawConfigPath: string) {
+  return {
+    outputPath,
+    explicitConfigPath,
+    openclawConfigPath,
+    host: "localhost",
+    port: 5432,
+    database: "test_db",
+    user: "test_user",
+    password: "test_pass",
+    heartbeatConfigMode: "retired",
+  };
+}
+
+function makeHeartbeatAgentRow(enabled: boolean) {
+  return {
+    name: "nova",
+    model: "ollama/llama3",
+    fallback_models: null,
+    thinking: null,
+    instance_type: "primary",
+    is_default: true,
+    allowed_subagents: null,
+    heartbeat_enabled: enabled,
+    heartbeat_every: "30m",
+    heartbeat_target: "channel",
+    heartbeat_to: "room",
+    heartbeat_isolated_session: true,
+  };
+}
+
+describe("TC-824-S-02: shutdown with heartbeat_enabled=true under retired mode", () => {
+  let tmpDir: string;
+  let outputPath: string;
+  let explicitPath: string;
+  let openclawPath: string;
+
+  beforeEach(async () => {
+    tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "acs-hb-shutdown-"));
+    outputPath = path.join(tmpDir, "agents.json");
+    explicitPath = path.join(tmpDir, "agents-explicit.json");
+    openclawPath = path.join(tmpDir, "openclaw.json");
+    // Seed agents.json as heartbeat-free; the retired-mode sync must keep it so.
+    await fs.promises.writeFile(
+      outputPath,
+      JSON.stringify({ nova: { model: "ollama/llama3" } }, null, 2) + "\n",
+      "utf-8",
+    );
+    await fs.promises.writeFile(
+      openclawPath,
+      JSON.stringify({ "$include": "./agents-explicit.json" }),
+      "utf-8",
+    );
+  });
+
+  afterEach(async () => {
+    await fs.promises.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("starts cleanly and writes heartbeat-free agents.json within budget", { timeout: 5000 }, async (t) => {
+    const logLines: string[] = [];
+    const logger = {
+      info: (msg: string) => logLines.push(`INFO ${msg}`),
+      warn: (msg: string) => logLines.push(`WARN ${msg}`),
+      error: (msg: string) => logLines.push(`ERROR ${msg}`),
+      debug: (msg: string) => logLines.push(`DEBUG ${msg}`),
+    };
+
+    class MockClient extends EventEmitter {
+      async connect() {}
+      async end() {
+        return new Promise<void>((resolve) => setTimeout(resolve, 50));
+      }
+      async query(text: string) {
+        if (text.includes("information_schema.columns")) {
+          return { rows: [{ exists: true }] };
+        }
+        if (text.includes("agent_bootstrap_context")) {
+          return { rows: [] };
+        }
+        if (text.includes("get_agent_export_rows()")) {
+          return { rows: [makeHeartbeatAgentRow(true)] };
+        }
+        return { rows: [] };
+      }
+    }
+
+    const mockPg = {
+      default: { Client: MockClient },
+      Client: MockClient,
+    };
+
+    (t as any).mock.module("pg", {
+      exports: { default: mockPg.default, Client: MockClient },
+    });
+
+    let service: any;
+    const api = {
+      pluginConfig: makeHeartbeatDbPluginConfig(outputPath, explicitPath, openclawPath),
+      config: {},
+      logger,
+      registerService: (svc: any) => {
+        service = svc;
+      },
+    };
+
+    const { default: plugin } = await import("../index.ts");
+    plugin.register(api);
+
+    const start = Date.now();
+    await service.start({ logger });
+    const startElapsed = Date.now() - start;
+
+    const written = JSON.parse(await fs.promises.readFile(outputPath, "utf-8"));
+    assert.ok(!Object.prototype.hasOwnProperty.call(written["nova"], "heartbeat"));
+
+    const stopStart = Date.now();
+    await service.stop({ logger });
+    const stopElapsed = Date.now() - stopStart;
+
+    assert.ok(startElapsed < 2000, `start took ${startElapsed}ms`);
+    assert.ok(stopElapsed < SHUTDOWN_BUDGET_MS, `stop took ${stopElapsed}ms`);
+    assert.ok(logLines.some((l) => l.includes("Heartbeat compat mode: retired")));
+  });
+});
+
+describe("TC-824-S-03: safe-default path emits at most one WARN and zero ERROR", () => {
+  let tmpDir: string;
+  let outputPath: string;
+
+  beforeEach(async () => {
+    tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "acs-hb-safe-"));
+    outputPath = path.join(tmpDir, "agents.json");
+    await fs.promises.writeFile(
+      outputPath,
+      JSON.stringify({ nova: { model: "ollama/llama3" } }, null, 2) + "\n",
+      "utf-8",
+    );
+  });
+
+  afterEach(async () => {
+    await fs.promises.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("logs one WARN on detection failure and no ERROR", { timeout: 5000 }, async (t) => {
+    const logLines: string[] = [];
+    const logger = {
+      info: (msg: string) => logLines.push(`INFO ${msg}`),
+      warn: (msg: string) => logLines.push(`WARN ${msg}`),
+      error: (msg: string) => logLines.push(`ERROR ${msg}`),
+      debug: (msg: string) => logLines.push(`DEBUG ${msg}`),
+    };
+
+    class MockClient extends EventEmitter {
+      async connect() {}
+      async end() {
+        return new Promise<void>((resolve) => setTimeout(resolve, 50));
+      }
+      async query(text: string) {
+        if (text.includes("information_schema.columns")) {
+          return { rows: [{ exists: true }] };
+        }
+        if (text.includes("agent_bootstrap_context")) {
+          return { rows: [] };
+        }
+        if (text.includes("get_agent_export_rows()")) {
+          return { rows: [makeHeartbeatAgentRow(true)] };
+        }
+        return { rows: [] };
+      }
+    }
+
+    const mockPg = {
+      default: { Client: MockClient },
+      Client: MockClient,
+    };
+
+    (t as any).mock.module("pg", {
+      exports: { default: mockPg.default, Client: MockClient },
+    });
+
+    const explicitPath = path.join(tmpDir, "agents-explicit.json");
+    const openclawPath = path.join(tmpDir, "openclaw.json");
+    await fs.promises.writeFile(
+      openclawPath,
+      JSON.stringify({ "$include": "./agents-explicit.json" }),
+      "utf-8",
+    );
+
+    let service: any;
+    const api = {
+      pluginConfig: { ...makeHeartbeatDbPluginConfig(outputPath, explicitPath, openclawPath), heartbeatConfigMode: "auto" },
+      config: {},
+      logger,
+      registerService: (svc: any) => {
+        service = svc;
+      },
+    };
+
+    const { default: plugin } = await import("../index.ts");
+    plugin.register(api);
+
+    await service.start({ logger });
+    await service.stop({ logger });
+
+    const warnings = logLines.filter((l) => l.startsWith("WARN") && l.includes("Host OpenClaw version could not be detected"));
+    const errors = logLines.filter((l) => l.startsWith("ERROR"));
+    assert.strictEqual(warnings.length, 1, `expected exactly one detection warning, got ${warnings.length}`);
+    assert.strictEqual(errors.length, 0, `expected zero ERROR lines, got ${errors.length}`);
+  });
+});
+
+// ── TC-824-N-*: NOTIFY-driven resync path ───────────────────────────────────
+
+describe("TC-824-N-01..N-03: heartbeat gate holds on NOTIFY resync", () => {
+  let tmpDir: string;
+  let outputPath: string;
+  let explicitPath: string;
+  let openclawPath: string;
+
+  beforeEach(async () => {
+    tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "acs-hb-notify-"));
+    outputPath = path.join(tmpDir, "agents.json");
+    explicitPath = path.join(tmpDir, "agents-explicit.json");
+    openclawPath = path.join(tmpDir, "openclaw.json");
+    await fs.promises.writeFile(
+      outputPath,
+      JSON.stringify({ nova: { model: "ollama/llama3" } }, null, 2) + "\n",
+      "utf-8",
+    );
+    await fs.promises.writeFile(
+      openclawPath,
+      JSON.stringify({ "$include": "./agents-explicit.json" }),
+      "utf-8",
+    );
+  });
+
+  afterEach(async () => {
+    await fs.promises.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("N-01/N-02: agent_config_changed notification keeps agents.json and agents-explicit.json heartbeat-free", { timeout: 5000 }, async (t) => {
+    const logLines: string[] = [];
+    const logger = {
+      info: (msg: string) => logLines.push(`INFO ${msg}`),
+      warn: (msg: string) => logLines.push(`WARN ${msg}`),
+      error: (msg: string) => logLines.push(`ERROR ${msg}`),
+      debug: (msg: string) => logLines.push(`DEBUG ${msg}`),
+    };
+
+    let notificationHandler: ((msg: any) => void) | null = null;
+    let rowEnabled = false;
+
+    class MockClient extends EventEmitter {
+      async connect() {}
+      async end() {
+        return new Promise<void>((resolve) => setTimeout(resolve, 50));
+      }
+      async query(text: string) {
+        if (text.includes("information_schema.columns")) {
+          return { rows: [{ exists: true }] };
+        }
+        if (text.includes("agent_bootstrap_context")) {
+          return { rows: [] };
+        }
+        if (text.includes("get_agent_export_rows()")) {
+          return { rows: [makeHeartbeatAgentRow(rowEnabled)] };
+        }
+        if (text.includes("LISTEN")) {
+          return { rows: [] };
+        }
+        return { rows: [] };
+      }
+      on(event: string, handler: (...args: any[]) => void) {
+        super.on(event, handler);
+        if (event === "notification") {
+          notificationHandler = handler;
+        }
+      }
+    }
+
+    const mockPg = {
+      default: { Client: MockClient },
+      Client: MockClient,
+    };
+
+    (t as any).mock.module("pg", {
+      exports: { default: mockPg.default, Client: MockClient },
+    });
+
+    let service: any;
+    const api = {
+      pluginConfig: makeHeartbeatDbPluginConfig(outputPath, explicitPath, openclawPath),
+      config: {},
+      logger,
+      registerService: (svc: any) => {
+        service = svc;
+      },
+    };
+
+    const { default: plugin } = await import("../index.ts");
+    plugin.register(api);
+
+    await service.start({ logger });
+    assert.ok(notificationHandler, "notification handler registered");
+
+    // Flip the DB row to heartbeat_enabled=true and fire a notification.
+    rowEnabled = true;
+    await notificationHandler!({ channel: "agent_config_changed", payload: "" });
+
+    const writtenAgents = JSON.parse(await fs.promises.readFile(outputPath, "utf-8"));
+    assert.ok(!Object.prototype.hasOwnProperty.call(writtenAgents["nova"], "heartbeat"));
+
+    const writtenExplicit = JSON.parse(await fs.promises.readFile(explicitPath, "utf-8"));
+    const defaults = (writtenExplicit.agents as Record<string, unknown>).defaults as Record<string, unknown>;
+    assert.ok(!Object.prototype.hasOwnProperty.call(defaults, "heartbeat"));
+
+    await service.stop({ logger });
+  });
+
+  it("N-03: heartbeat_content_changed notification still runs heartbeat sync without touching agents.json", { timeout: 5000 }, async (t) => {
+    const logLines: string[] = [];
+    const logger = {
+      info: (msg: string) => logLines.push(`INFO ${msg}`),
+      warn: (msg: string) => logLines.push(`WARN ${msg}`),
+      error: (msg: string) => logLines.push(`ERROR ${msg}`),
+      debug: (msg: string) => logLines.push(`DEBUG ${msg}`),
+    };
+
+    let notificationHandler: ((msg: any) => void) | null = null;
+
+    class MockClient extends EventEmitter {
+      async connect() {}
+      async end() {
+        return new Promise<void>((resolve) => setTimeout(resolve, 50));
+      }
+      async query(text: string) {
+        if (text.includes("information_schema.columns")) {
+          return { rows: [{ exists: true }] };
+        }
+        if (text.includes("agent_bootstrap_context")) {
+          // Empty rows keep the test from writing HEARTBEAT.md to the live
+          // ~/.openclaw workspace while still exercising the sync path.
+          return { rows: [] };
+        }
+        if (text.includes("get_agent_export_rows()")) {
+          return { rows: [makeHeartbeatAgentRow(false)] };
+        }
+        if (text.includes("LISTEN")) {
+          return { rows: [] };
+        }
+        return { rows: [] };
+      }
+      on(event: string, handler: (...args: any[]) => void) {
+        super.on(event, handler);
+        if (event === "notification") {
+          notificationHandler = handler;
+        }
+      }
+    }
+
+    const mockPg = {
+      default: { Client: MockClient },
+      Client: MockClient,
+    };
+
+    (t as any).mock.module("pg", {
+      exports: { default: mockPg.default, Client: MockClient },
+    });
+
+    let service: any;
+    const api = {
+      pluginConfig: makeHeartbeatDbPluginConfig(outputPath, explicitPath, openclawPath),
+      config: {},
+      logger,
+      registerService: (svc: any) => {
+        service = svc;
+      },
+    };
+
+    const { default: plugin } = await import("../index.ts");
+    plugin.register(api);
+
+    await service.start({ logger });
+    assert.ok(notificationHandler, "notification handler registered");
+
+    await notificationHandler!({ channel: "heartbeat_content_changed", payload: "" });
+
+    // The heartbeat sync path ran and reported no changes; no errors occurred.
+    assert.ok(
+      logLines.some((l) => l.includes("Heartbeat files unchanged after notification")),
+      "expected heartbeat unchanged log",
+    );
+    assert.ok(
+      !logLines.some((l) => l.startsWith("ERROR") && l.includes("Heartbeat sync failed")),
+      "expected no heartbeat sync error",
+    );
+
+    // agents.json stayed heartbeat-free.
+    const writtenAgents = JSON.parse(await fs.promises.readFile(outputPath, "utf-8"));
+    assert.ok(!Object.prototype.hasOwnProperty.call(writtenAgents["nova"], "heartbeat"));
+
+    await service.stop({ logger });
+  });
+});

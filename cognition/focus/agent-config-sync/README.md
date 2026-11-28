@@ -4,6 +4,8 @@ An OpenClaw extension plugin that keeps `~/.openclaw/agents.json` in sync with y
 
 > **Requirement:** This plugin requires **OpenClaw >= 2026.11.3** and is shipped together with the fork upgrade. It does not support OpenClaw 2026.9.x or earlier.
 
+> **Heartbeat config:** On OpenClaw **>= 2026.11.5** the strict agent schema rejects the `heartbeat` key, so the plugin automatically stops emitting per-agent `heartbeat` and `agents.defaults.heartbeat`. On OpenClaw **< 2026.11.5** the legacy behaviour is preserved byte-for-byte. See `heartbeatConfigMode` below to override auto-detection.
+
 It watches the `agents` DB table:
 
 - **`agents`** — agent definitions (model, fallback models, allowed subagents, default flag)
@@ -76,7 +78,7 @@ On startup, the plugin performs an **initial sync** for both `agents.json` and a
 | `model` | `agents.model` + `agents.fallback_models` | String when no fallbacks; object `{ primary, fallbacks }` when fallbacks present |
 | `thinkingDefault` | `agents.thinking` | Included only when `thinking` is a non-empty string matching the config schema's 9-value enum (`off`/`minimal`/`low`/`medium`/`high`/`xhigh`/`adaptive`/`max`/`ultra`, nova-mind#660). `NULL`, empty string, unknown tiers, wrong JS type, mixed case, and whitespace-padded values are all silently omitted — the row degrades gracefully rather than crashing or emitting a bad value. |
 | `subagents.allowAgents` | `agents.allowed_subagents` | Included when non-empty, sorted alphabetically |
-| `heartbeat` | `agents.heartbeat_enabled`, `heartbeat_every`, `heartbeat_target`, `heartbeat_to` | Object `{ every, target, to }` (non-NULL fields only) when `heartbeat_enabled = true`. **Key is omitted entirely** when `heartbeat_enabled` is `false` or `NULL` (fixed in #273 — OpenClaw's schema requires an object or no key at all, never a boolean `false`). |
+| `heartbeat` | `agents.heartbeat_enabled`, `heartbeat_every`, `heartbeat_target`, `heartbeat_to` | Object `{ every, target, to }` (non-NULL fields only) when `heartbeat_enabled = true` **and** the plugin is in `legacy` mode. **Key is omitted entirely** when `heartbeat_enabled` is `false` or `NULL`, and also omitted in `retired` mode regardless of the DB flag (nova-mind#824 — OpenClaw >= 2026.11.5 rejects the key). |
 
 **Not included in output:**
 - Models allowlist (`agents.defaults.models`) — stays in `openclaw.json`
@@ -108,7 +110,7 @@ The `$include` directive merges the keyed object into `agents.entries`. All othe
 The plugin always writes the managed include file when enabled — by default `~/.openclaw/agents-explicit.json` — containing:
 
 - `agents.ownership = "explicit"`
-- `agents.defaults.heartbeat` (direct policy / target / agent id)
+- `agents.defaults.heartbeat` (direct policy / target / agent id) — **omitted on OpenClaw >= 2026.11.5** because the strict agent schema rejects this key
 - `agents.defaults.systemAgent.agentId`
 - Top-level `bindings[]` routing every configured channel account to the default peer agent
 
@@ -334,7 +336,8 @@ Configure in `openclaw.json` under `plugins.entries.agent_config_sync.config`:
           "database": "nova",
           "user": "nova",
           "password": "...",
-          "outputPath": "/home/nova/.openclaw/agents.json"
+          "outputPath": "/home/nova/.openclaw/agents.json",
+          "heartbeatConfigMode": "auto"
         }
       }
     }
@@ -343,6 +346,16 @@ Configure in `openclaw.json` under `plugins.entries.agent_config_sync.config`:
 ```
 
 If `config` is omitted, the plugin falls back to `channels.agent_chat` DB credentials.
+
+### `heartbeatConfigMode`
+
+| Value | Behaviour |
+|---|---|
+| `auto` (default) | Detect the host OpenClaw version from the gateway executable's `package.json`. Use `legacy` mode for versions `< 2026.11.5` and `retired` mode for versions `>= 2026.11.5`. If detection fails, the plugin falls back to `retired` (safe default) and logs one WARN line. |
+| `legacy` | Always emit per-agent `heartbeat` and `agents.defaults.heartbeat` as on pre-fix OpenClaw < 2026.11.5. Use this to pin behaviour on a fleet whose auto-detection is unreliable. |
+| `retired` | Never emit heartbeat config. Use this on OpenClaw >= 2026.11.5 or when you want to guarantee no `heartbeat` key is written. |
+
+The boundary is **inclusive** at `2026.11.5`. Prerelease and fork suffixes (e.g. `2026.11.10-nova`) are classified by their numeric core version, so a fork-tagged 11.10 host is treated the same as a clean 11.10 host.
 
 ---
 

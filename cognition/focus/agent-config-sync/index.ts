@@ -22,6 +22,8 @@ import {
   syncHeartbeatFiles,
   fetchAgentRows,
   syncExplicitOwnershipConfig,
+  detectHostHeartbeatCompat,
+  resolveHeartbeatCompatMode,
 } from "./src/sync.js";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -128,6 +130,30 @@ function createConfigSyncService(api: OpenClawPluginApi) {
 
     log.info("agent_config_sync: OpenClaw 2026.11.3+ explicit ownership mode");
 
+    // Resolve heartbeat compatibility mode once per listener lifetime. A live
+    // OpenClaw upgrade without a full gateway restart will be picked up on the
+    // next plugin start (V-99).
+    const heartbeatConfigMode = (api.pluginConfig?.heartbeatConfigMode as string | undefined) ?? "auto";
+    const detected = detectHostHeartbeatCompat();
+    const { mode: compatMode, reason: compatReason } = resolveHeartbeatCompatMode(
+      heartbeatConfigMode,
+      detected,
+      log,
+    );
+    if (compatReason === "detection-failed-safe-default") {
+      log.warn(
+        `agent_config_sync: Host OpenClaw version could not be detected; ` +
+          `using heartbeat compat mode '${compatMode}' as a safe default. ` +
+          `Set plugins.entries.agent_config_sync.config.heartbeatConfigMode to ` +
+          `"legacy" or "retired" to pin the mode explicitly.`,
+      );
+    } else {
+      const versionSuffix = detected.version ? ` (host version ${detected.version})` : "";
+      log.info(
+        `agent_config_sync: Heartbeat compat mode: ${compatMode}${versionSuffix} — ${compatReason}`,
+      );
+    }
+
     // Dynamic import to match agent_chat pattern (pg may not be available)
     const pg = await import("pg");
     const client = new pg.default.Client(dbConfig);
@@ -156,6 +182,7 @@ function createConfigSyncService(api: OpenClawPluginApi) {
       // Initial agents.json sync on startup
       const changed = await syncAgentsConfig(client, outputPath, {
         logger: log,
+        heartbeatCompatMode: compatMode,
       });
       if (changed) {
         log.info(`agent_config_sync: Initial sync wrote ${outputPath}`);
@@ -176,6 +203,7 @@ function createConfigSyncService(api: OpenClawPluginApi) {
           explicitConfigPath,
           fullConfig,
           log,
+          compatMode,
         );
         if (explicitChanged) {
           log.info(
@@ -237,6 +265,7 @@ function createConfigSyncService(api: OpenClawPluginApi) {
           try {
             const changed = await syncAgentsConfig(client, outputPath, {
               logger: log,
+              heartbeatCompatMode: compatMode,
             });
             if (changed) {
               log.info(`agent_config_sync: Config updated → ${outputPath}`);
@@ -276,6 +305,7 @@ function createConfigSyncService(api: OpenClawPluginApi) {
                 explicitConfigPath,
                 fullConfig,
                 log,
+                compatMode,
               );
             if (explicitChanged || openclawChanged) {
               log.info(

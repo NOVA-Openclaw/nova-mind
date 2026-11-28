@@ -217,9 +217,13 @@ def load_openclaw_env(
             "env_loader: nova-op not found in PATH or $HOME/.local/bin/nova-op",
             file=sys.stderr,
         )
-        return {}
+        for var in target_vars:
+            print(
+                f"env_loader: could not resolve {var} (nova-op unavailable)",
+                file=sys.stderr,
+            )
+        return result
 
-    result: dict[str, str] = {}
     errors: list[str] = []
 
     for var in target_vars:

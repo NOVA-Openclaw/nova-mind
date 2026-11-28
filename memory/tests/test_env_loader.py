@@ -793,6 +793,88 @@ def test_d3_missing_binary_warns_no_exception():
     clean_env("X")
 
 
+def test_d3b_mixed_missing_binary_keeps_present_key():
+    name = "TC-D3b: missing nova-op still returns keys already present in env"
+    os.environ["PRESENT_KEY"] = "present-value"
+    clean_env("MISSING_KEY")
+    tmpdir = tempfile.mkdtemp()
+    cfg = write_map({
+        "PRESENT_KEY": {"vault": "v", "item": "present-item", "field": "f"},
+        "MISSING_KEY": {"vault": "v", "item": "missing-item", "field": "f"},
+    }, tmpdir)
+    home_dir = os.path.join(tmpdir, "home")
+    os.makedirs(home_dir, exist_ok=True)
+    empty_bin = os.path.join(tmpdir, "empty_bin")
+    os.makedirs(empty_bin, exist_ok=True)
+
+    def _run():
+        captured = io.StringIO()
+        old_stderr = sys.stderr
+        old_path = os.environ.get("PATH", "")
+        old_home = os.environ.get("HOME", "")
+        sys.stderr = captured
+        os.environ["PATH"] = empty_bin
+        os.environ["HOME"] = home_dir
+        try:
+            result = load_openclaw_env(config_path=cfg, keys=["PRESENT_KEY", "MISSING_KEY"])
+        finally:
+            sys.stderr = old_stderr
+            os.environ["PATH"] = old_path
+            os.environ["HOME"] = old_home
+        return result, captured.getvalue()
+
+    result, stderr = _run()
+    ok = (
+        result == {"PRESENT_KEY": "present-value"}
+        and "nova-op not found" in stderr
+        and "MISSING_KEY" in stderr
+        and os.environ.get("PRESENT_KEY") == "present-value"
+    )
+    if ok:
+        pass_test(name)
+    else:
+        fail_test(name, f"result={result} stderr={stderr}")
+    clean_env("PRESENT_KEY", "MISSING_KEY")
+
+
+def test_d3c_mixed_failing_stub_keeps_present_key():
+    name = "TC-D3c: failing nova-op for one key still returns other key already present"
+    os.environ["PRESENT_KEY"] = "present-value"
+    clean_env("FAILING_KEY")
+    tmpdir = tempfile.mkdtemp()
+    log_path = os.path.join(tmpdir, "calls.log")
+    cfg = write_map({
+        "PRESENT_KEY": {"vault": "v", "item": "present-item", "field": "f"},
+        "FAILING_KEY": {"vault": "v", "item": "failing-item", "field": "f"},
+    }, tmpdir)
+    bin_dir = make_failing_nova_op(tmpdir, log_path=log_path)
+
+    def _run():
+        captured = io.StringIO()
+        old_stderr = sys.stderr
+        sys.stderr = captured
+        try:
+            result = load_openclaw_env(config_path=cfg, keys=["PRESENT_KEY", "FAILING_KEY"])
+        finally:
+            sys.stderr = old_stderr
+        return result, captured.getvalue()
+
+    result, stderr = run_with_path(bin_dir, _run)
+    calls = count_calls(log_path)
+    ok = (
+        result == {"PRESENT_KEY": "present-value"}
+        and calls == 1
+        and "FAILING_KEY" in stderr
+        and os.environ.get("PRESENT_KEY") == "present-value"
+        and os.environ.get("FAILING_KEY") is None
+    )
+    if ok:
+        pass_test(name)
+    else:
+        fail_test(name, f"result={result} calls={calls} stderr={stderr}")
+    clean_env("PRESENT_KEY", "FAILING_KEY")
+
+
 def test_d4_skip_if_present_avoids_failing_stub():
     name = "TC-D4: pre-injected key skips failing stub entirely"
     os.environ["OPENROUTER_API_KEY"] = "injected"
@@ -1639,6 +1721,8 @@ if __name__ == "__main__":
     test_d1_timeout_warns_and_skips()
     test_d2_nonzero_exit_warns_and_continues()
     test_d3_missing_binary_warns_no_exception()
+    test_d3b_mixed_missing_binary_keeps_present_key()
+    test_d3c_mixed_failing_stub_keeps_present_key()
     test_d4_skip_if_present_avoids_failing_stub()
     test_d5_empty_value_warns_and_skips()
     test_d6_incomplete_entry_and_placeholder_still_raise()

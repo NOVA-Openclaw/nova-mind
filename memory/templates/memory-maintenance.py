@@ -41,12 +41,6 @@ sys.path.insert(0, str(SCRIPT_DIR.parent / "lib"))
 from embedding_config import load_embedding_config, EmbeddingConfigError
 
 try:
-    from env_loader import load_openclaw_env
-    load_openclaw_env()
-except ImportError:
-    pass
-
-try:
     from pg_env import load_pg_env
     load_pg_env()
 except ImportError:

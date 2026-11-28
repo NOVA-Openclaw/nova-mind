@@ -33,7 +33,7 @@ sys.path.insert(0, os.path.expanduser("~/.openclaw/lib"))
 
 try:
     from env_loader import load_openclaw_env
-    load_openclaw_env()
+    load_openclaw_env(keys=["OPENROUTER_API_KEY"])
 except ImportError:
     pass  # Library not available; keys already in env
 except RuntimeError as _env_loader_err:

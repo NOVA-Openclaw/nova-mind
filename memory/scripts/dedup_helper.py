@@ -11,14 +11,6 @@ import os
 import sys
 from typing import Optional, Dict, Any
 
-# Load OpenClaw environment (API keys from openclaw.json)
-sys.path.insert(0, os.path.expanduser('~/.openclaw/lib'))
-try:
-    from env_loader import load_openclaw_env
-    load_openclaw_env()
-except ImportError:
-    pass  # Library not installed yet
-
 # Load centralized PostgreSQL configuration
 sys.path.insert(0, os.path.expanduser("~/.openclaw/lib"))
 from pg_env import load_pg_env
